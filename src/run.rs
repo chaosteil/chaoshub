@@ -29,6 +29,7 @@ use tokio::time::timeout;
 
 use crate::app::App;
 use crate::app::exec::Runtime;
+use crate::app::keymap::Keymap;
 use crate::app::layout::layout;
 use crate::bus::{Msg, Progress, Size, TermState, TermStatus};
 use crate::osc;
@@ -79,7 +80,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
     let reader = Reader::spawn(tx.clone())?;
     let signals = spawn_signals(tx)?;
     let mut event_loop = EventLoop {
-        app: App::new(size),
+        app: App::new(size, Keymap::default()),
         runtime: Runtime::new(tokio.handle().clone()),
         handle: tokio.handle().clone(),
         transitions: Transitions::new(true, ANIMATION_MS),
@@ -645,10 +646,11 @@ mod tests {
     #[test]
     fn empty_frame() {
         let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
-        let mut app = App::new(Size {
+        let size = Size {
             width: 40,
             height: 6,
-        });
+        };
+        let mut app = App::new(size, Keymap::default());
         let mut transitions = Transitions::new(true, ANIMATION_MS);
         draw(
             &mut terminal,

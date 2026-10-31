@@ -126,6 +126,14 @@ pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusMod
     }
 }
 
+/// The status bar of the last built frame, if any.
+pub(crate) fn built_status(state: &AppState) -> Option<&StatusModel> {
+    state
+        .cache
+        .frame_generation
+        .map(|_| &state.cache.frame.status)
+}
+
 /// A list with no columns and no rows.
 fn empty_list() -> ListModel {
     ListModel {
