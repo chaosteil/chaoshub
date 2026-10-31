@@ -123,11 +123,10 @@ fn render_overlay(
         }
         OverlayContent::Help(help) => help::render(help, area, buf, theme),
         OverlayContent::Prompt { spec, text } => prompt::render(spec, text, area, buf, theme),
+        OverlayContent::Output { title, lines } => output::render(title, lines, area, buf, theme),
         // The renderers of the other overlay kinds come in the next
         // commits of this stack.
-        OverlayContent::Confirm(_)
-        | OverlayContent::Output { .. }
-        | OverlayContent::Picker { .. } => {}
+        OverlayContent::Confirm(_) | OverlayContent::Picker { .. } => {}
     }
 }
 
@@ -299,6 +298,35 @@ mod tests {
     #[test]
     fn prompt_160_ansi16() {
         insta::assert_snapshot!(draw(&prompt("ok"), 160, 40, &testdata::ansi16()));
+    }
+
+    fn output(count: usize) -> FrameModel {
+        testdata::with_overlay(testdata::output_overlay(count))
+    }
+
+    #[test]
+    fn output_100_pierre() {
+        insta::assert_snapshot!(draw(&output(5), 100, 30, &testdata::pierre()));
+    }
+
+    #[test]
+    fn output_160_pierre() {
+        insta::assert_snapshot!(draw(&output(5), 160, 40, &testdata::pierre()));
+    }
+
+    #[test]
+    fn output_100_ansi16() {
+        insta::assert_snapshot!(draw(&output(5), 100, 30, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn output_160_ansi16() {
+        insta::assert_snapshot!(draw(&output(5), 160, 40, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn output_follows_the_tail() {
+        insta::assert_snapshot!(draw(&output(60), 100, 30, &testdata::ansi16()));
     }
 
     #[test]
