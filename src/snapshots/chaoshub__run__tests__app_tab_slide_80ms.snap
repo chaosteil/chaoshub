@@ -1,0 +1,17 @@
+---
+source: src/run.rs
+assertion_line: 931
+expression: middle
+---
+"  1 M I N E ▌ 2 T E A M     ░         ˙                ˙                            ˙      chaoshub "
+" ·   ·      e ready for review · 3 · t shows all open                                               "
+"            d▌★  docs(readme): keymap table                     #88 chaoshub     alice            2h"
+"        +   r    perf(store): batch inserts                     #87 chaoshub     bob              3h"
+" ●   ○  D   :    perf(ui): cache the texture                    #86 codeview     bob              2d"
+" ✓   ✓         ˙ ·           ░              ˙               ░              ·    ˙          ·  ·    ·"
+" ✗   ✗  C           ·                  ˙                    ░░  ░   ˙       ·    ·     ·           ░"
+" ✓   ·      ˙    ░˙ ·    ˙                     ·      ˙    ˙      ˙  ░              ˙ ˙ ˙     ˙ ░ ˙ "
+"              ░   ˙                  ·                        ·        · ·     ·        ˙          ░"
+"        +         ·    ·        ˙                  ░˙      ˙             ░               ░          "
+"                                       ˙                                 ·              ░  ░        "
+" [TEAM] 0 repos · cache from 5m ago                                                          ? help "
