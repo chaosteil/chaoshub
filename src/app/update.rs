@@ -11,13 +11,15 @@ use chrono::{DateTime, TimeDelta, Utc};
 use crate::app::frame;
 use crate::app::keymap::{self, Keymap};
 use crate::app::layout::layout;
-use crate::app::models::{CellStyle, Direction};
+use crate::app::models::{CellStyle, Direction, PaneModel, RowItem};
 use crate::app::nav::{self, Motion};
+use crate::app::panes::{PANES, Pane, applicable, items};
 use crate::app::state::{
     AUTHOR_KEY, AppData, AppState, AuthorPicker, FILTER_KEY, Failure, Overlay, OverlayState,
-    error_text, ui_key,
+    PopupState, error_text, ui_key,
 };
-use crate::app::tabs::{KeyCx, TABS, Tab, pr_ref};
+use crate::app::tabs::{Handled, KeyCx, TABS, Tab, pr_ref};
+use crate::app::target::pr_target;
 use crate::app::term::term_status;
 use crate::bus::{
     ActionEvent, Cmd, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Msg, OverlayKind,
@@ -34,19 +36,28 @@ pub(crate) fn update(state: &mut AppState, keymap: &Keymap, msg: Msg) -> Vec<Cmd
     update_with(state, keymap, &TABS, msg)
 }
 
-/// Applies one message to the state, with the tabs of `tabs`.
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "the data messages of later phases move their payload into the state"
-)]
+/// Applies one message to the state, with the tabs of `tabs` and the
+/// panes of `PANES`.
 pub(crate) fn update_with(
     state: &mut AppState,
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
     msg: Msg,
 ) -> Vec<Cmd> {
+    update_full(state, keymap, tabs, &PANES, msg)
+}
+
+/// Applies one message to the state, with the tabs of `tabs` and the
+/// panes of `panes`.
+pub(crate) fn update_full(
+    state: &mut AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    msg: Msg,
+) -> Vec<Cmd> {
     match msg {
-        Msg::Key(event) => key(state, keymap, tabs, &event),
+        Msg::Key(event) => key(state, keymap, tabs, panes, &event),
         Msg::Resize(size) => resize(state, size),
         Msg::Tick => tick(state, tabs, Utc::now()),
         Msg::TransitionsDone => transitions_done(state),
@@ -97,7 +108,13 @@ pub(crate) fn update_with(
 /// A key press: the quit keys quit, every other key goes to the active
 /// tab. After a handled key, the generation moves when the tab says so,
 /// the UI events queue up, and a changed `Interest` goes to the workers.
-fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &KeyEvent) -> Vec<Cmd> {
+fn key(
+    state: &mut AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    event: &KeyEvent,
+) -> Vec<Cmd> {
     if event.kind == KeyEventKind::Release {
         return Vec::new();
     }
@@ -111,7 +128,7 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
         return quit();
     }
     if state.ui.overlays.iter().any(|overlay| !overlay.closing) {
-        return overlay_key(state, keymap, tabs, chord);
+        return overlay_key(state, keymap, tabs, panes, chord);
     }
     if quits && !state.ui.filter_edit {
         return quit();
@@ -139,6 +156,10 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
     }
     if keymap.matches("authors", chord) {
         open_authors(state, tabs);
+        return Vec::new();
+    }
+    if keymap.matches("open", chord) {
+        open_popup(state, tabs, panes);
         return Vec::new();
     }
     let index = state.ui.active;
@@ -198,6 +219,87 @@ fn open_authors(state: &mut AppState, tabs: &[Box<dyn Tab>]) {
     );
 }
 
+/// Opens the pull request popup for the cursor row, on the first pane
+/// that applies. A row that is not a pull request opens nothing.
+fn open_popup(state: &mut AppState, tabs: &[Box<dyn Tab>], panes: &[Box<dyn Pane>]) {
+    let model = frame::active_list(state, tabs);
+    let Some(RowItem::Pr(pr)) = model.rows.get(model.cursor).map(|row| &row.item) else {
+        return;
+    };
+    let Some(target) = pr_target(&state.data, &pr.key) else {
+        return;
+    };
+    let active = applicable(panes, &target).first().copied().unwrap_or(0);
+    open_overlay(
+        state,
+        OverlayKind::Popup,
+        OverlayState::Popup(PopupState {
+            key: pr.key.clone(),
+            active,
+            panes: panes.iter().map(|pane| pane.init_state()).collect(),
+        }),
+    );
+}
+
+/// A key in the pull request popup: a pane key or `next_tab` selects a
+/// pane, the navigation keys move the cursor of the pane (or scroll a
+/// pane of lines), and the other keys go to the active pane. `None` when
+/// nothing handled the key.
+fn popup_key(
+    data: &AppData,
+    keymap: &Keymap,
+    panes: &[Box<dyn Pane>],
+    popup: &mut PopupState,
+    chord: KeyChord,
+) -> Option<Handled> {
+    let target = pr_target(data, &popup.key)?;
+    let order = applicable(panes, &target);
+    let changed = Handled {
+        changed: true,
+        ..Handled::default()
+    };
+    if let KeyCode::Char(c) = chord.code
+        && chord.mods.is_empty()
+        && let Some(&index) = order.iter().find(|&&i| panes[i].key() == c)
+    {
+        popup.active = index;
+        return Some(changed);
+    }
+    if keymap.matches("next_tab", chord) && !order.is_empty() {
+        let at = order
+            .iter()
+            .position(|&i| i == popup.active)
+            .map_or(0, |p| p + 1);
+        popup.active = order[at % order.len()];
+        return Some(changed);
+    }
+    let pane = panes.get(popup.active)?;
+    let ps = popup.panes.get_mut(popup.active)?;
+    let areas = layout(data.size);
+    let size = Size {
+        width: areas.popup_body.width,
+        height: areas.popup_body.height,
+    };
+    let cx = KeyCx {
+        data,
+        target: Some(&target),
+        areas: &areas,
+        keys: keymap,
+    };
+    if let Some(motion) = motion(keymap, chord) {
+        let model = pane.model(&cx, ps, size);
+        let count = items(&model);
+        if matches!(model, PaneModel::Lines { .. }) {
+            ps.scroll = move_in(ps.scroll, count, motion);
+        } else {
+            ps.cursor = move_in(ps.cursor, count, motion);
+            ps.scroll = nav::keep_visible(count, ps.cursor, ps.scroll, usize::from(size.height));
+        }
+        return Some(changed);
+    }
+    pane.handle_key(chord, &cx, ps)
+}
+
 /// Pushes an overlay and starts its slide in.
 fn open_overlay(state: &mut AppState, kind: OverlayKind, overlay: OverlayState) {
     state.ui.overlays.push(Overlay {
@@ -226,6 +328,7 @@ fn overlay_key(
     state: &mut AppState,
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
     chord: KeyChord,
 ) -> Vec<Cmd> {
     if keymap.matches("close_overlay", chord) {
@@ -236,6 +339,16 @@ fn overlay_key(
         return Vec::new();
     };
     match &mut overlay.state {
+        OverlayState::Popup(popup) => {
+            let Some(handled) = popup_key(&state.data, keymap, panes, popup, chord) else {
+                return Vec::new();
+            };
+            if handled.changed {
+                state.bump();
+            }
+            state.ui.ui_events.extend(handled.events);
+            handled.cmds
+        }
         OverlayState::Authors(picker) => {
             if let Some(motion) = motion(keymap, chord) {
                 picker.cursor = move_in(picker.cursor, picker.authors.len() + 1, motion);
@@ -762,9 +875,8 @@ fn quit() -> Vec<Cmd> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::models::ListModel;
+    use crate::app::models::{ListModel, OverlayContent};
     use crate::app::state::Overlay;
-    use crate::app::tabs::Handled;
     use crate::app::tabs::fake::FakeTab;
     use crate::app::testdata;
     use crate::bus::{Interest, RateInfo};
@@ -1583,8 +1695,9 @@ mod tests {
             .iter()
             .rev()
             .find(|o| !o.closing)
-            .map(|o| match &o.state {
-                OverlayState::Authors(picker) => picker,
+            .and_then(|o| match &o.state {
+                OverlayState::Authors(picker) => Some(picker),
+                OverlayState::Popup(_) => None,
             })
     }
 
@@ -1703,6 +1816,141 @@ mod tests {
                 .map(|f| f.text),
             Some("overlay".to_owned())
         );
+    }
+
+    fn fake_panes() -> Vec<Box<dyn Pane>> {
+        use crate::app::panes::fake::FakePane;
+        vec![
+            Box::new(FakePane {
+                id: "a",
+                key: '1',
+                lines: 3,
+                only: None,
+            }),
+            Box::new(FakePane {
+                id: "b",
+                key: '2',
+                lines: 20,
+                only: None,
+            }),
+            Box::new(FakePane {
+                id: "c",
+                key: '3',
+                lines: 1,
+                only: Some(999),
+            }),
+        ]
+    }
+
+    /// The popup content of the top overlay.
+    fn popup_content(state: &mut AppState, panes: &[Box<dyn Pane>]) -> OverlayContent {
+        frame::frame_model_full(state, &TABS, panes)
+            .overlays
+            .last()
+            .unwrap()
+            .content
+            .clone()
+    }
+
+    #[test]
+    fn enter_opens_the_popup_with_the_panes_that_apply() {
+        let panes = fake_panes();
+        let mut state = mine_state(10);
+        let send = |state: &mut AppState, msg: Msg| {
+            update_full(state, &Keymap::default(), &TABS, &panes, msg)
+        };
+        let enter = press(KeyCode::Enter, KeyModifiers::NONE);
+        let j = press(KeyCode::Char('j'), KeyModifiers::NONE);
+        send(&mut state, j.clone());
+        state.ui.ui_events.clear();
+        assert_eq!(send(&mut state, enter), vec![]);
+        assert_eq!(state.ui.overlays.len(), 1);
+        assert_eq!(
+            state.ui.ui_events,
+            vec![UiEvent::OverlayOpened(OverlayKind::Popup)]
+        );
+        let OverlayContent::Popup {
+            title,
+            subtitle,
+            tabs,
+            active,
+            cursor,
+            ..
+        } = popup_content(&mut state, &panes)
+        else {
+            panic!("not a popup");
+        };
+        assert_eq!(title, "#103 feat(ui): popup frame with pane tabs");
+        assert_eq!(subtitle, "chaosteil · chaosteil/103 -> main · draft");
+        let keys: Vec<(char, &str)> = tabs.iter().map(|t| (t.key, t.title)).collect();
+        assert_eq!(keys, [('1', "a"), ('2', "b")], "pane c does not apply");
+        assert_eq!((active, cursor), (0, 0));
+        send(&mut state, j.clone());
+        send(&mut state, j.clone());
+        send(&mut state, j);
+        assert!(
+            matches!(
+                popup_content(&mut state, &panes),
+                OverlayContent::Popup { cursor: 2, .. }
+            ),
+            "j moves the pane cursor, up to the last item"
+        );
+        let x = press(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert_eq!(
+            send(&mut state, x.clone()),
+            vec![Cmd::OpenUrl("a 2".into())]
+        );
+        send(&mut state, press(KeyCode::Char('2'), KeyModifiers::NONE));
+        assert!(matches!(
+            popup_content(&mut state, &panes),
+            OverlayContent::Popup {
+                active: 1,
+                cursor: 0,
+                ..
+            }
+        ));
+        let generation = state.generation;
+        send(&mut state, press(KeyCode::Char('3'), KeyModifiers::NONE));
+        assert_eq!(state.generation, generation, "pane c does not apply");
+        send(&mut state, press(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(
+            matches!(
+                popup_content(&mut state, &panes),
+                OverlayContent::Popup {
+                    active: 0,
+                    cursor: 2,
+                    ..
+                }
+            ),
+            "Tab cycles, each pane keeps its cursor"
+        );
+        assert_eq!(state.ui.active, 0, "the tab keys go to the popup");
+        send(&mut state, press(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(state.ui.overlays[0].closing);
+        assert_eq!(
+            state.ui.ui_events.last(),
+            Some(&UiEvent::OverlayClosed(OverlayKind::Popup))
+        );
+        assert_eq!(send(&mut state, x), vec![], "a closing popup takes no keys");
+    }
+
+    #[test]
+    fn the_popup_says_when_its_pull_request_is_gone() {
+        let mut state = mine_state(10);
+        assert_eq!(selected_number(&mut state), Some(99));
+        let gone = testdata::pr_key("chaoshub", 99);
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(state.ui.overlays.len(), 1);
+        state.data.prs.remove(&gone);
+        state.bump();
+        assert!(matches!(
+            popup_content(&mut state, &PANES),
+            OverlayContent::Popup { subtitle, .. } if subtitle == "this pull request is gone"
+        ));
     }
 
     #[test]

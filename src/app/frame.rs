@@ -8,13 +8,16 @@ use crate::app::age::age;
 use crate::app::keymap;
 use crate::app::layout::layout;
 use crate::app::models::{
-    Cell, CellStyle, FilterModel, FrameModel, ListModel, OverlayContent, OverlayModel, StatusModel,
-    TabBarModel,
+    Cell, CellStyle, FilterModel, FrameModel, ListModel, OverlayContent, OverlayModel, PaneModel,
+    PaneTab, StatusModel, TabBarModel,
 };
-use crate::app::state::{AppState, OverlayState};
+use crate::app::panes::{PANES, Pane, applicable};
+use crate::app::state::{AppData, AppState, OverlayState, PopupState};
 use crate::app::tabs::{KeyCx, TABS, Tab};
+use crate::app::target::pr_target;
 use crate::app::term::term_status;
-use crate::bus::{Progress, Size, TermState, TermStatus};
+use crate::bus::{Progress, Size, Target, TermState, TermStatus};
+use crate::domain::pr::PrState;
 
 /// The models of the last frame.
 #[derive(Debug)]
@@ -55,6 +58,16 @@ pub(crate) fn frame_model_with<'s>(
     state: &'s mut AppState,
     tabs: &[Box<dyn Tab>],
 ) -> &'s FrameModel {
+    frame_model_full(state, tabs, &PANES)
+}
+
+/// The frame model for the current generation, from the tabs of `tabs`
+/// and the panes of `panes`.
+pub(crate) fn frame_model_full<'s>(
+    state: &'s mut AppState,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+) -> &'s FrameModel {
     if state.cache.frame_generation != Some(state.generation) {
         let list = active_list(state, tabs);
         let frame = FrameModel {
@@ -65,7 +78,7 @@ pub(crate) fn frame_model_with<'s>(
             list,
             prev_list: state.ui.prev_list.clone(),
             status: status_model(state, tabs),
-            overlays: overlay_models(state),
+            overlays: overlay_models(state, panes),
             term: term_status(state),
             filter: filter_model(state),
         };
@@ -76,7 +89,7 @@ pub(crate) fn frame_model_with<'s>(
 }
 
 /// The models of the overlay stack, bottom first.
-fn overlay_models(state: &AppState) -> Vec<OverlayModel> {
+fn overlay_models(state: &AppState, panes: &[Box<dyn Pane>]) -> Vec<OverlayModel> {
     state
         .ui
         .overlays
@@ -85,6 +98,7 @@ fn overlay_models(state: &AppState) -> Vec<OverlayModel> {
             kind: overlay.kind,
             closing: overlay.closing,
             content: match &overlay.state {
+                OverlayState::Popup(popup) => popup_content(&state.data, popup, panes),
                 OverlayState::Authors(picker) => OverlayContent::Picker {
                     title: "author".into(),
                     items: picker.items(),
@@ -93,6 +107,79 @@ fn overlay_models(state: &AppState) -> Vec<OverlayModel> {
             },
         })
         .collect()
+}
+
+/// The content of the pull request popup: the header, the tabs of the
+/// panes that apply, and the model of the active pane.
+fn popup_content(data: &AppData, popup: &PopupState, panes: &[Box<dyn Pane>]) -> OverlayContent {
+    let Some(target) = pr_target(data, &popup.key) else {
+        return OverlayContent::Popup {
+            title: format!("#{}", popup.key.number),
+            subtitle: "this pull request is gone".into(),
+            tabs: Vec::new(),
+            active: 0,
+            pane: PaneModel::Lines {
+                lines: Vec::new(),
+                wrap: false,
+            },
+            cursor: 0,
+            scroll: 0,
+        };
+    };
+    let Target::Pr { pr, .. } = &target else {
+        unreachable!("pr_target builds a pull request target")
+    };
+    let head = &pr.head.value;
+    let state = match head.state {
+        PrState::Open if head.is_draft => "draft",
+        PrState::Open => "open",
+        PrState::Closed => "closed",
+        PrState::Merged => "merged",
+    };
+    let order = applicable(panes, &target);
+    let tabs = order
+        .iter()
+        .map(|&i| PaneTab {
+            key: panes[i].key(),
+            title: panes[i].title(),
+        })
+        .collect();
+    let areas = layout(data.size);
+    let cx = KeyCx {
+        data,
+        target: Some(&target),
+        areas: &areas,
+        keys: &keymap::DEFAULT,
+    };
+    let size = Size {
+        width: areas.popup_body.width,
+        height: areas.popup_body.height,
+    };
+    let (pane, cursor, scroll) = match (panes.get(popup.active), popup.panes.get(popup.active)) {
+        (Some(pane), Some(ps)) if order.contains(&popup.active) => {
+            (pane.model(&cx, ps, size), ps.cursor, ps.scroll)
+        }
+        _ => (
+            PaneModel::Lines {
+                lines: Vec::new(),
+                wrap: false,
+            },
+            0,
+            0,
+        ),
+    };
+    OverlayContent::Popup {
+        title: format!("#{} {}", pr.key.number, head.title),
+        subtitle: format!(
+            "{} · {} -> {} · {state}",
+            head.author, head.head_ref, head.base_ref
+        ),
+        tabs,
+        active: order.iter().position(|&i| i == popup.active).unwrap_or(0),
+        pane,
+        cursor,
+        scroll,
+    }
 }
 
 /// The size of the list area that the tab models fill: the list area

@@ -14,6 +14,7 @@ use chrono::{DateTime, Utc};
 
 use crate::app::frame::ModelCache;
 use crate::app::models::{CellStyle, Direction, ListModel};
+use crate::app::panes::PaneState;
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{Interest, OverlayKind, RateInfo, Scope, Session, Size, SyncError, UiEvent};
 use crate::domain::detail::PrDetail;
@@ -164,8 +165,21 @@ pub(crate) struct Overlay {
 /// The own state of each overlay kind.
 #[derive(Debug)]
 pub(crate) enum OverlayState {
+    /// The pull request popup.
+    Popup(PopupState),
     /// The author picker of a tab.
     Authors(AuthorPicker),
+}
+
+/// The pull request popup: the pull request, the active pane and one
+/// state per pane of the registry.
+#[derive(Debug)]
+pub(crate) struct PopupState {
+    pub key: PrKey,
+    /// The registry index of the active pane.
+    pub active: usize,
+    /// One state per pane, in registry order.
+    pub panes: Vec<PaneState>,
 }
 
 /// The author picker: the first item shows every author.
