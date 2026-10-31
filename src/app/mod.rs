@@ -5,6 +5,7 @@ mod age;
 pub(crate) mod exec;
 mod filter;
 mod frame;
+mod help;
 pub(crate) mod keymap;
 pub(crate) mod layout;
 mod merge;

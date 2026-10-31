@@ -133,7 +133,6 @@ impl Keymap {
 
 /// The help section of `actions`: the chords of each action and its
 /// label, in registry order.
-#[allow(dead_code, reason = "the help overlay of phase E2 shows this section")]
 pub(crate) fn action_help(keymap: &Keymap, actions: &[Box<dyn Action>]) -> HelpSection {
     let entries = actions
         .iter()
