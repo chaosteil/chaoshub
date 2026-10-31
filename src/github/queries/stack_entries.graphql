@@ -1,0 +1,25 @@
+query StackEntries($id: ID!) {
+  node(id: $id) {
+    __typename
+    ... on PullRequestStack {
+      id
+      baseRefName
+      entries(first: 20) {
+        nodes {
+          position
+          pullRequest {
+            number
+            title
+            state
+            isDraft
+          }
+        }
+      }
+    }
+  }
+  rateLimit {
+    cost
+    remaining
+    resetAt
+  }
+}

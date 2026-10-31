@@ -8,7 +8,9 @@ use chrono::Utc;
 use graphql_client::GraphQLQuery;
 
 use crate::bus::RateInfo;
+use crate::domain::observed::Observed;
 use crate::domain::pr::PullRequest;
+use crate::domain::stack::Stack;
 use crate::github::parse::{self, Me};
 use crate::github::{GithubClient, GithubError};
 
@@ -49,6 +51,15 @@ pub(crate) struct ListPrs;
     response_derives = "Debug"
 )]
 pub(crate) struct PrByIds;
+
+/// The entries of a stack.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/stack_entries.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct StackEntries;
 
 impl GithubClient {
     /// The login of the token owner.
@@ -123,6 +134,18 @@ impl GithubClient {
         let vars = pr_by_ids::Variables { ids: ids.to_vec() };
         let (data, rate) = self.run::<PrByIds>(vars).await?;
         Ok((parse::pr_by_ids::prs(data, me, started_at)?, rate))
+    }
+
+    /// The stack with the GraphQL node id `id` and its entries, position 1
+    /// first. `None` when the id does not name a stack.
+    pub(crate) async fn stack_entries(
+        &self,
+        id: &str,
+    ) -> Result<(Option<Observed<Stack>>, RateInfo), GithubError> {
+        let started_at = Utc::now();
+        let vars = stack_entries::Variables { id: id.to_owned() };
+        let (data, rate) = self.run::<StackEntries>(vars).await?;
+        Ok((parse::stack_entries::stack(data, started_at)?, rate))
     }
 }
 
@@ -267,6 +290,27 @@ mod tests {
             body["variables"],
             json!({ "search": "is:pr author:chaosteil", "first": 3, "after": null })
         );
+    }
+
+    #[tokio::test]
+    async fn stack_entries_sends_the_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("query StackEntries"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(fixture(include_str!("testdata/stack_entries.json"))),
+            )
+            .mount(&server)
+            .await;
+        let before = Utc::now();
+        let (stack, _) = client(&server).stack_entries("PRS_1").await.unwrap();
+        let stack = stack.unwrap();
+        assert!(stack.observed_at >= before);
+        assert_eq!(stack.value.entries.len(), 6);
+        let requests = server.received_requests().await.unwrap();
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["variables"], json!({ "id": "PRS_1" }));
     }
 
     #[tokio::test]

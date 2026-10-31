@@ -14,7 +14,7 @@ use crate::domain::pr::{
     CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest, ReviewDecision,
 };
 use crate::domain::repo::RepoSettings;
-use crate::domain::stack::StackRef;
+use crate::domain::stack::{Stack, StackEntry, StackRef};
 use crate::github::GithubError;
 
 /// The user, for the `review_requested` rule.
@@ -344,6 +344,48 @@ pub(crate) mod pr_by_ids {
     }
 }
 
+/// Conversions for the `StackEntries` query.
+pub(crate) mod stack_entries {
+    use super::{DateTime, GithubError, Observed, PrState, Stack, StackEntry, Utc, observed, uint};
+    use crate::github::queries::stack_entries as q;
+
+    /// The stack and its entries, sorted by position, position 1 first.
+    /// Entries without a pull request are skipped. `None` when the node is
+    /// not a stack.
+    pub(crate) fn stack(
+        data: q::ResponseData,
+        observed_at: DateTime<Utc>,
+    ) -> Result<Option<Observed<Stack>>, GithubError> {
+        let Some(q::StackEntriesNode::PullRequestStack(node)) = data.node else {
+            return Ok(None);
+        };
+        let mut entries = Vec::new();
+        for entry in node.entries.nodes.unwrap_or_default().into_iter().flatten() {
+            let Some(pr) = entry.pull_request else {
+                continue;
+            };
+            entries.push(StackEntry {
+                position: uint(entry.position, "position")?,
+                number: uint(pr.number, "number")?,
+                title: pr.title,
+                state: match pr.state {
+                    q::PullRequestState::OPEN | q::PullRequestState::Other(_) => PrState::Open,
+                    q::PullRequestState::CLOSED => PrState::Closed,
+                    q::PullRequestState::MERGED => PrState::Merged,
+                },
+                is_draft: pr.is_draft,
+            });
+        }
+        entries.sort_by_key(|entry| entry.position);
+        let stack = Stack {
+            id: node.id,
+            base_ref: node.base_ref_name,
+            entries,
+        };
+        Ok(Some(observed(stack, observed_at)))
+    }
+}
+
 /// Decodes a captured fixture: the `data` of a GraphQL response.
 #[cfg(test)]
 pub(crate) fn fixture<T: serde::de::DeserializeOwned>(json: &str) -> T {
@@ -482,6 +524,51 @@ mod tests {
         assert_eq!(numbers, [1550, 1549]);
         assert_eq!(prs[0].head.value.state, PrState::Open);
         assert_eq!(prs[0].head.value.stack, None);
+    }
+
+    #[test]
+    fn stack_entries_are_sorted_by_position() {
+        let mut json: serde_json::Value =
+            serde_json::from_str(include_str!("testdata/stack_entries.json")).unwrap();
+        let nodes = json["data"]["node"]["entries"]["nodes"]
+            .as_array_mut()
+            .unwrap();
+        nodes.reverse();
+        nodes.push(serde_json::json!({ "position": 7, "pullRequest": null }));
+        let data = serde_json::from_value(json["data"].clone()).unwrap();
+        let stack = stack_entries::stack(data, test_time()).unwrap().unwrap();
+        assert_eq!(stack.observed_at, test_time());
+        assert_eq!(stack.value.id, "PRS_kwDOAAAABc4AAA02");
+        assert_eq!(stack.value.base_ref, "main");
+        let positions: Vec<(u32, u64)> = stack
+            .value
+            .entries
+            .iter()
+            .map(|entry| (entry.position, entry.number))
+            .collect();
+        assert_eq!(
+            positions,
+            [
+                (1, 1523),
+                (2, 1524),
+                (3, 1525),
+                (4, 1526),
+                (5, 1527),
+                (6, 1586)
+            ]
+        );
+        assert_eq!(stack.value.entries[0].state, PrState::Merged);
+        assert!(!stack.value.entries[0].is_draft);
+    }
+
+    #[test]
+    fn stack_entries_of_another_node_is_none() {
+        let data = serde_json::from_value(serde_json::json!({
+            "node": { "__typename": "PullRequest" },
+            "rateLimit": null
+        }))
+        .unwrap();
+        assert_eq!(stack_entries::stack(data, test_time()).unwrap(), None);
     }
 
     #[test]
