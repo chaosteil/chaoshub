@@ -2002,7 +2002,7 @@ mod tests {
     fn mine_state(height: u16) -> AppState {
         let mut state = AppState::new(Size {
             width: 100,
-            height: height + 2,
+            height: height + 3,
         });
         let snapshot = crate::store::Snapshot {
             local: Vec::new(),

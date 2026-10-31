@@ -9,7 +9,7 @@ use textwrap::core::display_width;
 use crate::actions::{Action, Applicability, Hint, REGISTRY};
 use crate::app::age::age;
 use crate::app::keymap::{self, Keymap};
-use crate::app::layout::layout;
+use crate::app::layout::{Areas, layout, layout_with};
 use crate::app::models::{
     Cell, CellStyle, FilterModel, FrameModel, HINT_CUT, HINT_GAP, HINT_PREFIX, KeyHint,
     KeyHintsModel, ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, StatusModel,
@@ -480,10 +480,16 @@ fn fit(hints: Vec<KeyHint>, width: usize) -> Vec<KeyHint> {
     kept
 }
 
+/// The areas of the terminal size, with the key hint bar when the key
+/// hints are on.
+pub(crate) fn areas(state: &AppState) -> Areas {
+    layout_with(state.data.size, state.cache.key_hints)
+}
+
 /// The size of the list area that the tab models fill: the list area
 /// without the filter line when it shows.
 pub(crate) fn list_size(state: &AppState) -> Size {
-    let areas = layout(state.data.size);
+    let areas = areas(state);
     let filter = u16::from(filter_model(state).is_some());
     Size {
         width: areas.list.width,
@@ -520,7 +526,7 @@ fn list_model(state: &mut AppState, tabs: &[Box<dyn Tab>], index: usize, size: S
     let (Some(tab), Some(ts)) = (tabs.get(index), state.ui.tabs.get(index)) else {
         return empty_list();
     };
-    let areas = layout(state.data.size);
+    let areas = areas(state);
     let cx = KeyCx {
         data: &state.data,
         target: None,

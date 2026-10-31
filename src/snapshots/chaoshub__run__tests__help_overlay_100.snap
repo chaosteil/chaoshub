@@ -29,6 +29,6 @@ expression: screen(&mut app)
 "    ˙  ·    ˙  ˙             ·     ˙░   ·                   ▌ d      toggle draft / ready          ▐"
 "         ·       ░           ˙       ░ ·           ˙˙ · ·   ▌ X      close                         ▐"
 " ·      ·              ˙    ░                        · ˙    ▌ o      open in the browser           ▐"
-"  ░                         ·          ˙                    ▌ y      copy the url                  ▐"
-"   ░                  ˙   · ·  ·                  ░     ░   ▙▄▒▄▄▄░▄▄▄▄▄▄░▄▄▄▄▓▄▒░▄▄▄▄▄▄▄▄▒▄▄▒▄▓▄▄▄▟"
+"  ░                         ·          ˙                    ▙▄▄▄▄▄▄▄▄▄░▄▓▄▒▄▄▄▄▄▄▄▄▄▄▄▄▄▄▒▄▄▄▄▄▓▒▄▄▟"
+"                                                                                                    "
 " [MINE] 0 repos · cache from 5m ago                                                          ? help "
