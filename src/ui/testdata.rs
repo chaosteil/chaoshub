@@ -9,7 +9,7 @@ use crate::app::models::{
     ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, Row, RowItem, RowStyle,
     StatusModel, TabBarModel, TreeNode,
 };
-use crate::bus::{OverlayKind, PrRef, Progress, Size, TermState, TermStatus};
+use crate::bus::{OverlayKind, PrRef, Progress, PromptSpec, Size, TermState, TermStatus};
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::theme::{Theme, ThemeKind};
 
@@ -438,5 +438,20 @@ pub(crate) fn help_overlay() -> OverlayModel {
                 },
             ],
         }),
+    }
+}
+
+/// The prompt overlay of the request changes action.
+pub(crate) fn prompt_overlay(text: &str) -> OverlayModel {
+    OverlayModel {
+        kind: OverlayKind::Prompt,
+        closing: false,
+        content: OverlayContent::Prompt {
+            spec: PromptSpec {
+                title: "request changes".to_owned(),
+                placeholder: "What must change?".to_owned(),
+            },
+            text: text.to_owned(),
+        },
     }
 }
