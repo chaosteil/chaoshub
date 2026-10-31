@@ -19,9 +19,10 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::config::schema::{
-    CodeviewConfig, MergeConfig, PrefetchConfig, RefreshConfig, RepoEntry, TerminalConfig,
-    ThemeConfig, WorkspacesConfig,
+    CodeviewConfig, MergeConfig, PrefetchConfig, RefreshConfig, RepoEntry, RepoMerge,
+    TerminalConfig, ThemeConfig, WorkspacesConfig,
 };
+use crate::domain::keys::RepoKey;
 use crate::domain::repo::Repo;
 
 /// The configuration of chaoshub. Every field has a default.
@@ -92,6 +93,12 @@ impl Config {
             .collect()
     }
 
+    /// The merge overrides of a repo. The defaults when the file has
+    /// none.
+    pub(crate) fn merge_for(&self, repo: &RepoKey) -> RepoMerge {
+        self.merge.repos.get(repo).cloned().unwrap_or_default()
+    }
+
     /// The `[actions.<id>]` table of one action.
     pub(crate) fn action(&self, id: &str) -> Option<&toml::Table> {
         self.actions.get(id)
@@ -132,7 +139,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::domain::keys::RepoKey;
+    use crate::config::schema::MergeMethodSetting;
 
     const SAMPLE: &str = include_str!("testdata/sample.toml");
 
@@ -220,6 +227,43 @@ mod tests {
         assert_eq!(agent["env"]["OPENAI_KEY"].as_str(), Some("secret"));
         assert_eq!(config.action("merge"), None);
         assert_eq!(config.workspaces.root, PathBuf::from("/home/me/work/ws"));
+        assert_eq!(
+            config.merge_for(&key("acme", "deploy")),
+            RepoMerge {
+                method: Some(MergeMethodSetting::Rebase),
+                bypass_rules: true,
+            }
+        );
+        assert_eq!(
+            config.merge_for(&key("chaosteil", "chaoshub")),
+            RepoMerge {
+                method: Some(MergeMethodSetting::Merge),
+                bypass_rules: false,
+            }
+        );
+    }
+
+    #[test]
+    fn merge_defaults_without_an_override() {
+        let config = Config::parse("", None).unwrap();
+        assert_eq!(
+            config.merge_for(&key("o", "r")),
+            RepoMerge {
+                method: None,
+                bypass_rules: false,
+            }
+        );
+    }
+
+    #[test]
+    fn bad_merge_override_is_an_error() {
+        let cases = [
+            "[merge.repos.chaoshub]\nmethod = \"squash\"\n",
+            "[merge.repos.\"o/r\"]\nmethod = \"fast-forward\"\n",
+        ];
+        for text in cases {
+            assert!(Config::parse(text, None).is_err(), "{text}");
+        }
     }
 
     #[test]
