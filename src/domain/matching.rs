@@ -191,7 +191,7 @@ pub(crate) fn group_stacks(prs: &[&PullRequest]) -> Vec<StackGroup> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::domain::keys::{PrKey, RepoKey};
     use crate::domain::observed::Observed;
