@@ -82,6 +82,54 @@ pub(crate) struct CiPoll;
 )]
 pub(crate) struct PrDetail;
 
+/// `addPullRequestReview`: approve or request changes.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/add_review.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct AddReview;
+
+/// `markPullRequestReadyForReview`.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/mark_ready.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct MarkReady;
+
+/// `convertPullRequestToDraft`.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/convert_to_draft.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct ConvertToDraft;
+
+/// `closePullRequest`.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/close_pr.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct ClosePr;
+
+/// The event of a review that chaoshub submits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReviewEvent {
+    Approve,
+    RequestChanges,
+}
+
+/// The error of a mutation whose payload is null.
+fn no_payload(mutation: &str) -> GithubError {
+    GithubError::Graphql(vec![format!("{mutation} returned no result")])
+}
+
 impl GithubClient {
     /// The login of the token owner.
     pub(crate) async fn viewer(&self) -> Result<(String, RateInfo), GithubError> {
@@ -202,6 +250,60 @@ impl GithubClient {
         };
         let (data, rate) = self.run::<PrDetail>(vars).await?;
         Ok((parse::pr_detail::detail(data, started_at)?, rate))
+    }
+
+    /// Submits a review of the pull request with the node id `id`. A
+    /// request for changes needs a `body`.
+    pub(crate) async fn add_review(
+        &self,
+        id: &str,
+        event: ReviewEvent,
+        body: Option<&str>,
+    ) -> Result<RateInfo, GithubError> {
+        let vars = add_review::Variables {
+            id: id.to_owned(),
+            event: match event {
+                ReviewEvent::Approve => add_review::PullRequestReviewEvent::APPROVE,
+                ReviewEvent::RequestChanges => add_review::PullRequestReviewEvent::REQUEST_CHANGES,
+            },
+            body: body.map(str::to_owned),
+        };
+        let (data, rate) = self.run::<AddReview>(vars).await?;
+        data.add_pull_request_review
+            .and_then(|payload| payload.pull_request_review)
+            .ok_or_else(|| no_payload("addPullRequestReview"))?;
+        Ok(rate)
+    }
+
+    /// Marks the draft pull request with the node id `id` as ready for
+    /// review.
+    pub(crate) async fn mark_ready(&self, id: &str) -> Result<RateInfo, GithubError> {
+        let vars = mark_ready::Variables { id: id.to_owned() };
+        let (data, rate) = self.run::<MarkReady>(vars).await?;
+        data.mark_pull_request_ready_for_review
+            .and_then(|payload| payload.pull_request)
+            .ok_or_else(|| no_payload("markPullRequestReadyForReview"))?;
+        Ok(rate)
+    }
+
+    /// Converts the pull request with the node id `id` to a draft.
+    pub(crate) async fn convert_to_draft(&self, id: &str) -> Result<RateInfo, GithubError> {
+        let vars = convert_to_draft::Variables { id: id.to_owned() };
+        let (data, rate) = self.run::<ConvertToDraft>(vars).await?;
+        data.convert_pull_request_to_draft
+            .and_then(|payload| payload.pull_request)
+            .ok_or_else(|| no_payload("convertPullRequestToDraft"))?;
+        Ok(rate)
+    }
+
+    /// Closes the pull request with the node id `id` without a merge.
+    pub(crate) async fn close_pr(&self, id: &str) -> Result<RateInfo, GithubError> {
+        let vars = close_pr::Variables { id: id.to_owned() };
+        let (data, rate) = self.run::<ClosePr>(vars).await?;
+        data.close_pull_request
+            .and_then(|payload| payload.pull_request)
+            .ok_or_else(|| no_payload("closePullRequest"))?;
+        Ok(rate)
     }
 }
 
@@ -431,6 +533,101 @@ mod tests {
         assert_eq!(
             body["variables"],
             json!({ "owner": "acme", "name": "monorepo", "number": 3311 })
+        );
+    }
+
+    /// Serves `data` to every request, with rate limit headers, because a
+    /// mutation cannot select `rateLimit`.
+    async fn mutation_server(data: Value) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("x-ratelimit-remaining", "4990")
+                    .insert_header("x-ratelimit-reset", "1790000000")
+                    .set_body_json(json!({ "data": data })),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// The operation name and the variables of the requests to `server`.
+    async fn sent(server: &MockServer) -> Vec<(Value, Value)> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                (body["operationName"].clone(), body["variables"].clone())
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn add_review_sends_the_event_and_body() {
+        let server = mutation_server(json!({
+            "addPullRequestReview": { "pullRequestReview": { "id": "PRR_1", "state": "APPROVED" } }
+        }))
+        .await;
+        let client = client(&server);
+        let rate = client
+            .add_review("PR_1", ReviewEvent::Approve, None)
+            .await
+            .unwrap();
+        assert_eq!((rate.remaining, rate.last_cost), (4990, 0));
+        client
+            .add_review("PR_1", ReviewEvent::RequestChanges, Some("Please fix."))
+            .await
+            .unwrap();
+        assert_eq!(
+            sent(&server).await,
+            [
+                (
+                    json!("AddReview"),
+                    json!({ "id": "PR_1", "event": "APPROVE", "body": null })
+                ),
+                (
+                    json!("AddReview"),
+                    json!({ "id": "PR_1", "event": "REQUEST_CHANGES", "body": "Please fix." })
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn draft_ready_and_close_send_the_id() {
+        let server = mutation_server(json!({
+            "markPullRequestReadyForReview": { "pullRequest": { "id": "PR_1", "isDraft": false } },
+            "convertPullRequestToDraft": { "pullRequest": { "id": "PR_1", "isDraft": true } },
+            "closePullRequest": { "pullRequest": { "id": "PR_1", "state": "CLOSED" } }
+        }))
+        .await;
+        let client = client(&server);
+        client.mark_ready("PR_1").await.unwrap();
+        client.convert_to_draft("PR_1").await.unwrap();
+        client.close_pr("PR_1").await.unwrap();
+        let id = json!({ "id": "PR_1" });
+        assert_eq!(
+            sent(&server).await,
+            [
+                (json!("MarkReady"), id.clone()),
+                (json!("ConvertToDraft"), id.clone()),
+                (json!("ClosePr"), id),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_null_payload_is_an_error() {
+        let server = mutation_server(json!({ "closePullRequest": null })).await;
+        let err = client(&server).close_pr("PR_1").await.unwrap_err();
+        assert!(
+            matches!(&err, GithubError::Graphql(messages) if messages == &["closePullRequest returned no result"]),
+            "{err:?}"
         );
     }
 
