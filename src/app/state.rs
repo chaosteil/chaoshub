@@ -12,6 +12,7 @@ use std::any::Any;
 use std::collections::BTreeMap;
 
 use crate::app::models::{Direction, ListModel};
+use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{OverlayKind, Session, Size, UiEvent};
 use crate::domain::detail::PrDetail;
 use crate::domain::keys::{PrKey, RepoKey};
@@ -48,6 +49,8 @@ pub(crate) struct AppData {
 pub(crate) struct UiState {
     /// The index of the active tab in the tab registry.
     pub active: usize,
+    /// One state per tab, in registry order.
+    pub tabs: Vec<TabState>,
     /// The overlay stack, bottom first.
     pub overlays: Vec<Overlay>,
     /// The last status message.
@@ -71,8 +74,14 @@ pub(crate) struct Overlay {
 }
 
 impl AppState {
-    /// Creates an empty state for a terminal size.
+    /// Creates an empty state for a terminal size, with one tab state
+    /// per tab of `TABS`.
     pub(crate) fn new(size: Size) -> Self {
+        Self::with_tabs(size, &TABS)
+    }
+
+    /// Creates an empty state with one tab state per tab of `tabs`.
+    pub(crate) fn with_tabs(size: Size, tabs: &[Box<dyn Tab>]) -> Self {
         Self {
             data: AppData {
                 size,
@@ -87,6 +96,7 @@ impl AppState {
             },
             ui: UiState {
                 active: 0,
+                tabs: tabs.iter().map(|tab| tab.init_state()).collect(),
                 overlays: Vec::new(),
                 status: None,
                 ui_events: Vec::new(),
@@ -105,6 +115,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::tabs::fake::FakeTab;
 
     #[test]
     fn new_state_is_empty_and_bump_moves_the_generation() {
@@ -119,5 +130,20 @@ mod tests {
         assert_eq!(state.generation, 0);
         state.bump();
         assert_eq!(state.generation, 1);
+    }
+
+    #[test]
+    fn with_tabs_makes_one_state_per_tab() {
+        let tabs: Vec<Box<dyn Tab>> =
+            vec![Box::new(FakeTab::new("a")), Box::new(FakeTab::new("b"))];
+        let state = AppState::with_tabs(
+            Size {
+                width: 100,
+                height: 30,
+            },
+            &tabs,
+        );
+        assert_eq!(state.ui.tabs.len(), 2);
+        assert_eq!(state.ui.active, 0);
     }
 }
