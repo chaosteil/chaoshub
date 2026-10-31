@@ -8,9 +8,10 @@ use crate::app::age::age;
 use crate::app::keymap;
 use crate::app::layout::layout;
 use crate::app::models::{
-    Cell, CellStyle, FilterModel, FrameModel, ListModel, StatusModel, TabBarModel,
+    Cell, CellStyle, FilterModel, FrameModel, ListModel, OverlayContent, OverlayModel, StatusModel,
+    TabBarModel,
 };
-use crate::app::state::AppState;
+use crate::app::state::{AppState, OverlayState};
 use crate::app::tabs::{KeyCx, TABS, Tab};
 use crate::app::term::term_status;
 use crate::bus::{Progress, Size, TermState, TermStatus};
@@ -64,8 +65,7 @@ pub(crate) fn frame_model_with<'s>(
             list,
             prev_list: state.ui.prev_list.clone(),
             status: status_model(state, tabs),
-            // The overlay models come with the overlay kinds of phase D.
-            overlays: Vec::new(),
+            overlays: overlay_models(state),
             term: term_status(state),
             filter: filter_model(state),
         };
@@ -73,6 +73,26 @@ pub(crate) fn frame_model_with<'s>(
         state.cache.frame_generation = Some(state.generation);
     }
     &state.cache.frame
+}
+
+/// The models of the overlay stack, bottom first.
+fn overlay_models(state: &AppState) -> Vec<OverlayModel> {
+    state
+        .ui
+        .overlays
+        .iter()
+        .map(|overlay| OverlayModel {
+            kind: overlay.kind,
+            closing: overlay.closing,
+            content: match &overlay.state {
+                OverlayState::Authors(picker) => OverlayContent::Picker {
+                    title: "author".into(),
+                    items: picker.items(),
+                    cursor: picker.cursor,
+                },
+            },
+        })
+        .collect()
 }
 
 /// The size of the list area that the tab models fill: the list area

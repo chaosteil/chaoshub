@@ -33,6 +33,9 @@ pub(crate) struct TabState {
     pub selected: Option<RowItem>,
     /// The text of the fuzzy filter.
     pub filter: String,
+    /// The author filter from the author picker. `None` shows every
+    /// author.
+    pub author: Option<String>,
     /// The own state of the tab, for example its toggles.
     pub ext: Box<dyn Any + Send + Sync>,
 }
@@ -45,6 +48,7 @@ impl Default for TabState {
             scroll: 0,
             selected: None,
             filter: String::new(),
+            author: None,
             ext: Box::new(()),
         }
     }
@@ -88,6 +92,9 @@ pub(crate) trait Tab: Send + Sync {
     /// Scores the fuzzy filter again when the filter text or the data
     /// changed since the last scoring.
     fn rescore(&self, cx: &KeyCx<'_>, ts: &mut TabState);
+    /// The authors for the author picker, sorted and once each. Empty
+    /// when the tab has no author filter.
+    fn authors(&self, cx: &KeyCx<'_>) -> Vec<String>;
     /// `None` when the tab does not handle the key.
     fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ts: &mut TabState) -> Option<Handled>;
     fn help(&self) -> Vec<(KeyChord, &'static str)>;
@@ -217,6 +224,10 @@ pub(crate) mod fake {
         }
 
         fn rescore(&self, _cx: &KeyCx<'_>, _ts: &mut TabState) {}
+
+        fn authors(&self, _cx: &KeyCx<'_>) -> Vec<String> {
+            Vec::new()
+        }
 
         fn handle_key(
             &self,
