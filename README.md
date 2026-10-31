@@ -49,6 +49,7 @@ Command line options:
 | `--config PATH` | Reads the configuration from `PATH` instead of `~/.config/chaoshub/config.toml`. |
 | `--no-prefetch` | Turns off the prefetch of pull request refs for this session. |
 | `--theme STYLE` | Uses `grunge`, `punk` or `plain` for this session, in place of `[theme] style`. |
+| `--palette NAME` | Uses `pierre` or `ansi16` for this session, in place of `[theme] palette`. |
 | `cache clear` | Deletes the cache file. The next start syncs from GitHub again. |
 
 ## Files
@@ -182,14 +183,17 @@ table (see "How to extend").
 | Key | Default | Meaning |
 |---|---|---|
 | `style` | `grunge` | The look: `grunge`, `punk` or `plain`. |
+| `palette` | `pierre` | The colors: `pierre` or `ansi16`. On a 16-color terminal, `pierre` changes to `ansi16`. |
 | `grunge` | `true` | Draws the rough block borders. Applies to the grunge style only. |
 | `textures` | `true` | Fills empty areas with noise textures. Applies to the grunge style only. |
 | `animations` | `true` | Turns the transitions on: tab slides, popup slides, scrolls and the status message fade. |
 | `animation_ms` | `160` | The duration of one transition, in milliseconds. The confirm and prompt popups always take 100 ms, and the status fade takes 300 ms. |
 | `key_hints` | `true` | Shows the key hint bar above the status bar. |
 
-The punk style uses black, white and hard red, with cut corners and
-diagonal accents. To try it, start chaoshub with `--theme punk`.
+The style and the palette are two switches. The style sets the shapes,
+and the palette sets the colors. The punk style keeps the palette and
+changes the shapes: cut corners, diagonal accents, inverted headers and
+a selection band. To try it, start chaoshub with `--theme punk`.
 
 If two frames in a row take longer than 12 ms to draw, chaoshub turns
 the transitions off until it quits, and writes a line in the log.
