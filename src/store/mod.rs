@@ -177,6 +177,8 @@ mod tests {
                         merge: false,
                         rebase: true,
                         default_branch: None,
+                        squash_title_default: None,
+                        squash_message_default: None,
                     },
                 },
                 observed_at,
@@ -357,6 +359,8 @@ mod tests {
                     merge: false,
                     rebase: true,
                     default_branch: None,
+                    squash_title_default: None,
+                    squash_message_default: None,
                 }
             )]
         );

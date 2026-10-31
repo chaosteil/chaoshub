@@ -487,6 +487,8 @@ mod tests {
             merge: false,
             rebase: false,
             default_branch: None,
+            squash_title_default: None,
+            squash_message_default: None,
         };
         let pr = crate::app::testdata::pr("r", 1, "One");
         let snapshot = Snapshot {

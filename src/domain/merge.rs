@@ -108,6 +108,8 @@ mod tests {
                 merge,
                 rebase,
                 default_branch: None,
+                squash_title_default: None,
+                squash_message_default: None,
             }),
         }
     }

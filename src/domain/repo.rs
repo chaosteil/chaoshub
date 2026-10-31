@@ -24,6 +24,37 @@ pub(crate) struct RepoSettings {
     pub rebase: bool,
     /// `None` when the source of the settings does not include it.
     pub default_branch: Option<String>,
+    /// The default title of a squash commit. `None` when the source of
+    /// the settings does not include it.
+    #[serde(default)]
+    pub squash_title_default: Option<SquashTitleDefault>,
+    /// The default body of a squash commit. `None` when the source of the
+    /// settings does not include it.
+    #[serde(default)]
+    pub squash_message_default: Option<SquashMessageDefault>,
+}
+
+/// The default title that GitHub gives a squash commit
+/// (`squashMergeCommitTitle`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum SquashTitleDefault {
+    /// The title of the pull request.
+    PrTitle,
+    /// The title of the commit when the pull request has one commit, else
+    /// the title of the pull request.
+    CommitOrPrTitle,
+}
+
+/// The default body that GitHub gives a squash commit
+/// (`squashMergeCommitMessage`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum SquashMessageDefault {
+    /// The body of the pull request.
+    PrBody,
+    /// The messages of the commits of the branch.
+    CommitMessages,
+    /// An empty body.
+    Blank,
 }
 
 #[cfg(test)]
@@ -44,6 +75,8 @@ mod tests {
                 merge: false,
                 rebase: true,
                 default_branch: Some("main".into()),
+                squash_title_default: Some(SquashTitleDefault::PrTitle),
+                squash_message_default: Some(SquashMessageDefault::Blank),
             }),
         });
     }
