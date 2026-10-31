@@ -8,6 +8,7 @@ use crate::app::layout::layout;
 use crate::app::models::{Cell, CellStyle, FrameModel, ListModel, StatusModel, TabBarModel};
 use crate::app::state::AppState;
 use crate::app::tabs::{KeyCx, TABS, Tab};
+use crate::app::term::term_status;
 use crate::bus::{Progress, Size, TermState, TermStatus};
 
 /// The models of the last frame.
@@ -66,11 +67,7 @@ pub(crate) fn frame_model_with<'s>(
             status: status_model(state, tabs),
             // The overlay models come with the overlay kinds of phase D.
             overlays: Vec::new(),
-            term: TermStatus {
-                state: TermState::Idle,
-                msg: None,
-                progress: Progress::Off,
-            },
+            term: term_status(state),
         };
         state.cache.frame = frame;
         state.cache.frame_generation = Some(state.generation);
@@ -258,6 +255,7 @@ mod tests {
             }
         );
         assert_eq!(frame.prev_list, Some((empty_list(), Direction::Left)));
+        assert_eq!(frame.term, term_status(&state));
     }
 
     #[test]
