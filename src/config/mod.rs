@@ -43,8 +43,8 @@ pub(crate) struct Config {
     /// Key binding overrides: an action id or app key name to a key.
     pub keys: BTreeMap<String, String>,
     /// The `[actions.<id>]` tables. Each action reads its own table.
-    /// `parse` copies the `method`, `bypass_rules` and `repos` keys of
-    /// `[merge]` into the `merge` table, so the merge action reads
+    /// `parse` copies the `method`, `bypass_rules`, `stack` and `repos`
+    /// keys of `[merge]` into the `merge` table, so the merge action reads
     /// `[merge.repos."owner/name"]`. A key that `[actions.merge]` sets
     /// stays: `[actions.merge.repos]` overrides `[merge.repos]`.
     pub actions: BTreeMap<String, toml::Table>,
@@ -57,7 +57,7 @@ pub(crate) struct Config {
 }
 
 /// The keys of `[merge]` that `parse` copies into `[actions.merge]`.
-const MERGE_KEYS: &[&str] = &["method", "bypass_rules", "repos"];
+const MERGE_KEYS: &[&str] = &["method", "bypass_rules", "stack", "repos"];
 
 /// An error that stops the configuration from loading.
 #[derive(Debug, thiserror::Error)]
@@ -165,7 +165,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::config::schema::MergeMethodSetting;
+    use crate::config::schema::{MergeMethodSetting, StackSetting};
 
     const SAMPLE: &str = include_str!("testdata/sample.toml");
 
@@ -261,6 +261,7 @@ mod tests {
             RepoMerge {
                 method: Some(MergeMethodSetting::Rebase),
                 bypass_rules: true,
+                stack: StackSetting::Auto,
             }
         );
         assert_eq!(
@@ -268,6 +269,7 @@ mod tests {
             RepoMerge {
                 method: Some(MergeMethodSetting::Merge),
                 bypass_rules: false,
+                stack: StackSetting::Auto,
             }
         );
     }
@@ -280,6 +282,7 @@ mod tests {
             RepoMerge {
                 method: None,
                 bypass_rules: false,
+                stack: StackSetting::Auto,
             }
         );
     }
@@ -300,6 +303,7 @@ mod tests {
             Some(&RepoMerge {
                 method: Some(MergeMethodSetting::Rebase),
                 bypass_rules: true,
+                stack: StackSetting::Auto,
             })
         );
     }
@@ -319,6 +323,7 @@ mod tests {
                 RepoMerge {
                     method: Some(MergeMethodSetting::Merge),
                     bypass_rules: false,
+                    stack: StackSetting::Auto,
                 }
             )])
         );
@@ -336,6 +341,23 @@ mod tests {
         assert_eq!(table["bypass_rules"].as_bool(), Some(false));
         assert_eq!(table["other"].as_integer(), Some(1));
         assert!(!table.contains_key("repos"));
+    }
+
+    #[test]
+    fn merge_stack_reaches_the_merge_action() {
+        let text = concat!(
+            "[merge]\nstack = \"sequential\"\n",
+            "[merge.repos.\"o/r\"]\nstack = \"atomic\"\n",
+        );
+        let config = Config::parse(text, None).unwrap();
+        let table = config.action("merge").unwrap();
+        assert_eq!(table["stack"].as_str(), Some("sequential"));
+        assert_eq!(config.merge_for(&key("o", "r")).stack, StackSetting::Atomic);
+        assert_eq!(
+            config.merge_for(&key("o", "other")).stack,
+            StackSetting::Auto
+        );
+        assert!(Config::parse("[merge.repos.\"o/r\"]\nstack = \"fast\"\n", None).is_err());
     }
 
     #[test]
