@@ -272,3 +272,56 @@ pub(crate) fn team_snapshot() -> crate::store::Snapshot {
     );
     snapshot
 }
+
+/// A conversation at head `oid7`: an issue comment (at the test time), a
+/// resolved thread of two comments, an open thread, a review that asks for
+/// changes (2 hours later), and a pending review.
+pub(crate) fn detail() -> crate::domain::detail::PrDetail {
+    use crate::domain::detail::{Comment, PrDetail, Review, ReviewState, Thread};
+
+    let comment = |author: &str, body: &str, minutes: i64| Comment {
+        author: author.into(),
+        body: body.into(),
+        created_at: test_time() + chrono::TimeDelta::minutes(minutes),
+        url: format!("https://github.com/c/{minutes}"),
+    };
+    PrDetail {
+        comments: vec![comment(
+            "alice",
+            "Looks good, one question about `layout`.\r\n",
+            0,
+        )],
+        reviews: vec![
+            Review {
+                author: "bob".into(),
+                state: ReviewState::ChangesRequested,
+                body: "Please split the **transition** module.".into(),
+                submitted_at: Some(test_time() + chrono::TimeDelta::hours(2)),
+            },
+            Review {
+                author: "carol".into(),
+                state: ReviewState::Pending,
+                body: String::new(),
+                submitted_at: None,
+            },
+        ],
+        threads: vec![
+            Thread {
+                path: "src/ui/list.rs".into(),
+                line: Some(42),
+                is_resolved: true,
+                comments: vec![
+                    comment("bob", "Off by one?", 10),
+                    comment("chaosteil", "Fixed.", 20),
+                ],
+            },
+            Thread {
+                path: "src/ui/pane.rs".into(),
+                line: Some(7),
+                is_resolved: false,
+                comments: vec![comment("bob", "The gutter eats one column.", 60)],
+            },
+        ],
+        head_oid: "oid7".into(),
+    }
+}

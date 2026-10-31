@@ -21,10 +21,6 @@ pub(crate) struct PaneState {
     pub cursor: usize,
     pub scroll: usize,
     /// The own state of the pane, for example the expanded threads.
-    #[allow(
-        dead_code,
-        reason = "the conversation pane keeps its expanded threads here"
-    )]
     pub ext: Box<dyn Any + Send + Sync>,
 }
 
@@ -58,8 +54,12 @@ pub(crate) trait Pane: Send + Sync {
 }
 
 /// The pane registry, in popup order.
-pub(crate) static PANES: LazyLock<Vec<Box<dyn Pane>>> =
-    LazyLock::new(|| vec![Box::new(checks::Checks)]);
+pub(crate) static PANES: LazyLock<Vec<Box<dyn Pane>>> = LazyLock::new(|| {
+    vec![
+        Box::new(checks::Checks),
+        Box::new(conversation::Conversation),
+    ]
+});
 
 /// The registry indexes of the panes that apply to `target`.
 pub(crate) fn applicable(panes: &[Box<dyn Pane>], target: &Target) -> Vec<usize> {

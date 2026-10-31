@@ -49,6 +49,9 @@ pub(crate) struct AppData {
     /// The jj scan of each repo.
     pub local: BTreeMap<RepoKey, Observed<LocalState>>,
     pub details: BTreeMap<PrKey, Observed<PrDetail>>,
+    /// The reason of the last failed detail load of each pull request,
+    /// until a load succeeds.
+    pub detail_errors: BTreeMap<PrKey, String>,
     pub repos: BTreeMap<RepoKey, Repo>,
     /// The newest sync time of the cached pull requests at startup: the
     /// age of the cache. `None` when the cache was empty.
@@ -232,6 +235,7 @@ impl AppState {
                 scopes: BTreeMap::new(),
                 local: BTreeMap::new(),
                 details: BTreeMap::new(),
+                detail_errors: BTreeMap::new(),
                 repos: BTreeMap::new(),
                 cache_at: None,
                 synced: HashMap::new(),

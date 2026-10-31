@@ -26,6 +26,7 @@ use crate::bus::{
     Persist, PrRef, Scope, Size, SyncError, TargetKey, UiEvent,
 };
 use crate::domain::check::Check;
+use crate::domain::detail::PrDetail;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::{Observed, apply_newer};
@@ -92,6 +93,13 @@ pub(crate) fn update_full(
             selected_checks,
         } => {
             if ci_updated(state, states, selected_checks) {
+                after_change(state, tabs)
+            } else {
+                Vec::new()
+            }
+        }
+        Msg::DetailLoaded(key, result) => {
+            if detail_loaded(state, key, result) {
                 after_change(state, tabs)
             } else {
                 Vec::new()
@@ -639,6 +647,37 @@ fn ci_updated(
     }
     if changed {
         state.data.revision += 1;
+        state.bump();
+    }
+    changed
+}
+
+/// The conversation of a pull request, under the freshness rule, or the
+/// reason why it did not load. True when it changed the data.
+fn detail_loaded(
+    state: &mut AppState,
+    key: PrKey,
+    result: Result<Observed<PrDetail>, SyncError>,
+) -> bool {
+    let data = &mut state.data;
+    let changed = match result {
+        Ok(detail) => {
+            let cleared = data.detail_errors.remove(&key).is_some();
+            let applied = match data.details.get_mut(&key) {
+                None => {
+                    data.details.insert(key, detail);
+                    true
+                }
+                Some(current) => apply(current, detail, &key, "detail"),
+            };
+            cleared || applied
+        }
+        Err(err) => {
+            let reason = error_text(&err);
+            data.detail_errors.insert(key, reason.clone()) != Some(reason)
+        }
+    };
+    if changed {
         state.bump();
     }
     changed
@@ -2055,6 +2094,34 @@ mod tests {
         };
         assert_eq!(run(&mut state, &tabs, older), vec![]);
         assert_eq!(pr(&state, 1).ci_state, ci(5));
+    }
+
+    #[test]
+    fn detail_loads_follow_the_freshness_rule_and_keep_errors() {
+        let (tabs, mut state) = setup(None);
+        let key = testdata::pr_key("chaoshub", 7);
+        let at_secs = |secs| Observed {
+            value: testdata::detail(),
+            observed_at: at(secs),
+        };
+        let loaded = |result| Msg::DetailLoaded(key.clone(), result);
+        run(&mut state, &tabs, loaded(Err(SyncError::Offline)));
+        assert_eq!(
+            state.data.detail_errors.get(&key).map(String::as_str),
+            Some("offline")
+        );
+        let generation = state.generation;
+        run(&mut state, &tabs, loaded(Err(SyncError::Offline)));
+        assert_eq!(state.generation, generation, "the same error again");
+        run(&mut state, &tabs, loaded(Ok(at_secs(10))));
+        assert_eq!(state.data.details.get(&key), Some(&at_secs(10)));
+        assert_eq!(state.data.detail_errors.get(&key), None);
+        let mut older = at_secs(5);
+        older.value.comments.clear();
+        let generation = state.generation;
+        assert_eq!(run(&mut state, &tabs, loaded(Ok(older))), vec![]);
+        assert_eq!(state.data.details.get(&key), Some(&at_secs(10)));
+        assert_eq!(state.generation, generation);
     }
 
     #[test]
