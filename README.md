@@ -21,9 +21,9 @@ starts, and then syncs with GitHub in the background.
 - **gh**, the GitHub command line tool, logged in. Run `gh auth login`
   once. chaoshub gets its token from `gh auth token`.
 - **nvim** with the **codeview** plugin, for the review action (`v`).
-- **Rex** (optional). Inside Rex, the review opens in a Rex pane beside
-  chaoshub. Without Rex, the review runs in the same terminal, and
-  chaoshub comes back when nvim quits.
+- **Rex** (optional). Inside Rex, the review and the pull request
+  detail open in Rex panes beside chaoshub. Without Rex, the review runs
+  in the same terminal, and chaoshub comes back when nvim quits.
 
 ## Install
 
@@ -53,6 +53,14 @@ Command line options:
 | `--theme STYLE` | Uses `grunge`, `punk` or `plain` for this session, in place of `[theme] style`. |
 | `--palette NAME` | Uses `pierre` or `ansi16` for this session, in place of `[theme] palette`. |
 | `cache clear` | Deletes the cache file. The next start syncs from GitHub again. |
+| `pr OWNER/NAME NUMBER` | Shows one pull request and nothing else: the panes of the pull request detail. A pull request that is not in the cache loads from GitHub. `q` or `esc` quits. The detail pane inside Rex runs this command. |
+
+To show one pull request, for example #7 of `chaosteil/chaoshub-test`,
+run:
+
+```sh
+chaoshub pr chaosteil/chaoshub-test 7
+```
 
 ## Files
 
@@ -94,7 +102,7 @@ launcher = "auto"
 |---|---|---|
 | `login` | none | Your GitHub login. When it is not set, chaoshub asks GitHub for the login of the token. |
 | `teams` | `[]` | Teams in the `org/team` form. A review request to one of these teams counts as a review request to you. |
-| `launcher` | `"auto"` | Where the review pane opens. `auto` and `rex` use a Rex pane when chaoshub runs inside Rex (`REX_BLOCK` is set). `inline` always runs the review in the same terminal. Any other value is an error. |
+| `launcher` | `"auto"` | Where the review pane and the detail pane open. `auto` and `rex` use a Rex pane when chaoshub runs inside Rex (`REX_BLOCK` is set). `inline` always runs the review in the same terminal. Any other value is an error. |
 
 ### `[[repo]]`
 
@@ -142,6 +150,24 @@ The Rex pane of the review action.
 |---|---|---|
 | `zoom` | `true` | Zooms the pane, so nvim fills the window. |
 | `split` | `"right"` | The direction of the new pane: `right`, `left`, `above` or `below`. |
+| `ratio` | none | The percent of the split that the pane gets. Without it, Rex uses its default. |
+
+### `[detail]`
+
+Where `enter` opens the detail of a pull request (see "Pull request
+detail").
+
+```toml
+[detail]
+mode = "auto"
+split = "right"
+ratio = 50
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `mode` | `"auto"` | `auto` opens a Rex pane inside Rex, and the sidebar elsewhere. `pane` always opens the pane. Without Rex, the pane runs in the same terminal, and the list comes back when it quits. `sidebar` always opens the sidebar. Any other value is an error. |
+| `split` | `"right"` | The direction of the pane: `right`, `left`, `above` or `below`. |
 | `ratio` | none | The percent of the split that the pane gets. Without it, Rex uses its default. |
 
 ### `[merge]`
@@ -254,38 +280,49 @@ for `[keys]`.
 
 | Binding | Keys | What it does |
 |---|---|---|
-| `tab_1` to `tab_9` | `1` to `9` | Selects a tab. In the pull request sidebar, the number keys select a pane. |
-| `next_tab` | `tab` | The next tab. In the sidebar, the next pane. |
+| `tab_1` to `tab_9` | `1` to `9` | Selects a tab. In the pull request detail, the number keys select a pane. |
+| `next_tab` | `tab` | The next tab. In the detail, the next pane. |
 | `down`, `up` | `j`, `k` | Moves the cursor. |
 | `top`, `bottom` | `g`, `G` | Moves to the first or the last row. |
 | `page_down`, `page_up` | `ctrl-d`, `ctrl-u` | Moves one page. |
-| `open` | `enter` | Opens the pull request sidebar. In the conversation pane, expands a thread. |
+| `open` | `enter` | Opens the pull request detail: a Rex pane inside Rex, else the sidebar (see `[detail]`). A second `enter` on the same pull request focuses its pane. In the conversation pane, expands a thread. |
 | `open_url` | `o` | In the checks pane, opens the selected check in the browser. |
-| `close_overlay` | `esc`, `q` | Closes the sidebar or the overlay. When nothing is open, these keys quit (see `quit`). |
+| `close_overlay` | `esc`, `q` | Closes the sidebar or the overlay. When nothing is open, these keys quit (see `quit`). In the Rex pane of the detail, they quit the pane. |
 | `confirm` | `y` | Confirms in a confirm popup. `enter` also confirms. |
 | `cancel` | `n` | Cancels a confirm popup. |
 | `filter` | `/` | Types a fuzzy filter for the active tab. |
 | `authors` | `a` | Opens the author picker of the Team tab. |
 | `toggle_all` | `t` | On the Team tab, shows every open pull request, not only the ready ones. |
-| `refresh` | `r` | Syncs both lists now. |
+| `refresh` | `r` | Syncs both lists now. In the pull request detail, syncs the pull request and its stack, and scans its repo. |
 | `help` | `?` | Shows the help overlay with every binding. |
 | `quit` | `q`, `esc`, `ctrl-c` | Quits. When the sidebar or an overlay is open, `esc` and `q` close it first. While you type a filter, `esc` clears the filter. `ctrl-c` quits from everywhere. |
 
 In a prompt popup, `enter` submits the text and `esc` cancels.
 
-### Pull request sidebar
+### Pull request detail
 
-`enter` on a pull request opens the sidebar. The sidebar slides in from
-the right and covers 80% of the width, over the list rows. The tab bar,
-the key hint bar and the status bar stay visible. `esc` or `q` closes
-the sidebar.
+`enter` on a pull request opens its detail. Where it opens depends on
+`[detail] mode`.
 
-The sidebar has four panes. The number keys select a pane, and `tab`
+Inside Rex, `enter` runs `chaoshub pr OWNER/NAME N` in a Rex pane beside
+the list, and the pane takes the focus. The pane shows the panes of the
+pull request and nothing else. `q` or `esc` in the pane closes the pane,
+and the list then syncs the pull request again and scans its repo.
+`enter` on another pull request replaces the pane. `enter` on the same
+pull request focuses the pane. A quit of the list closes the pane. A
+quit of the pane leaves a codeview review from `v` open.
+
+Outside Rex, `enter` opens the sidebar. The sidebar slides in from the
+right and covers 80% of the width, over the list rows. The tab bar, the
+key hint bar and the status bar stay visible. `esc` or `q` closes the
+sidebar.
+
+The detail has four panes. The number keys select a pane, and `tab`
 selects the next pane:
 
 | Key | Pane | What it shows |
 |---|---|---|
-| `1` | Description | The body of the pull request as markdown. The sidebar opens on this pane. |
+| `1` | Description | The body of the pull request as markdown. The detail opens on this pane. |
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order. |
 | `4` | Stack | The entries of the stack. Only for a stacked pull request. |
@@ -293,9 +330,9 @@ selects the next pane:
 `j`, `k` and the other motion keys move the cursor of the pane. In the
 description pane and the stack pane, they scroll the text.
 
-The action keys also work in the sidebar, on the pull request of the
-sidebar. For example, `v` opens codeview, and `m` opens the merge
-confirm popup on top of the sidebar. The pane keys, the motion keys and
+The action keys also work in the detail, on the pull request of the
+detail. For example, `v` opens codeview, and `m` opens the merge
+confirm popup on top of the detail. The pane keys, the motion keys and
 the keys of the active pane come first: in the checks pane, `o` opens
 the selected check, not the pull request. The key hint bar shows the
 action keys that work for the pull request.
@@ -381,6 +418,24 @@ transition runs before or after nvim.
 
 When the review ends, chaoshub syncs the pull request again and scans
 the repo again.
+
+### What `enter` runs inside Rex
+
+The pull request detail runs chaoshub again, in a Rex pane beside the
+list:
+
+```sh
+rex split -b $REX_BLOCK --split=<[detail] split> [--ratio <[detail] ratio>] \
+  -c <repo path> --label chaoshub-detail-<owner>-<name>-<N>-<id> --json -- \
+  <chaoshub> --config <config path> --no-prefetch [--theme <style>] \
+  [--palette <name>] [--repo <owner/name> ...] pr <owner/name> <N>
+```
+
+The pane gets the configuration file and the `--theme`, `--palette` and
+`--repo` options of the list. It always gets `--no-prefetch`, because
+the list already prefetches the pull request of its cursor row. A repo
+without a `path` runs in the directory of the list. chaoshub does not
+zoom the pane. It waits for the pane with `rex wait`.
 
 ### Terminal status: OSC 7501 and OSC 9;4
 
