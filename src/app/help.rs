@@ -113,7 +113,7 @@ mod tests {
         assert_eq!(keys[0], entry("1", "tab one"));
         assert_eq!(keys[1], entry("tab", "next tab"));
         assert!(keys.contains(&entry("F5 r", "refresh")));
-        assert!(keys.contains(&entry("q ctrl-c", "quit")));
+        assert!(keys.contains(&entry("q esc ctrl-c", "quit")));
         assert!(keys.contains(&entry("esc q", "close the popup")));
         assert!(keys.contains(&entry("j k", "down, up")));
         assert!(

@@ -267,7 +267,7 @@ for `[keys]`.
 | `toggle_all` | `t` | On the Team tab, shows every open pull request, not only the ready ones. |
 | `refresh` | `r` | Syncs both lists now. |
 | `help` | `?` | Shows the help overlay with every binding. |
-| `quit` | `q`, `ctrl-c` | Quits. `ctrl-c` quits from everywhere. |
+| `quit` | `q`, `esc`, `ctrl-c` | Quits. When the sidebar or an overlay is open, `esc` and `q` close it first. While you type a filter, `esc` clears the filter. `ctrl-c` quits from everywhere. |
 
 In a prompt popup, `enter` submits the text and `esc` cancels.
 

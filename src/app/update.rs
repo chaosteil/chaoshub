@@ -1486,6 +1486,41 @@ mod tests {
     }
 
     #[test]
+    fn esc_quits_when_no_overlay_is_open() {
+        let (tabs, mut state) = setup(None);
+        let esc = press(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(run(&mut state, &tabs, esc), vec![Cmd::Quit]);
+    }
+
+    #[test]
+    fn esc_closes_the_sidebar_and_does_not_quit() {
+        let mut state = mine_state(10);
+        key(&mut state, 'j');
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(state.ui.overlays.len(), 1);
+        let esc = press(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(update(&mut state, &Keymap::default(), esc), vec![]);
+        assert!(state.ui.overlays[0].closing, "the sidebar closes");
+    }
+
+    #[test]
+    fn esc_clears_the_filter_and_does_not_quit() {
+        let mut state = mine_state(10);
+        key(&mut state, '/');
+        typed(&mut state, "pane");
+        let esc = press(KeyCode::Esc, KeyModifiers::NONE);
+        let cmds = update(&mut state, &Keymap::default(), esc);
+        assert!(!cmds.contains(&Cmd::Quit));
+        assert_eq!(cmds[0], persist("filter", "mine", String::new()));
+        assert_eq!(state.ui.tabs[0].filter, "");
+        assert!(!state.ui.filter_edit);
+    }
+
+    #[test]
     fn a_signal_quits() {
         let (tabs, mut state) = setup(None);
         assert_eq!(run(&mut state, &tabs, Msg::Signal), vec![Cmd::Quit]);

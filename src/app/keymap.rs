@@ -43,7 +43,7 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("toggle_all", &["t"]),
     ("refresh", &["r"]),
     ("help", &["?"]),
-    ("quit", &["q", "ctrl-c"]),
+    ("quit", &["q", "esc", "ctrl-c"]),
 ];
 
 /// The default bindings, for the code that builds models and needs no
@@ -328,9 +328,10 @@ mod tests {
     }
 
     #[test]
-    fn quit_defaults_to_q_and_ctrl_c() {
+    fn quit_defaults_to_q_esc_and_ctrl_c() {
         let keymap = Keymap::default();
         assert!(keymap.matches("quit", key(KeyCode::Char('q'), KeyModifiers::NONE)));
+        assert!(keymap.matches("quit", key(KeyCode::Esc, KeyModifiers::NONE)));
         assert!(keymap.matches("quit", key(KeyCode::Char('c'), KeyModifiers::CONTROL)));
         assert!(!keymap.matches("quit", key(KeyCode::Char('c'), KeyModifiers::NONE)));
         assert!(!keymap.matches(
