@@ -1184,17 +1184,13 @@ fn cap(lines: &mut Vec<String>) {
 /// target, and refresh the stack group of a pull request (or the pull
 /// request alone when it has no stack).
 fn follow_up(data: &AppData, key: &TargetKey) -> Vec<Cmd> {
-    match key {
-        TargetKey::Local { repo, .. } => vec![Cmd::ScanJj(repo.clone())],
-        TargetKey::Pr(pr) => {
-            let mut cmds = vec![Cmd::ScanJj(pr.repo.clone())];
-            let refs = stack_group_refs(data, pr);
-            if !refs.is_empty() {
-                cmds.push(Cmd::RefreshPr(refs));
-            }
-            cmds
-        }
+    let TargetKey::Pr(pr) = key;
+    let mut cmds = vec![Cmd::ScanJj(pr.repo.clone())];
+    let refs = stack_group_refs(data, pr);
+    if !refs.is_empty() {
+        cmds.push(Cmd::RefreshPr(refs));
     }
+    cmds
 }
 
 /// A new state of an async merge.
@@ -2150,28 +2146,8 @@ mod tests {
         );
         assert_eq!(
             run(&mut state, &tabs, done(key(99))),
-            vec![Cmd::ScanJj(repo.clone())],
-            "an unknown pull request has no refs"
-        );
-        let local = TargetKey::Local {
-            repo: repo.clone(),
-            change_id: "kxyzkxyz".into(),
-        };
-        assert_eq!(
-            run(&mut state, &tabs, done(local.clone())),
-            vec![Cmd::ScanJj(repo.clone())]
-        );
-        assert_eq!(
-            run(
-                &mut state,
-                &tabs,
-                Msg::PaneEnded {
-                    id: "review",
-                    key: local
-                }
-            ),
             vec![Cmd::ScanJj(repo)],
-            "a local target gets only the scan"
+            "an unknown pull request has no refs"
         );
         let progress = Msg::ActionEvent {
             id: "approve",

@@ -40,7 +40,6 @@ impl Action for Approve {
                 Applicability::Disabled("you cannot review your own pull request")
             }
             Target::Pr { .. } => Applicability::Enabled,
-            Target::Local { .. } => Applicability::Hidden,
         }
     }
 
@@ -56,9 +55,7 @@ impl Action for Approve {
         svc: Services,
     ) -> BoxFuture<'static, Result<String, String>> {
         Box::pin(async move {
-            let Target::Pr { pr, .. } = sel.target else {
-                return Err("a local change has no review".to_owned());
-            };
+            let Target::Pr { pr, .. } = sel.target;
             svc.client
                 .add_review(&pr.node_id, ReviewEvent::Approve, None)
                 .await
@@ -135,9 +132,8 @@ mod tests {
         assert_eq!(Approve.applies(&sel), Applicability::Enabled);
         assert_eq!(Approve.prepare(&sel), Prepare::Run);
         let mut merged = selection();
-        if let Target::Pr { pr, .. } = &mut merged.target {
-            pr.head.value.state = PrState::Merged;
-        }
+        let Target::Pr { pr, .. } = &mut merged.target;
+        pr.head.value.state = PrState::Merged;
         assert_eq!(
             Approve.applies(&merged),
             Applicability::Disabled("the pull request is not open")

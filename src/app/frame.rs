@@ -163,9 +163,7 @@ fn popup_content(data: &AppData, popup: &PopupState, panes: &[Box<dyn Pane>]) ->
             scroll: 0,
         };
     };
-    let Target::Pr { pr, .. } = &target else {
-        unreachable!("pr_target builds a pull request target")
-    };
+    let Target::Pr { pr, .. } = &target;
     let head = &pr.head.value;
     let state = match head.state {
         PrState::Open if head.is_draft => "draft",

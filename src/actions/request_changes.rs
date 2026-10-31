@@ -37,15 +37,12 @@ impl Action for RequestChanges {
                 Applicability::Disabled("you cannot review your own pull request")
             }
             Target::Pr { .. } => Applicability::Enabled,
-            Target::Local { .. } => Applicability::Hidden,
         }
     }
 
     /// A prompt for the review body.
     fn prepare(&self, sel: &Selection) -> Prepare {
-        let Target::Pr { pr, .. } = &sel.target else {
-            unreachable!("applies hides the review of a local change")
-        };
+        let Target::Pr { pr, .. } = &sel.target;
         Prepare::Prompt(PromptSpec {
             title: format!("request changes on #{}", pr.key.number),
             placeholder: "what to change".to_owned(),
@@ -62,9 +59,7 @@ impl Action for RequestChanges {
         svc: Services,
     ) -> BoxFuture<'static, Result<String, String>> {
         Box::pin(async move {
-            let Target::Pr { pr, .. } = sel.target else {
-                return Err("a local change has no review".to_owned());
-            };
+            let Target::Pr { pr, .. } = sel.target;
             let body = match input {
                 ActionInput::Text(text) => text,
                 ActionInput::None | ActionInput::Confirmed => String::new(),
@@ -154,9 +149,8 @@ mod tests {
             })
         );
         let mut closed = selection();
-        if let Target::Pr { pr, .. } = &mut closed.target {
-            pr.head.value.state = PrState::Closed;
-        }
+        let Target::Pr { pr, .. } = &mut closed.target;
+        pr.head.value.state = PrState::Closed;
         assert_eq!(
             RequestChanges.applies(&closed),
             Applicability::Disabled("the pull request is not open")

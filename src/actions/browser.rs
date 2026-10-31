@@ -24,18 +24,13 @@ impl Action for Browser {
         })
     }
 
-    /// A pull request. A local-only change has no url.
-    fn applies(&self, sel: &Selection) -> Applicability {
-        match &sel.target {
-            Target::Pr { .. } => Applicability::Enabled,
-            Target::Local { .. } => Applicability::Hidden,
-        }
+    /// A pull request.
+    fn applies(&self, _sel: &Selection) -> Applicability {
+        Applicability::Enabled
     }
 
     fn prepare(&self, sel: &Selection) -> Prepare {
-        let Target::Pr { pr, .. } = &sel.target else {
-            unreachable!("applies hides the browser for a local change")
-        };
+        let Target::Pr { pr, .. } = &sel.target;
         Prepare::Command(Cmd::OpenUrl(pr.head.value.url.clone()))
     }
 
@@ -54,7 +49,7 @@ impl Action for Browser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::local::{LocalChange, LocalMatch};
+    use crate::domain::local::LocalMatch;
     use crate::domain::pr::PullRequest;
     use crate::domain::repo::Repo;
 
@@ -86,27 +81,5 @@ mod tests {
                 "https://github.com/chaosteil/chaoshub/pull/7".into()
             ))
         );
-    }
-
-    #[test]
-    fn a_local_change_has_no_url() {
-        let mut sel = selection();
-        sel.target = Target::Local {
-            change: LocalChange {
-                workspace: "default".into(),
-                change_id: "zzmqxkrtzzmq".into(),
-                commit_id: "c0ffee".into(),
-                bookmarks: Vec::new(),
-                empty: false,
-                parents: Vec::new(),
-                description: "wip".into(),
-            },
-            repo: Repo {
-                key: sel.target.repo().clone(),
-                path: None,
-                settings: None,
-            },
-        };
-        assert_eq!(Browser.applies(&sel), Applicability::Hidden);
     }
 }

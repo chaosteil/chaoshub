@@ -39,21 +39,17 @@ impl Action for Review {
         crate::actions::Hint::Primary
     }
 
-    /// A pull request of a repo with a local path. A local-only change
-    /// has no pull request to review.
+    /// A pull request of a repo with a local path.
     fn applies(&self, sel: &Selection) -> Applicability {
         match &sel.target {
             Target::Pr { repo, .. } if repo.path.is_some() => Applicability::Enabled,
             Target::Pr { .. } => Applicability::Disabled("the repo has no local path"),
-            Target::Local { .. } => Applicability::Hidden,
         }
     }
 
     /// nvim with codeview on the pull request, in the repo directory.
     fn prepare(&self, sel: &Selection) -> Prepare {
-        let Target::Pr { pr, repo, .. } = &sel.target else {
-            unreachable!("applies hides the review of a local change")
-        };
+        let Target::Pr { pr, repo, .. } = &sel.target;
         let number = pr.key.number;
         let zoom = sel
             .action_config
@@ -95,7 +91,7 @@ impl Action for Review {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::local::{LocalChange, LocalMatch};
+    use crate::domain::local::LocalMatch;
     use crate::domain::pr::PullRequest;
     use crate::domain::repo::Repo;
 
@@ -136,24 +132,6 @@ mod tests {
             Review.applies(&selection(None)),
             Applicability::Disabled("the repo has no local path")
         );
-        let mut local = selection(Some("/code/chaoshub"));
-        local.target = Target::Local {
-            change: LocalChange {
-                workspace: "default".into(),
-                change_id: "zzmqxkrtzzmq".into(),
-                commit_id: "c0ffee".into(),
-                bookmarks: Vec::new(),
-                empty: false,
-                parents: Vec::new(),
-                description: "wip".into(),
-            },
-            repo: Repo {
-                key: local.target.repo().clone(),
-                path: Some("/code/chaoshub".into()),
-                settings: None,
-            },
-        };
-        assert_eq!(Review.applies(&local), Applicability::Hidden);
     }
 
     #[test]

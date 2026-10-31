@@ -82,9 +82,7 @@ impl Action for RerunChecks {
 
     /// A pull request with failed checks that can run again.
     fn applies(&self, sel: &Selection) -> Applicability {
-        let Target::Pr { pr, .. } = &sel.target else {
-            return Applicability::Hidden;
-        };
+        let Target::Pr { pr, .. } = &sel.target;
         let checks = &pr.checks.value;
         if !checks.iter().any(failed) {
             Applicability::Disabled("no failed checks")
@@ -108,9 +106,7 @@ impl Action for RerunChecks {
         svc: Services,
     ) -> BoxFuture<'static, Result<String, String>> {
         Box::pin(async move {
-            let Target::Pr { pr, .. } = sel.target else {
-                return Err("a local change has no checks".to_owned());
-            };
+            let Target::Pr { pr, .. } = sel.target;
             let plan = rerun_plan(&pr.checks.value);
             let repo = &pr.key.repo;
             for &run in &plan.runs {

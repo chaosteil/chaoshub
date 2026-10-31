@@ -18,7 +18,7 @@ pub(crate) use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers}
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;
 use crate::domain::keys::{PrKey, RepoKey};
-use crate::domain::local::{LocalChange, LocalMatch, LocalState};
+use crate::domain::local::{LocalMatch, LocalState};
 use crate::domain::observed::Observed;
 use crate::domain::pr::{CiState, PullRequest};
 use crate::domain::repo::Repo;
@@ -78,7 +78,6 @@ pub(crate) struct Session {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum TargetKey {
     Pr(PrKey),
-    Local { repo: RepoKey, change_id: String },
 }
 
 /// The row that an action applies to.
@@ -95,10 +94,6 @@ pub(crate) enum Target {
         local: LocalMatch,
         repo: Repo,
     },
-    Local {
-        change: LocalChange,
-        repo: Repo,
-    },
 }
 
 impl Target {
@@ -106,17 +101,13 @@ impl Target {
     pub(crate) fn key(&self) -> TargetKey {
         match self {
             Target::Pr { pr, .. } => TargetKey::Pr(pr.key.clone()),
-            Target::Local { change, repo } => TargetKey::Local {
-                repo: repo.key.clone(),
-                change_id: change.change_id.clone(),
-            },
         }
     }
 
     /// The repo of the target.
     pub(crate) fn repo(&self) -> &RepoKey {
         match self {
-            Target::Pr { repo, .. } | Target::Local { repo, .. } => &repo.key,
+            Target::Pr { repo, .. } => &repo.key,
         }
     }
 }
