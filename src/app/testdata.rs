@@ -60,6 +60,8 @@ pub(crate) fn pr(repo: &str, number: u64, title: &str) -> PullRequest {
                 merge: true,
                 rebase: true,
                 default_branch: None,
+                squash_title_default: None,
+                squash_message_default: None,
             },
         }),
         ci_state: observed(CiState::None),

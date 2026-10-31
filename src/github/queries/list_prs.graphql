@@ -87,6 +87,8 @@ fragment PrFields on PullRequest {
     squashMergeAllowed
     mergeCommitAllowed
     rebaseMergeAllowed
+    squashMergeCommitTitle
+    squashMergeCommitMessage
   }
 }
 

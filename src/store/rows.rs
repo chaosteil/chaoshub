@@ -310,6 +310,8 @@ pub(crate) fn load_snapshot(conn: &Connection) -> Result<Snapshot, StoreError> {
                 merge: row.get::<_, Option<bool>>(3)?.unwrap_or(false),
                 rebase: row.get::<_, Option<bool>>(4)?.unwrap_or(false),
                 default_branch: row.get(5)?,
+                squash_title_default: None,
+                squash_message_default: None,
             },
         ))
     })?;

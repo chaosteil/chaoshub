@@ -414,7 +414,9 @@
             "nameWithOwner": "acme/monorepo",
             "squashMergeAllowed": true,
             "mergeCommitAllowed": false,
-            "rebaseMergeAllowed": true
+            "rebaseMergeAllowed": true,
+            "squashMergeCommitTitle": "PR_TITLE",
+            "squashMergeCommitMessage": "PR_BODY"
           }
         },
         {
@@ -743,7 +745,9 @@
             "nameWithOwner": "acme/monorepo",
             "squashMergeAllowed": true,
             "mergeCommitAllowed": false,
-            "rebaseMergeAllowed": true
+            "rebaseMergeAllowed": true,
+            "squashMergeCommitTitle": "PR_TITLE",
+            "squashMergeCommitMessage": "PR_BODY"
           }
         }
       ]

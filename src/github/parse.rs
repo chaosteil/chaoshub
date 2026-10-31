@@ -13,7 +13,7 @@ use crate::domain::observed::Observed;
 use crate::domain::pr::{
     CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest, ReviewDecision,
 };
-use crate::domain::repo::RepoSettings;
+use crate::domain::repo::{RepoSettings, SquashMessageDefault, SquashTitleDefault};
 use crate::domain::stack::{Stack, StackEntry, StackRef};
 use crate::github::GithubError;
 
@@ -182,6 +182,32 @@ macro_rules! rollup_parser {
 /// The module also needs `rollup_parser!()`.
 macro_rules! pr_fields_parser {
     () => {
+        /// The merge settings of the repository of a pull request. The
+        /// default branch is not in the fragment.
+        fn repo_settings(repository: &q::PrFieldsRepository) -> RepoSettings {
+            RepoSettings {
+                squash: repository.squash_merge_allowed,
+                merge: repository.merge_commit_allowed,
+                rebase: repository.rebase_merge_allowed,
+                default_branch: None,
+                squash_title_default: match repository.squash_merge_commit_title {
+                    q::SquashMergeCommitTitle::PR_TITLE => Some(SquashTitleDefault::PrTitle),
+                    q::SquashMergeCommitTitle::COMMIT_OR_PR_TITLE => {
+                        Some(SquashTitleDefault::CommitOrPrTitle)
+                    }
+                    q::SquashMergeCommitTitle::Other(_) => None,
+                },
+                squash_message_default: match repository.squash_merge_commit_message {
+                    q::SquashMergeCommitMessage::PR_BODY => Some(SquashMessageDefault::PrBody),
+                    q::SquashMergeCommitMessage::COMMIT_MESSAGES => {
+                        Some(SquashMessageDefault::CommitMessages)
+                    }
+                    q::SquashMergeCommitMessage::BLANK => Some(SquashMessageDefault::Blank),
+                    q::SquashMergeCommitMessage::Other(_) => None,
+                },
+            }
+        }
+
         /// A pull request from the `PrFields` fragment. Every field group
         /// carries `observed_at`, the start time of the request.
         pub(super) fn pull_request(
@@ -273,12 +299,7 @@ macro_rules! pr_fields_parser {
                 },
                 url: fields.url,
                 updated_at: fields.updated_at,
-                repo_settings: RepoSettings {
-                    squash: fields.repository.squash_merge_allowed,
-                    merge: fields.repository.merge_commit_allowed,
-                    rebase: fields.repository.rebase_merge_allowed,
-                    default_branch: None,
-                },
+                repo_settings: repo_settings(&fields.repository),
             };
             let (ci_state, checks) = rollup(fields.status_check_rollup);
             Ok(PullRequest {
@@ -611,7 +632,9 @@ mod tests {
                 squash: true,
                 merge: false,
                 rebase: true,
-                default_branch: None
+                default_branch: None,
+                squash_title_default: Some(SquashTitleDefault::CommitOrPrTitle),
+                squash_message_default: Some(SquashMessageDefault::CommitMessages),
             }
         );
         let stack = head.stack.as_ref().unwrap();
@@ -654,6 +677,14 @@ mod tests {
         assert!(draft.review_requested, "viewerLatestReviewRequest is set");
         assert_eq!(draft.reviewers, ["acme/team-1", "acme/team-2"]);
         assert_eq!(draft.review_decision, Some(ReviewDecision::ReviewRequired));
+        assert_eq!(
+            draft.repo_settings.squash_title_default,
+            Some(SquashTitleDefault::PrTitle)
+        );
+        assert_eq!(
+            draft.repo_settings.squash_message_default,
+            Some(SquashMessageDefault::PrBody)
+        );
         assert_eq!(prs[1].ci_state.value, CiState::Failure);
         assert!(
             prs[1]

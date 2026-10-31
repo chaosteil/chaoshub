@@ -98,7 +98,9 @@
           "nameWithOwner": "acme/deploy",
           "squashMergeAllowed": true,
           "mergeCommitAllowed": false,
-          "rebaseMergeAllowed": true
+          "rebaseMergeAllowed": true,
+          "squashMergeCommitTitle": "COMMIT_OR_PR_TITLE",
+          "squashMergeCommitMessage": "COMMIT_MESSAGES"
         }
       },
       {
@@ -198,7 +200,9 @@
           "nameWithOwner": "acme/deploy",
           "squashMergeAllowed": true,
           "mergeCommitAllowed": false,
-          "rebaseMergeAllowed": true
+          "rebaseMergeAllowed": true,
+          "squashMergeCommitTitle": "COMMIT_OR_PR_TITLE",
+          "squashMergeCommitMessage": "COMMIT_MESSAGES"
         }
       }
     ],
