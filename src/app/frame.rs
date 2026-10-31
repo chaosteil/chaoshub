@@ -4,20 +4,26 @@
 //! model of each tab is cached with the generation and the size it was
 //! built for, so animation frames and idle ticks never rebuild it.
 
+use textwrap::core::display_width;
+
+use crate::actions::{Action, Applicability, Hint, REGISTRY};
 use crate::app::age::age;
-use crate::app::keymap;
+use crate::app::keymap::{self, Keymap};
 use crate::app::layout::layout;
 use crate::app::models::{
-    Cell, CellStyle, FilterModel, FrameModel, ListModel, OverlayContent, OverlayModel, PaneModel,
-    PaneTab, StatusModel, TabBarModel,
+    Cell, CellStyle, FilterModel, FrameModel, HINT_CUT, HINT_GAP, HINT_PREFIX, KeyHint,
+    KeyHintsModel, ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, StatusModel,
+    TabBarModel,
 };
 use crate::app::panes::conversation::is_stale;
 use crate::app::panes::{PANES, Pane, applicable};
 use crate::app::state::{AppData, AppState, OverlayState, PopupState};
 use crate::app::tabs::{KeyCx, TABS, Tab};
-use crate::app::target::pr_target;
+use crate::app::target::{pr_target, row_target};
 use crate::app::term::term_status;
-use crate::bus::{Progress, Size, Target, TermState, TermStatus};
+use crate::bus::{
+    KeyChord, KeyCode, KeyModifiers, Progress, Selection, Size, Target, TermState, TermStatus,
+};
 use crate::domain::pr::PrState;
 
 /// The models of the last frame.
@@ -29,15 +35,37 @@ pub(crate) struct ModelCache {
     /// build.
     frame_generation: Option<u64>,
     frame: FrameModel,
+    /// The key bindings that the key hints show.
+    keymap: Keymap,
+    /// False when `[theme] key_hints = false`. The frame then has no key
+    /// hints.
+    key_hints: bool,
 }
 
 impl Default for ModelCache {
+    /// No models, the default key bindings and the key hints on.
     fn default() -> Self {
         Self {
             lists: Vec::new(),
             frame_generation: None,
             frame: empty_frame(),
+            keymap: keymap::DEFAULT.clone(),
+            key_hints: true,
         }
+    }
+}
+
+impl ModelCache {
+    /// Sets the key bindings that the key hints show and the
+    /// `[theme] key_hints` switch. The next frame is built again.
+    #[allow(
+        dead_code,
+        reason = "App::new calls it when the configuration reaches the app"
+    )]
+    pub(crate) fn set_key_hints(&mut self, keymap: Keymap, on: bool) {
+        self.keymap = keymap;
+        self.key_hints = on;
+        self.frame_generation = None;
     }
 }
 
@@ -71,6 +99,7 @@ pub(crate) fn frame_model_full<'s>(
 ) -> &'s FrameModel {
     if state.cache.frame_generation != Some(state.generation) {
         let list = active_list(state, tabs);
+        let hints = hints_model(state, tabs, panes, &REGISTRY, &list);
         let frame = FrameModel {
             tab_bar: TabBarModel {
                 titles: tabs.iter().map(|tab| tab.title()).collect(),
@@ -82,6 +111,7 @@ pub(crate) fn frame_model_full<'s>(
             overlays: overlay_models(state, panes),
             term: term_status(state),
             filter: filter_model(state),
+            hints,
         };
         state.cache.frame = frame;
         state.cache.frame_generation = Some(state.generation);
@@ -196,6 +226,258 @@ fn popup_content(data: &AppData, popup: &PopupState, panes: &[Box<dyn Pane>]) ->
         cursor,
         scroll,
     }
+}
+
+/// The key hint bar of the active context: the top overlay that is not
+/// closing, or else the list. `None` when the key hints are off.
+fn hints_model(
+    state: &AppState,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
+    list: &ListModel,
+) -> Option<KeyHintsModel> {
+    if !state.cache.key_hints {
+        return None;
+    }
+    let keymap = &state.cache.keymap;
+    let hints = match state.ui.overlays.iter().rev().find(|o| !o.closing) {
+        Some(overlay) => overlay_hints(&state.data, keymap, panes, &overlay.state),
+        None => list_hints(state, keymap, tabs, actions, list),
+    };
+    Some(KeyHintsModel {
+        hints: fit(hints, usize::from(state.data.size.width)),
+    })
+}
+
+/// The hints of the list: the app keys, the keys of the active tab and
+/// the actions that are enabled for the cursor row. The primary hints
+/// come first.
+fn list_hints(
+    state: &AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    actions: &[Box<dyn Action>],
+    list: &ListModel,
+) -> Vec<KeyHint> {
+    let tab_names: Vec<String> = (1..=tabs.len().min(9))
+        .map(|n| format!("tab_{n}"))
+        .chain(std::iter::once("next_tab".to_owned()))
+        .collect();
+    let tab_names: Vec<&str> = tab_names.iter().map(String::as_str).collect();
+    let mut hints: Vec<KeyHint> = [
+        app_hint(keymap, &["down", "up"], "move", true),
+        app_hint(keymap, &["open"], "open", true),
+        app_hint(keymap, &["filter"], "filter", false),
+        app_hint(keymap, &tab_names, "tabs", false),
+        app_hint(keymap, &["refresh"], "refresh", false),
+        app_hint(keymap, &["help"], "help", false),
+        app_hint(keymap, &["quit"], "quit", false),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if let Some(tab) = tabs.get(state.ui.active) {
+        hints.extend(tab.help().into_iter().map(|(chord, label)| KeyHint {
+            key: key_text(chord),
+            label: label.to_owned(),
+            primary: false,
+        }));
+    }
+    hints.extend(action_hints(&state.data, keymap, actions, list));
+    hints.sort_by_key(|hint| !hint.primary);
+    hints
+}
+
+/// The hints of the actions that are enabled for the cursor row of
+/// `list`, in registry order. An action with `Hint::None` or without a
+/// key has no hint. The label is the action id with spaces.
+fn action_hints(
+    data: &AppData,
+    keymap: &Keymap,
+    actions: &[Box<dyn Action>],
+    list: &ListModel,
+) -> Vec<KeyHint> {
+    let Some(target) = list
+        .rows
+        .get(list.cursor)
+        .and_then(|row| row_target(data, &row.item))
+    else {
+        return Vec::new();
+    };
+    let mut selection = Selection {
+        target,
+        me: data.session.login.clone().unwrap_or_default(),
+        action_config: None,
+    };
+    let mut hints = Vec::new();
+    for action in actions {
+        let primary = match action.hint() {
+            Hint::Primary => true,
+            Hint::Secondary => false,
+            Hint::None => continue,
+        };
+        let Some(&chord) = keymap.chords(action.id()).first() else {
+            continue;
+        };
+        selection.action_config = data.action_config.get(action.id()).cloned();
+        if action.applies(&selection) == Applicability::Enabled {
+            hints.push(KeyHint {
+                key: key_text(chord),
+                label: action.id().replace('_', " "),
+                primary,
+            });
+        }
+    }
+    hints
+}
+
+/// The hints of an overlay. They are all primary.
+fn overlay_hints(
+    data: &AppData,
+    keymap: &Keymap,
+    panes: &[Box<dyn Pane>],
+    overlay: &OverlayState,
+) -> Vec<KeyHint> {
+    let hints = match overlay {
+        OverlayState::Popup(popup) => {
+            let mut keys: Vec<String> = pr_target(data, &popup.key)
+                .map(|target| {
+                    applicable(panes, &target)
+                        .into_iter()
+                        .map(|i| panes[i].key().to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            keys.extend(first_keys(keymap, &["next_tab"]));
+            vec![
+                hint(&keys, "pane tabs"),
+                app_hint(keymap, &["open"], "expand", true),
+                app_hint(keymap, &["close_overlay"], "close", true),
+            ]
+        }
+        OverlayState::Confirm { .. } => vec![
+            app_hint(keymap, &["confirm"], "confirm", true),
+            app_hint(keymap, &["cancel", "close_overlay"], "cancel", true),
+        ],
+        OverlayState::Prompt { .. } => {
+            let key = |code| {
+                [key_text(KeyChord {
+                    code,
+                    mods: KeyModifiers::NONE,
+                })]
+            };
+            vec![
+                hint(&key(KeyCode::Enter), "submit"),
+                hint(&key(KeyCode::Esc), "cancel"),
+            ]
+        }
+        OverlayState::Authors(_) => vec![
+            app_hint(keymap, &["open"], "select", true),
+            app_hint(keymap, &["close_overlay"], "clear", true),
+        ],
+        OverlayState::Output { .. } | OverlayState::Help(_) => {
+            vec![app_hint(keymap, &["close_overlay"], "close", true)]
+        }
+    };
+    hints.into_iter().flatten().collect()
+}
+
+/// The hint of the bindings `names`: the first chord of each binding,
+/// joined with `/`. `None` when no binding has a chord.
+fn app_hint(keymap: &Keymap, names: &[&str], label: &str, primary: bool) -> Option<KeyHint> {
+    let keys = first_keys(keymap, names);
+    (!keys.is_empty()).then(|| KeyHint {
+        key: keys.join("/"),
+        label: label.to_owned(),
+        primary,
+    })
+}
+
+/// A primary hint of `keys`, joined with `/`. `None` when `keys` is
+/// empty.
+fn hint(keys: &[String], label: &str) -> Option<KeyHint> {
+    (!keys.is_empty()).then(|| KeyHint {
+        key: keys.join("/"),
+        label: label.to_owned(),
+        primary: true,
+    })
+}
+
+/// The text of the first chord of each binding in `names` that has one.
+fn first_keys(keymap: &Keymap, names: &[&str]) -> Vec<String> {
+    names
+        .iter()
+        .filter_map(|name| keymap.chords(name).first())
+        .map(|&chord| key_text(chord))
+        .collect()
+}
+
+/// The text of a chord in a hint: the text of the key map, with a
+/// capital first letter when it is longer than one character, for
+/// example `Enter` or `Ctrl-d`.
+fn key_text(chord: KeyChord) -> String {
+    let text = keymap::chord_text(chord);
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) if !chars.as_str().is_empty() => first.to_uppercase().chain(chars).collect(),
+        _ => text,
+    }
+}
+
+/// The display width of a hint: the key, a space and the label.
+fn hint_width(hint: &KeyHint) -> usize {
+    let space = usize::from(!hint.key.is_empty() && !hint.label.is_empty());
+    display_width(&hint.key) + space + display_width(&hint.label)
+}
+
+/// The hints that fit `width` cells after `HINT_PREFIX`, with `HINT_GAP`
+/// between them. The primary hints always stay. The secondary hints fill
+/// the rest in order; after the first one that does not fit, the rest
+/// is cut, and a last hint with the label `HINT_CUT` marks the cut.
+fn fit(hints: Vec<KeyHint>, width: usize) -> Vec<KeyHint> {
+    let gap = display_width(HINT_GAP);
+    let cut_width = gap + display_width(HINT_CUT);
+    // Each hint adds a gap and its width. The prefix takes the place of
+    // the gap before the first hint.
+    let mut used = display_width(HINT_PREFIX).saturating_sub(gap)
+        + hints
+            .iter()
+            .filter(|hint| hint.primary)
+            .map(|hint| gap + hint_width(hint))
+            .sum::<usize>();
+    let last_secondary = hints.iter().rposition(|hint| !hint.primary);
+    let mut cut = false;
+    let mut kept = Vec::with_capacity(hints.len());
+    for (i, hint) in hints.into_iter().enumerate() {
+        if hint.primary {
+            kept.push(hint);
+            continue;
+        }
+        if cut {
+            continue;
+        }
+        let cost = gap + hint_width(&hint);
+        let reserve = if Some(i) == last_secondary {
+            0
+        } else {
+            cut_width
+        };
+        if used + cost + reserve <= width {
+            used += cost;
+            kept.push(hint);
+        } else {
+            cut = true;
+        }
+    }
+    if cut {
+        kept.push(KeyHint {
+            key: String::new(),
+            label: HINT_CUT.to_owned(),
+            primary: false,
+        });
+    }
+    kept
 }
 
 /// The size of the list area that the tab models fill: the list area
@@ -347,6 +629,7 @@ fn empty_frame() -> FrameModel {
             progress: Progress::Off,
         },
         filter: None,
+        hints: None,
     }
 }
 
