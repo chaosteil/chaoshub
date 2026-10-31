@@ -383,6 +383,32 @@ pub(crate) mod pr_by_ids {
     }
 }
 
+/// Conversions for the `PrByNumber` query.
+pub(crate) mod pr_by_number {
+    #[allow(
+        clippy::wildcard_imports,
+        reason = "the macro bodies use the imports of the parent module"
+    )]
+    use super::*;
+    use crate::github::queries::pr_by_number as q;
+
+    rollup_parser!();
+    pr_fields_parser!();
+
+    /// The pull request. `None` when the repo or the pull request does not
+    /// exist.
+    pub(crate) fn pr(
+        data: q::ResponseData,
+        me: &Me<'_>,
+        observed_at: DateTime<Utc>,
+    ) -> Result<Option<PullRequest>, GithubError> {
+        data.repository
+            .and_then(|repo| repo.pull_request)
+            .map(|fields| pull_request(fields, me, observed_at))
+            .transpose()
+    }
+}
+
 /// Conversions for the `StackEntries` query.
 pub(crate) mod stack_entries {
     use super::{DateTime, GithubError, Observed, PrState, Stack, StackEntry, Utc, observed, uint};
@@ -716,6 +742,28 @@ mod tests {
         assert_eq!(numbers, [1550, 1549]);
         assert_eq!(prs[0].head.value.state, PrState::Open);
         assert_eq!(prs[0].head.value.stack, None);
+    }
+
+    #[test]
+    fn by_number_parses_the_pull_request() {
+        let data = fixture(include_str!("testdata/pr_by_number.json"));
+        let pr = pr_by_number::pr(data, &ME, test_time()).unwrap().unwrap();
+        assert_eq!(pr.key.number, 1550);
+        assert_eq!(pr.key.repo.owner, "acme");
+        assert_eq!(pr.key.repo.name, "deploy");
+        assert_eq!(pr.head.value.state, PrState::Open);
+        assert_eq!(pr.head.observed_at, test_time());
+    }
+
+    #[test]
+    fn by_number_of_a_null_pull_request_is_none() {
+        for data in [
+            serde_json::json!({ "repository": { "pullRequest": null }, "rateLimit": null }),
+            serde_json::json!({ "repository": null, "rateLimit": null }),
+        ] {
+            let data = serde_json::from_value(data).unwrap();
+            assert_eq!(pr_by_number::pr(data, &ME, test_time()).unwrap(), None);
+        }
     }
 
     #[test]
