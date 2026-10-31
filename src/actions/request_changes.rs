@@ -27,11 +27,16 @@ impl Action for RequestChanges {
         })
     }
 
-    /// An open pull request.
+    /// An open pull request of another author.
     fn applies(&self, sel: &Selection) -> Applicability {
         match &sel.target {
-            Target::Pr { pr, .. } if pr.head.value.state == PrState::Open => Applicability::Enabled,
-            Target::Pr { .. } => Applicability::Disabled("the pull request is not open"),
+            Target::Pr { pr, .. } if pr.head.value.state != PrState::Open => {
+                Applicability::Disabled("the pull request is not open")
+            }
+            Target::Pr { pr, .. } if pr.head.value.author == sel.me => {
+                Applicability::Disabled("you cannot review your own pull request")
+            }
+            Target::Pr { .. } => Applicability::Enabled,
             Target::Local { .. } => Applicability::Hidden,
         }
     }
@@ -48,7 +53,8 @@ impl Action for RequestChanges {
     }
 
     /// `addPullRequestReview` with the event `REQUEST_CHANGES` and the
-    /// prompt text as the body.
+    /// prompt text as the body. An empty text is an error, before any
+    /// request.
     fn execute(
         &self,
         sel: Selection,
@@ -63,6 +69,9 @@ impl Action for RequestChanges {
                 ActionInput::Text(text) => text,
                 ActionInput::None | ActionInput::Confirmed => String::new(),
             };
+            if body.trim().is_empty() {
+                return Err("a change request needs a message".to_owned());
+            }
             svc.client
                 .add_review(&pr.node_id, ReviewEvent::RequestChanges, Some(&body))
                 .await
@@ -102,7 +111,7 @@ mod tests {
                 stack: Vec::new(),
                 local: LocalMatch::None,
             },
-            me: "chaosteil".into(),
+            me: "reviewer".into(),
             action_config: None,
         }
     }
@@ -152,6 +161,32 @@ mod tests {
             RequestChanges.applies(&closed),
             Applicability::Disabled("the pull request is not open")
         );
+    }
+
+    #[test]
+    fn your_own_pull_request_is_disabled() {
+        let mut own = selection();
+        own.me = "chaosteil".into();
+        assert_eq!(
+            RequestChanges.applies(&own),
+            Applicability::Disabled("you cannot review your own pull request")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_message_fails_before_any_request() {
+        let server = server(json!({})).await;
+        for input in [
+            ActionInput::Text(String::new()),
+            ActionInput::Text("  \n ".to_owned()),
+            ActionInput::None,
+        ] {
+            let result = RequestChanges
+                .execute(selection(), input, services(&server))
+                .await;
+            assert_eq!(result, Err("a change request needs a message".to_owned()));
+        }
+        assert_eq!(server.received_requests().await.unwrap().len(), 0);
     }
 
     #[tokio::test]
