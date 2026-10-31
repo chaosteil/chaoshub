@@ -6,7 +6,7 @@
 )]
 
 mod discover;
-mod paths;
+pub(crate) mod paths;
 mod schema;
 
 /// The configuration. A placeholder: phase B replaces it with the real

@@ -29,6 +29,8 @@ mod ui;
 mod vcs;
 mod workers;
 
+pub use config::paths::state_dir;
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
