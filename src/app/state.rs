@@ -9,7 +9,7 @@
 )]
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 
@@ -53,6 +53,12 @@ pub(crate) struct AppData {
     /// The newest sync time of the cached pull requests at startup: the
     /// age of the cache. `None` when the cache was empty.
     pub cache_at: Option<DateTime<Utc>>,
+    /// The time of the last sync of each scope: the start time of the
+    /// sync that delivered the last `PrsSynced`.
+    pub synced: HashMap<Scope, DateTime<Utc>>,
+    /// Counts the changes of the pull requests and the jj scans. The
+    /// fuzzy filters score again when it moves.
+    pub revision: u64,
     /// The time of the last `Msg::Tick`. Ages are relative to it, so
     /// the models stay pure functions of the state.
     pub now: DateTime<Utc>,
@@ -111,6 +117,8 @@ impl AppState {
                 details: BTreeMap::new(),
                 repos: BTreeMap::new(),
                 cache_at: None,
+                synced: HashMap::new(),
+                revision: 0,
                 now: DateTime::UNIX_EPOCH,
             },
             ui: UiState {

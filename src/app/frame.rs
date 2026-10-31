@@ -119,7 +119,7 @@ pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusMod
         .into_iter()
         .collect();
     left.push(Cell {
-        text: sync_text(state),
+        text: sync_text(state, tabs),
         style: CellStyle::Dim,
     });
     StatusModel {
@@ -137,13 +137,18 @@ pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusMod
 
 /// The repo count and the age of the data, for example
 /// ` 3 repos · cache from 5m ago`.
-fn sync_text(state: &AppState) -> String {
+fn sync_text(state: &AppState, tabs: &[Box<dyn Tab>]) -> String {
     let data = &state.data;
     let repos = data.session.repos.len();
     let noun = if repos == 1 { "repo" } else { "repos" };
-    match data.cache_at {
-        Some(at) => format!(" {repos} {noun} · cache from {} ago", age(at, data.now)),
-        None => format!(" {repos} {noun}"),
+    let scope = tabs.get(state.ui.active).and_then(|tab| tab.scope());
+    match (
+        scope.and_then(|scope| data.synced.get(&scope)),
+        data.cache_at,
+    ) {
+        (Some(&at), _) => format!(" {repos} {noun} · synced {} ago", age(at, data.now)),
+        (None, Some(at)) => format!(" {repos} {noun} · cache from {} ago", age(at, data.now)),
+        (None, None) => format!(" {repos} {noun}"),
     }
 }
 
