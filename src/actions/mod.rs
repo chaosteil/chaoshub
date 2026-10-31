@@ -97,7 +97,8 @@ pub(crate) trait Action: Send + Sync {
 pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(|| {
     vec![
         Box::new(review::Review),
-        // merge is registered by the e-merge slice
+        Box::new(merge::MergeAction),
+        // merge: registered here after the e-merge slice landed
         Box::new(rerun_checks::RerunChecks),
         Box::new(draft::Draft),
         Box::new(close::Close),
