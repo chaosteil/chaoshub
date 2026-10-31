@@ -16,7 +16,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use crossterm::cursor::{Hide, Show};
-use crossterm::event::{self, Event};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -34,8 +36,8 @@ use crate::app::App;
 use crate::app::exec::{ActionEnv, Runtime, Senders};
 use crate::app::keymap::Keymap;
 use crate::bus::{
-    Cmd, Interest, JjReq, LaunchRequest, Msg, Progress, Scope, Session, Size, SyncReq, TargetKey,
-    TermState, TermStatus,
+    Cmd, Hit, Interest, JjReq, LaunchRequest, MouseKind, Msg, Progress, Scope, Session, Size,
+    SyncReq, TargetKey, TermState, TermStatus,
 };
 use crate::cli::{CacheAction, CacheCommand, Cli};
 use crate::config::schema::parse_repo_name;
@@ -75,6 +77,10 @@ type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
 
 /// Runs the command of `cli`: `cache clear`, or the TUI until the user
 /// quits.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the composition root builds every part of the session in one place"
+)]
 pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     let started = Instant::now();
     let Cli {
@@ -118,7 +124,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         .build()?;
     let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
 
-    let guard = TerminalGuard::enter()?;
+    let guard = TerminalGuard::enter(settings.config.terminal.mouse)?;
     install_panic_hook(thread::current().id(), term.clear_sequence());
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let area = terminal.size()?;
@@ -161,6 +167,8 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         started: Some(started),
         foreground: VecDeque::new(),
         slow: SlowFrames::default(),
+        hits: HitMap::default(),
+        overlay_drawn: false,
     };
     // The first frame comes before any subprocess: the workers start
     // after it.
@@ -467,6 +475,10 @@ struct EventLoop {
     foreground: VecDeque<Foreground>,
     /// The slow frames in a row.
     slow: SlowFrames,
+    /// The targets of the last draw.
+    hits: HitMap,
+    /// True when the last draw had an overlay.
+    overlay_drawn: bool,
 }
 
 /// Counts the slow frames in a row. The second slow frame in a row
@@ -514,7 +526,9 @@ impl EventLoop {
             &mut self.transitions,
             &self.theme,
             Duration::ZERO,
+            &mut self.hits,
         )?;
+        self.overlay_drawn = !self.app.frame().overlays.is_empty();
         self.frame_done(render);
         if let Some(started) = self.started.take() {
             tracing::info!(ms = started.elapsed().as_millis(), "startup: first frame");
@@ -543,7 +557,9 @@ impl EventLoop {
                     &mut self.transitions,
                     &self.theme,
                     elapsed,
+                    &mut self.hits,
                 )?;
+                self.overlay_drawn = !self.app.frame().overlays.is_empty();
                 self.frame_done(render_time);
                 if let Some(started) = self.started.take() {
                     tracing::info!(ms = started.elapsed().as_millis(), "startup: first frame");
@@ -561,7 +577,10 @@ impl EventLoop {
 
             let wait = async { timeout(self.transitions.deadline(), rx.recv()).await };
             match self.handle.block_on(wait) {
-                Ok(Some(msg)) => self.update(msg),
+                Ok(Some(msg)) => {
+                    let msg = with_hit(msg, &self.hits, self.overlay_drawn);
+                    self.update(msg);
+                }
                 Ok(None) => break,
                 Err(_) => self.update(Msg::Tick),
             }
@@ -632,6 +651,9 @@ impl EventLoop {
             }
             enable_raw_mode()?;
             execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+            if self.settings.config.terminal.mouse {
+                execute!(io::stdout(), EnableMouseCapture)?;
+            }
             terminal.clear()?;
             reader.resume();
             self.drawn = None;
@@ -640,6 +662,21 @@ impl EventLoop {
         }
         Ok(())
     }
+}
+
+/// A mouse message with the hit of its cell in the last frame. When the
+/// last frame had an overlay, a cell that is in no overlay is
+/// `Hit::Outside`: no target, or a list row under the overlay. Other
+/// messages stay as they are.
+fn with_hit(msg: Msg, hits: &HitMap, overlay: bool) -> Msg {
+    let Msg::Mouse { kind, x, y, .. } = msg else {
+        return msg;
+    };
+    let hit = match hits.at(x, y) {
+        None | Some(Hit::Row(_)) if overlay => Some(Hit::Outside),
+        hit => hit,
+    };
+    Msg::Mouse { kind, x, y, hit }
 }
 
 /// Runs the argv of `request` in its directory with its environment, and
@@ -673,6 +710,7 @@ fn draw<B: Backend>(
     transitions: &mut Transitions,
     theme: &Theme,
     elapsed: Duration,
+    hits: &mut HitMap,
 ) -> Result<Duration, B::Error> {
     let started = Instant::now();
     transitions.apply(app.take_ui_events());
@@ -680,7 +718,7 @@ fn draw<B: Backend>(
     let model = app.frame();
     transitions.prepare(model, &areas);
     terminal.draw(|frame| {
-        ui::view(frame, model, &areas, theme, &mut HitMap::default());
+        ui::view(frame, model, &areas, theme, hits);
         transitions.process(frame, elapsed);
     })?;
     let render = started.elapsed();
@@ -688,15 +726,18 @@ fn draw<B: Backend>(
     Ok(render)
 }
 
-/// Puts the terminal in raw mode on the alternate screen, and restores it
-/// on drop.
+/// Puts the terminal in raw mode on the alternate screen, with the mouse
+/// capture when `mouse` is true, and restores it on drop.
 struct TerminalGuard;
 
 impl TerminalGuard {
-    fn enter() -> io::Result<Self> {
+    fn enter(mouse: bool) -> io::Result<Self> {
         enable_raw_mode()?;
         let guard = Self;
         execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+        if mouse {
+            execute!(io::stdout(), EnableMouseCapture)?;
+        }
         Ok(guard)
     }
 }
@@ -707,12 +748,17 @@ impl Drop for TerminalGuard {
     }
 }
 
-/// Leaves raw mode and the alternate screen.
+/// Leaves raw mode, the mouse capture and the alternate screen.
 fn restore_terminal() {
     if let Err(err) = disable_raw_mode() {
         tracing::warn!(%err, "cannot leave raw mode");
     }
-    if let Err(err) = execute!(io::stdout(), Show, LeaveAlternateScreen) {
+    if let Err(err) = execute!(
+        io::stdout(),
+        DisableMouseCapture,
+        Show,
+        LeaveAlternateScreen
+    ) {
         tracing::warn!(%err, "cannot leave the alternate screen");
     }
 }
@@ -937,6 +983,10 @@ fn read_loop(
         let msg = match source.read() {
             Ok(Event::Key(key)) => Msg::Key(key),
             Ok(Event::Resize(width, height)) => Msg::Resize(Size { width, height }),
+            Ok(Event::Mouse(mouse)) => match mouse_msg(mouse) {
+                Some(msg) => msg,
+                None => continue,
+            },
             Ok(_) => continue,
             Err(err) => {
                 tracing::error!(%err, "cannot read the terminal");
@@ -947,6 +997,24 @@ fn read_loop(
             break;
         }
     }
+}
+
+/// The message of a mouse event: a left button press is a click, and
+/// the wheel scrolls. The hit is not known here. `None` for the other
+/// mouse events.
+fn mouse_msg(event: MouseEvent) -> Option<Msg> {
+    let kind = match event.kind {
+        MouseEventKind::Down(MouseButton::Left) => MouseKind::Click,
+        MouseEventKind::ScrollDown => MouseKind::ScrollDown,
+        MouseEventKind::ScrollUp => MouseKind::ScrollUp,
+        _ => return None,
+    };
+    Some(Msg::Mouse {
+        kind,
+        x: event.column,
+        y: event.row,
+        hit: None,
+    })
 }
 
 /// Starts the signal thread: SIGTERM and SIGINT become `Msg::Signal`.
@@ -1279,7 +1347,15 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(size.width, size.height)).unwrap();
         let theme = Theme::new(ThemeKind::TrueColor, true, true);
         let mut transitions = Transitions::new(false, 160).with_theme(theme);
-        draw(&mut terminal, app, &mut transitions, &theme, Duration::ZERO).unwrap();
+        draw(
+            &mut terminal,
+            app,
+            &mut transitions,
+            &theme,
+            Duration::ZERO,
+            &mut HitMap::default(),
+        )
+        .unwrap();
         terminal.backend().to_string()
     }
 
@@ -1290,7 +1366,15 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(size.width, size.height)).unwrap();
         let theme = Theme::new(kind, true, true);
         let mut transitions = Transitions::new(false, 160).with_theme(theme);
-        draw(&mut terminal, app, &mut transitions, &theme, Duration::ZERO).unwrap();
+        draw(
+            &mut terminal,
+            app,
+            &mut transitions,
+            &theme,
+            Duration::ZERO,
+            &mut HitMap::default(),
+        )
+        .unwrap();
         terminal.backend().to_string()
     }
 
@@ -1604,6 +1688,7 @@ mod tests {
                 transitions,
                 &theme,
                 Duration::from_millis(ms),
+                &mut HitMap::default(),
             )
             .unwrap();
             terminal.backend().to_string()
@@ -1627,9 +1712,23 @@ mod tests {
         assert_eq!(app.frame().prev_list, None);
     }
 
-    /// Key events every 2 ms. It counts its polls.
+    /// The same event every 2 ms, a `j` key by default. It counts its
+    /// polls.
     struct FakeEvents {
         polls: Arc<std::sync::atomic::AtomicUsize>,
+        event: Event,
+    }
+
+    impl FakeEvents {
+        fn new(polls: Arc<std::sync::atomic::AtomicUsize>) -> Self {
+            Self {
+                polls,
+                event: Event::Key(crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char('j'),
+                    crossterm::event::KeyModifiers::NONE,
+                )),
+            }
+        }
     }
 
     impl EventSource for FakeEvents {
@@ -1640,20 +1739,164 @@ mod tests {
         }
 
         fn read(&mut self) -> io::Result<Event> {
-            Ok(Event::Key(crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Char('j'),
-                crossterm::event::KeyModifiers::NONE,
-            )))
+            Ok(self.event.clone())
         }
+    }
+
+    /// A mouse event of `kind` at the cell `x`, `y`.
+    fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            column: x,
+            row: y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        })
+    }
+
+    /// The first message that a reader of the fake `event` sends.
+    fn first_message(event: Event) -> Option<Msg> {
+        let (tx, mut rx) = mpsc::channel(1024);
+        let source = FakeEvents {
+            event,
+            ..FakeEvents::new(Arc::default())
+        };
+        let reader = Reader::spawn_with(tx, source).unwrap();
+        thread::sleep(Duration::from_millis(20));
+        let msg = rx.try_recv().ok();
+        drop(rx);
+        reader.stop();
+        msg
+    }
+
+    #[test]
+    fn the_reader_sends_clicks_and_the_wheel_without_a_hit() {
+        let cases = [
+            (MouseEventKind::Down(MouseButton::Left), MouseKind::Click),
+            (MouseEventKind::ScrollDown, MouseKind::ScrollDown),
+            (MouseEventKind::ScrollUp, MouseKind::ScrollUp),
+        ];
+        for (event, kind) in cases {
+            assert_eq!(
+                first_message(mouse(event, 3, 4)),
+                Some(Msg::Mouse {
+                    kind,
+                    x: 3,
+                    y: 4,
+                    hit: None,
+                }),
+                "{event:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_reader_drops_other_mouse_events() {
+        for event in [
+            MouseEventKind::Moved,
+            MouseEventKind::Down(MouseButton::Right),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+        ] {
+            assert_eq!(first_message(mouse(event, 3, 4)), None, "{event:?}");
+        }
+    }
+
+    #[test]
+    fn a_scroll_event_reaches_update_with_its_kind() {
+        let mut app = seeded_app(100, 14, crate::app::testdata::mine_snapshot());
+        let msg = first_message(mouse(MouseEventKind::ScrollDown, 3, 4)).unwrap();
+        let msg = with_hit(msg, &HitMap::default(), false);
+        assert!(matches!(
+            msg,
+            Msg::Mouse {
+                kind: MouseKind::ScrollDown,
+                ..
+            }
+        ));
+        assert_eq!(app.update(msg), vec![]);
+    }
+
+    /// The seeded mine app drawn once, and the hit map of the draw.
+    fn drawn_hits(app: &mut App) -> HitMap {
+        let size = app.size();
+        let mut terminal = Terminal::new(TestBackend::new(size.width, size.height)).unwrap();
+        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let mut transitions = Transitions::new(false, 160).with_theme(theme);
+        let mut hits = HitMap::default();
+        draw(
+            &mut terminal,
+            app,
+            &mut transitions,
+            &theme,
+            Duration::ZERO,
+            &mut hits,
+        )
+        .unwrap();
+        hits
+    }
+
+    #[test]
+    fn the_hit_of_a_click_comes_from_the_map() {
+        let mut app = seeded_app(100, 14, crate::app::testdata::mine_snapshot());
+        let hits = drawn_hits(&mut app);
+        let click = |x, y| Msg::Mouse {
+            kind: MouseKind::Click,
+            x,
+            y,
+            hit: None,
+        };
+        let hit = |msg| match msg {
+            Msg::Mouse { hit, .. } => hit,
+            _ => None,
+        };
+        assert_eq!(hit(with_hit(click(5, 3), &hits, false)), Some(Hit::Row(2)));
+        assert_eq!(hit(with_hit(click(2, 0), &hits, false)), Some(Hit::Tab(0)));
+        assert_eq!(
+            hit(with_hit(click(2, 13), &hits, false)),
+            None,
+            "the status bar"
+        );
+        let key = with_hit(press_msg('j'), &hits, true);
+        assert_eq!(key, press_msg('j'), "a key stays as it is");
+        app.update(Msg::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        )));
+        let hits = drawn_hits(&mut app);
+        let popup = app.areas().popup;
+        assert_eq!(
+            hit(with_hit(click(popup.x - 1, 3), &hits, true)),
+            Some(Hit::Outside),
+            "a row left of the sidebar"
+        );
+        assert_eq!(
+            hit(with_hit(click(2, 13), &hits, true)),
+            Some(Hit::Outside),
+            "the status bar"
+        );
+        assert_eq!(
+            hit(with_hit(click(popup.x, 3), &hits, true)),
+            Some(Hit::Inside)
+        );
+        assert_eq!(
+            hit(with_hit(click(2, 0), &hits, true)),
+            Some(Hit::Tab(0)),
+            "the tab bar stays"
+        );
+    }
+
+    fn press_msg(c: char) -> Msg {
+        Msg::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(c),
+            crossterm::event::KeyModifiers::NONE,
+        ))
     }
 
     #[test]
     fn the_reader_pauses_on_request_and_resumes() {
         let (tx, mut rx) = mpsc::channel(1024);
         let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let source = FakeEvents {
-            polls: Arc::clone(&polls),
-        };
+        let source = FakeEvents::new(Arc::clone(&polls));
         let reader = Reader::spawn_with(tx, source).unwrap();
         assert!(matches!(rx.blocking_recv(), Some(Msg::Key(_))));
         assert!(reader.pause(), "the reader confirms the pause");
@@ -1697,6 +1940,7 @@ mod tests {
             &mut transitions,
             &theme,
             Duration::ZERO,
+            &mut HitMap::default(),
         )
         .unwrap();
         insta::assert_snapshot!(terminal.backend());

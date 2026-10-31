@@ -219,15 +219,29 @@ pub(crate) enum PaletteSetting {
     Ansi16,
 }
 
-/// The `[terminal]` section: the terminal status sequences. `None` turns a
-/// sequence on inside Rex and Ghostty only. `Some` forces it on or off.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+/// The `[terminal]` section: the terminal status sequences and the
+/// mouse. For a sequence, `None` turns it on inside Rex and Ghostty only,
+/// and `Some` forces it on or off.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub(crate) struct TerminalConfig {
     /// OSC 7501, the program status.
     pub program_status: Option<bool>,
     /// OSC 9;4, the progress bar.
     pub progress: Option<bool>,
+    /// True when chaoshub reads the mouse. False leaves the mouse, and
+    /// so the text selection, to the terminal.
+    pub mouse: bool,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            program_status: None,
+            progress: None,
+            mouse: true,
+        }
+    }
 }
 
 /// The `[workspaces]` section.
@@ -305,6 +319,14 @@ mod tests {
         for bad in ["chaoshub", "/chaoshub", "chaosteil/", "a/b/c", ""] {
             assert_eq!(parse_repo_name(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn terminal_mouse_defaults_to_on() {
+        let terminal: TerminalConfig = toml::from_str("").unwrap();
+        assert!(terminal.mouse);
+        let terminal: TerminalConfig = toml::from_str("mouse = false").unwrap();
+        assert!(!terminal.mouse);
     }
 
     #[test]
