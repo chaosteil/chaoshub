@@ -125,8 +125,8 @@ pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusMod
     StatusModel {
         left,
         center: state.ui.status.as_ref().map(|msg| Cell {
-            text: msg.clone(),
-            style: CellStyle::Normal,
+            text: msg.text.clone(),
+            style: msg.style,
         }),
         right: vec![Cell {
             text: "? help".into(),
@@ -152,12 +152,13 @@ fn sync_text(state: &AppState, tabs: &[Box<dyn Tab>]) -> String {
     }
 }
 
-/// The status bar of the last built frame, if any.
-pub(crate) fn built_status(state: &AppState) -> Option<&StatusModel> {
+/// The status bar and the terminal status of the last built frame, if
+/// any.
+pub(crate) fn built_status(state: &AppState) -> Option<(&StatusModel, &TermStatus)> {
     state
         .cache
         .frame_generation
-        .map(|_| &state.cache.frame.status)
+        .map(|_| (&state.cache.frame.status, &state.cache.frame.term))
 }
 
 /// A list with no columns and no rows.
@@ -262,7 +263,11 @@ mod tests {
     fn frame_has_the_tab_bar_status_and_prev_list() {
         let (tabs, mut state, [one, two]) = fake_tabs();
         state.ui.active = 1;
-        state.ui.status = Some("synced".into());
+        state.ui.status = Some(crate::app::state::StatusMsg {
+            text: "synced".into(),
+            style: CellStyle::Normal,
+            expires: chrono::DateTime::UNIX_EPOCH,
+        });
         state.ui.prev_list = Some((empty_list(), Direction::Left));
         let frame = frame_model_with(&mut state, &tabs).clone();
         assert_eq!(builds(&one), 0);

@@ -9,14 +9,14 @@
 )]
 
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 
 use crate::app::frame::ModelCache;
-use crate::app::models::{Direction, ListModel};
+use crate::app::models::{CellStyle, Direction, ListModel};
 use crate::app::tabs::{TABS, Tab, TabState};
-use crate::bus::{Interest, OverlayKind, Scope, Session, Size, UiEvent};
+use crate::bus::{Interest, OverlayKind, RateInfo, Scope, Session, Size, SyncError, UiEvent};
 use crate::domain::detail::PrDetail;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
@@ -56,6 +56,9 @@ pub(crate) struct AppData {
     /// The time of the last sync of each scope: the start time of the
     /// sync that delivered the last `PrsSynced`.
     pub synced: HashMap<Scope, DateTime<Utc>>,
+    /// The state of the syncs: requested syncs, the last failure and the
+    /// rate limit.
+    pub sync: SyncInfo,
     /// Counts the changes of the pull requests and the jj scans. The
     /// fuzzy filters score again when it moves.
     pub revision: u64,
@@ -73,8 +76,8 @@ pub(crate) struct UiState {
     pub tabs: Vec<TabState>,
     /// The overlay stack, bottom first.
     pub overlays: Vec<Overlay>,
-    /// The last status message.
-    pub status: Option<String>,
+    /// The last status message, until it expires.
+    pub status: Option<StatusMsg>,
     /// The events for the transitions since the last draw.
     pub ui_events: Vec<UiEvent>,
     /// The list of the previous tab and the slide direction, until the tab
@@ -82,6 +85,58 @@ pub(crate) struct UiState {
     pub prev_list: Option<(ListModel, Direction)>,
     /// The interest that was last sent to the workers.
     pub interest: Option<Interest>,
+}
+
+/// The state of the syncs, for the status bar and the terminal status.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct SyncInfo {
+    /// The scopes of the syncs that `update` requested and that have no
+    /// result yet.
+    pub pending: HashSet<Scope>,
+    /// The last failure. A key press or the next successful sync clears
+    /// it.
+    pub failure: Option<Failure>,
+    /// The rate limit after the last request.
+    pub rate: Option<RateInfo>,
+}
+
+/// A sync failure or a worker restart.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Failure {
+    /// The failed worker: `sync`, `ci`, `detail`, `prefetch`, or the name
+    /// of a restarted worker.
+    pub source: &'static str,
+    /// The text for the user, for example `offline`.
+    pub reason: String,
+    /// `Some` for a rate limit: the time when the limit resets.
+    pub rate_limited_until: Option<DateTime<Utc>>,
+    /// When the failure arrived.
+    pub at: DateTime<Utc>,
+}
+
+/// A status bar message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StatusMsg {
+    pub text: String,
+    pub style: CellStyle,
+    /// The message leaves the status bar on the first tick after this
+    /// time.
+    pub expires: DateTime<Utc>,
+}
+
+/// The text of a sync error for the user.
+pub(crate) fn error_text(err: &SyncError) -> String {
+    match err {
+        SyncError::Auth => "GitHub login failed, run gh auth login".to_owned(),
+        SyncError::RateLimited { until } => {
+            format!(
+                "rate limited until {}",
+                until.with_timezone(&chrono::Local).format("%H:%M")
+            )
+        }
+        SyncError::Offline => "offline".to_owned(),
+        SyncError::Other(text) => text.clone(),
+    }
 }
 
 /// One overlay of the overlay stack.
@@ -118,6 +173,7 @@ impl AppState {
                 repos: BTreeMap::new(),
                 cache_at: None,
                 synced: HashMap::new(),
+                sync: SyncInfo::default(),
                 revision: 0,
                 now: DateTime::UNIX_EPOCH,
             },
@@ -138,6 +194,21 @@ impl AppState {
     /// Marks a visible change.
     pub(crate) fn bump(&mut self) {
         self.generation += 1;
+    }
+
+    /// Shows a status message for `ttl` from now.
+    pub(crate) fn message(
+        &mut self,
+        text: impl Into<String>,
+        style: CellStyle,
+        ttl: chrono::TimeDelta,
+    ) {
+        self.ui.status = Some(StatusMsg {
+            text: text.into(),
+            style,
+            expires: self.data.now + ttl,
+        });
+        self.bump();
     }
 
     /// Loads the startup snapshot of the cache and the repos of the
