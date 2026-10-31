@@ -28,8 +28,8 @@ use crate::app::term::term_status;
 use crate::bus::MergeProgress;
 use crate::bus::{
     ActionEvent, ActionInput, Cmd, Hit, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-    MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection, Size, SyncError, Target,
-    TargetKey, UiEvent,
+    LaunchRequest, MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection, Size, SyncError,
+    Target, TargetKey, UiEvent,
 };
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;
@@ -233,8 +233,7 @@ fn key(
         return Vec::new();
     }
     if keymap.matches("open", chord) {
-        open_popup(state, tabs, panes);
-        return Vec::new();
+        return open_selected(state, tabs, panes);
     }
     if keymap.matches("help", chord) {
         let help = help_model(keymap, tabs, actions);
@@ -353,12 +352,7 @@ fn run_action_key(
             if state.data.panes.contains_key(&(id, key.clone())) {
                 return Some(vec![Cmd::FocusPane { id, key }]);
             }
-            state
-                .data
-                .panes
-                .insert((id, key.clone()), PaneHandleState::Starting);
-            state.bump();
-            vec![Cmd::RunTerminal { id, key, request }]
+            vec![start_pane(state, id, key, request)]
         }
         Prepare::Command(cmd) => vec![cmd],
     };
@@ -434,17 +428,97 @@ fn open_authors(state: &mut AppState, tabs: &[Box<dyn Tab>]) {
     );
 }
 
-/// Opens the pull request popup for the cursor row, on the first pane
-/// that applies. A row that is not a pull request opens nothing.
-fn open_popup(state: &mut AppState, tabs: &[Box<dyn Tab>], panes: &[Box<dyn Pane>]) {
+/// The pane bookkeeping of a terminal command: the pane of `(id, key)`
+/// is `Starting` until `Msg::PaneStarted`.
+fn start_pane(
+    state: &mut AppState,
+    id: &'static str,
+    key: TargetKey,
+    request: LaunchRequest,
+) -> Cmd {
+    state
+        .data
+        .panes
+        .insert((id, key.clone()), PaneHandleState::Starting);
+    state.bump();
+    Cmd::RunTerminal { id, key, request }
+}
+
+/// The action id of the detail pane.
+const DETAIL_ID: &str = "detail";
+
+/// Opens the pull request of the cursor row: in the detail pane when
+/// `run` gave its command, else in the sidebar. A row that is not a pull
+/// request opens nothing.
+fn open_selected(state: &mut AppState, tabs: &[Box<dyn Tab>], panes: &[Box<dyn Pane>]) -> Vec<Cmd> {
     let model = frame::active_list(state, tabs);
     let Some(RowItem::Pr(pr)) = model.rows.get(model.cursor).map(|row| &row.item) else {
-        return;
+        return Vec::new();
     };
     let Some(target) = pr_target(&state.data, &pr.key) else {
-        return;
+        return Vec::new();
     };
-    let active = applicable(panes, &target).first().copied().unwrap_or(0);
+    if state.data.detail.is_some() {
+        return open_pane(state, &target);
+    }
+    open_popup(state, panes, &target);
+    Vec::new()
+}
+
+/// Opens `chaoshub pr OWNER/NAME NUMBER` for `target` in the detail
+/// pane. A second open of the same pull request focuses its pane. One
+/// detail pane is open at a time, so the pane of another pull request
+/// closes.
+fn open_pane(state: &mut AppState, target: &Target) -> Vec<Cmd> {
+    let Some(detail) = state.data.detail.clone() else {
+        return Vec::new();
+    };
+    let Target::Pr { pr, repo, .. } = target;
+    let key = target.key();
+    if state.data.panes.contains_key(&(DETAIL_ID, key.clone())) {
+        return vec![Cmd::FocusPane { id: DETAIL_ID, key }];
+    }
+    let mut cmds: Vec<Cmd> = state
+        .data
+        .panes
+        .keys()
+        .filter(|(id, other)| *id == DETAIL_ID && *other != key)
+        .map(|(_, other)| Cmd::CancelAction {
+            id: DETAIL_ID,
+            key: other.clone(),
+        })
+        .collect();
+    let PrKey {
+        repo: RepoKey { owner, name },
+        number,
+    } = &pr.key;
+    let mut argv = detail.argv;
+    argv.extend([
+        "pr".to_owned(),
+        format!("{owner}/{name}"),
+        number.to_string(),
+    ]);
+    let request = LaunchRequest {
+        argv,
+        cwd: repo.path.clone().unwrap_or(detail.cwd),
+        env: Vec::new(),
+        label: format!(
+            "chaoshub-detail-{owner}-{name}-{number}-{:04x}",
+            rand::random::<u16>()
+        ),
+        zoom: false,
+        split: detail.split,
+        ratio: detail.ratio,
+    };
+    cmds.push(start_pane(state, DETAIL_ID, key, request));
+    cmds
+}
+
+/// Opens the pull request popup for `target`, on the first pane that
+/// applies.
+fn open_popup(state: &mut AppState, panes: &[Box<dyn Pane>], target: &Target) {
+    let Target::Pr { pr, .. } = target;
+    let active = applicable(panes, target).first().copied().unwrap_or(0);
     open_overlay(
         state,
         OverlayKind::Popup,
@@ -838,8 +912,7 @@ fn click_row(
         return Vec::new();
     };
     if index == model.cursor {
-        open_popup(state, tabs, panes);
-        return Vec::new();
+        return open_selected(state, tabs, panes);
     }
     let height = usize::from(frame::list_size(state).height);
     let Some(ts) = state.ui.tabs.get_mut(state.ui.active) else {
@@ -4673,5 +4746,144 @@ mod tests {
             &frame.overlays[0].content,
             OverlayContent::Popup { subtitle, .. } if subtitle == "not loaded yet"
         ));
+    }
+
+    /// The detail pane command of the tests.
+    fn detail_pane() -> crate::app::state::DetailPane {
+        crate::app::state::DetailPane {
+            argv: vec!["/bin/chaoshub".into(), "--config".into(), "/c.toml".into()],
+            cwd: "/home/me".into(),
+            split: Some("left".into()),
+            ratio: Some(40),
+        }
+    }
+
+    /// The mine state with the detail pane, the repo `chaoshub` at
+    /// `/code/chaoshub`, and the cursor on `#99`.
+    fn detail_state() -> AppState {
+        let mut state = AppState::new(SIZE);
+        let repos = vec![Repo {
+            key: testdata::repo_key("chaoshub"),
+            path: Some("/code/chaoshub".into()),
+            settings: None,
+        }];
+        state.load(testdata::mine_snapshot(), repos);
+        state.data.session.login = Some("chaosteil".into());
+        state.data.detail = Some(detail_pane());
+        state
+    }
+
+    fn enter(state: &mut AppState) -> Vec<Cmd> {
+        update(
+            state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        )
+    }
+
+    /// The key and the request of a `RunTerminal` of the detail pane.
+    fn detail_run(cmd: &Cmd) -> (TargetKey, LaunchRequest) {
+        match cmd {
+            Cmd::RunTerminal { id, key, request } if *id == DETAIL_ID => {
+                (key.clone(), request.clone())
+            }
+            other => panic!("not a detail pane: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enter_with_a_detail_pane_runs_chaoshub_pr_in_a_pane() {
+        let mut state = detail_state();
+        assert_eq!(selected_number(&mut state), Some(99));
+        let cmds = enter(&mut state);
+        assert_eq!(cmds.len(), 1, "{cmds:?}");
+        let (key, request) = detail_run(&cmds[0]);
+        let pr = testdata::pr_key("chaoshub", 99);
+        assert_eq!(key, TargetKey::Pr(pr.clone()));
+        assert_eq!(
+            request.argv,
+            [
+                "/bin/chaoshub",
+                "--config",
+                "/c.toml",
+                "pr",
+                "chaosteil/chaoshub",
+                "99"
+            ]
+        );
+        assert_eq!(request.cwd, std::path::PathBuf::from("/code/chaoshub"));
+        assert_eq!(request.env, []);
+        assert!(!request.zoom);
+        assert_eq!(request.split.as_deref(), Some("left"));
+        assert_eq!(request.ratio, Some(40));
+        let suffix = request
+            .label
+            .strip_prefix("chaoshub-detail-chaosteil-chaoshub-99-")
+            .unwrap();
+        assert_eq!(suffix.len(), 4, "{}", request.label);
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(state.ui.overlays.is_empty(), "no sidebar");
+        assert_eq!(
+            state.data.panes.get(&(DETAIL_ID, key.clone())),
+            Some(&PaneHandleState::Starting)
+        );
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::PaneStarted { id: DETAIL_ID, key },
+        );
+        assert_eq!(flags_of(&mut state, 99), "▶");
+    }
+
+    #[test]
+    fn a_repo_without_a_path_runs_in_the_directory_of_the_list() {
+        let mut state = detail_state();
+        key(&mut state, 'G');
+        assert_eq!(selected_number(&mut state), Some(7));
+        let (_, request) = detail_run(&enter(&mut state)[0]);
+        assert_eq!(request.cwd, std::path::PathBuf::from("/home/me"));
+        assert_eq!(request.argv[3..], ["pr", "chaosteil/codeview", "7"]);
+    }
+
+    #[test]
+    fn enter_on_the_open_detail_pane_focuses_it() {
+        let mut state = detail_state();
+        enter(&mut state);
+        assert_eq!(
+            enter(&mut state),
+            vec![Cmd::FocusPane {
+                id: DETAIL_ID,
+                key: TargetKey::Pr(testdata::pr_key("chaoshub", 99)),
+            }]
+        );
+    }
+
+    #[test]
+    fn enter_on_another_pull_request_replaces_the_detail_pane() {
+        let mut state = detail_state();
+        enter(&mut state);
+        key(&mut state, 'j');
+        assert_eq!(selected_number(&mut state), Some(103));
+        let cmds = enter(&mut state);
+        assert_eq!(cmds.len(), 2, "{cmds:?}");
+        assert_eq!(
+            cmds[0],
+            Cmd::CancelAction {
+                id: DETAIL_ID,
+                key: TargetKey::Pr(testdata::pr_key("chaoshub", 99)),
+            }
+        );
+        let (key, _) = detail_run(&cmds[1]);
+        assert_eq!(key, TargetKey::Pr(testdata::pr_key("chaoshub", 103)));
+    }
+
+    #[test]
+    fn a_click_on_the_cursor_row_opens_the_detail_pane() {
+        let mut state = detail_state();
+        let cmds = update(&mut state, &Keymap::default(), click_on(Hit::Row(0)));
+        assert_eq!(cmds.len(), 1, "{cmds:?}");
+        let (key, _) = detail_run(&cmds[0]);
+        assert_eq!(key, TargetKey::Pr(testdata::pr_key("chaoshub", 99)));
+        assert!(state.ui.overlays.is_empty(), "no sidebar");
     }
 }

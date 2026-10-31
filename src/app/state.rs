@@ -9,6 +9,7 @@
 )]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 
@@ -81,6 +82,22 @@ pub(crate) struct AppData {
     pub merge: Option<MergeState>,
     /// The prefetch batch that runs, for the terminal progress bar.
     pub prefetch: Option<PrefetchBatch>,
+    /// The command of the detail pane. `None` opens the sidebar.
+    pub detail: Option<DetailPane>,
+}
+
+/// The command of the detail pane, as plain data from `run`: `app`
+/// adds `pr OWNER/NAME NUMBER` to the argv.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DetailPane {
+    /// The binary and the flags of the list process.
+    pub argv: Vec<String>,
+    /// The directory of the list process, for a repo without a path.
+    pub cwd: PathBuf,
+    /// The `[detail] split` direction.
+    pub split: Option<String>,
+    /// The `[detail] ratio` in percent.
+    pub ratio: Option<u8>,
 }
 
 /// The state of an async merge.
@@ -387,6 +404,7 @@ impl AppState {
                 panes: HashMap::new(),
                 merge: None,
                 prefetch: None,
+                detail: None,
             },
             ui: UiState {
                 active: 0,
