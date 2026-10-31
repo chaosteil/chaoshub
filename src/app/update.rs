@@ -787,7 +787,7 @@ fn startup_done(
 /// freshness rule. After a complete full sync (`gone` is `Some`), the
 /// open pull requests of the scope that the sync did not return leave
 /// the data, under the gone rule. The worker's list is only a hint. Each
-/// repo of the result gets a jj scan.
+/// repo of the result with a local path gets a jj scan.
 fn prs_synced(
     state: &mut AppState,
     scope: Scope,
@@ -821,7 +821,17 @@ fn prs_synced(
         state.data.revision += 1;
     }
     state.bump();
-    repos.into_iter().map(Cmd::ScanJj).collect()
+    repos
+        .into_iter()
+        .filter(|key| {
+            state
+                .data
+                .repos
+                .get(key)
+                .is_some_and(|repo| repo.path.is_some())
+        })
+        .map(Cmd::ScanJj)
+        .collect()
 }
 
 /// A pull request that the sync worker read again by id. True when it
@@ -1510,27 +1520,39 @@ mod tests {
     }
 
     #[test]
-    fn prs_synced_stores_the_prs_and_scans_each_repo_once() {
+    fn prs_synced_stores_the_prs_and_scans_each_repo_with_a_path_once() {
         let (tabs, mut state) = setup(None);
+        let repo = |name: &str, path: Option<&str>| Repo {
+            key: testdata::repo_key(name),
+            path: path.map(Into::into),
+            settings: None,
+        };
+        state.load(
+            crate::store::Snapshot::default(),
+            vec![
+                repo("chaoshub", Some("/code/chaoshub")),
+                repo("deploy", Some("/code/deploy")),
+                repo("codeview", None),
+            ],
+        );
         let mut other = pr_at(3, "Other repo", 0);
         other.key.repo = testdata::repo_key("codeview");
-        let prs = vec![pr_at(1, "One", 0), pr_at(2, "Two", 0), other];
+        let mut unknown = pr_at(4, "Repo outside the session", 0);
+        unknown.key.repo = testdata::repo_key("elsewhere");
+        let prs = vec![pr_at(1, "One", 0), pr_at(2, "Two", 0), other, unknown];
         assert_eq!(
             run(&mut state, &tabs, synced(prs, None, 0)),
-            vec![
-                Cmd::ScanJj(testdata::repo_key("chaoshub")),
-                Cmd::ScanJj(testdata::repo_key("codeview")),
-                fake_interest(),
-            ]
+            vec![Cmd::ScanJj(testdata::repo_key("chaoshub")), fake_interest()],
+            "codeview and elsewhere have no path, deploy has no pull request"
         );
-        assert_eq!(state.data.prs.len(), 3);
+        assert_eq!(state.data.prs.len(), 4);
         assert_eq!(
             state.data.scopes.get(&testdata::pr_key("chaoshub", 1)),
             Some(&Scope::Mine)
         );
         assert_eq!(state.data.synced.get(&Scope::Mine), Some(&at(0)));
         assert_eq!(state.data.revision, 1);
-        assert_eq!(state.generation, 1);
+        assert_eq!(state.generation, 2, "one for the load, one for the sync");
         let settings = state.data.repos[&testdata::repo_key("chaoshub")]
             .settings
             .clone();
