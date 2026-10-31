@@ -1,0 +1,41 @@
+login = "chaosteil"
+teams = ["pierredotco/platform"]
+launcher = "rex"
+
+[[repo]]
+name = "chaosteil/chaoshub"
+path = "~/code/chaoshub"
+
+[[repo]]
+name = "pierredotco/deploy"
+
+[refresh]
+mine_secs = 30
+full_secs = 600
+
+[prefetch]
+enabled = false
+
+[codeview]
+zoom = false
+ratio = 70
+
+[merge]
+
+[theme]
+textures = false
+animation_ms = 120
+
+[terminal]
+progress = true
+
+[keys]
+merge = "M"
+refresh = "ctrl-r"
+
+[actions.pr_agent]
+command = "pr-agent"
+env = { OPENAI_KEY = "secret" }
+
+[workspaces]
+root = "~/work/ws"
