@@ -43,8 +43,6 @@ pub(crate) struct Palette {
     pub orange: Color,
     pub purple: Color,
     pub pink: Color,
-    /// The background of the selection band, under `fg` text.
-    pub band: Color,
 }
 
 /// The look of the frames, headers, separators, fills, selections and
@@ -145,13 +143,13 @@ impl Theme {
         }
     }
 
-    /// Builds the punk theme for a terminal kind: the punk palette, or
-    /// its 16-color fallback.
+    /// Builds the punk theme for a terminal kind: the Pierre palette, or
+    /// the 16 ANSI colors, with the punk skin.
     pub(crate) const fn punk(kind: ThemeKind) -> Self {
         Self {
             palette: match kind {
-                ThemeKind::TrueColor => Palette::punk(),
-                ThemeKind::Ansi16 => Palette::punk_ansi16(),
+                ThemeKind::TrueColor => Palette::pierre(),
+                ThemeKind::Ansi16 => Palette::ansi16(),
             },
             skin: Skin::Punk,
         }
@@ -189,22 +187,22 @@ impl Theme {
 
     /// How the selected row of a list looks. Grunge and plain rows get
     /// the surface background and a `▌` marker. A punk row is a slanted
-    /// band: `▶`, the cells in white on the band red, and a `╱` tail.
+    /// band: `▶`, the cells in black on the primary color, and a `╱` tail.
     pub(crate) fn selected_row(&self) -> Selection {
         let p = &self.palette;
         match self.skin {
             Skin::Punk => Selection {
-                patch: Style::new().bg(p.band).fg(p.fg),
+                patch: Style::new().bg(p.primary).fg(p.bg),
                 marker: "▶",
-                marker_fg: p.fg,
+                marker_fg: p.bg,
                 tail: Some((
                     "╱",
                     Style::new()
                         .bg(p.bg)
-                        .fg(p.band)
+                        .fg(p.primary)
                         .add_modifier(Modifier::BOLD),
                 )),
-                cell_fg: Some(p.fg),
+                cell_fg: Some(p.bg),
             },
             Skin::Grunge { .. } | Skin::Plain => Selection {
                 patch: Style::new().bg(p.surface),
@@ -232,7 +230,7 @@ impl Theme {
 
     /// The spans of one tab with its label. The active tab stands out.
     /// A punk tab is angled, `◤ label ◢`, and the active one is filled
-    /// with the accent red. The other punk tabs are plain.
+    /// with the primary color. The other punk tabs are plain.
     pub(crate) fn tab(&self, label: &str, active: bool) -> Vec<Span<'static>> {
         let p = &self.palette;
         if self.skin == Skin::Punk {
@@ -274,8 +272,8 @@ impl Theme {
     }
 
     /// How the status bar looks. Grunge and plain bars have the surface
-    /// background. The punk bar has a red band with black text on the
-    /// left, a diagonal end, and the message in white.
+    /// background. The punk bar has a band in the primary color with
+    /// black text on the left, a diagonal end, and the message in white.
     pub(crate) fn status_band(&self) -> StatusBand {
         let p = &self.palette;
         match self.skin {
@@ -375,10 +373,11 @@ mod tests {
     #[test]
     fn punk_picks_the_palette_by_kind() {
         let theme = Theme::punk(ThemeKind::TrueColor);
-        assert_eq!(theme.palette, Palette::punk());
+        assert_eq!(theme.palette, Palette::pierre());
         assert_eq!(theme.skin, Skin::Punk);
         let theme = Theme::punk(ThemeKind::Ansi16);
-        assert_eq!(theme.palette, Palette::punk_ansi16());
+        assert_eq!(theme.palette, Palette::ansi16());
+        assert_eq!(theme.skin, Skin::Punk);
         assert!(!theme.textures());
     }
 
@@ -387,11 +386,16 @@ mod tests {
         let theme = Theme::punk(ThemeKind::TrueColor);
         let p = theme.palette;
         let selection = theme.selected_row();
-        assert_eq!(selection.patch.bg, Some(p.band));
-        assert_eq!(selection.patch.fg, Some(p.fg));
+        assert_eq!(selection.patch.bg, Some(p.primary));
+        assert_eq!(selection.patch.fg, Some(p.bg));
         assert_eq!(selection.marker, "▶");
+        assert_eq!(selection.marker_fg, p.bg);
         assert_eq!(selection.tail.map(|(glyph, _)| glyph), Some("╱"));
-        assert_eq!(selection.cell_fg, Some(p.fg));
+        assert_eq!(
+            selection.tail.map(|(_, style)| style.fg),
+            Some(Some(p.primary))
+        );
+        assert_eq!(selection.cell_fg, Some(p.bg));
     }
 
     #[test]
