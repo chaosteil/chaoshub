@@ -12,6 +12,8 @@ mod sync;
 #[cfg(test)]
 mod testkit;
 
+use std::time::Duration;
+
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
@@ -21,7 +23,7 @@ use crate::workers::ctx::WorkerCtx;
 use crate::workers::supervisor::{FIRST_BACKOFF, Worker, supervise};
 
 /// The workers that `spawn_all` starts.
-const WORKERS: &[Worker] = &[startup::WORKER, ci::WORKER, jj::WORKER];
+const WORKERS: &[Worker] = &[startup::WORKER, ci::WORKER, jj::WORKER, detail::WORKER];
 
 /// Spawns every worker into one `JoinSet`, each one inside its own
 /// supervisor. A drop of the set aborts the supervisors and the workers.
@@ -57,9 +59,20 @@ pub(crate) async fn wait_for_login(session: &mut watch::Receiver<Session>) -> Op
     session.login.clone()
 }
 
+/// Waits until `rx` had no change for `quiet`. It returns at once when
+/// no change comes within `quiet`. False when the sender is gone.
+pub(crate) async fn settle<T>(rx: &mut watch::Receiver<T>, quiet: Duration) -> bool {
+    loop {
+        match tokio::time::timeout(quiet, rx.changed()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => return false,
+            Err(_) => return true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
 
     use chrono::Utc;
     use pretty_assertions::assert_eq;
@@ -103,6 +116,25 @@ mod tests {
         assert!(!waiter.is_finished());
         tx.send_modify(|session| session.login = Some("chaosteil".into()));
         assert_eq!(waiter.await.unwrap().as_deref(), Some("chaosteil"));
+    }
+
+    #[tokio::test]
+    async fn settle_waits_for_a_quiet_time() {
+        let (tx, mut rx) = watch::channel(0);
+        let quiet = Duration::from_millis(100);
+        let sender = tokio::spawn(async move {
+            for value in 1..=3 {
+                tx.send(value).unwrap();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            tx
+        });
+        let start = std::time::Instant::now();
+        assert!(settle(&mut rx, quiet).await);
+        assert!(start.elapsed() >= Duration::from_millis(200));
+        assert_eq!(*rx.borrow(), 3);
+        drop(sender.await.unwrap());
+        assert!(!settle(&mut rx, quiet).await);
     }
 
     #[tokio::test]
