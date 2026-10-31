@@ -11,7 +11,7 @@ use crate::bus::RateInfo;
 use crate::domain::observed::Observed;
 use crate::domain::pr::PullRequest;
 use crate::domain::stack::Stack;
-use crate::github::parse::{self, Me};
+use crate::github::parse::{self, CiPollResult, Me};
 use crate::github::{GithubClient, GithubError};
 
 /// The GraphQL `DateTime` scalar: an ISO 8601 time.
@@ -60,6 +60,16 @@ pub(crate) struct PrByIds;
     response_derives = "Debug"
 )]
 pub(crate) struct StackEntries;
+
+/// The CI state of visible pull requests and the checks of the selected
+/// one, in one request.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/ci_poll.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct CiPoll;
 
 impl GithubClient {
     /// The login of the token owner.
@@ -146,6 +156,24 @@ impl GithubClient {
         let vars = stack_entries::Variables { id: id.to_owned() };
         let (data, rate) = self.run::<StackEntries>(vars).await?;
         Ok((parse::stack_entries::stack(data, started_at)?, rate))
+    }
+
+    /// The CI state of the pull requests `visible` and, when `selected` is
+    /// set, the state and the checks of that pull request. All ids are
+    /// GraphQL node ids.
+    pub(crate) async fn ci_poll(
+        &self,
+        visible: &[String],
+        selected: Option<&str>,
+    ) -> Result<(CiPollResult, RateInfo), GithubError> {
+        let started_at = Utc::now();
+        let vars = ci_poll::Variables {
+            visible: visible.to_vec(),
+            selected: selected.unwrap_or_default().to_owned(),
+            with_selected: selected.is_some(),
+        };
+        let (data, rate) = self.run::<CiPoll>(vars).await?;
+        Ok((parse::ci_poll::result(data, started_at), rate))
     }
 }
 
@@ -311,6 +339,40 @@ mod tests {
         let requests = server.received_requests().await.unwrap();
         let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
         assert_eq!(body["variables"], json!({ "id": "PRS_1" }));
+    }
+
+    #[tokio::test]
+    async fn ci_poll_sends_the_selection() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("query CiPoll"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(fixture(include_str!("testdata/ci_poll.json"))),
+            )
+            .mount(&server)
+            .await;
+        let client = client(&server);
+        let visible = vec!["PR_1".to_owned(), "PR_2".to_owned()];
+        let (result, _) = client.ci_poll(&visible, Some("PR_2")).await.unwrap();
+        assert_eq!(result.visible.len(), 2);
+        assert!(result.selected.is_some());
+        client.ci_poll(&visible[..1], None).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let bodies: Vec<Value> = requests
+            .iter()
+            .map(|request| {
+                serde_json::from_slice::<Value>(&request.body).unwrap()["variables"].clone()
+            })
+            .collect();
+        assert_eq!(
+            bodies,
+            [
+                json!({ "visible": ["PR_1", "PR_2"], "selected": "PR_2", "withSelected": true }),
+                json!({ "visible": ["PR_1"], "selected": "", "withSelected": false }),
+            ]
+        );
     }
 
     #[tokio::test]

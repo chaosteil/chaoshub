@@ -1,0 +1,311 @@
+{
+  "data": {
+    "visible": [
+      {
+        "__typename": "PullRequest",
+        "id": "PR_kwDOAAAAAc8AAAAAAAAA02",
+        "headRefOid": "00000000000000000000000000000000c0de0003",
+        "statusCheckRollup": {
+          "state": "SUCCESS"
+        }
+      },
+      {
+        "__typename": "PullRequest",
+        "id": "PR_kwDOAAAAAc8AAAAAAAAA01",
+        "headRefOid": "00000000000000000000000000000000c0de0005",
+        "statusCheckRollup": {
+          "state": "FAILURE"
+        }
+      }
+    ],
+    "selected": {
+      "__typename": "PullRequest",
+      "id": "PR_kwDOAAAAAc8AAAAAAAAA01",
+      "headRefOid": "00000000000000000000000000000000c0de0005",
+      "statusCheckRollup": {
+        "state": "FAILURE",
+        "contexts": {
+          "nodes": [
+            {
+              "__typename": "CheckRun",
+              "name": "check-1",
+              "status": "COMPLETED",
+              "conclusion": "FAILURE",
+              "startedAt": "2026-10-08T06:51:59Z",
+              "completedAt": "2026-10-08T06:52:56Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70010/job/70080",
+              "checkSuite": {
+                "databaseId": 70044,
+                "workflowRun": {
+                  "databaseId": 70010
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-2",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:52:00Z",
+              "completedAt": "2026-10-08T06:52:35Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70016/job/70086",
+              "checkSuite": {
+                "databaseId": 70050,
+                "workflowRun": {
+                  "databaseId": 70016
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-3",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:52:00Z",
+              "completedAt": "2026-10-08T06:52:09Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70014/job/70083",
+              "checkSuite": {
+                "databaseId": 70048,
+                "workflowRun": {
+                  "databaseId": 70014
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-4",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:51:59Z",
+              "completedAt": "2026-10-08T06:52:23Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70015/job/70085",
+              "checkSuite": {
+                "databaseId": 70049,
+                "workflowRun": {
+                  "databaseId": 70015
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-5",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:51:59Z",
+              "completedAt": "2026-10-08T06:52:19Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70013/job/70082",
+              "checkSuite": {
+                "databaseId": 70047,
+                "workflowRun": {
+                  "databaseId": 70013
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-6",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:51:59Z",
+              "completedAt": "2026-10-08T06:52:44Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70012/job/70081",
+              "checkSuite": {
+                "databaseId": 70046,
+                "workflowRun": {
+                  "databaseId": 70012
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-7",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:51:59Z",
+              "completedAt": "2026-10-08T06:52:17Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70009/job/70079",
+              "checkSuite": {
+                "databaseId": 70043,
+                "workflowRun": {
+                  "databaseId": 70009
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-8",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:51:59Z",
+              "completedAt": "2026-10-08T06:52:27Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70011/job/70078",
+              "checkSuite": {
+                "databaseId": 70045,
+                "workflowRun": {
+                  "databaseId": 70011
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-9",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:52:16Z",
+              "completedAt": "2026-10-08T06:55:35Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70014/job/70087",
+              "checkSuite": {
+                "databaseId": 70048,
+                "workflowRun": {
+                  "databaseId": 70014
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-10",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:51:59Z",
+              "completedAt": "2026-10-08T06:53:01Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70013/job/70084",
+              "checkSuite": {
+                "databaseId": 70047,
+                "workflowRun": {
+                  "databaseId": 70013
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-11",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:52:27Z",
+              "completedAt": "2026-10-08T06:53:33Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70013/job/70088",
+              "checkSuite": {
+                "databaseId": 70047,
+                "workflowRun": {
+                  "databaseId": 70013
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-12",
+              "status": "COMPLETED",
+              "conclusion": "SKIPPED",
+              "startedAt": "2026-10-08T06:52:20Z",
+              "completedAt": "2026-10-08T06:52:19Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70013/job/70091",
+              "checkSuite": {
+                "databaseId": 70047,
+                "workflowRun": {
+                  "databaseId": 70013
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-13",
+              "status": "COMPLETED",
+              "conclusion": "SKIPPED",
+              "startedAt": "2026-10-08T06:52:20Z",
+              "completedAt": "2026-10-08T06:52:19Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70013/job/70092",
+              "checkSuite": {
+                "databaseId": 70047,
+                "workflowRun": {
+                  "databaseId": 70013
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-14",
+              "status": "COMPLETED",
+              "conclusion": "SKIPPED",
+              "startedAt": "2026-10-08T06:52:20Z",
+              "completedAt": "2026-10-08T06:52:19Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70013/job/70089",
+              "checkSuite": {
+                "databaseId": 70047,
+                "workflowRun": {
+                  "databaseId": 70013
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-15",
+              "status": "COMPLETED",
+              "conclusion": "SKIPPED",
+              "startedAt": "2026-10-08T06:52:20Z",
+              "completedAt": "2026-10-08T06:52:19Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70013/job/70090",
+              "checkSuite": {
+                "databaseId": 70047,
+                "workflowRun": {
+                  "databaseId": 70013
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-16",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:53:41Z",
+              "completedAt": "2026-10-08T06:53:47Z",
+              "detailsUrl": "https://github.com/acme/monorepo/actions/runs/70013/job/70093",
+              "checkSuite": {
+                "databaseId": 70047,
+                "workflowRun": {
+                  "databaseId": 70013
+                }
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-17",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:51:56Z",
+              "completedAt": "2026-10-08T06:52:01Z",
+              "detailsUrl": "https://ci-1.example.com/status",
+              "checkSuite": {
+                "databaseId": 70042,
+                "workflowRun": null
+              }
+            },
+            {
+              "__typename": "CheckRun",
+              "name": "check-18",
+              "status": "COMPLETED",
+              "conclusion": "SUCCESS",
+              "startedAt": "2026-10-08T06:52:02Z",
+              "completedAt": "2026-10-08T06:52:06Z",
+              "detailsUrl": "https://ci-1.example.com/status",
+              "checkSuite": {
+                "databaseId": 70042,
+                "workflowRun": null
+              }
+            },
+            {
+              "__typename": "StatusContext",
+              "context": "check-19",
+              "state": "SUCCESS",
+              "targetUrl": "https://ci-2.example.com/status"
+            }
+          ]
+        }
+      }
+    },
+    "rateLimit": {
+      "cost": 1,
+      "remaining": 4991,
+      "resetAt": "2026-10-31T05:50:43Z"
+    }
+  }
+}

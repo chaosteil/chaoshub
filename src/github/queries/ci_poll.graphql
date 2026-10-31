@@ -1,0 +1,55 @@
+query CiPoll($visible: [ID!]!, $selected: ID!, $withSelected: Boolean!) {
+  visible: nodes(ids: $visible) {
+    __typename
+    ... on PullRequest {
+      id
+      headRefOid
+      statusCheckRollup {
+        state
+      }
+    }
+  }
+  selected: node(id: $selected) @include(if: $withSelected) {
+    __typename
+    ... on PullRequest {
+      id
+      headRefOid
+      statusCheckRollup {
+        ...RollupFields
+      }
+    }
+  }
+  rateLimit {
+    cost
+    remaining
+    resetAt
+  }
+}
+
+fragment RollupFields on StatusCheckRollup {
+  state
+  contexts(first: 30) {
+    nodes {
+      __typename
+      ... on CheckRun {
+        name
+        status
+        conclusion
+        startedAt
+        completedAt
+        detailsUrl
+        checkSuite {
+          databaseId
+          workflowRun {
+            databaseId
+          }
+        }
+      }
+      ... on StatusContext {
+        context
+        state
+        targetUrl
+      }
+    }
+  }
+}
