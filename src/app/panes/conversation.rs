@@ -36,7 +36,7 @@ impl Pane for Conversation {
     }
 
     fn key(&self) -> char {
-        '2'
+        '3'
     }
 
     fn applies(&self, target: &Target) -> bool {

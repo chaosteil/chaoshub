@@ -1,12 +1,12 @@
 ---
 source: src/run.rs
-expression: "screen(&mut popup_app(100, 30))"
+expression: screen(&mut app)
 ---
 "▌ 1 M I N E   2 T E A M     ░         ˙                ˙                            ˙      chaoshub "
 " ─ fix(store): reope▛▀▀▀▓▀▀▀▀▀▀▀▀▀▀▒▀▒▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▓▀▀▀░▀▀▀▀▀▀▒▓▒▀▒▀░▀▀▀▀▓▀▀▀▀▀▀▀▀▀░▀▀▀▀▀▀▓▀▓▀▀▀▜"
 " stack #12 -> main ·▌ #101 feat(app): Pane trait, registry and overlay stack                       ▐"
 " ┌ feat(ui): popup f▌ chaosteil · chaosteil/101 -> main · open                                     ▐"
-" ├ feat(app): checks░ ▌ 1 Checks     2 Conversation     3 Stack                                    ▐"
+" ├ feat(app): checks░   1 Description   ▌ 2 Checks     3 Conversation     4 Stack                  ▐"
 "▌└ feat(app): Pane t▌ ──────────────────────────────────────────────────────────────────────────── ▐"
 " ─ docs: describe th▌  NAME                                                  STATE        DURATION ▐"
 "    ░˙ ·    ˙       ▌ ▌ci / build                                            ✓ success      2m 10s ▐"
@@ -30,5 +30,5 @@ expression: "screen(&mut popup_app(100, 30))"
 "         ·       ░  ▌        ˙       ░ ·           ˙˙ · ·             ░                            ▐"
 " ·      ·           ▌  ˙    ░                        · ˙                ·           ░              ▐"
 "  ░                 ▙▄▄▄▄▓▄▄▄▄▄▄░▄▄▄▄▄▄▄▄▄▄▄░▄▄▄▄▄▄▒▒▄▄▓▄▄▄▓▄▓▄▄▄▄▄▓▄▄▄▄▄▒▄▄▓▄▄▄▄▄▄▄▓▄░▄▄▒▄▄▄▄▓▒▄▄▄▟"
-"▌ 1/2/3/Tab pane tabs  Enter expand  Esc close                                                      "
+"▌ 1/2/3/4/Tab pane tabs  Enter expand  Esc close                                                    "
 " [MINE] 0 repos · cache from 5m ago                                                          ? help "

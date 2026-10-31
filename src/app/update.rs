@@ -15,7 +15,7 @@ use crate::app::keymap::{self, Keymap};
 use crate::app::layout::Areas;
 use crate::app::models::{CellStyle, Direction, PaneModel, RowItem};
 use crate::app::nav::{self, Motion};
-use crate::app::panes::{PANES, Pane, applicable, items};
+use crate::app::panes::{PANES, Pane, applicable, display_rows, items};
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
@@ -482,10 +482,10 @@ fn popup_key(
     };
     if let Some(motion) = motion(keymap, chord) {
         let model = pane.model(&cx, ps, size);
-        let count = items(&model);
-        if matches!(model, PaneModel::Lines { .. }) {
-            ps.scroll = move_in(ps.scroll, count, motion);
+        if let PaneModel::Lines { lines, .. } = &model {
+            ps.scroll = move_in(ps.scroll, display_rows(lines, size.width), motion);
         } else {
+            let count = items(&model);
             ps.cursor = move_in(ps.cursor, count, motion);
             ps.scroll = nav::keep_visible(count, ps.cursor, ps.scroll, usize::from(size.height));
         }
