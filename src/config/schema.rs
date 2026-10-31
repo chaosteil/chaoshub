@@ -136,9 +136,11 @@ impl From<MergeMethodSetting> for MergeMethod {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub(crate) struct ThemeConfig {
+    /// The look: grunge, punk or plain.
+    pub style: ThemeStyleSetting,
     /// Draws the rough block borders.
     pub grunge: bool,
-    /// Fills empty areas with noise textures.
+    /// Fills empty areas with noise textures. Grunge only.
     pub textures: bool,
     /// Turns the transitions on.
     pub animations: bool,
@@ -151,6 +153,7 @@ pub(crate) struct ThemeConfig {
 impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
+            style: ThemeStyleSetting::Grunge,
             grunge: true,
             textures: true,
             animations: true,
@@ -158,6 +161,19 @@ impl Default for ThemeConfig {
             key_hints: true,
         }
     }
+}
+
+/// A `[theme] style` in the configuration file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ThemeStyleSetting {
+    /// Rough block borders and textures.
+    #[default]
+    Grunge,
+    /// Black, white and hard red with angular cuts.
+    Punk,
+    /// Rounded borders, no textures.
+    Plain,
 }
 
 /// The `[terminal]` section: the terminal status sequences. `None` turns a
@@ -246,6 +262,16 @@ mod tests {
         for bad in ["chaoshub", "/chaoshub", "chaosteil/", "a/b/c", ""] {
             assert_eq!(parse_repo_name(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn theme_style_parses() {
+        let theme: ThemeConfig = toml::from_str("style = \"punk\"").unwrap();
+        assert_eq!(theme.style, ThemeStyleSetting::Punk);
+        assert!(theme.textures);
+        let theme: ThemeConfig = toml::from_str("").unwrap();
+        assert_eq!(theme.style, ThemeStyleSetting::Grunge);
+        assert!(toml::from_str::<ThemeConfig>("style = \"neon\"").is_err());
     }
 
     #[test]

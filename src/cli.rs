@@ -1,9 +1,9 @@
-//! Command line types (clap): `--repo`, `--config`, `--no-prefetch` and
-//! `cache clear`.
+//! Command line types (clap): `--repo`, `--config`, `--no-prefetch`,
+//! `--theme` and `cache clear`.
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// A PR tracking TUI for jj, Rex and codeview.
 #[derive(Debug, Clone, PartialEq, Eq, Parser)]
@@ -21,8 +21,23 @@ pub struct Cli {
     /// session.
     #[arg(long)]
     pub no_prefetch: bool,
+    /// Uses this theme style for this session, in place of `[theme]
+    /// style`.
+    #[arg(long, value_name = "STYLE")]
+    pub theme: Option<ThemeArg>,
     #[command(subcommand)]
     pub command: Option<CacheCommand>,
+}
+
+/// A theme style on the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ThemeArg {
+    /// Rough block borders and textures.
+    Grunge,
+    /// Black, white and hard red with angular cuts.
+    Punk,
+    /// Rounded borders, no textures.
+    Plain,
 }
 
 /// The subcommands. Without one, chaoshub starts the TUI.
@@ -63,9 +78,18 @@ mod tests {
                 repo: Vec::new(),
                 config: None,
                 no_prefetch: false,
+                theme: None,
                 command: None,
             }
         );
+    }
+
+    #[test]
+    fn theme_parses() {
+        assert_eq!(parse(&["--theme", "punk"]).theme, Some(ThemeArg::Punk));
+        assert_eq!(parse(&["--theme", "plain"]).theme, Some(ThemeArg::Plain));
+        assert_eq!(parse(&["--theme", "grunge"]).theme, Some(ThemeArg::Grunge));
+        assert!(Cli::try_parse_from(["chaoshub", "--theme", "neon"]).is_err());
     }
 
     #[test]
@@ -84,6 +108,7 @@ mod tests {
                 repo: vec!["chaosteil/chaoshub".into(), "pierredotco/deploy".into()],
                 config: Some(PathBuf::from("/tmp/c.toml")),
                 no_prefetch: true,
+                theme: None,
                 command: None,
             }
         );
