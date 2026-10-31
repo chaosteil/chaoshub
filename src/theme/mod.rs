@@ -42,6 +42,8 @@ pub(crate) struct Palette {
     pub orange: Color,
     pub purple: Color,
     pub pink: Color,
+    /// The background of the selection band, under `fg` text.
+    pub band: Color,
 }
 
 /// The look of the frames, headers, separators, fills, selections and
@@ -99,6 +101,18 @@ impl Theme {
                 palette: Palette::ansi16(),
                 skin: Skin::Plain,
             },
+        }
+    }
+
+    /// Builds the punk theme for a terminal kind: the punk palette, or
+    /// its 16-color fallback.
+    pub(crate) const fn punk(kind: ThemeKind) -> Self {
+        Self {
+            palette: match kind {
+                ThemeKind::TrueColor => Palette::punk(),
+                ThemeKind::Ansi16 => Palette::punk_ansi16(),
+            },
+            skin: Skin::Punk,
         }
     }
 
@@ -212,6 +226,16 @@ mod tests {
         assert_eq!(theme.palette, Palette::ansi16());
         assert_eq!(theme.skin, Skin::Plain);
         assert!(!theme.grunge());
+        assert!(!theme.textures());
+    }
+
+    #[test]
+    fn punk_picks_the_palette_by_kind() {
+        let theme = Theme::punk(ThemeKind::TrueColor);
+        assert_eq!(theme.palette, Palette::punk());
+        assert_eq!(theme.skin, Skin::Punk);
+        let theme = Theme::punk(ThemeKind::Ansi16);
+        assert_eq!(theme.palette, Palette::punk_ansi16());
         assert!(!theme.textures());
     }
 
