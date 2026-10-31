@@ -138,6 +138,9 @@ pub(crate) struct UiState {
     pub interest: Option<Interest>,
     /// True while the user types the filter of the active tab.
     pub filter_edit: bool,
+    /// The pull request of the pinned mode (`chaoshub pr`). Its popup is
+    /// the overlay at index 0 and never closes. `None` in the list mode.
+    pub pinned: Option<PrKey>,
 }
 
 /// The state of the syncs, for the status bar and the terminal status.
@@ -394,6 +397,7 @@ impl AppState {
                 prev_list: None,
                 interest: None,
                 filter_edit: false,
+                pinned: None,
             },
             generation: 0,
             cache: ModelCache::default(),

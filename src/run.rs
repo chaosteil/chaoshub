@@ -1676,6 +1676,22 @@ mod tests {
         insta::assert_snapshot!(screen(&mut app));
     }
 
+    /// The seeded mine app in the pinned mode of #101.
+    fn detail_pane_app(width: u16, height: u16) -> App {
+        seeded_app(width, height, crate::app::testdata::mine_snapshot())
+            .pinned(crate::app::testdata::pr_key("chaoshub", 101))
+    }
+
+    #[test]
+    fn detail_pane_100() {
+        insta::assert_snapshot!(screen(&mut detail_pane_app(100, 30)));
+    }
+
+    #[test]
+    fn detail_pane_160() {
+        insta::assert_snapshot!(screen(&mut detail_pane_app(160, 40)));
+    }
+
     #[test]
     fn tab_slide_with_two_tabs() {
         let mut app = seeded_app(100, 12, crate::app::testdata::team_snapshot());

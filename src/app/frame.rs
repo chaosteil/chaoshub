@@ -9,7 +9,7 @@ use textwrap::core::display_width;
 use crate::actions::{Action, Applicability, Hint, REGISTRY};
 use crate::app::age::age;
 use crate::app::keymap::{self, Keymap};
-use crate::app::layout::{Areas, layout, layout_with};
+use crate::app::layout::{Areas, layout_full};
 use crate::app::models::{
     Cell, CellStyle, FilterModel, FrameModel, HINT_CUT, HINT_GAP, HINT_PREFIX, KeyHint,
     KeyHintsModel, ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, StatusModel,
@@ -24,6 +24,7 @@ use crate::app::term::term_status;
 use crate::bus::{
     KeyChord, KeyCode, KeyModifiers, Progress, Selection, Size, Target, TermState, TermStatus,
 };
+use crate::domain::keys::PrKey;
 use crate::domain::pr::PrState;
 
 /// The models of the last frame.
@@ -96,9 +97,14 @@ pub(crate) fn frame_model_full<'s>(
     if state.cache.frame_generation != Some(state.generation) {
         let list = active_list(state, tabs);
         let hints = hints_model(state, tabs, panes, &REGISTRY, &list);
+        let titles = if state.ui.pinned.is_some() {
+            Vec::new()
+        } else {
+            tabs.iter().map(|tab| tab.title()).collect()
+        };
         let frame = FrameModel {
             tab_bar: TabBarModel {
-                titles: tabs.iter().map(|tab| tab.title()).collect(),
+                titles,
                 active: state.ui.active,
             },
             list,
@@ -117,6 +123,8 @@ pub(crate) fn frame_model_full<'s>(
 
 /// The models of the overlay stack, bottom first.
 fn overlay_models(state: &AppState, panes: &[Box<dyn Pane>]) -> Vec<OverlayModel> {
+    let areas = areas(state);
+    let pinned = state.ui.pinned.is_some();
     state
         .ui
         .overlays
@@ -125,7 +133,9 @@ fn overlay_models(state: &AppState, panes: &[Box<dyn Pane>]) -> Vec<OverlayModel
             kind: overlay.kind,
             closing: overlay.closing,
             content: match &overlay.state {
-                OverlayState::Popup(popup) => popup_content(&state.data, popup, panes),
+                OverlayState::Popup(popup) => {
+                    popup_content(&state.data, &areas, pinned, popup, panes)
+                }
                 OverlayState::Authors(picker) => OverlayContent::Picker {
                     title: "author".into(),
                     items: picker.items(),
@@ -155,13 +165,26 @@ fn overlay_models(state: &AppState, panes: &[Box<dyn Pane>]) -> Vec<OverlayModel
         .collect()
 }
 
-/// The content of the pull request popup: the header, the tabs of the
-/// panes that apply, and the model of the active pane.
-fn popup_content(data: &AppData, popup: &PopupState, panes: &[Box<dyn Pane>]) -> OverlayContent {
+/// The content of the pull request popup in `areas`: the header, the
+/// tabs of the panes that apply, and the model of the active pane. A pull
+/// request that is not loaded is `not loaded yet` in the pinned mode, and
+/// gone in the list mode.
+fn popup_content(
+    data: &AppData,
+    areas: &Areas,
+    pinned: bool,
+    popup: &PopupState,
+    panes: &[Box<dyn Pane>],
+) -> OverlayContent {
     let Some(target) = pr_target(data, &popup.key) else {
+        let subtitle = if pinned {
+            "not loaded yet"
+        } else {
+            "this pull request is gone"
+        };
         return OverlayContent::Popup {
             title: format!("#{}", popup.key.number),
-            subtitle: "this pull request is gone".into(),
+            subtitle: subtitle.into(),
             tabs: Vec::new(),
             active: 0,
             pane: PaneModel::Lines {
@@ -193,11 +216,10 @@ fn popup_content(data: &AppData, popup: &PopupState, panes: &[Box<dyn Pane>]) ->
             title: panes[i].title(),
         })
         .collect();
-    let areas = layout(data.size);
     let cx = KeyCx {
         data,
         target: Some(&target),
-        areas: &areas,
+        areas,
         keys: &keymap::DEFAULT,
     };
     let size = Size {
@@ -526,9 +548,13 @@ fn fit(hints: Vec<KeyHint>, width: usize) -> Vec<KeyHint> {
 }
 
 /// The areas of the terminal size, with the key hint bar when the key
-/// hints are on.
+/// hints are on, for the list mode or the pinned mode.
 pub(crate) fn areas(state: &AppState) -> Areas {
-    layout_with(state.data.size, state.cache.key_hints)
+    layout_full(
+        state.data.size,
+        state.cache.key_hints,
+        state.ui.pinned.is_some(),
+    )
 }
 
 /// The size of the list area that the tab models fill: the list area
@@ -552,8 +578,12 @@ fn filter_model(state: &AppState) -> Option<FilterModel> {
     })
 }
 
-/// The list model of the active tab for the current generation.
+/// The list model of the active tab for the current generation. The
+/// pinned mode has no list.
 pub(crate) fn active_list(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> ListModel {
+    if state.ui.pinned.is_some() {
+        return empty_list();
+    }
     let size = list_size(state);
     list_model(state, tabs, state.ui.active, size)
 }
@@ -592,19 +622,26 @@ fn list_model(state: &mut AppState, tabs: &[Box<dyn Tab>], index: usize, size: S
 
 /// The status bar: the active tab, the repo count and the data age on
 /// the left, the last message in the center, the help hint on the right.
+/// In the pinned mode the left shows the pull request, its repo and the
+/// age of its data.
 pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusModel {
-    let mut left: Vec<Cell> = tabs
-        .get(state.ui.active)
-        .map(|tab| Cell {
-            text: format!("[{}]", tab.title().to_uppercase()),
-            style: CellStyle::Primary,
-        })
-        .into_iter()
-        .collect();
-    left.push(Cell {
-        text: sync_text(state, tabs),
-        style: CellStyle::Dim,
-    });
+    let left = if let Some(key) = &state.ui.pinned {
+        pinned_status(&state.data, key)
+    } else {
+        let mut left: Vec<Cell> = tabs
+            .get(state.ui.active)
+            .map(|tab| Cell {
+                text: format!("[{}]", tab.title().to_uppercase()),
+                style: CellStyle::Primary,
+            })
+            .into_iter()
+            .collect();
+        left.push(Cell {
+            text: sync_text(state, tabs),
+            style: CellStyle::Dim,
+        });
+        left
+    };
     StatusModel {
         left,
         center: state.ui.status.as_ref().map(|msg| Cell {
@@ -616,6 +653,30 @@ pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusMod
             style: CellStyle::Dim,
         }],
     }
+}
+
+/// The left of the status bar in the pinned mode, for example `[#7]`
+/// and ` owner/name · updated 2m ago`, or ` owner/name · not loaded yet`
+/// before the pull request is loaded.
+fn pinned_status(data: &AppData, key: &PrKey) -> Vec<Cell> {
+    let repo = format!("{}/{}", key.repo.owner, key.repo.name);
+    let text = match data.prs.get(key) {
+        Some(pr) => format!(
+            " {repo} · updated {} ago",
+            age(pr.head.observed_at, data.now)
+        ),
+        None => format!(" {repo} · not loaded yet"),
+    };
+    vec![
+        Cell {
+            text: format!("[#{}]", key.number),
+            style: CellStyle::Primary,
+        },
+        Cell {
+            text,
+            style: CellStyle::Dim,
+        },
+    ]
 }
 
 /// The repo count, the age of the data and the pull requests that the

@@ -29,6 +29,7 @@ use crate::app::layout::Areas;
 use crate::app::models::FrameModel;
 use crate::app::state::AppState;
 use crate::bus::{Cmd, Interest, Msg, Size, UiEvent};
+use crate::domain::keys::PrKey;
 use crate::domain::repo::Repo;
 use crate::store::Snapshot;
 
@@ -64,6 +65,18 @@ impl App {
     /// selection carries the table of its action.
     pub(crate) fn with_action_config(mut self, tables: BTreeMap<String, toml::Table>) -> Self {
         self.state.data.action_config = tables;
+        self
+    }
+
+    /// Pins the pull request `key`: the pinned mode of `chaoshub pr`. The
+    /// popup of `key` is in place from the first frame, without a slide,
+    /// and the interest is the one of the pinned pull request.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "run starts the pinned mode in a later commit")
+    )]
+    pub(crate) fn pinned(mut self, key: PrKey) -> Self {
+        update::pin(&mut self.state, key);
         self
     }
 

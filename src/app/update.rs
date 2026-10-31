@@ -550,6 +550,27 @@ fn open_overlay(state: &mut AppState, kind: OverlayKind, overlay: OverlayState) 
     state.bump();
 }
 
+/// The index of the top overlay that is not closing.
+fn top_overlay(state: &AppState) -> Option<usize> {
+    state.ui.overlays.iter().rposition(|o| !o.closing)
+}
+
+/// True when the top overlay that is not closing is the pinned popup:
+/// the overlay at index 0 in the pinned mode.
+fn pinned_on_top(state: &AppState) -> bool {
+    state.ui.pinned.is_some() && top_overlay(state) == Some(0)
+}
+
+/// The `close_overlay` key: it quits when the pinned popup is on top,
+/// else it closes the top overlay that is not closing.
+fn close_top(state: &mut AppState) -> Vec<Cmd> {
+    if pinned_on_top(state) {
+        return quit();
+    }
+    close_overlay(state);
+    Vec::new()
+}
+
 /// Starts the slide out of the top overlay that is not closing. It stays
 /// in the stack until `Msg::TransitionsDone`.
 fn close_overlay(state: &mut AppState) {
@@ -577,8 +598,7 @@ fn overlay_key(
         return cmds;
     }
     if keymap.matches("close_overlay", chord) {
-        close_overlay(state);
-        return Vec::new();
+        return close_top(state);
     }
     let areas = frame::areas(state);
     let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
@@ -591,6 +611,18 @@ fn overlay_key(
     match &mut overlay.state {
         OverlayState::Popup(popup) => {
             let Some(handled) = popup_key(&state.data, &areas, keymap, panes, popup, chord) else {
+                if keymap.matches("refresh", chord) {
+                    return refresh_popup(&state.data, &popup.key);
+                }
+                if keymap.matches("help", chord) {
+                    let help = help_model(keymap, tabs, actions);
+                    open_overlay(
+                        state,
+                        OverlayKind::Help,
+                        OverlayState::Help { help, scroll: 0 },
+                    );
+                    return Vec::new();
+                }
                 let Some(target) = pr_target(&state.data, &popup.key) else {
                     return Vec::new();
                 };
@@ -639,6 +671,19 @@ fn overlay_key(
         }
         OverlayState::Prompt { .. } => Vec::new(),
     }
+}
+
+/// The `refresh` key in the popup of `key`: a load by number when the
+/// pull request is not loaded, else a refresh of its stack group and a
+/// scan of its repo.
+fn refresh_popup(data: &AppData, key: &PrKey) -> Vec<Cmd> {
+    if !data.prs.contains_key(key) {
+        return vec![Cmd::LoadPr(key.clone())];
+    }
+    vec![
+        Cmd::RefreshPr(stack_group_refs(data, key)),
+        Cmd::ScanJj(key.repo.clone()),
+    ]
 }
 
 /// Closes the author picker and filters the tab at `tab` by `author`.
@@ -768,7 +813,9 @@ fn click(
         Hit::PaneRow(index) => click_pane_row(state, keymap, panes, index),
         Hit::Item(index) => click_item(state, tabs, index),
         Hit::Outside => {
-            close_overlay(state);
+            if !pinned_on_top(state) {
+                close_overlay(state);
+            }
             Vec::new()
         }
         Hit::Tab(_) | Hit::Inside => Vec::new(),
@@ -965,6 +1012,25 @@ pub(crate) fn start(state: &mut AppState) {
     after_change(state, &TABS);
 }
 
+/// Pins the pull request `key`: it sets `UiState.pinned`, pushes the
+/// popup of `key` without a `UiEvent` (the popup is in place from the
+/// first frame), and runs `start` again, so the interest is the one of the
+/// pinned pull request.
+pub(crate) fn pin(state: &mut AppState, key: PrKey) {
+    state.ui.pinned = Some(key.clone());
+    state.ui.overlays.push(Overlay {
+        kind: OverlayKind::Popup,
+        closing: false,
+        state: OverlayState::Popup(PopupState {
+            key,
+            active: 0,
+            panes: PANES.iter().map(|pane| pane.init_state()).collect(),
+        }),
+    });
+    state.bump();
+    start(state);
+}
+
 /// After a change of the data or the UI state: the filters score again
 /// where their text or the data moved, and a changed interest goes to the
 /// workers.
@@ -1060,24 +1126,44 @@ fn navigate(state: &mut AppState, tabs: &[Box<dyn Tab>], motion: Motion) {
     state.bump();
 }
 
-/// `Cmd::SetInterest` when the interest of the active tab differs from
-/// the interest that the workers have.
+/// `Cmd::SetInterest` when the interest of the active tab, or of the
+/// pinned pull request, differs from the interest that the workers have.
 fn refresh_interest(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Option<Cmd> {
-    let index = state.ui.active;
-    let (tab, ts) = (tabs.get(index)?, state.ui.tabs.get(index)?);
-    let areas = frame::areas(state);
-    let cx = KeyCx {
-        data: &state.data,
-        target: None,
-        areas: &areas,
-        keys: &keymap::DEFAULT,
+    let interest = if let Some(key) = &state.ui.pinned {
+        pinned_interest(&state.data, key)
+    } else {
+        let index = state.ui.active;
+        let (tab, ts) = (tabs.get(index)?, state.ui.tabs.get(index)?);
+        let areas = frame::areas(state);
+        let cx = KeyCx {
+            data: &state.data,
+            target: None,
+            areas: &areas,
+            keys: &keymap::DEFAULT,
+        };
+        tab.interest(&cx, ts)
     };
-    let interest = tab.interest(&cx, ts);
     if state.ui.interest.as_ref() == Some(&interest) {
         return None;
     }
     state.ui.interest = Some(interest.clone());
     Some(Cmd::SetInterest(interest))
+}
+
+/// The interest of the pinned mode: the pinned pull request is selected
+/// when it is loaded, and the other loaded entries of its stack are
+/// visible. No scope and no jj data.
+fn pinned_interest(data: &AppData, key: &PrKey) -> crate::bus::Interest {
+    crate::bus::Interest {
+        tab: "pr",
+        scope: None,
+        wants_local: false,
+        selected: data.prs.get(key).map(pr_ref),
+        visible: stack_group_refs(data, key)
+            .into_iter()
+            .filter(|other| other.key != *key)
+            .collect(),
+    }
 }
 
 /// The startup worker read the login and the repo of the current
@@ -1114,6 +1200,11 @@ fn startup_done(
         }
     }
     let mut cmds = vec![Cmd::SetSession(data.session.clone())];
+    if let Some(key) = &state.ui.pinned {
+        cmds.extend(pinned_startup(data, key));
+        state.bump();
+        return cmds;
+    }
     let mut scopes: Vec<Scope> = Vec::new();
     for scope in tabs.iter().filter_map(|tab| tab.scope()) {
         if !scopes.contains(&scope) {
@@ -1132,6 +1223,25 @@ fn startup_done(
             .map(|repo| Cmd::ScanJj(repo.key.clone())),
     );
     state.bump();
+    cmds
+}
+
+/// The startup commands of the pinned mode: a jj scan of the pinned repo
+/// when it has a path, then a load of the pinned pull request when it is
+/// not cached, else a refresh of it. No list sync.
+fn pinned_startup(data: &AppData, key: &PrKey) -> Vec<Cmd> {
+    let mut cmds: Vec<Cmd> = data
+        .session
+        .repos
+        .iter()
+        .filter(|repo| repo.key == key.repo && repo.path.is_some())
+        .map(|repo| Cmd::ScanJj(repo.key.clone()))
+        .take(1)
+        .collect();
+    cmds.push(match data.prs.get(key) {
+        Some(pr) => Cmd::RefreshPr(vec![pr_ref(pr)]),
+        None => Cmd::LoadPr(key.clone()),
+    });
     cmds
 }
 
@@ -4306,5 +4416,262 @@ mod tests {
             vec![]
         );
         assert!(state.ui.overlays.iter().all(|o| o.closing));
+    }
+
+    /// The real tabs with the mine fixtures, the session `repos` and the
+    /// login `chaosteil`, pinned to `key`.
+    fn pinned_with(key: PrKey, repos: Vec<Repo>) -> AppState {
+        let mut state = AppState::new(SIZE);
+        state.load(testdata::mine_snapshot(), repos);
+        state.data.session.login = Some("chaosteil".into());
+        state.data.now = test_time() + TimeDelta::minutes(5);
+        pin(&mut state, key);
+        state
+    }
+
+    fn pinned(key: PrKey) -> AppState {
+        pinned_with(key, Vec::new())
+    }
+
+    /// A pull request of `chaoshub` that is not in the mine fixtures.
+    fn not_cached() -> PrKey {
+        testdata::pr_key("chaoshub", 500)
+    }
+
+    #[test]
+    fn the_pinned_app_has_one_popup_and_no_open_event() {
+        let state = pinned(testdata::pr_key("codeview", 7));
+        assert_eq!(state.ui.overlays.len(), 1);
+        let overlay = &state.ui.overlays[0];
+        assert_eq!(overlay.kind, OverlayKind::Popup);
+        assert!(!overlay.closing);
+        assert!(matches!(
+            &overlay.state,
+            OverlayState::Popup(popup) if popup.key == testdata::pr_key("codeview", 7)
+                && popup.active == 0
+                && popup.panes.len() == PANES.len()
+        ));
+        assert_eq!(state.ui.ui_events, vec![]);
+    }
+
+    #[test]
+    fn esc_and_q_quit_the_pinned_popup() {
+        for code in [KeyCode::Esc, KeyCode::Char('q')] {
+            let mut state = pinned(testdata::pr_key("codeview", 7));
+            let cmds = update(
+                &mut state,
+                &Keymap::default(),
+                press(code, KeyModifiers::NONE),
+            );
+            assert_eq!(cmds, vec![Cmd::Quit], "{code:?}");
+            assert!(!state.ui.overlays[0].closing, "the pinned popup stays");
+        }
+    }
+
+    /// A fake merge action with a confirm on `m`.
+    fn confirm_merge() -> Vec<Box<dyn Action>> {
+        let mut merge = FakeAction::new("merge", 'm');
+        merge.prepare = Prepare::Confirm(crate::bus::ConfirmSpec {
+            title: "merge?".into(),
+            lines: Vec::new(),
+            danger: true,
+        });
+        fake(merge)
+    }
+
+    #[test]
+    fn esc_in_a_confirm_on_the_pinned_popup_closes_the_confirm_only() {
+        let mut state = pinned(testdata::pr_key("chaoshub", 101));
+        let actions = confirm_merge();
+        act(&mut state, &actions, KeyCode::Char('m'));
+        assert_eq!(state.ui.overlays.len(), 2);
+        assert_eq!(state.ui.overlays[1].kind, OverlayKind::Confirm);
+        assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
+        assert!(state.ui.overlays[1].closing, "the confirm closes");
+        assert!(!state.ui.overlays[0].closing, "the pinned popup stays");
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Esc),
+            vec![Cmd::Quit],
+            "the pinned popup is on top again"
+        );
+    }
+
+    /// The repos `chaoshub` and `codeview`, both with a path.
+    fn two_repos() -> Vec<Repo> {
+        ["chaoshub", "codeview"]
+            .into_iter()
+            .map(|name| Repo {
+                key: testdata::repo_key(name),
+                path: Some(format!("/code/{name}").into()),
+                settings: None,
+            })
+            .collect()
+    }
+
+    fn startup() -> Msg {
+        Msg::StartupDone {
+            login: "chaosteil".into(),
+            cwd_repo: None,
+        }
+    }
+
+    #[test]
+    fn the_pinned_startup_scans_the_pinned_repo_and_loads_the_pull_request() {
+        let mut state = pinned_with(not_cached(), two_repos());
+        let cmds = update(&mut state, &Keymap::default(), startup());
+        assert_eq!(
+            cmds,
+            vec![
+                Cmd::SetSession(state.data.session.clone()),
+                Cmd::ScanJj(testdata::repo_key("chaoshub")),
+                Cmd::LoadPr(not_cached()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_pinned_startup_refreshes_a_cached_pull_request() {
+        let key = testdata::pr_key("chaoshub", 101);
+        let mut state = pinned_with(key.clone(), two_repos());
+        let cmds = update(&mut state, &Keymap::default(), startup());
+        let pr = pr_ref(&state.data.prs[&key]);
+        assert_eq!(
+            cmds,
+            vec![
+                Cmd::SetSession(state.data.session.clone()),
+                Cmd::ScanJj(testdata::repo_key("chaoshub")),
+                Cmd::RefreshPr(vec![pr]),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_pinned_interest_selects_the_loaded_pull_request() {
+        let mut state = pinned(not_cached());
+        let interest = state.ui.interest.clone().unwrap();
+        assert_eq!(interest.tab, "pr");
+        assert_eq!(interest.selected, None);
+        let pr = testdata::pr("chaoshub", 500, "Loaded");
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            Msg::PrRefreshed(Box::new(pr.clone())),
+        );
+        assert_eq!(
+            cmds,
+            vec![Cmd::SetInterest(Interest {
+                tab: "pr",
+                scope: None,
+                wants_local: false,
+                selected: Some(pr_ref(&pr)),
+                visible: Vec::new(),
+            })]
+        );
+    }
+
+    #[test]
+    fn the_pinned_interest_shows_the_other_entries_of_the_stack() {
+        let state = pinned(testdata::pr_key("chaoshub", 102));
+        let interest = state.ui.interest.clone().unwrap();
+        let numbers: Vec<u64> = interest.visible.iter().map(|pr| pr.key.number).collect();
+        assert_eq!(numbers, [101, 103]);
+        assert_eq!(
+            interest.selected.map(|pr| pr.key.number),
+            Some(102),
+            "the pinned pull request is selected"
+        );
+        assert!(!interest.wants_local);
+    }
+
+    #[test]
+    fn r_in_the_pinned_popup_loads_then_refreshes() {
+        let mut state = pinned(not_cached());
+        assert_eq!(key(&mut state, 'r'), vec![Cmd::LoadPr(not_cached())]);
+        let pr = testdata::pr("chaoshub", 500, "Loaded");
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::PrRefreshed(Box::new(pr.clone())),
+        );
+        assert_eq!(
+            key(&mut state, 'r'),
+            vec![
+                Cmd::RefreshPr(vec![pr_ref(&pr)]),
+                Cmd::ScanJj(testdata::repo_key("chaoshub")),
+            ]
+        );
+    }
+
+    #[test]
+    fn r_in_the_sidebar_refreshes_the_stack_group() {
+        let mut state = mine_state(10);
+        key(&mut state, 'j');
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        let refs = stack_group_refs(&state.data, &testdata::pr_key("chaoshub", 103));
+        assert_eq!(refs.len(), 3);
+        assert_eq!(
+            key(&mut state, 'r'),
+            vec![
+                Cmd::RefreshPr(refs),
+                Cmd::ScanJj(testdata::repo_key("chaoshub")),
+            ]
+        );
+    }
+
+    #[test]
+    fn help_opens_on_top_of_the_pinned_popup() {
+        let mut state = pinned(testdata::pr_key("codeview", 7));
+        assert_eq!(key(&mut state, '?'), vec![]);
+        assert_eq!(state.ui.overlays.len(), 2);
+        assert_eq!(state.ui.overlays[1].kind, OverlayKind::Help);
+        assert!(!state.ui.overlays[0].closing);
+    }
+
+    #[test]
+    fn a_click_outside_the_pinned_popup_does_nothing() {
+        let mut state = pinned(testdata::pr_key("chaoshub", 101));
+        let generation = state.generation;
+        assert_eq!(
+            update(&mut state, &Keymap::default(), click_on(Hit::Outside)),
+            vec![]
+        );
+        assert!(!state.ui.overlays[0].closing);
+        assert_eq!(state.generation, generation);
+        let actions = confirm_merge();
+        act(&mut state, &actions, KeyCode::Char('m'));
+        assert_eq!(
+            run_msg(&mut state, &actions, click_on(Hit::Outside)),
+            vec![]
+        );
+        assert!(state.ui.overlays[1].closing, "the confirm closes");
+        assert!(!state.ui.overlays[0].closing, "the pinned popup stays");
+    }
+
+    #[test]
+    fn the_pinned_frame_has_no_tabs_and_no_list() {
+        let mut state = pinned(testdata::pr_key("codeview", 7));
+        let frame = frame::frame_model(&mut state).clone();
+        assert_eq!(frame.tab_bar.titles, [""; 0]);
+        assert_eq!(frame.list, empty_list());
+        assert_eq!(frame.status.left[0].text, "[#7]");
+        assert_eq!(
+            frame.status.left[1].text,
+            " chaosteil/codeview · updated 5m ago"
+        );
+
+        let mut state = pinned(not_cached());
+        let frame = frame::frame_model(&mut state).clone();
+        assert_eq!(
+            frame.status.left[1].text,
+            " chaosteil/chaoshub · not loaded yet"
+        );
+        assert!(matches!(
+            &frame.overlays[0].content,
+            OverlayContent::Popup { subtitle, .. } if subtitle == "not loaded yet"
+        ));
     }
 }
