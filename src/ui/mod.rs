@@ -11,6 +11,8 @@ mod pane;
 mod picker;
 mod popup;
 mod prompt;
+mod status;
+mod style;
 #[cfg(test)]
 mod testdata;
 mod text;
@@ -78,7 +80,8 @@ pub(crate) fn overlay_area(overlay: &OverlayModel, areas: &Areas) -> Rect {
 }
 
 /// Draws one frame: the tab bar, the list, the status bar and the overlay
-/// stack. It draws nothing yet.
+/// stack. For now it draws the status bar.
 pub(crate) fn view(frame: &mut Frame<'_>, model: &FrameModel, areas: &Areas, theme: &Theme) {
-    let _ = (frame, model, areas, theme);
+    let buf = frame.buffer_mut();
+    status::render(&model.status, rect(areas.status), buf, theme);
 }

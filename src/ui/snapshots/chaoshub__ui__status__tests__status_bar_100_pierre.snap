@@ -1,0 +1,5 @@
+---
+source: src/ui/status.rs
+expression: "row(&draw(&testdata::status(), 100, &testdata::pierre()))"
+---
+ [MINE] 3 repos · synced 12s ago · prefetch 2  merged #101                                   ? help
