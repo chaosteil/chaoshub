@@ -11,6 +11,7 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 
+use crate::app::frame::ModelCache;
 use crate::app::models::{Direction, ListModel};
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{OverlayKind, Session, Size, UiEvent};
@@ -29,6 +30,8 @@ pub(crate) struct AppState {
     /// The redraw signal. `update` bumps it on every visible change, and
     /// `run` draws when it moved since the last draw.
     pub generation: u64,
+    /// The models of the last frame.
+    pub cache: ModelCache,
 }
 
 /// The data that the workers deliver.
@@ -103,6 +106,7 @@ impl AppState {
                 prev_list: None,
             },
             generation: 0,
+            cache: ModelCache::default(),
         }
     }
 
