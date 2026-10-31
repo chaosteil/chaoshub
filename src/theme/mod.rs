@@ -1,7 +1,7 @@
 //! The theme: palette, grunge borders and textures.
 #![allow(dead_code, reason = "ui and run use the theme in later phases")]
 
-mod grunge;
+pub(crate) mod grunge;
 mod palette;
 mod texture;
 
