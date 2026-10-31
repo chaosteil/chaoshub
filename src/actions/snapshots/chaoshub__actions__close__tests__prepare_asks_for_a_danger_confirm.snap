@@ -1,0 +1,12 @@
+---
+source: src/actions/close.rs
+expression: spec
+---
+ConfirmSpec {
+    title: "close #7?",
+    lines: [
+        "#7 Add the review action",
+        "closes the pull request without a merge",
+    ],
+    danger: true,
+}
