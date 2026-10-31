@@ -122,10 +122,10 @@ fn render_overlay(
             popup::render(&content, area, buf, theme);
         }
         OverlayContent::Help(help) => help::render(help, area, buf, theme),
+        OverlayContent::Prompt { spec, text } => prompt::render(spec, text, area, buf, theme),
         // The renderers of the other overlay kinds come in the next
         // commits of this stack.
         OverlayContent::Confirm(_)
-        | OverlayContent::Prompt { .. }
         | OverlayContent::Output { .. }
         | OverlayContent::Picker { .. } => {}
     }
@@ -268,6 +268,37 @@ mod tests {
         insta::assert_snapshot!("help_slide_in_0ms", frames[0]);
         insta::assert_snapshot!("help_slide_in_80ms", frames[1]);
         insta::assert_snapshot!("help_slide_in_160ms", frames[2]);
+    }
+
+    fn prompt(text: &str) -> FrameModel {
+        testdata::with_overlay(testdata::prompt_overlay(text))
+    }
+
+    #[test]
+    fn prompt_100_pierre() {
+        let text = "Please split the transition module into two commits, one for the \
+                    mapping and one for the scratch buffers.";
+        insta::assert_snapshot!(draw(&prompt(text), 100, 30, &testdata::pierre()));
+    }
+
+    #[test]
+    fn prompt_160_pierre() {
+        insta::assert_snapshot!(draw(
+            &prompt("line one\nline two"),
+            160,
+            40,
+            &testdata::pierre()
+        ));
+    }
+
+    #[test]
+    fn prompt_100_ansi16() {
+        insta::assert_snapshot!(draw(&prompt(""), 100, 30, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn prompt_160_ansi16() {
+        insta::assert_snapshot!(draw(&prompt("ok"), 160, 40, &testdata::ansi16()));
     }
 
     #[test]
