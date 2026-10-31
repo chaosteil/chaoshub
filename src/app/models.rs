@@ -17,6 +17,16 @@ pub(crate) struct FrameModel {
     /// The overlay stack, bottom first.
     pub overlays: Vec<OverlayModel>,
     pub term: TermStatus,
+    /// The filter line of the active tab, while the user edits it or
+    /// while it has text. It takes the last row of the list area.
+    pub filter: Option<FilterModel>,
+}
+
+/// The filter line: the filter text and whether the user edits it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FilterModel {
+    pub text: String,
+    pub editing: bool,
 }
 
 /// The tab bar: the tab titles in registry order and the active tab.

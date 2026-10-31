@@ -4,6 +4,7 @@
 //! requests top first with the tree glyphs `┌ ├ └`. A pull request
 //! without a stack is a single row with `─`.
 
+use crate::app::filter::{Filter, ItemKey, pr_candidate};
 use crate::app::models::{
     Align, Cell, CellStyle, Column, ColumnWidth, ListModel, Row, RowItem, RowStyle,
 };
@@ -75,12 +76,16 @@ impl Tab for Mine {
     }
 
     fn init_state(&self) -> TabState {
-        TabState::default()
+        TabState {
+            ext: Box::new(Filter::default()),
+            ..TabState::default()
+        }
     }
 
     fn model(&self, cx: &KeyCx<'_>, ts: &TabState, size: Size) -> ListModel {
         let set = Columns::for_width(size.width);
-        let rows = rows(cx, set);
+        let filter = ts.ext.downcast_ref::<Filter>();
+        let rows = rows(cx, set, filter);
         let (cursor, scroll) = place(
             &rows,
             ts.selected.as_ref(),
@@ -103,6 +108,14 @@ impl Tab for Mine {
             height: list.height,
         };
         list_interest(self, &self.model(cx, ts, size), list.height)
+    }
+
+    fn rescore(&self, cx: &KeyCx<'_>, ts: &mut TabState) {
+        let Some(filter) = ts.ext.downcast_mut::<Filter>() else {
+            return;
+        };
+        let candidates = mine_prs(cx).into_iter().map(pr_candidate);
+        filter.rescore(&ts.filter, cx.data.revision, candidates);
     }
 
     fn handle_key(&self, _key: KeyChord, _cx: &KeyCx<'_>, _ts: &mut TabState) -> Option<Handled> {
@@ -168,9 +181,13 @@ fn mine_prs<'a>(cx: &KeyCx<'a>) -> Vec<&'a PullRequest> {
     prs
 }
 
-/// The rows of every stack group.
-fn rows(cx: &KeyCx<'_>, set: Columns) -> Vec<Row> {
-    let prs = mine_prs(cx);
+/// The rows of every stack group, of the pull requests that pass the
+/// filter.
+fn rows(cx: &KeyCx<'_>, set: Columns, filter: Option<&Filter>) -> Vec<Row> {
+    let mut prs = mine_prs(cx);
+    if let Some(filter) = filter {
+        prs.retain(|pr| filter.keeps(&ItemKey::Pr(pr.key.clone())));
+    }
     let mut rows = Vec::new();
     for group in group_stacks(&prs) {
         group_rows(cx, set, &group, &mut rows);
@@ -408,6 +425,27 @@ mod tests {
         assert_eq!(change(140), Some(ColumnWidth::Fixed(12)));
         assert_eq!(titles(100).len(), 8);
         assert_eq!(titles(79).len(), 6, "no commit and no workspace");
+    }
+
+    #[test]
+    fn the_filter_keeps_matching_prs_and_their_stack_header() {
+        let state = seeded();
+        let areas = layout(SIZE);
+        let cx = KeyCx {
+            data: &state.data,
+            target: None,
+            areas: &areas,
+        };
+        let mut ts = Mine.init_state();
+        ts.filter = "middle".into();
+        Mine.rescore(&cx, &mut ts);
+        let model = Mine.model(&cx, &ts, SIZE);
+        let expected: Vec<(Option<char>, String)> = vec![
+            (None, "stack #12 -> main · 3 PRs".into()),
+            (Some('─'), "Add the middle".into()),
+        ];
+        assert_eq!(outline(&model), expected);
+        assert_eq!(model.cursor, 1, "the cursor skips the header");
     }
 
     #[test]

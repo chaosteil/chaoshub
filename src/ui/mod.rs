@@ -85,7 +85,15 @@ pub(crate) fn overlay_area(overlay: &OverlayModel, areas: &Areas) -> Rect {
 pub(crate) fn view(frame: &mut Frame<'_>, model: &FrameModel, areas: &Areas, theme: &Theme) {
     let buf = frame.buffer_mut();
     tabbar::render(&model.tab_bar, rect(areas.tab_bar), buf, theme);
-    list::render(&model.list, rect(areas.list), buf, theme);
+    let mut list_area = rect(areas.list);
+    if let Some(line) = &model.filter
+        && list_area.height > 0
+    {
+        list_area.height -= 1;
+        let line_area = Rect::new(list_area.x, list_area.bottom(), list_area.width, 1);
+        filter::render(line, line_area, buf, theme);
+    }
+    list::render(&model.list, list_area, buf, theme);
     status::render(&model.status, rect(areas.status), buf, theme);
     for overlay in &model.overlays {
         render_overlay(overlay, areas, buf, theme);
@@ -146,6 +154,16 @@ mod tests {
             .draw(|frame| view(frame, model, &areas, theme))
             .unwrap();
         terminal.backend().to_string()
+    }
+
+    #[test]
+    fn filter_line_takes_the_last_list_row() {
+        let mut model = testdata::frame();
+        model.filter = Some(crate::app::models::FilterModel {
+            text: "pane".into(),
+            editing: true,
+        });
+        insta::assert_snapshot!(draw(&model, 100, 12, &testdata::ansi16()));
     }
 
     #[test]

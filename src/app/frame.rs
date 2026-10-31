@@ -6,7 +6,9 @@
 
 use crate::app::age::age;
 use crate::app::layout::layout;
-use crate::app::models::{Cell, CellStyle, FrameModel, ListModel, StatusModel, TabBarModel};
+use crate::app::models::{
+    Cell, CellStyle, FilterModel, FrameModel, ListModel, StatusModel, TabBarModel,
+};
 use crate::app::state::AppState;
 use crate::app::tabs::{KeyCx, TABS, Tab};
 use crate::app::term::term_status;
@@ -64,6 +66,7 @@ pub(crate) fn frame_model_with<'s>(
             // The overlay models come with the overlay kinds of phase D.
             overlays: Vec::new(),
             term: term_status(state),
+            filter: filter_model(state),
         };
         state.cache.frame = frame;
         state.cache.frame_generation = Some(state.generation);
@@ -71,13 +74,25 @@ pub(crate) fn frame_model_with<'s>(
     &state.cache.frame
 }
 
-/// The size of the list area, which the tab models fill.
+/// The size of the list area that the tab models fill: the list area
+/// without the filter line when it shows.
 pub(crate) fn list_size(state: &AppState) -> Size {
     let areas = layout(state.data.size);
+    let filter = u16::from(filter_model(state).is_some());
     Size {
         width: areas.list.width,
-        height: areas.list.height,
+        height: areas.list.height.saturating_sub(filter),
     }
+}
+
+/// The filter line of the active tab: while the user edits the filter, or
+/// while it has text.
+fn filter_model(state: &AppState) -> Option<FilterModel> {
+    let ts = state.ui.tabs.get(state.ui.active)?;
+    (state.ui.filter_edit || !ts.filter.is_empty()).then(|| FilterModel {
+        text: ts.filter.clone(),
+        editing: state.ui.filter_edit,
+    })
 }
 
 /// The list model of the active tab for the current generation.
@@ -201,6 +216,7 @@ fn empty_frame() -> FrameModel {
             msg: None,
             progress: Progress::Off,
         },
+        filter: None,
     }
 }
 

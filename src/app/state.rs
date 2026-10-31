@@ -85,6 +85,8 @@ pub(crate) struct UiState {
     pub prev_list: Option<(ListModel, Direction)>,
     /// The interest that was last sent to the workers.
     pub interest: Option<Interest>,
+    /// True while the user types the filter of the active tab.
+    pub filter_edit: bool,
 }
 
 /// The state of the syncs, for the status bar and the terminal status.
@@ -185,6 +187,7 @@ impl AppState {
                 ui_events: Vec::new(),
                 prev_list: None,
                 interest: None,
+                filter_edit: false,
             },
             generation: 0,
             cache: ModelCache::default(),
