@@ -7,6 +7,7 @@
 use crate::app::models::{
     Align, Cell, CellStyle, Column, ColumnWidth, ListModel, Row, RowItem, RowStyle,
 };
+use crate::app::nav::place;
 use crate::app::tabs::cells::{self, cell};
 use crate::app::tabs::{Handled, KeyCx, Tab, TabState, list_interest, pr_ref};
 use crate::bus::{Interest, KeyChord, Scope, Size};
@@ -80,10 +81,17 @@ impl Tab for Mine {
     fn model(&self, cx: &KeyCx<'_>, ts: &TabState, size: Size) -> ListModel {
         let set = Columns::for_width(size.width);
         let rows = rows(cx, set);
+        let (cursor, scroll) = place(
+            &rows,
+            ts.selected.as_ref(),
+            ts.cursor,
+            ts.scroll,
+            usize::from(size.height),
+        );
         ListModel {
             columns: columns(set),
-            cursor: ts.cursor.min(rows.len().saturating_sub(1)),
-            scroll: ts.scroll,
+            cursor,
+            scroll,
             rows,
         }
     }

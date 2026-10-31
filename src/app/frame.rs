@@ -52,12 +52,7 @@ pub(crate) fn frame_model_with<'s>(
     tabs: &[Box<dyn Tab>],
 ) -> &'s FrameModel {
     if state.cache.frame_generation != Some(state.generation) {
-        let areas = layout(state.data.size);
-        let size = Size {
-            width: areas.list.width,
-            height: areas.list.height,
-        };
-        let list = list_model(state, tabs, state.ui.active, size);
+        let list = active_list(state, tabs);
         let frame = FrameModel {
             tab_bar: TabBarModel {
                 titles: tabs.iter().map(|tab| tab.title()).collect(),
@@ -74,6 +69,21 @@ pub(crate) fn frame_model_with<'s>(
         state.cache.frame_generation = Some(state.generation);
     }
     &state.cache.frame
+}
+
+/// The size of the list area, which the tab models fill.
+pub(crate) fn list_size(state: &AppState) -> Size {
+    let areas = layout(state.data.size);
+    Size {
+        width: areas.list.width,
+        height: areas.list.height,
+    }
+}
+
+/// The list model of the active tab for the current generation.
+pub(crate) fn active_list(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> ListModel {
+    let size = list_size(state);
+    list_model(state, tabs, state.ui.active, size)
 }
 
 /// The list model of the tab at `index` for the list area `size`, from the
