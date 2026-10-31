@@ -1,0 +1,356 @@
+{
+  "data": {
+    "search": {
+      "pageInfo": {
+        "hasNextPage": true,
+        "endCursor": "Y3Vyc29yOjY="
+      },
+      "nodes": [
+        {
+          "__typename": "PullRequest",
+          "id": "PR_kwDOAAAABc8AAAAAAAAA05",
+          "number": 1574,
+          "title": "Title 1",
+          "body": "Body 1.\r\nSecond line.  ",
+          "url": "https://github.com/acme/deploy/pull/1574",
+          "isDraft": false,
+          "state": "MERGED",
+          "updatedAt": "2026-10-30T21:29:07Z",
+          "headRefName": "dominykas/unyolyssntvq",
+          "headRefOid": "00000000000000000000000000000000c0de0009",
+          "baseRefName": "main",
+          "mergeable": "UNKNOWN",
+          "mergeStateStatus": "UNKNOWN",
+          "reviewDecision": "APPROVED",
+          "author": {
+            "__typename": "User",
+            "login": "chaosteil"
+          },
+          "autoMergeRequest": null,
+          "mergeQueueEntry": null,
+          "viewerLatestReviewRequest": null,
+          "reviewRequests": {
+            "nodes": []
+          },
+          "latestOpinionatedReviews": {
+            "nodes": [
+              {
+                "author": {
+                  "__typename": "User",
+                  "login": "colleague-1"
+                }
+              }
+            ]
+          },
+          "statusCheckRollup": {
+            "state": "SUCCESS",
+            "contexts": {
+              "nodes": [
+                {
+                  "__typename": "CheckRun",
+                  "name": "check-1",
+                  "status": "COMPLETED",
+                  "conclusion": "SUCCESS",
+                  "startedAt": "2026-10-30T21:26:50Z",
+                  "completedAt": "2026-10-30T21:27:02Z",
+                  "detailsUrl": "https://github.com/acme/deploy/actions/runs/70035/job/70122",
+                  "checkSuite": {
+                    "databaseId": 70071,
+                    "workflowRun": {
+                      "databaseId": 70035
+                    }
+                  }
+                },
+                {
+                  "__typename": "CheckRun",
+                  "name": "check-2",
+                  "status": "COMPLETED",
+                  "conclusion": "SUCCESS",
+                  "startedAt": "2026-10-30T21:27:33Z",
+                  "completedAt": "2026-10-30T21:29:09Z",
+                  "detailsUrl": "https://github.com/acme/deploy/actions/runs/70034/job/70123",
+                  "checkSuite": {
+                    "databaseId": 70070,
+                    "workflowRun": {
+                      "databaseId": 70034
+                    }
+                  }
+                },
+                {
+                  "__typename": "StatusContext",
+                  "context": "check-3",
+                  "state": "SUCCESS",
+                  "targetUrl": ""
+                },
+                {
+                  "__typename": "StatusContext",
+                  "context": "check-4",
+                  "state": "SUCCESS",
+                  "targetUrl": ""
+                },
+                {
+                  "__typename": "StatusContext",
+                  "context": "check-5",
+                  "state": "SUCCESS",
+                  "targetUrl": ""
+                }
+              ]
+            }
+          },
+          "stack": {
+            "id": "PRS_kwDOAAAABc4AAA01",
+            "number": 1570,
+            "size": 6,
+            "baseRefName": "main"
+          },
+          "stackEntry": {
+            "position": 6
+          },
+          "repository": {
+            "nameWithOwner": "acme/deploy",
+            "squashMergeAllowed": true,
+            "mergeCommitAllowed": false,
+            "rebaseMergeAllowed": true
+          }
+        },
+        {
+          "__typename": "PullRequest",
+          "id": "PR_kwDOAAAABc8AAAAAAAAA04",
+          "number": 1573,
+          "title": "Title 2",
+          "body": "Body 2.\r\nSecond line.  ",
+          "url": "https://github.com/acme/deploy/pull/1573",
+          "isDraft": false,
+          "state": "MERGED",
+          "updatedAt": "2026-10-30T21:27:30Z",
+          "headRefName": "dominykas/srnlqllrorkr",
+          "headRefOid": "00000000000000000000000000000000c0de0010",
+          "baseRefName": "main",
+          "mergeable": "UNKNOWN",
+          "mergeStateStatus": "UNKNOWN",
+          "reviewDecision": "APPROVED",
+          "author": {
+            "__typename": "User",
+            "login": "chaosteil"
+          },
+          "autoMergeRequest": null,
+          "mergeQueueEntry": null,
+          "viewerLatestReviewRequest": null,
+          "reviewRequests": {
+            "nodes": []
+          },
+          "latestOpinionatedReviews": {
+            "nodes": [
+              {
+                "author": {
+                  "__typename": "User",
+                  "login": "colleague-1"
+                }
+              }
+            ]
+          },
+          "statusCheckRollup": {
+            "state": "SUCCESS",
+            "contexts": {
+              "nodes": [
+                {
+                  "__typename": "CheckRun",
+                  "name": "check-1",
+                  "status": "COMPLETED",
+                  "conclusion": "SUCCESS",
+                  "startedAt": "2026-10-30T21:25:21Z",
+                  "completedAt": "2026-10-30T21:25:32Z",
+                  "detailsUrl": "https://github.com/acme/deploy/actions/runs/70032/job/70120",
+                  "checkSuite": {
+                    "databaseId": 70068,
+                    "workflowRun": {
+                      "databaseId": 70032
+                    }
+                  }
+                },
+                {
+                  "__typename": "CheckRun",
+                  "name": "check-2",
+                  "status": "COMPLETED",
+                  "conclusion": "SUCCESS",
+                  "startedAt": "2026-10-30T21:25:50Z",
+                  "completedAt": "2026-10-30T21:27:28Z",
+                  "detailsUrl": "https://github.com/acme/deploy/actions/runs/70033/job/70121",
+                  "checkSuite": {
+                    "databaseId": 70069,
+                    "workflowRun": {
+                      "databaseId": 70033
+                    }
+                  }
+                },
+                {
+                  "__typename": "StatusContext",
+                  "context": "check-3",
+                  "state": "SUCCESS",
+                  "targetUrl": ""
+                },
+                {
+                  "__typename": "StatusContext",
+                  "context": "check-6",
+                  "state": "SUCCESS",
+                  "targetUrl": "https://ci-1.example.com/status"
+                },
+                {
+                  "__typename": "StatusContext",
+                  "context": "check-4",
+                  "state": "SUCCESS",
+                  "targetUrl": ""
+                },
+                {
+                  "__typename": "StatusContext",
+                  "context": "check-7",
+                  "state": "SUCCESS",
+                  "targetUrl": "https://ci-1.example.com/status"
+                }
+              ]
+            }
+          },
+          "stack": {
+            "id": "PRS_kwDOAAAABc4AAA01",
+            "number": 1570,
+            "size": 6,
+            "baseRefName": "main"
+          },
+          "stackEntry": {
+            "position": 5
+          },
+          "repository": {
+            "nameWithOwner": "acme/deploy",
+            "squashMergeAllowed": true,
+            "mergeCommitAllowed": false,
+            "rebaseMergeAllowed": true
+          }
+        },
+        {
+          "__typename": "PullRequest",
+          "id": "PR_kwDOAAAABc8AAAAAAAAA03",
+          "number": 1572,
+          "title": "Title 3",
+          "body": "Body 3.\r\nSecond line.  ",
+          "url": "https://github.com/acme/deploy/pull/1572",
+          "isDraft": false,
+          "state": "MERGED",
+          "updatedAt": "2026-10-30T21:25:14Z",
+          "headRefName": "dominykas/vrunuloypzxz",
+          "headRefOid": "00000000000000000000000000000000c0de0007",
+          "baseRefName": "main",
+          "mergeable": "UNKNOWN",
+          "mergeStateStatus": "UNKNOWN",
+          "reviewDecision": "APPROVED",
+          "author": {
+            "__typename": "User",
+            "login": "chaosteil"
+          },
+          "autoMergeRequest": null,
+          "mergeQueueEntry": null,
+          "viewerLatestReviewRequest": null,
+          "reviewRequests": {
+            "nodes": []
+          },
+          "latestOpinionatedReviews": {
+            "nodes": [
+              {
+                "author": {
+                  "__typename": "User",
+                  "login": "colleague-1"
+                }
+              }
+            ]
+          },
+          "statusCheckRollup": {
+            "state": "SUCCESS",
+            "contexts": {
+              "nodes": [
+                {
+                  "__typename": "CheckRun",
+                  "name": "check-1",
+                  "status": "COMPLETED",
+                  "conclusion": "SUCCESS",
+                  "startedAt": "2026-10-30T21:20:38Z",
+                  "completedAt": "2026-10-30T21:20:48Z",
+                  "detailsUrl": "https://github.com/acme/deploy/actions/runs/70030/job/70118",
+                  "checkSuite": {
+                    "databaseId": 70066,
+                    "workflowRun": {
+                      "databaseId": 70030
+                    }
+                  }
+                },
+                {
+                  "__typename": "CheckRun",
+                  "name": "check-2",
+                  "status": "COMPLETED",
+                  "conclusion": "SUCCESS",
+                  "startedAt": "2026-10-30T21:20:38Z",
+                  "completedAt": "2026-10-30T21:21:47Z",
+                  "detailsUrl": "https://github.com/acme/deploy/actions/runs/70031/job/70119",
+                  "checkSuite": {
+                    "databaseId": 70067,
+                    "workflowRun": {
+                      "databaseId": 70031
+                    }
+                  }
+                },
+                {
+                  "__typename": "StatusContext",
+                  "context": "check-3",
+                  "state": "SUCCESS",
+                  "targetUrl": ""
+                },
+                {
+                  "__typename": "StatusContext",
+                  "context": "check-6",
+                  "state": "SUCCESS",
+                  "targetUrl": "https://ci-1.example.com/status"
+                },
+                {
+                  "__typename": "StatusContext",
+                  "context": "check-4",
+                  "state": "SUCCESS",
+                  "targetUrl": ""
+                },
+                {
+                  "__typename": "StatusContext",
+                  "context": "check-7",
+                  "state": "SUCCESS",
+                  "targetUrl": "https://ci-1.example.com/status"
+                },
+                {
+                  "__typename": "StatusContext",
+                  "context": "check-5",
+                  "state": "SUCCESS",
+                  "targetUrl": ""
+                }
+              ]
+            }
+          },
+          "stack": {
+            "id": "PRS_kwDOAAAABc4AAA01",
+            "number": 1570,
+            "size": 6,
+            "baseRefName": "main"
+          },
+          "stackEntry": {
+            "position": 4
+          },
+          "repository": {
+            "nameWithOwner": "acme/deploy",
+            "squashMergeAllowed": true,
+            "mergeCommitAllowed": false,
+            "rebaseMergeAllowed": true
+          }
+        }
+      ]
+    },
+    "rateLimit": {
+      "cost": 1,
+      "remaining": 4995,
+      "resetAt": "2026-10-31T05:50:43Z"
+    }
+  }
+}
