@@ -1,0 +1,52 @@
+query PrDetail($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      headRefOid
+      comments(first: 100) {
+        nodes {
+          author {
+            __typename
+            login
+          }
+          body
+          createdAt
+          url
+        }
+      }
+      reviews(first: 50) {
+        nodes {
+          author {
+            __typename
+            login
+          }
+          state
+          body
+          submittedAt
+        }
+      }
+      reviewThreads(first: 100) {
+        nodes {
+          isResolved
+          path
+          line
+          comments(first: 50) {
+            nodes {
+              author {
+                __typename
+                login
+              }
+              body
+              createdAt
+              url
+            }
+          }
+        }
+      }
+    }
+  }
+  rateLimit {
+    cost
+    remaining
+    resetAt
+  }
+}

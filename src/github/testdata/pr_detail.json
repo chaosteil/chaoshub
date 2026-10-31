@@ -1,0 +1,125 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "headRefOid": "00000000000000000000000000000000c0de0003",
+        "comments": {
+          "nodes": [
+            {
+              "author": {
+                "__typename": "Bot",
+                "login": "ci-bot"
+              },
+              "body": "Body 1.\r\nSecond line.  ",
+              "createdAt": "2026-10-08T22:32:12Z",
+              "url": "https://github.com/acme/monorepo/pull/3311#issuecomment-70007"
+            },
+            {
+              "author": {
+                "__typename": "Bot",
+                "login": "colleague-1"
+              },
+              "body": "Body 2.\r\nSecond line.  ",
+              "createdAt": "2026-10-08T22:32:16Z",
+              "url": "https://github.com/acme/monorepo/pull/3311#issuecomment-70008"
+            }
+          ]
+        },
+        "reviews": {
+          "nodes": [
+            {
+              "author": {
+                "__typename": "Bot",
+                "login": "colleague-1"
+              },
+              "state": "COMMENTED",
+              "body": "Body 3.\r\nSecond line.  ",
+              "submittedAt": "2026-10-08T22:36:01Z"
+            },
+            {
+              "author": {
+                "__typename": "User",
+                "login": "colleague-2"
+              },
+              "state": "COMMENTED",
+              "body": "",
+              "submittedAt": "2026-10-08T22:41:03Z"
+            },
+            {
+              "author": {
+                "__typename": "User",
+                "login": "colleague-2"
+              },
+              "state": "COMMENTED",
+              "body": "",
+              "submittedAt": "2026-10-08T22:41:05Z"
+            }
+          ]
+        },
+        "reviewThreads": {
+          "nodes": [
+            {
+              "isResolved": true,
+              "path": "src/file-1.rs",
+              "line": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "__typename": "Bot",
+                      "login": "colleague-1"
+                    },
+                    "body": "Body 6.\r\nSecond line.  ",
+                    "createdAt": "2026-10-08T22:36:01Z",
+                    "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70003"
+                  },
+                  {
+                    "author": {
+                      "__typename": "User",
+                      "login": "colleague-2"
+                    },
+                    "body": "Body 7.\r\nSecond line.  ",
+                    "createdAt": "2026-10-08T22:41:03Z",
+                    "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70005"
+                  }
+                ]
+              }
+            },
+            {
+              "isResolved": false,
+              "path": "src/file-1.rs",
+              "line": 550,
+              "comments": {
+                "nodes": [
+                  {
+                    "author": {
+                      "__typename": "Bot",
+                      "login": "colleague-1"
+                    },
+                    "body": "Body 8.\r\nSecond line.  ",
+                    "createdAt": "2026-10-08T22:36:01Z",
+                    "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70004"
+                  },
+                  {
+                    "author": {
+                      "__typename": "User",
+                      "login": "colleague-2"
+                    },
+                    "body": "Body 9.\r\nSecond line.  ",
+                    "createdAt": "2026-10-08T22:41:05Z",
+                    "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70006"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "rateLimit": {
+      "cost": 1,
+      "remaining": 4989,
+      "resetAt": "2026-10-31T05:50:43Z"
+    }
+  }
+}
