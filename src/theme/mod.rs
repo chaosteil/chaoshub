@@ -3,7 +3,7 @@
 
 pub(crate) mod grunge;
 mod palette;
-mod texture;
+pub(crate) mod texture;
 
 use ratatui::style::Color;
 
