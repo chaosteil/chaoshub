@@ -151,6 +151,61 @@ pub(crate) struct SyncInfo {
     pub failure: Option<Failure>,
     /// The rate limit after the last request.
     pub rate: Option<RateInfo>,
+    /// The lasting state of the status bar. A key press does not clear
+    /// it.
+    pub condition: Option<Condition>,
+}
+
+/// A lasting state of the status bar: a rate limit, no network, or a
+/// worker restart. A message on top of it hides it until the message
+/// expires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Condition {
+    /// GitHub refuses requests until `until`.
+    RateLimited { until: DateTime<Utc> },
+    /// A request found no network. The next success clears it.
+    Offline,
+    /// The supervisor restarts the worker `name` `secs` seconds after
+    /// the panic, at `at`.
+    Restarting {
+        name: &'static str,
+        secs: u64,
+        at: DateTime<Utc>,
+    },
+}
+
+impl Condition {
+    /// The status bar message: `rate limited until HH:MM` in warn until
+    /// the reset time, `offline` in danger until the next success, and
+    /// `<name> worker restarting in Ns` in warn until the restart.
+    pub(crate) fn message(&self) -> StatusMsg {
+        match self {
+            Self::RateLimited { until } => StatusMsg {
+                text: error_text(&SyncError::RateLimited { until: *until }),
+                style: CellStyle::Warn,
+                expires: *until,
+            },
+            Self::Offline => StatusMsg {
+                text: error_text(&SyncError::Offline),
+                style: CellStyle::Danger,
+                expires: DateTime::<Utc>::MAX_UTC,
+            },
+            Self::Restarting { name, secs, at } => StatusMsg {
+                text: format!("{name} worker restarting in {secs}s"),
+                style: CellStyle::Warn,
+                expires: *at,
+            },
+        }
+    }
+
+    /// True while the state lasts at `now`.
+    pub(crate) fn holds(&self, now: DateTime<Utc>) -> bool {
+        match self {
+            Self::RateLimited { until } => now < *until,
+            Self::Offline => true,
+            Self::Restarting { at, .. } => now < *at,
+        }
+    }
 }
 
 /// A sync failure or a worker restart.
