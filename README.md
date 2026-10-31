@@ -226,16 +226,18 @@ below.
 
 ### `[terminal]`
 
-The terminal status sequences (see "Rex, Ghostty and codeview").
+The terminal status sequences (see "Rex, Ghostty and codeview") and the
+mouse (see "Mouse").
 
 | Key | Default | Meaning |
 |---|---|---|
 | `program_status` | detected | Writes OSC 7501, the program status. |
 | `progress` | detected | Writes OSC 9;4, the progress bar. |
+| `mouse` | `true` | Reads the mouse. `false` leaves the mouse to the terminal, so a drag selects text again. |
 
-When a key is not set, chaoshub writes the sequence only inside Rex
-(`REX_BLOCK` is set) and Ghostty (`TERM_PROGRAM=ghostty`). `true` forces
-it on, `false` forces it off.
+When `program_status` or `progress` is not set, chaoshub writes the
+sequence only inside Rex (`REX_BLOCK` is set) and Ghostty
+(`TERM_PROGRAM=ghostty`). `true` forces it on, `false` forces it off.
 
 ### `[workspaces]`
 
@@ -259,7 +261,7 @@ for `[keys]`.
 | `page_down`, `page_up` | `ctrl-d`, `ctrl-u` | Moves one page. |
 | `open` | `enter` | Opens the pull request sidebar. In the conversation pane, expands a thread. |
 | `open_url` | `o` | In the checks pane, opens the selected check in the browser. |
-| `close_overlay` | `esc`, `q` | Closes the sidebar or the overlay. |
+| `close_overlay` | `esc`, `q` | Closes the sidebar or the overlay. When nothing is open, these keys quit (see `quit`). |
 | `confirm` | `y` | Confirms in a confirm popup. `enter` also confirms. |
 | `cancel` | `n` | Cancels a confirm popup. |
 | `filter` | `/` | Types a fuzzy filter for the active tab. |
@@ -325,6 +327,32 @@ chaoshub sends one atomic request. Else chaoshub merges each entry
 itself, bottom first, each with its own title and body. Thus every
 squash commit carries its PR body. The confirm popup says which way
 chaoshub merges.
+
+### Mouse
+
+chaoshub reads the mouse. Set `[terminal] mouse = false` to give the
+mouse back to the terminal, for example to select text. While a command
+runs in the foreground (for example codeview without Rex), chaoshub
+does not read the mouse.
+
+The wheel moves three rows per step:
+
+- On the list, it moves the cursor.
+- In the sidebar, it scrolls the description pane and the stack pane,
+  and moves the cursor of the checks pane and the conversation pane.
+- In the help overlay and the output popup, it scrolls the text.
+
+A click acts on what it hits:
+
+| Click on | What it does |
+|---|---|
+| A tab in the tab bar | Selects the tab. |
+| A list row | Selects the row. A click on the selected row opens the sidebar. |
+| A key hint | Presses the key. Every action with a hint is clickable, for example `v review`. |
+| A pane tab in the sidebar | Selects the pane. |
+| A row in a pane | Moves the cursor of the pane to the row. In the conversation pane, a click on the selected thread expands it or collapses it. |
+| An author in the author picker | Picks the author. |
+| A cell outside of the sidebar or the overlay | Closes it. For a confirm popup, this cancels the action. |
 
 ## Rex, Ghostty and codeview
 
