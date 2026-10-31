@@ -1,10 +1,12 @@
 # chaoshub
 
-chaoshub is a terminal app that tracks your GitHub pull requests. It
-shows your own pull requests as jj stacks, with the local jj change of
-each one. It also shows the pull requests of your colleagues that are
-ready for review. From the list, you can review a pull request in
-codeview, merge it, approve it, and do other actions.
+chaoshub is a terminal app that tracks your GitHub pull requests. The
+Mine tab lists your own pull requests as stacks, and only pull requests.
+A local jj change without a pull request gets no row. The change id,
+commit and workspace columns of each pull request come from the jj scan
+of your local checkout. chaoshub also shows the pull requests of your
+colleagues that are ready for review. From the list, you can review a
+pull request in codeview, merge it, approve it, and do other actions.
 
 chaoshub keeps a local cache. It shows the cached lists at once when it
 starts, and then syncs with GitHub in the background.
@@ -285,7 +287,7 @@ action cannot run, the status line says why.
 | `close` | `X` | Closes the pull request after a confirm popup. |
 | `browser` | `o` | Opens the pull request in the browser. |
 | `copy_url` | `y` | Copies the pull request URL. |
-| `copy_change_id` | `Y` | Copies the jj change id of the row. Also works on a local change without a pull request. |
+| `copy_change_id` | `Y` | Copies the jj change id of the local change that matches the pull request. Hidden when no local change matches. |
 
 A merge of a stacked pull request includes every entry up to it. The
 `[merge] stack` key sets how chaoshub sends the merge. In `auto` mode,
