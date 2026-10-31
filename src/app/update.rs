@@ -13,7 +13,7 @@ use crate::app::keymap::{self, Keymap};
 use crate::app::layout::layout;
 use crate::app::models::CellStyle;
 use crate::app::state::{AppData, AppState, Failure, error_text};
-use crate::app::tabs::{KeyCx, TABS, Tab};
+use crate::app::tabs::{KeyCx, TABS, Tab, pr_ref};
 use crate::app::term::term_status;
 use crate::bus::{
     ActionEvent, Cmd, KeyEvent, KeyEventKind, Msg, PrRef, Scope, Size, SyncError, TargetKey,
@@ -305,16 +305,6 @@ fn stack_group_refs(data: &AppData, key: &PrKey) -> Vec<PrRef> {
         .collect();
     group.sort_by_key(|other| other.head.value.stack.as_ref().map(|s| s.position));
     group.into_iter().map(pr_ref).collect()
-}
-
-/// The fields of a pull request that the workers need.
-pub(crate) fn pr_ref(pr: &PullRequest) -> PrRef {
-    PrRef {
-        key: pr.key.clone(),
-        node_id: pr.node_id.clone(),
-        head_oid: pr.head.value.head_oid.clone(),
-        base_ref: pr.head.value.base_ref.clone(),
-    }
 }
 
 /// A new terminal size.

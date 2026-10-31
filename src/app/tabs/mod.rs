@@ -8,6 +8,7 @@
     reason = "the filter, the target and the help are read in later phases"
 )]
 
+pub(crate) mod cells;
 mod mine;
 mod team;
 
@@ -15,9 +16,10 @@ use std::any::Any;
 use std::sync::LazyLock;
 
 use crate::app::layout::Areas;
-use crate::app::models::ListModel;
+use crate::app::models::{ListModel, RowItem};
 use crate::app::state::AppData;
-use crate::bus::{Cmd, Interest, KeyChord, Scope, Size, Target, UiEvent};
+use crate::bus::{Cmd, Interest, KeyChord, PrRef, Scope, Size, Target, UiEvent};
+use crate::domain::pr::PullRequest;
 
 /// The state of one tab. `update` owns one per tab, made by
 /// `Tab::init_state`.
@@ -78,6 +80,38 @@ pub(crate) trait Tab: Send + Sync {
     /// `None` when the tab does not handle the key.
     fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ts: &mut TabState) -> Option<Handled>;
     fn help(&self) -> Vec<(KeyChord, &'static str)>;
+}
+
+/// The fields of a pull request that the workers need.
+pub(crate) fn pr_ref(pr: &PullRequest) -> PrRef {
+    PrRef {
+        key: pr.key.clone(),
+        node_id: pr.node_id.clone(),
+        head_oid: pr.head.value.head_oid.clone(),
+        base_ref: pr.head.value.base_ref.clone(),
+    }
+}
+
+/// The interest of a tab from its list model: the pull request of the
+/// cursor row and the pull requests of the visible rows.
+pub(crate) fn list_interest(tab: &dyn Tab, model: &ListModel, height: u16) -> Interest {
+    let pr = |item: &RowItem| match item {
+        RowItem::Pr(pr) => Some(pr.clone()),
+        _ => None,
+    };
+    Interest {
+        tab: tab.id(),
+        scope: tab.scope(),
+        wants_local: tab.wants_local(),
+        selected: model.rows.get(model.cursor).and_then(|row| pr(&row.item)),
+        visible: model
+            .rows
+            .iter()
+            .skip(model.scroll)
+            .take(usize::from(height))
+            .filter_map(|row| pr(&row.item))
+            .collect(),
+    }
 }
 
 /// The tab registry, in tab bar order.
