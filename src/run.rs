@@ -912,6 +912,30 @@ mod tests {
         insta::assert_snapshot!(screen(&mut app));
     }
 
+    /// The seeded mine app with the popup open on #101 (the fifth row).
+    fn popup_app(width: u16, height: u16) -> App {
+        let mut app = seeded_app(width, height, crate::app::testdata::mine_snapshot());
+        for _ in 0..4 {
+            press(&mut app, 'j');
+        }
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(enter));
+        app
+    }
+
+    #[test]
+    fn popup_checks_100() {
+        insta::assert_snapshot!(screen(&mut popup_app(100, 30)));
+    }
+
+    #[test]
+    fn popup_checks_160() {
+        insta::assert_snapshot!(screen(&mut popup_app(160, 40)));
+    }
+
     #[test]
     fn tab_slide_with_two_tabs() {
         let mut app = seeded_app(100, 12, crate::app::testdata::team_snapshot());

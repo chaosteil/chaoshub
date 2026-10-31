@@ -58,7 +58,8 @@ pub(crate) trait Pane: Send + Sync {
 }
 
 /// The pane registry, in popup order.
-pub(crate) static PANES: LazyLock<Vec<Box<dyn Pane>>> = LazyLock::new(Vec::new);
+pub(crate) static PANES: LazyLock<Vec<Box<dyn Pane>>> =
+    LazyLock::new(|| vec![Box::new(checks::Checks)]);
 
 /// The registry indexes of the panes that apply to `target`.
 pub(crate) fn applicable(panes: &[Box<dyn Pane>], target: &Target) -> Vec<usize> {

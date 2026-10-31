@@ -89,6 +89,7 @@ pub(crate) fn mine_prs() -> Vec<PullRequest> {
 
     let mut base = stacked(101, 1, "feat(app): Pane trait, registry and overlay stack");
     base.ci_state.value = CiState::Failure;
+    base.checks.value = checks();
     base.head.value.review_decision = Some(ReviewDecision::ChangesRequested);
     base.head.value.mergeable = Mergeable::Conflicting;
     let mut middle = stacked(102, 2, "feat(app): checks pane");
@@ -177,6 +178,41 @@ pub(crate) fn mine_local() -> (RepoKey, Observed<crate::domain::local::LocalStat
             changes,
         }),
     )
+}
+
+/// Three checks: a success, a failure and a running check.
+pub(crate) fn checks() -> Vec<crate::domain::check::Check> {
+    use crate::domain::check::{Check, CheckConclusion, CheckKind, CheckStatus};
+
+    let check = |name: &str, status, conclusion, secs: i64| Check {
+        name: name.into(),
+        kind: CheckKind::CheckRun,
+        status,
+        conclusion,
+        started: Some(test_time()),
+        completed: (status == CheckStatus::Completed)
+            .then(|| test_time() + chrono::TimeDelta::seconds(secs)),
+        url: Some(format!(
+            "https://github.com/chaosteil/chaoshub/actions/runs/{secs}"
+        )),
+        run_id: Some(1),
+        suite_id: Some(2),
+    };
+    vec![
+        check(
+            "ci / build",
+            CheckStatus::Completed,
+            Some(CheckConclusion::Success),
+            130,
+        ),
+        check(
+            "ci / test",
+            CheckStatus::Completed,
+            Some(CheckConclusion::Failure),
+            242,
+        ),
+        check("ci / lint", CheckStatus::InProgress, None, 0),
+    ]
 }
 
 /// A startup snapshot with the pull requests of `mine_prs` and the jj
