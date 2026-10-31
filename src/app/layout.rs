@@ -62,12 +62,20 @@ pub(crate) fn layout(size: Size) -> Areas {
 /// `[theme] key_hints` switch: when it is false, the key hint bar is
 /// empty and the list takes its row.
 pub(crate) fn layout_with(size: Size, key_hints: bool) -> Areas {
+    layout_full(size, key_hints, false)
+}
+
+/// Computes the areas for a terminal size. `key_hints` is the
+/// `[theme] key_hints` switch. `pinned` is true in the pinned mode: the
+/// tab bar is empty, the list starts at the first row, and the popup
+/// covers the whole list area.
+pub(crate) fn layout_full(size: Size, key_hints: bool, pinned: bool) -> Areas {
     let Size { width, height } = size;
     let tab_bar = Rect {
         x: 0,
         y: 0,
         width,
-        height: height.min(1),
+        height: if pinned { 0 } else { height.min(1) },
     };
     let status = Rect {
         x: 0,
@@ -89,14 +97,18 @@ pub(crate) fn layout_with(size: Size, key_hints: bool) -> Areas {
         x: 0,
         y: tab_bar.height,
         width,
-        height: height.saturating_sub(2 + hints.height),
+        height: height.saturating_sub(1 + tab_bar.height + hints.height),
     };
-    let popup_width = percent(width, POPUP_PERCENT);
-    let popup = Rect {
-        x: width - popup_width,
-        y: list.y,
-        width: popup_width,
-        height: list.height,
+    let popup = if pinned {
+        list
+    } else {
+        let popup_width = percent(width, POPUP_PERCENT);
+        Rect {
+            x: width - popup_width,
+            y: list.y,
+            width: popup_width,
+            height: list.height,
+        }
     };
     let popup_body = Rect {
         x: popup.x.saturating_add(POPUP_BORDER + POPUP_PADDING),
@@ -202,6 +214,24 @@ mod tests {
             },
             areas
         );
+    }
+
+    #[test]
+    fn pinned_the_popup_covers_the_screen_above_the_hints() {
+        let areas = layout_full(
+            Size {
+                width: 100,
+                height: 30,
+            },
+            true,
+            true,
+        );
+        assert_eq!(areas.tab_bar.height, 0);
+        assert_eq!(areas.list, rect(0, 0, 100, 28));
+        assert_eq!(areas.hints, rect(0, 28, 100, 1));
+        assert_eq!(areas.status, rect(0, 29, 100, 1));
+        assert_eq!(areas.popup, rect(0, 0, 100, 28));
+        assert_eq!(areas.popup_body, rect(2, 5, 96, 22));
     }
 
     #[test]
