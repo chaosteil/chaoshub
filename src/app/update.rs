@@ -17,8 +17,8 @@ use crate::app::state::{AppData, AppState, Failure, error_text};
 use crate::app::tabs::{KeyCx, TABS, Tab, pr_ref};
 use crate::app::term::term_status;
 use crate::bus::{
-    ActionEvent, Cmd, KeyChord, KeyEvent, KeyEventKind, Msg, PrRef, Scope, Size, SyncError,
-    TargetKey, UiEvent,
+    ActionEvent, Cmd, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Msg, PrRef, Scope,
+    Size, SyncError, TargetKey, UiEvent,
 };
 use crate::domain::keys::PrKey;
 use crate::domain::observed::{Observed, apply_newer};
@@ -54,12 +54,12 @@ pub(crate) fn update_with(
             started_at,
         } => {
             let mut cmds = prs_synced(state, scope, prs, gone, started_at);
-            cmds.extend(refresh_interest(state, tabs));
+            cmds.extend(after_change(state, tabs));
             cmds
         }
         Msg::PrRefreshed(pr) => {
             if pr_refreshed(state, *pr) {
-                refresh_interest(state, tabs).into_iter().collect()
+                after_change(state, tabs)
             } else {
                 Vec::new()
             }
@@ -94,21 +94,30 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
         state.bump();
     }
     let chord = keymap::chord(event);
-    if keymap.matches("quit", chord) {
+    let control = chord.mods.contains(KeyModifiers::CONTROL);
+    if keymap.matches("quit", chord) && (control || !state.ui.filter_edit) {
         return quit();
+    }
+    if state.ui.filter_edit {
+        return filter_key(state, tabs, chord);
     }
     if keymap.matches("refresh", chord) {
         let mut cmds = refresh(state, tabs);
-        cmds.extend(refresh_interest(state, tabs));
+        cmds.extend(after_change(state, tabs));
         return cmds;
     }
     if let Some(to) = tab_target(keymap, chord, state.ui.active, tabs.len()) {
         switch_tab(state, tabs, to);
-        return refresh_interest(state, tabs).into_iter().collect();
+        return after_change(state, tabs);
     }
     if let Some(motion) = motion(keymap, chord) {
         navigate(state, tabs, motion);
-        return refresh_interest(state, tabs).into_iter().collect();
+        return after_change(state, tabs);
+    }
+    if keymap.matches("filter", chord) {
+        state.ui.filter_edit = true;
+        state.bump();
+        return Vec::new();
     }
     let index = state.ui.active;
     let (Some(tab), Some(ts)) = (tabs.get(index), state.ui.tabs.get_mut(index)) else {
@@ -128,8 +137,54 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
     }
     state.ui.ui_events.extend(handled.events);
     let mut cmds = handled.cmds;
-    cmds.extend(refresh_interest(state, tabs));
+    cmds.extend(after_change(state, tabs));
     cmds
+}
+
+/// A key while the user types the filter: characters and backspace edit
+/// it, Enter keeps it, Esc clears it, the arrows move the cursor.
+fn filter_key(state: &mut AppState, tabs: &[Box<dyn Tab>], chord: KeyChord) -> Vec<Cmd> {
+    let Some(ts) = state.ui.tabs.get_mut(state.ui.active) else {
+        return Vec::new();
+    };
+    match chord.code {
+        KeyCode::Esc => {
+            ts.filter.clear();
+            state.ui.filter_edit = false;
+        }
+        KeyCode::Enter => state.ui.filter_edit = false,
+        KeyCode::Backspace => {
+            ts.filter.pop();
+        }
+        KeyCode::Char(c)
+            if !chord
+                .mods
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            ts.filter.push(c);
+        }
+        KeyCode::Down => navigate(state, tabs, Motion::Down),
+        KeyCode::Up => navigate(state, tabs, Motion::Up),
+        _ => return Vec::new(),
+    }
+    state.bump();
+    after_change(state, tabs)
+}
+
+/// After a change of the data or the UI state: the filters score again
+/// where their text or the data moved, and a changed interest goes to the
+/// workers.
+fn after_change(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
+    let areas = layout(state.data.size);
+    let cx = KeyCx {
+        data: &state.data,
+        target: None,
+        areas: &areas,
+    };
+    for (tab, ts) in tabs.iter().zip(state.ui.tabs.iter_mut()) {
+        tab.rescore(&cx, ts);
+    }
+    refresh_interest(state, tabs).into_iter().collect()
 }
 
 /// The tab that a chord selects: `tab_1` to `tab_9` by registry order,
@@ -528,7 +583,7 @@ mod tests {
     use crate::app::tabs::Handled;
     use crate::app::tabs::fake::FakeTab;
     use crate::app::testdata;
-    use crate::bus::{Interest, KeyCode, KeyModifiers, OverlayKind, RateInfo};
+    use crate::bus::{Interest, OverlayKind, RateInfo};
     use crate::domain::test_time;
 
     const SIZE: Size = Size {
@@ -1191,6 +1246,94 @@ mod tests {
         let frame = frame::frame_model_with(&mut state, &tabs).clone();
         assert_eq!(frame.tab_bar.active, 1);
         assert_eq!(frame.prev_list, Some((empty_list(), Direction::Left)));
+    }
+
+    fn typed(state: &mut AppState, text: &str) {
+        for c in text.chars() {
+            key(state, c);
+        }
+    }
+
+    #[test]
+    fn slash_types_a_filter_that_narrows_the_list() {
+        let mut state = mine_state(10);
+        assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 6);
+        key(&mut state, '/');
+        assert!(state.ui.filter_edit);
+        typed(&mut state, "quit");
+        assert_eq!(state.ui.tabs[0].filter, "quit", "q types, it does not quit");
+        let back = press(KeyCode::Backspace, KeyModifiers::NONE);
+        for _ in 0..4 {
+            update(&mut state, &Keymap::default(), back.clone());
+        }
+        typed(&mut state, "pane tab");
+        let model = frame::active_list(&mut state, &TABS);
+        let titles: Vec<_> = model.rows.iter().map(|r| r.cells[0].text.clone()).collect();
+        assert_eq!(
+            titles,
+            [
+                "stack #12 -> main · 3 PRs",
+                "feat(ui): popup frame with pane tabs",
+            ]
+        );
+        assert_eq!(
+            frame::frame_model(&mut state).filter,
+            Some(crate::app::models::FilterModel {
+                text: "pane tab".into(),
+                editing: true,
+            })
+        );
+        assert_eq!(
+            frame::list_size(&state).height,
+            9,
+            "the filter line takes a row"
+        );
+        let enter = press(KeyCode::Enter, KeyModifiers::NONE);
+        update(&mut state, &Keymap::default(), enter);
+        assert!(!state.ui.filter_edit);
+        assert_eq!(selected_number(&mut state), Some(103));
+        key(&mut state, 'k');
+        assert_eq!(state.ui.tabs[0].filter, "pane tab", "k navigates again");
+        key(&mut state, '/');
+        let esc = press(KeyCode::Esc, KeyModifiers::NONE);
+        update(&mut state, &Keymap::default(), esc);
+        assert_eq!(state.ui.tabs[0].filter, "");
+        assert_eq!(frame::frame_model(&mut state).filter, None);
+        assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 6);
+        assert_eq!(
+            selected_number(&mut state),
+            Some(103),
+            "the selection stays"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_quits_while_typing_a_filter() {
+        let mut state = mine_state(10);
+        key(&mut state, '/');
+        let ctrl_c = press(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(
+            update(&mut state, &Keymap::default(), ctrl_c),
+            vec![Cmd::Quit]
+        );
+    }
+
+    #[test]
+    fn the_filter_scores_again_after_a_sync() {
+        let mut state = mine_state(10);
+        key(&mut state, '/');
+        typed(&mut state, "quokka");
+        assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 0);
+        let mut newer = testdata::pr("chaoshub", 300, "Quokka support");
+        newer.head.observed_at += TimeDelta::seconds(1);
+        let msg = Msg::PrsSynced {
+            scope: Scope::Mine,
+            prs: vec![newer],
+            gone: None,
+            started_at: at(1),
+        };
+        update(&mut state, &Keymap::default(), msg);
+        assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 1);
     }
 
     #[test]

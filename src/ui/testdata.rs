@@ -256,6 +256,7 @@ pub(crate) fn frame() -> FrameModel {
             msg: None,
             progress: Progress::Off,
         },
+        filter: None,
     }
 }
 
