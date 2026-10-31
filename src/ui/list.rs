@@ -408,14 +408,14 @@ mod tests {
         let row = lines(&buf).lines().nth(1).unwrap().to_owned();
         assert!(row.starts_with('▶'), "{row}");
         assert!(row.ends_with('╱'), "{row}");
-        assert_eq!(buf[(0, 1)].fg, p.fg);
-        assert_eq!(buf[(0, 1)].bg, p.band);
-        // Every cell on the band is white, colored markers too.
+        assert_eq!(buf[(0, 1)].fg, p.bg);
+        assert_eq!(buf[(0, 1)].bg, p.primary);
+        // Every cell on the band is black, colored markers too.
         for x in 1..99 {
-            assert_eq!(buf[(x, 1)].bg, p.band, "x {x}");
-            assert_eq!(buf[(x, 1)].fg, p.fg, "x {x}");
+            assert_eq!(buf[(x, 1)].bg, p.primary, "x {x}");
+            assert_eq!(buf[(x, 1)].fg, p.bg, "x {x}");
         }
-        assert_eq!(buf[(99, 1)].fg, p.band);
+        assert_eq!(buf[(99, 1)].fg, p.primary);
         assert_eq!(buf[(99, 1)].bg, p.bg);
         // Other rows keep the last cell free.
         assert_eq!(buf[(99, 4)].symbol(), " ");

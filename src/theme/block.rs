@@ -90,7 +90,7 @@ impl Widget for ThemeBlock<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::ThemeKind;
+    use crate::theme::{Palette, ThemeKind};
 
     fn draw(theme: &Theme) -> Buffer {
         let area = Rect::new(0, 0, 30, 4);
@@ -106,6 +106,7 @@ mod tests {
     fn punk_block_has_the_punk_frame_and_header() {
         let theme = Theme::punk(ThemeKind::TrueColor);
         let p = theme.palette;
+        assert_eq!(p, Palette::pierre());
         let buf = draw(&theme);
         assert_eq!(buf[(0, 0)].symbol(), "◢");
         assert_eq!(buf[(0, 0)].fg, p.primary);
