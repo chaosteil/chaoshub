@@ -66,3 +66,62 @@ pub(crate) fn pr(repo: &str, number: u64, title: &str) -> PullRequest {
         checks: observed(Vec::new()),
     }
 }
+
+/// A pull request of `chaoshub` in the stack `S_1` (#12, 3 entries) at
+/// `position`.
+pub(crate) fn stacked(number: u64, position: u32, title: &str) -> PullRequest {
+    let mut pr = pr("chaoshub", number, title);
+    pr.head.value.stack = Some(crate::domain::stack::StackRef {
+        id: "S_1".into(),
+        number: 12,
+        size: 3,
+        position,
+        base_ref: "main".into(),
+    });
+    pr
+}
+
+/// The pull requests of the user: a 3-PR stack with mixed CI and review
+/// states, and two single pull requests. Newest update first: #99, the
+/// stack, #7.
+pub(crate) fn mine_prs() -> Vec<PullRequest> {
+    use crate::domain::pr::ReviewDecision;
+
+    let mut base = stacked(101, 1, "feat(app): Pane trait, registry and overlay stack");
+    base.ci_state.value = CiState::Failure;
+    base.head.value.review_decision = Some(ReviewDecision::ChangesRequested);
+    base.head.value.mergeable = Mergeable::Conflicting;
+    let mut middle = stacked(102, 2, "feat(app): checks pane");
+    middle.ci_state.value = CiState::Success;
+    middle.head.value.review_decision = Some(ReviewDecision::Approved);
+    let mut top = stacked(103, 3, "feat(ui): popup frame with pane tabs");
+    top.ci_state.value = CiState::Pending;
+    top.head.value.review_decision = Some(ReviewDecision::ReviewRequired);
+    top.head.value.is_draft = true;
+    let mut single = pr(
+        "chaoshub",
+        99,
+        "fix(store): reopen the connection after an error",
+    );
+    single.head.value.updated_at += chrono::TimeDelta::hours(2);
+    let mut old = pr(
+        "codeview",
+        7,
+        "docs: describe the export file format in the README",
+    );
+    old.head.value.updated_at -= chrono::TimeDelta::days(3);
+    old.ci_state.value = CiState::Success;
+    vec![base, middle, top, single, old]
+}
+
+/// A startup snapshot with the pull requests of `mine_prs`.
+pub(crate) fn mine_snapshot() -> crate::store::Snapshot {
+    crate::store::Snapshot {
+        prs: mine_prs()
+            .into_iter()
+            .map(|pr| (crate::bus::Scope::Mine, pr))
+            .collect(),
+        synced_at: Some(test_time()),
+        ..crate::store::Snapshot::default()
+    }
+}

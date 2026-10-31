@@ -841,6 +841,40 @@ mod tests {
         assert_eq!(out, osc::progress(Progress::Off));
     }
 
+    /// The app at a size with a snapshot, 5 minutes after the cache was
+    /// written.
+    fn seeded_app(width: u16, height: u16, snapshot: Snapshot) -> App {
+        App::new(
+            Size { width, height },
+            Keymap::default(),
+            snapshot,
+            Vec::new(),
+            crate::domain::test_time() + chrono::TimeDelta::minutes(5),
+        )
+    }
+
+    /// Draws the app once without transitions and returns the screen.
+    fn screen(app: &mut App) -> String {
+        let size = app.size();
+        let mut terminal = Terminal::new(TestBackend::new(size.width, size.height)).unwrap();
+        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let mut transitions = Transitions::new(false, 160).with_theme(theme);
+        draw(&mut terminal, app, &mut transitions, &theme, Duration::ZERO).unwrap();
+        terminal.backend().to_string()
+    }
+
+    #[test]
+    fn mine_list_100() {
+        let mut app = seeded_app(100, 14, crate::app::testdata::mine_snapshot());
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
+    #[test]
+    fn mine_list_160() {
+        let mut app = seeded_app(160, 14, crate::app::testdata::mine_snapshot());
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
     #[test]
     fn empty_frame() {
         let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();

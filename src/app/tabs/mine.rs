@@ -16,6 +16,42 @@ use crate::domain::stack::StackGroup;
 
 /// The minimum width of the title column.
 const TITLE_MIN_WIDTH: u16 = 28;
+/// From this list width on, the change id column is 12 wide.
+const WIDE_FROM: u16 = 140;
+/// Below this list width, the commit and workspace columns go away.
+const NARROW_BELOW: u16 = 80;
+
+/// The column set for a list width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Columns {
+    /// Below `NARROW_BELOW`: no commit and no workspace column.
+    Narrow,
+    Normal,
+    /// From `WIDE_FROM` on: a 12 cell change id.
+    Wide,
+}
+
+impl Columns {
+    fn for_width(width: u16) -> Self {
+        if width >= WIDE_FROM {
+            Self::Wide
+        } else if width < NARROW_BELOW {
+            Self::Narrow
+        } else {
+            Self::Normal
+        }
+    }
+
+    /// The width of the change id column.
+    fn change_width(self) -> u16 {
+        if self == Self::Wide { 12 } else { 8 }
+    }
+
+    /// True when the commit and the workspace columns show.
+    fn local_details(self) -> bool {
+        self != Self::Narrow
+    }
+}
 
 /// The Mine tab.
 pub(crate) struct Mine;
@@ -41,10 +77,11 @@ impl Tab for Mine {
         TabState::default()
     }
 
-    fn model(&self, cx: &KeyCx<'_>, ts: &TabState, _size: Size) -> ListModel {
-        let rows = rows(cx);
+    fn model(&self, cx: &KeyCx<'_>, ts: &TabState, size: Size) -> ListModel {
+        let set = Columns::for_width(size.width);
+        let rows = rows(cx, set);
         ListModel {
-            columns: columns(),
+            columns: columns(set),
             cursor: ts.cursor.min(rows.len().saturating_sub(1)),
             scroll: ts.scroll,
             rows,
@@ -70,14 +107,14 @@ impl Tab for Mine {
 }
 
 /// The columns: tree and title, number, change id, commit, workspace,
-/// CI, review and flags.
-fn columns() -> Vec<Column> {
+/// CI, review and flags. The narrow set has no commit and no workspace.
+fn columns(set: Columns) -> Vec<Column> {
     let column = |title: &str, width, align| Column {
         title: title.into(),
         width,
         align,
     };
-    vec![
+    let mut columns = vec![
         column(
             "title",
             ColumnWidth::Fill {
@@ -86,13 +123,22 @@ fn columns() -> Vec<Column> {
             Align::Left,
         ),
         column("#", ColumnWidth::Fixed(6), Align::Right),
-        column("change", ColumnWidth::Fixed(8), Align::Left),
-        column("commit", ColumnWidth::Fixed(8), Align::Left),
-        column("workspace", ColumnWidth::Fixed(10), Align::Left),
+        column(
+            "change",
+            ColumnWidth::Fixed(set.change_width()),
+            Align::Left,
+        ),
+    ];
+    if set.local_details() {
+        columns.push(column("commit", ColumnWidth::Fixed(8), Align::Left));
+        columns.push(column("workspace", ColumnWidth::Fixed(10), Align::Left));
+    }
+    columns.extend([
         column("ci", ColumnWidth::Fixed(3), Align::Center),
         column("rv", ColumnWidth::Fixed(3), Align::Center),
         column("flags", ColumnWidth::Fixed(4), Align::Left),
-    ]
+    ]);
+    columns
 }
 
 /// The open pull requests of the Mine scope, newest update first.
@@ -115,25 +161,25 @@ fn mine_prs<'a>(cx: &KeyCx<'a>) -> Vec<&'a PullRequest> {
 }
 
 /// The rows of every stack group.
-fn rows(cx: &KeyCx<'_>) -> Vec<Row> {
+fn rows(cx: &KeyCx<'_>, set: Columns) -> Vec<Row> {
     let prs = mine_prs(cx);
     let mut rows = Vec::new();
     for group in group_stacks(&prs) {
-        group_rows(cx, &group, &mut rows);
+        group_rows(cx, set, &group, &mut rows);
     }
     rows
 }
 
 /// The rows of one group: a header and the tree for a stack, one row for
 /// a single pull request.
-fn group_rows(cx: &KeyCx<'_>, group: &StackGroup, rows: &mut Vec<Row>) {
+fn group_rows(cx: &KeyCx<'_>, set: Columns, group: &StackGroup, rows: &mut Vec<Row>) {
     let prs: Vec<&PullRequest> = group
         .prs
         .iter()
         .filter_map(|key| cx.data.prs.get(key))
         .collect();
     let Some(stack) = &group.stack else {
-        rows.extend(prs.into_iter().map(|pr| pr_row(pr, '─')));
+        rows.extend(prs.into_iter().map(|pr| pr_row(pr, set, '─')));
         return;
     };
     let noun = if stack.size == 1 { "PR" } else { "PRs" };
@@ -160,24 +206,27 @@ fn group_rows(cx: &KeyCx<'_>, group: &StackGroup, rows: &mut Vec<Row>) {
             i if i == last => '└',
             _ => '├',
         };
-        rows.push(pr_row(pr, glyph));
+        rows.push(pr_row(pr, set, glyph));
     }
 }
 
 /// The row of one pull request.
-fn pr_row(pr: &PullRequest, glyph: char) -> Row {
+fn pr_row(pr: &PullRequest, set: Columns, glyph: char) -> Row {
     let head = &pr.head.value;
     let empty = || cell("", CellStyle::Dim);
-    let cells: Vec<Cell> = vec![
+    let mut cells: Vec<Cell> = vec![
         cell(head.title.clone(), CellStyle::Normal),
         cell(format!("#{}", pr.key.number), CellStyle::Dim),
         empty(),
-        empty(),
-        empty(),
+    ];
+    if set.local_details() {
+        cells.extend([empty(), empty()]);
+    }
+    cells.extend([
         cells::ci(pr.ci_state.value),
         cells::review(head.review_decision),
         cells::flags(pr),
-    ];
+    ]);
     Row {
         item: RowItem::Pr(pr_ref(pr)),
         cells,
@@ -314,6 +363,43 @@ mod tests {
         let model = model(&state, &TabState::default());
         assert_eq!(model.rows.len(), 2);
         assert_eq!(model.rows[1].glyph, Some('─'));
+    }
+
+    #[test]
+    fn column_sets_follow_the_width() {
+        let state = seeded();
+        let areas = layout(SIZE);
+        let cx = KeyCx {
+            data: &state.data,
+            target: None,
+            areas: &areas,
+        };
+        let titles = |width| {
+            let model = Mine.model(&cx, &TabState::default(), Size { width, height: 20 });
+            for row in model
+                .rows
+                .iter()
+                .filter(|row| matches!(row.item, RowItem::Pr(_)))
+            {
+                assert_eq!(row.cells.len(), model.columns.len(), "{width}");
+            }
+            model
+                .columns
+                .iter()
+                .map(|c| (c.title.clone(), c.width))
+                .collect::<Vec<_>>()
+        };
+        let change = |width| {
+            titles(width)
+                .into_iter()
+                .find(|(title, _)| title == "change")
+                .map(|(_, w)| w)
+        };
+        assert_eq!(change(100), Some(ColumnWidth::Fixed(8)));
+        assert_eq!(change(139), Some(ColumnWidth::Fixed(8)));
+        assert_eq!(change(140), Some(ColumnWidth::Fixed(12)));
+        assert_eq!(titles(100).len(), 8);
+        assert_eq!(titles(79).len(), 6, "no commit and no workspace");
     }
 
     #[test]
