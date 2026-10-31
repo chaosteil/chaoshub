@@ -1,5 +1,5 @@
 //! Command line types (clap): `--repo`, `--config`, `--no-prefetch`,
-//! `--theme` and `cache clear`.
+//! `--theme`, `--palette` and `cache clear`.
 
 use std::path::PathBuf;
 
@@ -25,6 +25,9 @@ pub struct Cli {
     /// style`.
     #[arg(long, value_name = "STYLE")]
     pub theme: Option<ThemeArg>,
+    /// Uses this palette for this session, in place of `[theme] palette`.
+    #[arg(long, value_name = "NAME")]
+    pub palette: Option<PaletteArg>,
     #[command(subcommand)]
     pub command: Option<CacheCommand>,
 }
@@ -34,10 +37,20 @@ pub struct Cli {
 pub enum ThemeArg {
     /// Rough block borders and textures.
     Grunge,
-    /// Black, white and hard red with angular cuts.
+    /// Angular cuts, diagonal accents, inverted headers and a selection
+    /// band.
     Punk,
     /// Rounded borders, no textures.
     Plain,
+}
+
+/// A palette on the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PaletteArg {
+    /// The Pierre colors. A 16-color terminal gets the ANSI colors.
+    Pierre,
+    /// The 16 ANSI colors.
+    Ansi16,
 }
 
 /// The subcommands. Without one, chaoshub starts the TUI.
@@ -79,6 +92,7 @@ mod tests {
                 config: None,
                 no_prefetch: false,
                 theme: None,
+                palette: None,
                 command: None,
             }
         );
@@ -90,6 +104,19 @@ mod tests {
         assert_eq!(parse(&["--theme", "plain"]).theme, Some(ThemeArg::Plain));
         assert_eq!(parse(&["--theme", "grunge"]).theme, Some(ThemeArg::Grunge));
         assert!(Cli::try_parse_from(["chaoshub", "--theme", "neon"]).is_err());
+    }
+
+    #[test]
+    fn palette_parses() {
+        assert_eq!(
+            parse(&["--palette", "ansi16"]).palette,
+            Some(PaletteArg::Ansi16)
+        );
+        assert_eq!(
+            parse(&["--palette", "pierre"]).palette,
+            Some(PaletteArg::Pierre)
+        );
+        assert!(Cli::try_parse_from(["chaoshub", "--palette", "neon"]).is_err());
     }
 
     #[test]
@@ -109,6 +136,7 @@ mod tests {
                 config: Some(PathBuf::from("/tmp/c.toml")),
                 no_prefetch: true,
                 theme: None,
+                palette: None,
                 command: None,
             }
         );
