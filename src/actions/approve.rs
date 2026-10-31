@@ -30,11 +30,16 @@ impl Action for Approve {
         crate::actions::Hint::Primary
     }
 
-    /// An open pull request.
+    /// An open pull request of another author.
     fn applies(&self, sel: &Selection) -> Applicability {
         match &sel.target {
-            Target::Pr { pr, .. } if pr.head.value.state == PrState::Open => Applicability::Enabled,
-            Target::Pr { .. } => Applicability::Disabled("the pull request is not open"),
+            Target::Pr { pr, .. } if pr.head.value.state != PrState::Open => {
+                Applicability::Disabled("the pull request is not open")
+            }
+            Target::Pr { pr, .. } if pr.head.value.author == sel.me => {
+                Applicability::Disabled("you cannot review your own pull request")
+            }
+            Target::Pr { .. } => Applicability::Enabled,
             Target::Local { .. } => Applicability::Hidden,
         }
     }
@@ -93,7 +98,7 @@ mod tests {
                 stack: Vec::new(),
                 local: LocalMatch::None,
             },
-            me: "chaosteil".into(),
+            me: "reviewer".into(),
             action_config: None,
         }
     }
@@ -136,6 +141,16 @@ mod tests {
         assert_eq!(
             Approve.applies(&merged),
             Applicability::Disabled("the pull request is not open")
+        );
+    }
+
+    #[test]
+    fn your_own_pull_request_is_disabled() {
+        let mut own = selection();
+        own.me = "chaosteil".into();
+        assert_eq!(
+            Approve.applies(&own),
+            Applicability::Disabled("you cannot review your own pull request")
         );
     }
 
