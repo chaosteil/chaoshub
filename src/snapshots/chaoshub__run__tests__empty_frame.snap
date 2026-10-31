@@ -1,5 +1,6 @@
 ---
 source: src/run.rs
+assertion_line: 871
 expression: terminal.backend()
 ---
 "▌ 1 M I N E         ·  ·    ░  chaoshub "
@@ -7,4 +8,4 @@ expression: terminal.backend()
 "          ˙      ˙                      "
 "                ░            ˙       ˙  "
 "      ˙·         ˙              ˙    ·  "
-" [MINE]                                 "
+" [MINE] 0 repos                  ? help "

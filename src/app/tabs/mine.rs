@@ -106,64 +106,12 @@ mod tests {
     use super::*;
     use crate::app::layout::layout;
     use crate::app::state::AppState;
-    use crate::domain::keys::{PrKey, RepoKey};
-    use crate::domain::observed::Observed;
-    use crate::domain::pr::{CiState, MergeStateStatus, Mergeable, PrHead, PrState};
-    use crate::domain::repo::RepoSettings;
-    use crate::domain::test_time;
+    use crate::app::testdata::pr;
 
     const SIZE: Size = Size {
         width: 100,
         height: 30,
     };
-
-    fn observed<T>(value: T) -> Observed<T> {
-        Observed {
-            value,
-            observed_at: test_time(),
-        }
-    }
-
-    fn pr(repo: &str, number: u64, title: &str) -> PullRequest {
-        PullRequest {
-            key: PrKey {
-                repo: RepoKey {
-                    owner: "chaosteil".into(),
-                    name: repo.into(),
-                },
-                number,
-            },
-            node_id: format!("PR_{repo}_{number}"),
-            head: observed(PrHead {
-                title: title.into(),
-                body: String::new(),
-                author: "chaosteil".into(),
-                state: PrState::Open,
-                is_draft: false,
-                head_ref: format!("chaosteil/{number}"),
-                head_oid: format!("oid{number}"),
-                base_ref: "main".into(),
-                review_decision: None,
-                review_requested: false,
-                reviewers: Vec::new(),
-                stack: None,
-                auto_merge: false,
-                in_merge_queue: false,
-                mergeable: Mergeable::Unknown,
-                merge_state: MergeStateStatus::Unknown,
-                url: format!("https://github.com/chaosteil/{repo}/pull/{number}"),
-                updated_at: test_time(),
-                repo_settings: RepoSettings {
-                    squash: true,
-                    merge: true,
-                    rebase: true,
-                    default_branch: None,
-                },
-            }),
-            ci_state: observed(CiState::None),
-            checks: observed(Vec::new()),
-        }
-    }
 
     /// A state with three pull requests, seeded out of order.
     fn seeded() -> (AppState, [PullRequest; 3]) {
