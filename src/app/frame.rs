@@ -110,6 +110,7 @@ fn overlay_models(state: &AppState, panes: &[Box<dyn Pane>]) -> Vec<OverlayModel
                     spec: spec.clone(),
                     text: text.clone(),
                 },
+                OverlayState::Help(help) => OverlayContent::Help(help.clone()),
             },
         })
         .collect()
