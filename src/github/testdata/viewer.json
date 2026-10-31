@@ -1,0 +1,12 @@
+{
+  "data": {
+    "viewer": {
+      "login": "chaosteil"
+    },
+    "rateLimit": {
+      "cost": 1,
+      "remaining": 4993,
+      "resetAt": "2026-10-31T05:50:43Z"
+    }
+  }
+}
