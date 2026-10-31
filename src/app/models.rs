@@ -217,13 +217,21 @@ pub(crate) enum OverlayContent {
     Output {
         title: String,
         lines: Vec<String>,
+        /// The index of the first visible line. `ui` shows the last page
+        /// when the index is past it.
+        scroll: usize,
     },
     Picker {
         title: String,
         items: Vec<String>,
         cursor: usize,
     },
-    Help(HelpModel),
+    Help {
+        help: HelpModel,
+        /// The index of the first visible line. `ui` shows the last page
+        /// when the index is past it.
+        scroll: usize,
+    },
 }
 
 /// A pane tab in the popup header.
@@ -237,6 +245,15 @@ pub(crate) struct PaneTab {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HelpModel {
     pub sections: Vec<HelpSection>,
+}
+
+impl HelpModel {
+    /// The number of lines that the help overlay draws: a title line per
+    /// section, a line per entry, and a blank line between two sections.
+    pub(crate) fn line_count(&self) -> usize {
+        let lines: usize = self.sections.iter().map(|s| 1 + s.entries.len()).sum();
+        lines + self.sections.len().saturating_sub(1)
+    }
 }
 
 /// One section of the help overlay.

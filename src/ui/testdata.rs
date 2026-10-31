@@ -436,30 +436,33 @@ pub(crate) fn help_overlay() -> OverlayModel {
     OverlayModel {
         kind: OverlayKind::Help,
         closing: false,
-        content: OverlayContent::Help(HelpModel {
-            sections: vec![
-                HelpSection {
-                    title: "navigation".to_owned(),
-                    entries: entries(&[
-                        ("j / k", "move down / up"),
-                        ("g / G", "first / last row"),
-                        ("1 2 Tab", "switch tab"),
-                        ("Enter", "open the popup"),
-                        ("/", "filter"),
-                    ]),
-                },
-                HelpSection {
-                    title: "actions".to_owned(),
-                    entries: entries(&[
-                        ("v", "review in codeview"),
-                        ("m", "merge"),
-                        ("A", "approve"),
-                        ("R", "request changes"),
-                        ("x", "re-run failed checks"),
-                    ]),
-                },
-            ],
-        }),
+        content: OverlayContent::Help {
+            help: HelpModel {
+                sections: vec![
+                    HelpSection {
+                        title: "navigation".to_owned(),
+                        entries: entries(&[
+                            ("j / k", "move down / up"),
+                            ("g / G", "first / last row"),
+                            ("1 2 Tab", "switch tab"),
+                            ("Enter", "open the popup"),
+                            ("/", "filter"),
+                        ]),
+                    },
+                    HelpSection {
+                        title: "actions".to_owned(),
+                        entries: entries(&[
+                            ("v", "review in codeview"),
+                            ("m", "merge"),
+                            ("A", "approve"),
+                            ("R", "request changes"),
+                            ("x", "re-run failed checks"),
+                        ]),
+                    },
+                ],
+            },
+            scroll: 0,
+        },
     }
 }
 
@@ -488,6 +491,7 @@ pub(crate) fn output_overlay(count: usize) -> OverlayModel {
             lines: (1..=count)
                 .map(|i| format!("{i:>3} | reviewing src/ui/list.rs hunk {i} of {count}"))
                 .collect(),
+            scroll: count.saturating_sub(1),
         },
     }
 }

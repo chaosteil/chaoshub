@@ -1810,7 +1810,9 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(app.update(msg), vec![]);
+        let cursor = app.frame().list.cursor;
+        app.update(msg);
+        assert!(app.frame().list.cursor > cursor, "the list cursor moves");
     }
 
     /// The seeded mine app drawn once, and the hit map of the draw.

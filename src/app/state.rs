@@ -286,15 +286,19 @@ pub(crate) enum OverlayState {
         spec: PromptSpec,
         text: String,
     },
-    /// The help overlay: the key bindings that it shows.
-    Help(HelpModel),
+    /// The help overlay: the key bindings that it shows, and the index
+    /// of its first visible line.
+    Help { help: HelpModel, scroll: usize },
     /// The output popup of an action: the lines of its
-    /// `ActionEvent::Output` events, at most `OUTPUT_LINES`.
+    /// `ActionEvent::Output` events, at most `OUTPUT_LINES`, and the index
+    /// of the first visible line. On the last line, the popup follows
+    /// the new lines.
     Output {
         id: &'static str,
         key: TargetKey,
         title: String,
         lines: Vec<String>,
+        scroll: usize,
     },
 }
 

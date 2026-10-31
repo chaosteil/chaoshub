@@ -15,7 +15,7 @@ use crate::app::keymap::{self, Keymap};
 use crate::app::layout::Areas;
 use crate::app::models::{CellStyle, Direction, PaneModel, RowItem};
 use crate::app::nav::{self, Motion};
-use crate::app::panes::{PANES, Pane, applicable, display_rows, items};
+use crate::app::panes::{PANES, Pane, PaneState, applicable, display_rows, items};
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
@@ -27,8 +27,9 @@ use crate::app::target::{pr_target, row_target};
 use crate::app::term::term_status;
 use crate::bus::MergeProgress;
 use crate::bus::{
-    ActionEvent, ActionInput, Cmd, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Msg,
-    OverlayKind, Persist, PrRef, Scope, Selection, Size, SyncError, Target, TargetKey, UiEvent,
+    ActionEvent, ActionInput, Cmd, Hit, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection, Size, SyncError, Target,
+    TargetKey, UiEvent,
 };
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;
@@ -66,7 +67,7 @@ pub(crate) fn update_full(
 ) -> Vec<Cmd> {
     match msg {
         Msg::Key(event) => key(state, keymap, tabs, panes, actions, &event),
-        Msg::Mouse { .. } => Vec::new(),
+        Msg::Mouse { kind, hit, .. } => mouse(state, keymap, tabs, panes, actions, kind, hit),
         Msg::Resize(size) => resize(state, size),
         Msg::Tick => tick(state, tabs, Utc::now()),
         Msg::TransitionsDone => transitions_done(state),
@@ -237,7 +238,11 @@ fn key(
     }
     if keymap.matches("help", chord) {
         let help = help_model(keymap, tabs, actions);
-        open_overlay(state, OverlayKind::Help, OverlayState::Help(help));
+        open_overlay(
+            state,
+            OverlayKind::Help,
+            OverlayState::Help { help, scroll: 0 },
+        );
         return Vec::new();
     }
     if let Some(cmds) = action_key(state, keymap, tabs, actions, chord) {
@@ -484,6 +489,28 @@ fn popup_key(
         popup.active = order[at % order.len()];
         return Some(changed);
     }
+    in_pane(data, areas, keymap, panes, popup, |pane, cx, ps, size| {
+        if let Some(motion) = motion(keymap, chord) {
+            move_pane(pane, cx, ps, size, motion);
+            return Some(changed);
+        }
+        pane.handle_key(chord, cx, ps)
+    })
+    .flatten()
+}
+
+/// Calls `f` with the active pane of `popup`, its key context, its state
+/// and the size of the pane body. `None` when the pull request or the
+/// pane is gone.
+fn in_pane<R>(
+    data: &AppData,
+    areas: &Areas,
+    keymap: &Keymap,
+    panes: &[Box<dyn Pane>],
+    popup: &mut PopupState,
+    f: impl FnOnce(&dyn Pane, &KeyCx<'_>, &mut PaneState, Size) -> R,
+) -> Option<R> {
+    let target = pr_target(data, &popup.key)?;
     let pane = panes.get(popup.active)?;
     let ps = popup.panes.get_mut(popup.active)?;
     let size = Size {
@@ -496,18 +523,20 @@ fn popup_key(
         areas,
         keys: keymap,
     };
-    if let Some(motion) = motion(keymap, chord) {
-        let model = pane.model(&cx, ps, size);
-        if let PaneModel::Lines { lines, .. } = &model {
-            ps.scroll = move_in(ps.scroll, display_rows(lines, size.width), motion);
-        } else {
-            let count = items(&model);
-            ps.cursor = move_in(ps.cursor, count, motion);
-            ps.scroll = nav::keep_visible(count, ps.cursor, ps.scroll, usize::from(size.height));
-        }
-        return Some(changed);
+    Some(f(pane.as_ref(), &cx, ps, size))
+}
+
+/// Moves the cursor of a pane one step, or the scroll of a pane of
+/// lines.
+fn move_pane(pane: &dyn Pane, cx: &KeyCx<'_>, ps: &mut PaneState, size: Size, motion: Motion) {
+    let model = pane.model(cx, ps, size);
+    if let PaneModel::Lines { lines, .. } = &model {
+        ps.scroll = move_in(ps.scroll, display_rows(lines, size.width), motion);
+    } else {
+        let count = items(&model);
+        ps.cursor = move_in(ps.cursor, count, motion);
+        ps.scroll = nav::keep_visible(count, ps.cursor, ps.scroll, usize::from(size.height));
     }
-    pane.handle_key(chord, &cx, ps)
 }
 
 /// Pushes an overlay and starts its slide in.
@@ -555,7 +584,7 @@ fn overlay_key(
     let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
         return Vec::new();
     };
-    if matches!(overlay.state, OverlayState::Help(_)) && keymap.matches("help", chord) {
+    if matches!(overlay.state, OverlayState::Help { .. }) && keymap.matches("help", chord) {
         close_overlay(state);
         return Vec::new();
     }
@@ -583,17 +612,7 @@ fn overlay_key(
                 return Vec::new();
             }
             let (tab, author) = (picker.tab, picker.chosen());
-            close_overlay(state);
-            if let Some(ts) = state.ui.tabs.get_mut(tab) {
-                ts.author.clone_from(&author);
-            }
-            let mut cmds: Vec<Cmd> = tabs
-                .get(tab)
-                .map(|t| persist(AUTHOR_KEY, t.id(), author.unwrap_or_default()))
-                .into_iter()
-                .collect();
-            cmds.extend(after_change(state, tabs));
-            cmds
+            pick_author(state, tabs, tab, author)
         }
         OverlayState::Confirm { action, .. } => {
             if keymap.matches("cancel", chord) {
@@ -611,10 +630,271 @@ fn overlay_key(
             close_overlay(state);
             vec![cmd]
         }
-        OverlayState::Prompt { .. } | OverlayState::Help(_) | OverlayState::Output { .. } => {
+        OverlayState::Help { .. } | OverlayState::Output { .. } => {
+            if let Some(motion) = motion(keymap, chord) {
+                scroll_text(&mut overlay.state, motion);
+                state.bump();
+            }
             Vec::new()
         }
+        OverlayState::Prompt { .. } => Vec::new(),
     }
+}
+
+/// Closes the author picker and filters the tab at `tab` by `author`.
+/// `None` shows every author.
+fn pick_author(
+    state: &mut AppState,
+    tabs: &[Box<dyn Tab>],
+    tab: usize,
+    author: Option<String>,
+) -> Vec<Cmd> {
+    close_overlay(state);
+    if let Some(ts) = state.ui.tabs.get_mut(tab) {
+        ts.author.clone_from(&author);
+    }
+    let mut cmds: Vec<Cmd> = tabs
+        .get(tab)
+        .map(|t| persist(AUTHOR_KEY, t.id(), author.unwrap_or_default()))
+        .into_iter()
+        .collect();
+    cmds.extend(after_change(state, tabs));
+    cmds
+}
+
+/// Moves the scroll of a help or an output overlay over its lines.
+/// False for the other overlays.
+fn scroll_text(overlay: &mut OverlayState, motion: Motion) -> bool {
+    match overlay {
+        OverlayState::Help { help, scroll } => {
+            *scroll = move_in(*scroll, help.line_count(), motion);
+        }
+        OverlayState::Output { lines, scroll, .. } => {
+            *scroll = move_in(*scroll, lines.len(), motion);
+        }
+        OverlayState::Popup(_)
+        | OverlayState::Authors(_)
+        | OverlayState::Confirm { .. }
+        | OverlayState::Prompt { .. } => return false,
+    }
+    true
+}
+
+/// The rows that one wheel step moves.
+const WHEEL_ROWS: usize = 3;
+
+/// A mouse event: the wheel moves the top overlay, or the list when no
+/// overlay is open, by `WHEEL_ROWS`. A click acts on its hit.
+fn mouse(
+    state: &mut AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
+    kind: MouseKind,
+    hit: Option<Hit>,
+) -> Vec<Cmd> {
+    match (kind, hit) {
+        (MouseKind::ScrollDown, _) => wheel(state, keymap, tabs, panes, Motion::Down),
+        (MouseKind::ScrollUp, _) => wheel(state, keymap, tabs, panes, Motion::Up),
+        (MouseKind::Click, Some(hit)) => click(state, keymap, tabs, panes, actions, hit),
+        (MouseKind::Click, None) => Vec::new(),
+    }
+}
+
+/// One wheel step: `WHEEL_ROWS` moves through the code of the motion
+/// keys. With no overlay, the list cursor moves. In the sidebar, the
+/// active pane moves. In the help or the output overlay, the text
+/// scrolls.
+fn wheel(
+    state: &mut AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    motion: Motion,
+) -> Vec<Cmd> {
+    let areas = frame::areas(state);
+    let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
+        for _ in 0..WHEEL_ROWS {
+            navigate(state, tabs, motion);
+        }
+        return after_change(state, tabs);
+    };
+    let moved = match &mut overlay.state {
+        OverlayState::Popup(popup) => (0..WHEEL_ROWS).all(|_| {
+            in_pane(
+                &state.data,
+                &areas,
+                keymap,
+                panes,
+                popup,
+                |pane, cx, ps, size| {
+                    move_pane(pane, cx, ps, size, motion);
+                },
+            )
+            .is_some()
+        }),
+        text => (0..WHEEL_ROWS).all(|_| scroll_text(text, motion)),
+    };
+    if moved {
+        state.bump();
+    }
+    Vec::new()
+}
+
+/// A click on `hit`.
+fn click(
+    state: &mut AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
+    hit: Hit,
+) -> Vec<Cmd> {
+    match hit {
+        Hit::Tab(index) if index < tabs.len() => {
+            switch_tab(state, tabs, index);
+            after_change(state, tabs)
+        }
+        Hit::Row(index) => click_row(state, tabs, panes, index),
+        Hit::Key(chord) => {
+            let event = KeyEvent::new(chord.code, chord.mods);
+            key(state, keymap, tabs, panes, actions, &event)
+        }
+        Hit::PaneTab(index) => {
+            click_pane_tab(state, panes, index);
+            Vec::new()
+        }
+        Hit::PaneRow(index) => click_pane_row(state, keymap, panes, index),
+        Hit::Item(index) => click_item(state, tabs, index),
+        Hit::Outside => {
+            close_overlay(state);
+            Vec::new()
+        }
+        Hit::Tab(_) | Hit::Inside => Vec::new(),
+    }
+}
+
+/// A click on the list row at `index`: the cursor moves to it when it is
+/// selectable. A click on the cursor row opens the sidebar.
+fn click_row(
+    state: &mut AppState,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    index: usize,
+) -> Vec<Cmd> {
+    if state.ui.overlays.iter().any(|o| !o.closing) {
+        return Vec::new();
+    }
+    let model = frame::active_list(state, tabs);
+    let Some(row) = model.rows.get(index).filter(|row| nav::selectable(row)) else {
+        return Vec::new();
+    };
+    if index == model.cursor {
+        open_popup(state, tabs, panes);
+        return Vec::new();
+    }
+    let height = usize::from(frame::list_size(state).height);
+    let Some(ts) = state.ui.tabs.get_mut(state.ui.active) else {
+        return Vec::new();
+    };
+    ts.cursor = index;
+    ts.scroll = nav::keep_visible(model.rows.len(), index, model.scroll, height);
+    ts.selected = Some(row.item.clone());
+    state.bump();
+    after_change(state, tabs)
+}
+
+/// A click on the pane tab at `index` of the sidebar tabs: that pane
+/// becomes active. The tabs are the panes that apply, in registry order.
+fn click_pane_tab(state: &mut AppState, panes: &[Box<dyn Pane>], index: usize) {
+    let Some(Overlay {
+        state: OverlayState::Popup(popup),
+        ..
+    }) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing)
+    else {
+        return;
+    };
+    let Some(target) = pr_target(&state.data, &popup.key) else {
+        return;
+    };
+    if let Some(&active) = applicable(panes, &target).get(index) {
+        popup.active = active;
+        state.bump();
+    }
+}
+
+/// A click on the row or the node at `index` of the active pane: the
+/// pane cursor moves to it. A click on the cursor node of a tree runs
+/// the `open` key of the pane, which expands or collapses it.
+fn click_pane_row(
+    state: &mut AppState,
+    keymap: &Keymap,
+    panes: &[Box<dyn Pane>],
+    index: usize,
+) -> Vec<Cmd> {
+    let areas = frame::areas(state);
+    let Some(Overlay {
+        state: OverlayState::Popup(popup),
+        ..
+    }) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing)
+    else {
+        return Vec::new();
+    };
+    let handled = in_pane(
+        &state.data,
+        &areas,
+        keymap,
+        panes,
+        popup,
+        |pane, cx, ps, size| {
+            let model = pane.model(cx, ps, size);
+            let count = items(&model);
+            if index >= count || matches!(model, PaneModel::Lines { .. }) {
+                return None;
+            }
+            if index == ps.cursor {
+                if !matches!(model, PaneModel::Tree { .. }) {
+                    return None;
+                }
+                let open = cx.keys.chords("open").first().copied()?;
+                return pane.handle_key(open, cx, ps);
+            }
+            ps.cursor = index;
+            ps.scroll = nav::keep_visible(count, index, ps.scroll, usize::from(size.height));
+            Some(Handled {
+                changed: true,
+                ..Handled::default()
+            })
+        },
+    )
+    .flatten();
+    let Some(handled) = handled else {
+        return Vec::new();
+    };
+    if handled.changed {
+        state.bump();
+    }
+    state.ui.ui_events.extend(handled.events);
+    handled.cmds
+}
+
+/// A click on the item at `index` of the author picker: it picks that
+/// item, as Enter does on the cursor item.
+fn click_item(state: &mut AppState, tabs: &[Box<dyn Tab>], index: usize) -> Vec<Cmd> {
+    let Some(Overlay {
+        state: OverlayState::Authors(picker),
+        ..
+    }) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing)
+    else {
+        return Vec::new();
+    };
+    if index > picker.authors.len() {
+        return Vec::new();
+    }
+    picker.cursor = index;
+    let (tab, author) = (picker.tab, picker.chosen());
+    pick_author(state, tabs, tab, author)
 }
 
 /// The cursor in a list of `len` items after a move.
@@ -1175,24 +1455,35 @@ fn output(
                 id: open_id,
                 key: open_key,
                 lines,
+                scroll,
                 ..
-            } if !overlay.closing && *open_id == id && *open_key == key => Some(lines),
+            } if !overlay.closing && *open_id == id && *open_key == key => Some((lines, scroll)),
             _ => None,
         });
-    let Some(open) = open else {
+    let Some((open, scroll)) = open else {
         cap(&mut lines);
         let title = format!("{label} output");
         let overlay = OverlayState::Output {
             id,
             key,
             title,
+            scroll: lines.len().saturating_sub(1),
             lines,
         };
         open_overlay(state, OverlayKind::Output, overlay);
         return;
     };
+    // A popup on its last line follows the new lines. Else its first
+    // visible line stays, also when old lines drop.
+    let follow = *scroll + 1 >= open.len();
     open.append(&mut lines);
+    let dropped = open.len().saturating_sub(OUTPUT_LINES);
     cap(open);
+    *scroll = if follow {
+        open.len().saturating_sub(1)
+    } else {
+        scroll.saturating_sub(dropped)
+    };
     state.bump();
 }
 
@@ -1896,7 +2187,13 @@ mod tests {
         let overlays = &frame::frame_model_with(&mut state, &tabs).overlays;
         assert_eq!(
             overlays.last().map(|o| (o.kind, &o.content)),
-            Some((OverlayKind::Help, &OverlayContent::Help(expected)))
+            Some((
+                OverlayKind::Help,
+                &OverlayContent::Help {
+                    help: expected,
+                    scroll: 0,
+                }
+            ))
         );
         assert_eq!(
             state.ui.ui_events,
@@ -2526,7 +2823,7 @@ mod tests {
                 OverlayState::Popup(_)
                 | OverlayState::Confirm { .. }
                 | OverlayState::Prompt { .. }
-                | OverlayState::Help(_)
+                | OverlayState::Help { .. }
                 | OverlayState::Output { .. } => None,
             })
     }
@@ -3462,6 +3759,7 @@ mod tests {
             Some(OverlayContent::Output {
                 title: "agent output".into(),
                 lines: lines(0..3),
+                scroll: 2,
             })
         );
         run_msg(&mut state, &actions, event("agent", 101, out(0..1)));
@@ -3574,5 +3872,430 @@ mod tests {
             state.data.panes.is_empty(),
             "the pane that never started is gone"
         );
+    }
+
+    /// A mouse event of `kind` on `hit`.
+    fn mouse_on(kind: MouseKind, hit: Option<Hit>) -> Msg {
+        Msg::Mouse {
+            kind,
+            x: 0,
+            y: 0,
+            hit,
+        }
+    }
+
+    fn click_on(hit: Hit) -> Msg {
+        mouse_on(MouseKind::Click, Some(hit))
+    }
+
+    fn wheel_down() -> Msg {
+        mouse_on(MouseKind::ScrollDown, Some(Hit::Inside))
+    }
+
+    fn wheel_up() -> Msg {
+        mouse_on(MouseKind::ScrollUp, None)
+    }
+
+    /// Sends `msg` with the real tabs, the panes of `panes` and the
+    /// default keys.
+    fn send_with(state: &mut AppState, panes: &[Box<dyn Pane>], msg: Msg) -> Vec<Cmd> {
+        update_full(state, &Keymap::default(), &TABS, panes, &REGISTRY, msg)
+    }
+
+    #[test]
+    fn the_wheel_moves_the_list_cursor_three_rows() {
+        // Rows: #99, header, #103, #102, #101, #7.
+        let mut state = mine_state(10);
+        let cmds = update(&mut state, &Keymap::default(), wheel_down());
+        assert_eq!(selected_number(&mut state), Some(101));
+        assert!(matches!(cmds.as_slice(), [Cmd::SetInterest(_)]));
+        update(&mut state, &Keymap::default(), wheel_down());
+        assert_eq!(selected_number(&mut state), Some(7), "the last row");
+        update(&mut state, &Keymap::default(), wheel_up());
+        assert_eq!(selected_number(&mut state), Some(103));
+    }
+
+    #[test]
+    fn the_wheel_scrolls_a_pane_of_lines_in_the_sidebar() {
+        let mut state = mine_state(10);
+        let key99 = testdata::pr_key("chaoshub", 99);
+        let body: Vec<String> = (0..40).map(|i| format!("paragraph {i}")).collect();
+        state.data.prs.get_mut(&key99).unwrap().head.value.body = body.join("\n\n");
+        state.bump();
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(
+            sidebar(&state).map(|p| p.active),
+            Some(0),
+            "the description"
+        );
+        update(&mut state, &Keymap::default(), wheel_down());
+        assert!(matches!(
+            popup_content(&mut state, &PANES),
+            OverlayContent::Popup {
+                scroll: 3,
+                cursor: 0,
+                ..
+            }
+        ));
+        update(&mut state, &Keymap::default(), wheel_up());
+        assert!(matches!(
+            popup_content(&mut state, &PANES),
+            OverlayContent::Popup { scroll: 0, .. }
+        ));
+        assert_eq!(selected_number(&mut state), Some(99), "the list stays");
+    }
+
+    #[test]
+    fn the_wheel_moves_the_cursor_of_a_tree_pane_in_the_sidebar() {
+        let panes = fake_panes();
+        let mut state = mine_state(10);
+        send_with(
+            &mut state,
+            &panes,
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        send_with(
+            &mut state,
+            &panes,
+            press(KeyCode::Char('2'), KeyModifiers::NONE),
+        );
+        assert_eq!(send_with(&mut state, &panes, wheel_down()), vec![]);
+        assert!(matches!(
+            popup_content(&mut state, &panes),
+            OverlayContent::Popup { cursor: 3, .. }
+        ));
+        send_with(
+            &mut state,
+            &panes,
+            press(KeyCode::Char('1'), KeyModifiers::NONE),
+        );
+        send_with(&mut state, &panes, wheel_down());
+        assert!(
+            matches!(
+                popup_content(&mut state, &panes),
+                OverlayContent::Popup { cursor: 2, .. }
+            ),
+            "pane a has three nodes"
+        );
+    }
+
+    /// The scroll of the top help or output overlay.
+    fn text_scroll(state: &AppState) -> Option<usize> {
+        match state.ui.overlays.iter().rev().find(|o| !o.closing)?.state {
+            OverlayState::Help { scroll, .. } | OverlayState::Output { scroll, .. } => Some(scroll),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_wheel_and_the_motion_keys_scroll_the_help() {
+        let mut state = mine_state(10);
+        key(&mut state, '?');
+        assert_eq!(text_scroll(&state), Some(0));
+        update(&mut state, &Keymap::default(), wheel_down());
+        assert_eq!(text_scroll(&state), Some(3));
+        key(&mut state, 'j');
+        assert_eq!(text_scroll(&state), Some(4));
+        key(&mut state, 'G');
+        let OverlayState::Help { help, .. } = &state.ui.overlays[0].state else {
+            panic!("not the help");
+        };
+        let last = help.line_count() - 1;
+        assert_eq!(text_scroll(&state), Some(last));
+        update(&mut state, &Keymap::default(), wheel_up());
+        assert_eq!(text_scroll(&state), Some(last - 3));
+        key(&mut state, 'g');
+        assert_eq!(text_scroll(&state), Some(0));
+        assert_eq!(selected_number(&mut state), Some(99), "the list stays");
+    }
+
+    #[test]
+    fn an_output_popup_follows_the_tail_until_it_scrolls_up() {
+        let mut state = action_state(&pr_row(102));
+        let actions = fake(FakeAction::new("agent", 'g'));
+        let out = |range| event("agent", 102, ActionEvent::Output(lines(range)));
+        run_msg(&mut state, &actions, out(0..10));
+        assert_eq!(text_scroll(&state), Some(9), "on the last line");
+        run_msg(&mut state, &actions, out(10..12));
+        assert_eq!(text_scroll(&state), Some(11), "it follows");
+        run_msg(&mut state, &actions, wheel_up());
+        assert_eq!(text_scroll(&state), Some(8));
+        run_msg(&mut state, &actions, out(12..14));
+        assert_eq!(text_scroll(&state), Some(8), "it stays");
+        run_msg(
+            &mut state,
+            &actions,
+            press(KeyCode::Char('k'), KeyModifiers::NONE),
+        );
+        assert_eq!(text_scroll(&state), Some(7));
+        run_msg(&mut state, &actions, wheel_down());
+        assert_eq!(text_scroll(&state), Some(10));
+    }
+
+    #[test]
+    fn a_click_on_a_tab_switches_to_it() {
+        let mut state = mine_state(10);
+        let cmds = update(&mut state, &Keymap::default(), click_on(Hit::Tab(1)));
+        assert_eq!(state.ui.active, 1);
+        assert!(matches!(cmds.as_slice(), [Cmd::SetInterest(_)]));
+        assert_eq!(
+            state.ui.ui_events.last(),
+            Some(&UiEvent::TabChanged { from: 0, to: 1 })
+        );
+        let generation = state.generation;
+        update(&mut state, &Keymap::default(), click_on(Hit::Tab(8)));
+        assert_eq!(state.ui.active, 1, "no ninth tab");
+        assert_eq!(state.generation, generation);
+    }
+
+    #[test]
+    fn a_click_selects_a_row_and_a_second_click_opens_the_sidebar() {
+        // Rows: #99, header, #103, #102, #101, #7.
+        let mut state = mine_state(10);
+        let generation = state.generation;
+        assert_eq!(
+            update(&mut state, &Keymap::default(), click_on(Hit::Row(1))),
+            vec![]
+        );
+        assert_eq!(state.generation, generation, "a header is not selectable");
+        assert_eq!(selected_number(&mut state), Some(99));
+        let cmds = update(&mut state, &Keymap::default(), click_on(Hit::Row(3)));
+        assert_eq!(selected_number(&mut state), Some(102));
+        assert!(matches!(cmds.as_slice(), [Cmd::SetInterest(_)]));
+        assert!(state.ui.overlays.is_empty());
+        update(&mut state, &Keymap::default(), click_on(Hit::Row(3)));
+        let popup = sidebar(&state).map(|p| p.key.clone());
+        assert_eq!(popup, Some(testdata::pr_key("chaoshub", 102)));
+        let generation = state.generation;
+        update(&mut state, &Keymap::default(), click_on(Hit::Row(9)));
+        assert_eq!(state.generation, generation, "no such row");
+    }
+
+    #[test]
+    fn a_click_on_a_key_hint_presses_the_key() {
+        let mut state = action_state(&pr_row(102));
+        let actions = fake(FakeAction::new("approve", 'A'));
+        let keymap = Keymap::with_actions(&actions, &std::collections::BTreeMap::new()).unwrap();
+        let chord = |code| KeyChord {
+            code,
+            mods: KeyModifiers::NONE,
+        };
+        let msg = click_on(Hit::Key(chord(KeyCode::Char('A'))));
+        let cmds = update_full(&mut state, &keymap, &TABS, &PANES, &actions, msg);
+        assert_eq!(
+            cmds,
+            vec![Cmd::RunAction {
+                id: "approve",
+                selection: pr_selection(&state, 102),
+                input: ActionInput::None,
+            }]
+        );
+        let msg = click_on(Hit::Key(chord(KeyCode::Char('?'))));
+        update_full(&mut state, &keymap, &TABS, &PANES, &actions, msg);
+        assert_eq!(text_scroll(&state), Some(0), "the help opens");
+        let msg = click_on(Hit::Key(chord(KeyCode::Esc)));
+        assert_eq!(
+            update_full(&mut state, &keymap, &TABS, &PANES, &actions, msg),
+            vec![]
+        );
+        assert!(
+            state.ui.overlays.iter().all(|o| o.closing),
+            "Esc closes the help"
+        );
+    }
+
+    #[test]
+    fn a_click_on_a_pane_tab_makes_that_pane_active() {
+        let panes = fake_panes();
+        let mut state = mine_state(10);
+        send_with(
+            &mut state,
+            &panes,
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        send_with(&mut state, &panes, click_on(Hit::PaneTab(1)));
+        assert_eq!(sidebar(&state).map(|p| p.active), Some(1));
+        let generation = state.generation;
+        send_with(&mut state, &panes, click_on(Hit::PaneTab(2)));
+        assert_eq!(
+            sidebar(&state).map(|p| p.active),
+            Some(1),
+            "pane c does not apply, so the sidebar has two tabs"
+        );
+        assert_eq!(state.generation, generation);
+    }
+
+    /// A tree pane of three nodes. The `open` key returns
+    /// `Cmd::OpenUrl` with the cursor node.
+    struct OpenPane;
+
+    impl Pane for OpenPane {
+        fn id(&self) -> &'static str {
+            "open"
+        }
+
+        fn title(&self) -> &'static str {
+            "open"
+        }
+
+        fn key(&self) -> char {
+            '1'
+        }
+
+        fn applies(&self, _target: &Target) -> bool {
+            true
+        }
+
+        fn init_state(&self) -> PaneState {
+            PaneState::default()
+        }
+
+        fn model(&self, _cx: &KeyCx<'_>, _ps: &PaneState, _size: Size) -> PaneModel {
+            PaneModel::Tree {
+                nodes: (0..3)
+                    .map(|_| crate::app::models::TreeNode {
+                        depth: 0,
+                        expanded: Some(false),
+                        cells: Vec::new(),
+                    })
+                    .collect(),
+            }
+        }
+
+        fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
+            cx.keys.matches("open", key).then(|| Handled {
+                cmds: vec![Cmd::OpenUrl(format!("node {}", ps.cursor))],
+                ..Handled::default()
+            })
+        }
+    }
+
+    #[test]
+    fn a_click_on_a_pane_row_moves_the_cursor_and_a_second_click_expands() {
+        let panes: Vec<Box<dyn Pane>> = vec![Box::new(OpenPane)];
+        let mut state = mine_state(10);
+        send_with(
+            &mut state,
+            &panes,
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(
+            send_with(&mut state, &panes, click_on(Hit::PaneRow(0))),
+            vec![Cmd::OpenUrl("node 0".into())],
+            "the cursor node opens"
+        );
+        assert_eq!(
+            send_with(&mut state, &panes, click_on(Hit::PaneRow(2))),
+            vec![]
+        );
+        assert!(matches!(
+            popup_content(&mut state, &panes),
+            OverlayContent::Popup { cursor: 2, .. }
+        ));
+        assert_eq!(
+            send_with(&mut state, &panes, click_on(Hit::PaneRow(2))),
+            vec![Cmd::OpenUrl("node 2".into())]
+        );
+        assert_eq!(
+            send_with(&mut state, &panes, click_on(Hit::PaneRow(7))),
+            vec![],
+            "no such node"
+        );
+    }
+
+    #[test]
+    fn a_click_on_a_table_row_moves_the_pane_cursor() {
+        let mut state = mine_state(10);
+        let key99 = testdata::pr_key("chaoshub", 99);
+        state.data.prs.get_mut(&key99).unwrap().checks.value = testdata::checks();
+        state.bump();
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Char('2'), KeyModifiers::NONE),
+        );
+        let OverlayContent::Popup {
+            pane: PaneModel::Table { rows, .. },
+            ..
+        } = popup_content(&mut state, &PANES)
+        else {
+            panic!("the checks pane is a table");
+        };
+        assert!(rows.len() > 1, "the checks of the fixture");
+        let last = rows.len() - 1;
+        update(&mut state, &Keymap::default(), click_on(Hit::PaneRow(last)));
+        assert!(matches!(
+            popup_content(&mut state, &PANES),
+            OverlayContent::Popup { cursor, .. } if cursor == last
+        ));
+    }
+
+    #[test]
+    fn a_click_on_a_picker_item_picks_it() {
+        let mut state = team_state();
+        key(&mut state, 'a');
+        let cmds = update(&mut state, &Keymap::default(), click_on(Hit::Item(2)));
+        assert_eq!(cmds[0], persist("author", "team", "bob".into()));
+        assert_eq!(picker(&state), None, "the picker closes");
+        assert_eq!(state.ui.tabs[1].author.as_deref(), Some("bob"));
+        key(&mut state, 'a');
+        update(&mut state, &Keymap::default(), click_on(Hit::Item(0)));
+        assert_eq!(state.ui.tabs[1].author, None, "all authors");
+        key(&mut state, 'a');
+        update(&mut state, &Keymap::default(), click_on(Hit::Item(9)));
+        assert!(picker(&state).is_some(), "no such item");
+    }
+
+    #[test]
+    fn a_click_outside_closes_the_top_overlay_and_inside_does_nothing() {
+        let mut state = mine_state(10);
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        let generation = state.generation;
+        assert_eq!(
+            update(&mut state, &Keymap::default(), click_on(Hit::Inside)),
+            vec![]
+        );
+        assert_eq!(state.generation, generation);
+        assert!(sidebar(&state).is_some());
+        assert_eq!(
+            update(&mut state, &Keymap::default(), click_on(Hit::Outside)),
+            vec![]
+        );
+        assert!(sidebar(&state).is_none());
+        assert_eq!(
+            state.ui.ui_events.last(),
+            Some(&UiEvent::OverlayClosed(OverlayKind::Popup))
+        );
+    }
+
+    #[test]
+    fn a_click_outside_a_confirm_cancels_it() {
+        let mut state = action_state(&pr_row(102));
+        let mut merge = FakeAction::new("merge", 'm');
+        merge.prepare = Prepare::Confirm(crate::bus::ConfirmSpec {
+            title: "merge #102?".into(),
+            lines: Vec::new(),
+            danger: true,
+        });
+        let actions = fake(merge);
+        act(&mut state, &actions, KeyCode::Char('m'));
+        assert_eq!(
+            run_msg(&mut state, &actions, click_on(Hit::Outside)),
+            vec![]
+        );
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
     }
 }

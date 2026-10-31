@@ -136,10 +136,19 @@ fn overlay_models(state: &AppState, panes: &[Box<dyn Pane>]) -> Vec<OverlayModel
                     spec: spec.clone(),
                     text: text.clone(),
                 },
-                OverlayState::Help(help) => OverlayContent::Help(help.clone()),
-                OverlayState::Output { title, lines, .. } => OverlayContent::Output {
+                OverlayState::Help { help, scroll } => OverlayContent::Help {
+                    help: help.clone(),
+                    scroll: *scroll,
+                },
+                OverlayState::Output {
+                    title,
+                    lines,
+                    scroll,
+                    ..
+                } => OverlayContent::Output {
                     title: title.clone(),
                     lines: lines.clone(),
+                    scroll: *scroll,
                 },
             },
         })
@@ -400,7 +409,7 @@ fn overlay_hints(
             app_hint(keymap, &["open"], "select", true),
             app_hint(keymap, &["close_overlay"], "close", true),
         ],
-        OverlayState::Output { .. } | OverlayState::Help(_) => {
+        OverlayState::Output { .. } | OverlayState::Help { .. } => {
             vec![app_hint(keymap, &["close_overlay"], "close", true)]
         }
     };

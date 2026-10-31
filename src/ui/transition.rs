@@ -486,12 +486,16 @@ mod tests {
 
     fn overlay(kind: OverlayKind) -> OverlayModel {
         let content = match kind {
-            OverlayKind::Help => OverlayContent::Help(crate::app::models::HelpModel {
-                sections: Vec::new(),
-            }),
+            OverlayKind::Help => OverlayContent::Help {
+                help: crate::app::models::HelpModel {
+                    sections: Vec::new(),
+                },
+                scroll: 0,
+            },
             _ => OverlayContent::Output {
                 title: "output".to_owned(),
                 lines: Vec::new(),
+                scroll: 0,
             },
         };
         OverlayModel {
