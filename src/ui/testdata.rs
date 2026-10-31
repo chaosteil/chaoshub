@@ -5,8 +5,9 @@ use ratatui::backend::TestBackend;
 
 use crate::app::layout::{Areas, layout};
 use crate::app::models::{
-    Align, Cell, CellStyle, Column, ColumnWidth, Direction, FrameModel, ListModel, OverlayContent,
-    OverlayModel, PaneModel, PaneTab, Row, RowItem, RowStyle, StatusModel, TabBarModel, TreeNode,
+    Align, Cell, CellStyle, Column, ColumnWidth, Direction, FrameModel, HelpModel, HelpSection,
+    ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, Row, RowItem, RowStyle,
+    StatusModel, TabBarModel, TreeNode,
 };
 use crate::bus::{OverlayKind, PrRef, Progress, Size, TermState, TermStatus};
 use crate::domain::keys::{PrKey, RepoKey};
@@ -399,5 +400,43 @@ pub(crate) fn with_overlay(overlay: OverlayModel) -> FrameModel {
     FrameModel {
         overlays: vec![overlay],
         ..frame()
+    }
+}
+
+/// The help overlay with the app keys and the actions.
+pub(crate) fn help_overlay() -> OverlayModel {
+    let entries = |pairs: &[(&str, &str)]| {
+        pairs
+            .iter()
+            .map(|(k, l)| ((*k).to_owned(), (*l).to_owned()))
+            .collect()
+    };
+    OverlayModel {
+        kind: OverlayKind::Help,
+        closing: false,
+        content: OverlayContent::Help(HelpModel {
+            sections: vec![
+                HelpSection {
+                    title: "navigation".to_owned(),
+                    entries: entries(&[
+                        ("j / k", "move down / up"),
+                        ("g / G", "first / last row"),
+                        ("1 2 Tab", "switch tab"),
+                        ("Enter", "open the popup"),
+                        ("/", "filter"),
+                    ]),
+                },
+                HelpSection {
+                    title: "actions".to_owned(),
+                    entries: entries(&[
+                        ("v", "review in codeview"),
+                        ("m", "merge"),
+                        ("A", "approve"),
+                        ("R", "request changes"),
+                        ("x", "re-run failed checks"),
+                    ]),
+                },
+            ],
+        }),
     }
 }
