@@ -56,36 +56,53 @@ impl GithubClient {
         format!("{}{path}", self.base_url)
     }
 
-    /// Sends the request that `build` makes with the token. After a 401 it
-    /// refreshes the token once and sends again. It maps rate limits and
-    /// other failed statuses to errors.
+    /// Sends the request that `build` makes with the token and maps a
+    /// failed status to an error. See [`GithubClient::send_raw`].
     async fn send<F>(&self, build: F) -> Result<Response, GithubError>
     where
         F: Fn(&reqwest::Client) -> RequestBuilder,
     {
-        let token = self.token.token().await?;
-        let mut response = build(&self.http).bearer_auth(&token).send().await?;
-        if response.status() == StatusCode::UNAUTHORIZED {
-            tracing::info!("GitHub returned 401, refreshing the token");
-            let token = self.token.refresh(&token).await?;
-            response = build(&self.http).bearer_auth(&token).send().await?;
-            if response.status() == StatusCode::UNAUTHORIZED {
-                return Err(GithubError::Auth);
-            }
-        }
-        let status = response.status();
-        if status.is_success() {
+        let response = self.send_raw(build).await?;
+        if response.status().is_success() {
             return Ok(response);
         }
-        if let Some(until) = rate_limited_until(status, response.headers(), Utc::now()) {
-            tracing::warn!(%status, %until, "GitHub rate limit");
-            return Err(GithubError::RateLimited { until });
+        Err(status_error(response).await)
+    }
+
+    /// Sends the request that `build` makes with the token. After a 401 it
+    /// refreshes the token once and sends again; a second 401 is
+    /// `GithubError::Auth`. Other statuses come back unchanged.
+    async fn send_raw<F>(&self, build: F) -> Result<Response, GithubError>
+    where
+        F: Fn(&reqwest::Client) -> RequestBuilder,
+    {
+        let token = self.token.token().await?;
+        let response = build(&self.http).bearer_auth(&token).send().await?;
+        if response.status() != StatusCode::UNAUTHORIZED {
+            return Ok(response);
         }
-        let body = response.text().await.unwrap_or_default();
-        Err(GithubError::Http {
-            status: Some(status.as_u16()),
-            message: error_message(&body),
-        })
+        tracing::info!("GitHub returned 401, refreshing the token");
+        let token = self.token.refresh(&token).await?;
+        let response = build(&self.http).bearer_auth(&token).send().await?;
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Err(GithubError::Auth);
+        }
+        Ok(response)
+    }
+}
+
+/// The error of a response with a failed status: a rate limit, else
+/// `Http` with the message of the body.
+async fn status_error(response: Response) -> GithubError {
+    let status = response.status();
+    if let Some(until) = rate_limited_until(status, response.headers(), Utc::now()) {
+        tracing::warn!(%status, %until, "GitHub rate limit");
+        return GithubError::RateLimited { until };
+    }
+    let body = response.text().await.unwrap_or_default();
+    GithubError::Http {
+        status: Some(status.as_u16()),
+        message: error_message(&body),
     }
 }
 
