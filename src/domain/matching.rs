@@ -1,5 +1,7 @@
 //! Matches pull requests to local changes and groups stacks.
 
+use std::collections::{HashSet, VecDeque};
+
 use crate::domain::keys::PrKey;
 use crate::domain::local::{LocalChange, LocalMatch};
 use crate::domain::pr::PullRequest;
@@ -49,6 +51,68 @@ fn match_pr(pr: &PullRequest, changes: &[LocalChange]) -> LocalMatch {
         return compare(change, &head.head_oid);
     }
     LocalMatch::None
+}
+
+/// The change id of a match, if any.
+fn matched_change(m: &LocalMatch) -> Option<&str> {
+    match m {
+        LocalMatch::None => None,
+        LocalMatch::Synced { change_id, .. } | LocalMatch::Diverged { change_id, .. } => {
+            Some(change_id)
+        }
+    }
+}
+
+/// The changes that no pull request matches, once per change id, in
+/// the order of `changes`. A change that is empty and has no description
+/// is left out: it is a fresh working copy, not work.
+pub(crate) fn local_only(
+    changes: &[LocalChange],
+    matches: &[(PrKey, LocalMatch)],
+) -> Vec<LocalChange> {
+    let taken: HashSet<&str> = matches
+        .iter()
+        .filter_map(|(_, m)| matched_change(m))
+        .collect();
+    let mut seen = HashSet::new();
+    changes
+        .iter()
+        .filter(|change| !taken.contains(change.change_id.as_str()))
+        .filter(|change| !(change.empty && change.description.is_empty()))
+        .filter(|change| seen.insert(change.change_id.clone()))
+        .cloned()
+        .collect()
+}
+
+/// The pull request of the nearest ancestor of `change` that a pull
+/// request matches. The search follows the parents through `changes`,
+/// breadth first. `None` when no ancestor in `changes` has a pull
+/// request.
+pub(crate) fn nearest_pr(
+    change: &LocalChange,
+    changes: &[LocalChange],
+    matches: &[(PrKey, LocalMatch)],
+) -> Option<PrKey> {
+    let pr_of = |id: &str| {
+        matches
+            .iter()
+            .find(|(_, m)| matched_change(m) == Some(id))
+            .map(|(key, _)| key.clone())
+    };
+    let mut queue: VecDeque<&str> = change.parents.iter().map(String::as_str).collect();
+    let mut seen: HashSet<&str> = HashSet::new();
+    while let Some(id) = queue.pop_front() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Some(key) = pr_of(id) {
+            return Some(key);
+        }
+        if let Some(parent) = changes.iter().find(|c| c.change_id == id) {
+            queue.extend(parent.parents.iter().map(String::as_str));
+        }
+    }
+    None
 }
 
 /// True when two commit ids name the same commit. One of them can be a
@@ -306,6 +370,72 @@ mod tests {
                 commit_id: "bbb222".into(),
             }
         );
+    }
+
+    /// A change of the `ws` stack with parents and an empty flag.
+    fn node(id: &str, parents: &[&str], empty: bool, description: &str) -> LocalChange {
+        LocalChange {
+            parents: parents.iter().map(|p| (*p).to_owned()).collect(),
+            empty,
+            description: description.into(),
+            ..change("ws", id, &format!("c_{id}"), &[])
+        }
+    }
+
+    fn synced_to(id: &str) -> LocalMatch {
+        LocalMatch::Synced {
+            workspace: "ws".into(),
+            change_id: id.into(),
+            commit_id: format!("c_{id}"),
+        }
+    }
+
+    #[test]
+    fn local_only_cases() {
+        // A stack: base <- pr1 <- wip <- top, and a fresh empty working copy.
+        let changes = vec![
+            node("fresh", &["top"], true, ""),
+            node("top", &["wip"], false, "top"),
+            node("wip", &["pr1"], true, "wip: an empty change with a note"),
+            node("pr1", &["base"], false, "the pull request"),
+            node("base", &[], false, "base"),
+            node("top", &["wip"], false, "top, again in another workspace"),
+        ];
+        let matches = vec![(key(1), synced_to("pr1")), (key(2), LocalMatch::None)];
+        let ids: Vec<String> = local_only(&changes, &matches)
+            .into_iter()
+            .map(|c| c.change_id)
+            .collect();
+        assert_eq!(ids, ["top", "wip", "base"]);
+    }
+
+    #[test]
+    fn nearest_pr_cases() {
+        let changes = vec![
+            node("top", &["wip"], false, "top"),
+            node("wip", &["pr2"], false, "wip"),
+            node("pr2", &["pr1"], false, "second"),
+            node("pr1", &["base"], false, "first"),
+            node("base", &[], false, "base"),
+            node("merge", &["base", "pr1"], false, "merge"),
+            node("loop", &["loop"], false, "a parent cycle"),
+        ];
+        let matches = vec![(key(1), synced_to("pr1")), (key(2), synced_to("pr2"))];
+        let anchor = |id: &str| {
+            let change = changes.iter().find(|c| c.change_id == id).unwrap();
+            nearest_pr(change, &changes, &matches).map(|k| k.number)
+        };
+        let cases = [
+            ("top", Some(2)),
+            ("wip", Some(2)),
+            ("pr2", Some(1)),
+            ("base", None),
+            ("merge", Some(1)),
+            ("loop", None),
+        ];
+        for (id, expected) in cases {
+            assert_eq!(anchor(id), expected, "{id}");
+        }
     }
 
     /// The stack id and the numbers of each group.
