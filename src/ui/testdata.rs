@@ -455,3 +455,17 @@ pub(crate) fn prompt_overlay(text: &str) -> OverlayModel {
         },
     }
 }
+
+/// The output overlay with `count` numbered lines.
+pub(crate) fn output_overlay(count: usize) -> OverlayModel {
+    OverlayModel {
+        kind: OverlayKind::Output,
+        closing: false,
+        content: OverlayContent::Output {
+            title: "pr-agent review".to_owned(),
+            lines: (1..=count)
+                .map(|i| format!("{i:>3} | reviewing src/ui/list.rs hunk {i} of {count}"))
+                .collect(),
+        },
+    }
+}
