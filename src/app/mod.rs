@@ -47,6 +47,7 @@ impl App {
         let mut state = AppState::new(size);
         state.data.now = now;
         state.load(snapshot, repos);
+        update::start(&mut state);
         Self { state, keymap }
     }
 

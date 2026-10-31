@@ -14,13 +14,14 @@ use crate::app::layout::layout;
 use crate::app::models::{CellStyle, Direction};
 use crate::app::nav::{self, Motion};
 use crate::app::state::{
-    AppData, AppState, AuthorPicker, Failure, Overlay, OverlayState, error_text,
+    AUTHOR_KEY, AppData, AppState, AuthorPicker, FILTER_KEY, Failure, Overlay, OverlayState,
+    error_text, ui_key,
 };
 use crate::app::tabs::{KeyCx, TABS, Tab, pr_ref};
 use crate::app::term::term_status;
 use crate::bus::{
     ActionEvent, Cmd, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Msg, OverlayKind,
-    PrRef, Scope, Size, SyncError, TargetKey, UiEvent,
+    Persist, PrRef, Scope, Size, SyncError, TargetKey, UiEvent,
 };
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
@@ -247,9 +248,15 @@ fn overlay_key(
             let (tab, author) = (picker.tab, picker.chosen());
             close_overlay(state);
             if let Some(ts) = state.ui.tabs.get_mut(tab) {
-                ts.author = author;
+                ts.author.clone_from(&author);
             }
-            after_change(state, tabs)
+            let mut cmds: Vec<Cmd> = tabs
+                .get(tab)
+                .map(|t| persist(AUTHOR_KEY, t.id(), author.unwrap_or_default()))
+                .into_iter()
+                .collect();
+            cmds.extend(after_change(state, tabs));
+            cmds
         }
     }
 }
@@ -272,15 +279,23 @@ fn move_in(cursor: usize, len: usize, motion: Motion) -> usize {
 /// A key while the user types the filter: characters and backspace edit
 /// it, Enter keeps it, Esc clears it, the arrows move the cursor.
 fn filter_key(state: &mut AppState, tabs: &[Box<dyn Tab>], chord: KeyChord) -> Vec<Cmd> {
-    let Some(ts) = state.ui.tabs.get_mut(state.ui.active) else {
+    let (Some(tab), Some(ts)) = (
+        tabs.get(state.ui.active),
+        state.ui.tabs.get_mut(state.ui.active),
+    ) else {
         return Vec::new();
     };
+    let mut cmds = Vec::new();
     match chord.code {
         KeyCode::Esc => {
             ts.filter.clear();
             state.ui.filter_edit = false;
+            cmds.push(persist(FILTER_KEY, tab.id(), String::new()));
         }
-        KeyCode::Enter => state.ui.filter_edit = false,
+        KeyCode::Enter => {
+            state.ui.filter_edit = false;
+            cmds.push(persist(FILTER_KEY, tab.id(), ts.filter.clone()));
+        }
         KeyCode::Backspace => {
             ts.filter.pop();
         }
@@ -296,7 +311,22 @@ fn filter_key(state: &mut AppState, tabs: &[Box<dyn Tab>], chord: KeyChord) -> V
         _ => return Vec::new(),
     }
     state.bump();
-    after_change(state, tabs)
+    cmds.extend(after_change(state, tabs));
+    cmds
+}
+
+/// The write of one tab setting into `ui_state`. An empty value clears
+/// it.
+fn persist(kind: &str, tab: &str, value: String) -> Cmd {
+    Cmd::Persist(Persist::UiState {
+        key: ui_key(kind, tab),
+        value,
+    })
+}
+
+/// Scores the restored filters once before the first frame.
+pub(crate) fn start(state: &mut AppState) {
+    after_change(state, &TABS);
 }
 
 /// After a change of the data or the UI state: the filters score again
@@ -1451,14 +1481,16 @@ mod tests {
             "the filter line takes a row"
         );
         let enter = press(KeyCode::Enter, KeyModifiers::NONE);
-        update(&mut state, &Keymap::default(), enter);
+        let cmds = update(&mut state, &Keymap::default(), enter);
+        assert_eq!(cmds, vec![persist("filter", "mine", "pane tab".into())]);
         assert!(!state.ui.filter_edit);
         assert_eq!(selected_number(&mut state), Some(103));
         key(&mut state, 'k');
         assert_eq!(state.ui.tabs[0].filter, "pane tab", "k navigates again");
         key(&mut state, '/');
         let esc = press(KeyCode::Esc, KeyModifiers::NONE);
-        update(&mut state, &Keymap::default(), esc);
+        let cmds = update(&mut state, &Keymap::default(), esc);
+        assert_eq!(cmds[0], persist("filter", "mine", String::new()));
         assert_eq!(state.ui.tabs[0].filter, "");
         assert_eq!(frame::frame_model(&mut state).filter, None);
         assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 6);
@@ -1581,7 +1613,8 @@ mod tests {
         assert_eq!(state.ui.active, 1, "j moves the picker, not the list");
         let enter = press(KeyCode::Enter, KeyModifiers::NONE);
         let cmds = update(&mut state, &Keymap::default(), enter);
-        assert!(matches!(cmds.as_slice(), [Cmd::SetInterest(_)]));
+        assert_eq!(cmds[0], persist("author", "team", "bob".into()));
+        assert!(matches!(cmds[1..], [Cmd::SetInterest(_)]));
         assert_eq!(picker(&state), None);
         assert!(state.ui.overlays[0].closing, "it slides out");
         assert_eq!(
@@ -1642,6 +1675,33 @@ mod tests {
         assert_eq!(
             state.ui.status.as_ref().map(|m| m.text.as_str()),
             Some("no authors to pick here")
+        );
+    }
+
+    #[test]
+    fn a_restored_filter_applies_from_the_first_frame() {
+        let mut snapshot = testdata::mine_snapshot();
+        snapshot
+            .ui_state
+            .insert("filter.mine".into(), "overlay".into());
+        let mut state = AppState::new(SIZE);
+        state.load(snapshot, Vec::new());
+        start(&mut state);
+        let model = frame::active_list(&mut state, &TABS);
+        let titles: Vec<_> = model.rows.iter().map(|r| r.cells[0].text.clone()).collect();
+        assert_eq!(
+            titles,
+            [
+                "stack #12 -> main · 3 PRs",
+                "feat(app): Pane trait, registry and overlay stack",
+            ]
+        );
+        assert_eq!(
+            frame::frame_model(&mut state)
+                .filter
+                .clone()
+                .map(|f| f.text),
+            Some("overlay".to_owned())
         );
     }
 
