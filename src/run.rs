@@ -936,6 +936,40 @@ mod tests {
         insta::assert_snapshot!(screen(&mut popup_app(160, 40)));
     }
 
+    /// The popup on #101 with a conversation, on the conversation pane,
+    /// with the open thread expanded.
+    fn conversation_app(width: u16, height: u16) -> App {
+        let mut app = popup_app(width, height);
+        let key = crate::app::testdata::pr_key("chaoshub", 101);
+        let mut detail = crate::app::testdata::detail();
+        detail.head_oid = "oid101".into();
+        let observed = crate::domain::observed::Observed {
+            value: detail,
+            observed_at: crate::domain::test_time(),
+        };
+        app.update(Msg::DetailLoaded(key, Ok(observed)));
+        press(&mut app, '2');
+        for _ in 0..3 {
+            press(&mut app, 'j');
+        }
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(enter));
+        app
+    }
+
+    #[test]
+    fn popup_conversation_100() {
+        insta::assert_snapshot!(screen(&mut conversation_app(100, 30)));
+    }
+
+    #[test]
+    fn popup_conversation_160() {
+        insta::assert_snapshot!(screen(&mut conversation_app(160, 40)));
+    }
+
     #[test]
     fn tab_slide_with_two_tabs() {
         let mut app = seeded_app(100, 12, crate::app::testdata::team_snapshot());
