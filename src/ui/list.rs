@@ -9,11 +9,9 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::Widget;
 
 use crate::app::models::{Cell, CellStyle, Column, ColumnWidth, ListModel, Row, RowItem, RowStyle};
 use crate::theme::Theme;
-use crate::theme::texture::Texture;
 use crate::ui::{style, text};
 
 /// The space between two columns.
@@ -65,7 +63,8 @@ fn row_style(row: &Row, selected: bool, theme: &Theme) -> Style {
         RowStyle::Header => base.fg(p.fg_dim).add_modifier(Modifier::BOLD),
     };
     if selected || row.style == RowStyle::Selected {
-        base.bg(p.surface).add_modifier(Modifier::BOLD)
+        base.patch(theme.selected_row().patch)
+            .add_modifier(Modifier::BOLD)
     } else {
         base
     }
@@ -110,26 +109,24 @@ fn render_row(frame: &Frame<'_>, row: &Row, y: u16, selected: bool, buf: &mut Bu
     let base = row_style(row, selected, theme);
     buf.set_style(line, base);
     if selected {
+        let selection = theme.selected_row();
         buf.set_string(
             area.x,
             y,
-            "▌",
-            Style::new()
-                .fg(theme.palette.primary)
-                .bg(theme.palette.surface),
+            selection.marker,
+            Style::new().patch(selection.patch).fg(selection.marker_fg),
         );
     }
     let x0 = area.x + GUTTER;
     let right = area.right();
     match row.item {
         RowItem::Separator => {
-            let width = usize::from(right.saturating_sub(x0));
-            buf.set_stringn(
+            let width = right.saturating_sub(x0);
+            buf.set_span(
                 x0,
                 y,
-                "─".repeat(width),
+                &theme.separator(usize::from(width), base.fg(theme.palette.surface)),
                 width,
-                base.fg(theme.palette.surface),
             );
             return;
         }
@@ -242,7 +239,7 @@ pub(crate) fn render_rows(
         area.width,
         area.height.saturating_sub(drawn),
     );
-    Texture::new(theme).render(empty, buf);
+    theme.fill(empty, buf, 0);
 }
 
 #[cfg(test)]

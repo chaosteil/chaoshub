@@ -74,7 +74,7 @@ impl<'a> GrungeBlock<'a> {
     /// Creates a block for the theme.
     pub(crate) fn new(theme: &Theme) -> Self {
         Self {
-            grunge: theme.grunge,
+            grunge: theme.grunge(),
             title: None,
             border_style: Style::new().fg(theme.palette.fg_mute),
             style: Style::new().bg(theme.palette.bg),
