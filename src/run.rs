@@ -21,7 +21,6 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
-use ratatui::style::Color;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use tokio::runtime::Handle;
@@ -34,26 +33,23 @@ use crate::app::keymap::Keymap;
 use crate::app::layout::layout;
 use crate::bus::{Msg, Progress, Size, TermState, TermStatus};
 use crate::cli::{CacheAction, CacheCommand, Cli};
-use crate::config::paths;
+use crate::config::schema::parse_repo_name;
+use crate::config::{self, Config, paths};
+use crate::domain::repo::Repo;
+use crate::launch::rex::RexLauncher;
 use crate::osc;
-use crate::theme::{Palette, Theme, ThemeKind};
+use crate::theme::{Theme, ThemeKind};
 use crate::ui;
 use crate::ui::transition::Transitions;
 
 /// The capacity of the message channel.
 const CHANNEL_CAPACITY: usize = 256;
-/// The wait for a message while a transition runs: one frame at 60 fps.
-const FRAME_DEADLINE: Duration = Duration::from_millis(16);
-/// The wait for a message while no transition runs.
-const IDLE_DEADLINE: Duration = Duration::from_secs(1);
 /// The longest time step that one transition frame advances.
 const MAX_ELAPSED: Duration = Duration::from_millis(32);
 /// The poll timeout of the reader thread.
 const READER_POLL: Duration = Duration::from_millis(100);
 /// The longest wait for the reader thread to confirm a pause.
 const PAUSE_TIMEOUT: Duration = Duration::from_secs(1);
-/// The default of `[theme] animation_ms`.
-const ANIMATION_MS: u64 = 160;
 /// The interval of the OSC 9;4 keep-alive while a progress is active.
 /// Ghostty resets a progress bar after about 15 s without an update.
 const PROGRESS_KEEP_ALIVE: Duration = Duration::from_secs(1);
@@ -63,22 +59,44 @@ type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
 
 /// Runs the command of `cli`: `cache clear`, or the TUI until the user
 /// quits.
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "the next commit moves the repos and the config path out of cli"
-)]
 pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
-    if let Some(CacheCommand::Cache(CacheAction::Clear)) = cli.command {
+    let Cli {
+        repo,
+        config: config_path,
+        no_prefetch,
+        command,
+    } = cli;
+    if let Some(CacheCommand::Cache(CacheAction::Clear)) = command {
         return clear_cache();
     }
-    tracing::debug!(?theme_kind, "terminal colors");
+    let config_path = config_path
+        .or_else(paths::config_file)
+        .context("the config directory is unknown")?;
+    let mut config = config::load(&config_path)?;
+    if no_prefetch {
+        config.prefetch.enabled = false;
+    }
+    let keymap = Keymap::new(&config.keys)?;
+    let theme = Theme::new(theme_kind, config.theme.grunge, config.theme.textures);
+    let transitions =
+        Transitions::new(config.theme.animations, config.theme.animation_ms).with_theme(theme);
+    let detected = term_status_detected();
+    let term = TermWriter::new(
+        config.terminal.program_status.unwrap_or(detected),
+        config.terminal.progress.unwrap_or(detected),
+    );
+    let launcher = launcher(&config, RexLauncher::from_env())?;
+    let settings = Settings {
+        repos: session_repos(&config, &repo)?,
+        launcher,
+        config,
+    };
+    tracing::debug!(?theme_kind, ?settings, "settings");
+
     let tokio = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
-
-    let status_on = term_status_detected();
-    let term = TermWriter::new(status_on, status_on);
 
     let guard = TerminalGuard::enter()?;
     install_panic_hook(thread::current().id(), term.clear_sequence());
@@ -92,12 +110,13 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     let reader = Reader::spawn(tx.clone())?;
     let signals = spawn_signals(tx)?;
     let mut event_loop = EventLoop {
-        app: App::new(size, Keymap::default()),
+        app: App::new(size, keymap),
         runtime: Runtime::new(tokio.handle().clone()),
         handle: tokio.handle().clone(),
-        transitions: Transitions::new(true, ANIMATION_MS),
-        theme: default_theme(),
+        transitions,
+        theme,
         term,
+        settings,
         drawn: None,
         was_active: false,
         last_draw: None,
@@ -112,6 +131,67 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     drop(guard);
     tokio.shutdown_timeout(Duration::from_millis(500));
     result
+}
+
+/// The settings that `run` builds from the configuration and the command
+/// line, for the parts of the app that start after the first frame.
+#[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "phase D builds the Session and the workers from it, and phase E gives the launcher to the runtime"
+)]
+struct Settings {
+    /// The configuration, with `--no-prefetch` applied.
+    config: Config,
+    /// The repos of the session: the `[[repo]]` entries, then the
+    /// `--repo` repos.
+    repos: Vec<Repo>,
+    /// The launcher of detached panes. `None` runs a terminal command in
+    /// the foreground.
+    launcher: Option<RexLauncher>,
+}
+
+/// The repos of the session: the `[[repo]]` entries of the
+/// configuration, then each `--repo` that is not one of them. A `--repo`
+/// repo has no local path.
+fn session_repos(config: &Config, extra: &[String]) -> anyhow::Result<Vec<Repo>> {
+    let mut repos = config.repos();
+    for text in extra {
+        let key = parse_repo_name(text)
+            .with_context(|| format!("--repo `{text}` is not in the owner/name form"))?;
+        if !repos.iter().any(|repo| repo.key == key) {
+            repos.push(Repo {
+                key,
+                path: None,
+                settings: None,
+            });
+        }
+    }
+    Ok(repos)
+}
+
+/// The launcher for `launcher = "auto" | "rex" | "inline"`. `auto`, the
+/// default, and `rex` use the Rex pane of the environment (`env`), with
+/// the split and the ratio of `[codeview]`. `inline` uses none.
+fn launcher(config: &Config, env: Option<RexLauncher>) -> anyhow::Result<Option<RexLauncher>> {
+    let rex = env.map(|rex| RexLauncher {
+        split: config.codeview.split.clone(),
+        ratio: config.codeview.ratio,
+        ..rex
+    });
+    match config.launcher.as_deref().unwrap_or("auto") {
+        "auto" => Ok(rex),
+        "rex" => {
+            if rex.is_none() {
+                tracing::warn!("launcher = \"rex\", but REX_BLOCK is not set");
+            }
+            Ok(rex)
+        }
+        "inline" => Ok(None),
+        other => anyhow::bail!(
+            "invalid launcher `{other}` in the configuration: use auto, rex or inline"
+        ),
+    }
 }
 
 /// `chaoshub cache clear`: deletes the cache file and says what it did.
@@ -144,6 +224,11 @@ struct EventLoop {
     transitions: Transitions,
     theme: Theme,
     term: TermWriter,
+    #[allow(
+        dead_code,
+        reason = "phase D builds the Session and the workers from it, and phase E gives the launcher to the runtime"
+    )]
+    settings: Settings,
     /// The generation of the last draw. `None` before the first draw.
     drawn: Option<u64>,
     /// True when a transition ran after the last draw.
@@ -185,7 +270,7 @@ impl EventLoop {
                 tracing::warn!(%err, "cannot write the terminal status");
             }
 
-            let wait = async { timeout(deadline(active), rx.recv()).await };
+            let wait = async { timeout(self.transitions.deadline(), rx.recv()).await };
             match self.handle.block_on(wait) {
                 Ok(Some(msg)) => self.update(msg),
                 Ok(None) => break,
@@ -200,15 +285,6 @@ impl EventLoop {
         for cmd in self.app.update(msg) {
             self.runtime.exec(cmd);
         }
-    }
-}
-
-/// The wait for the next message.
-fn deadline(active: bool) -> Duration {
-    if active {
-        FRAME_DEADLINE
-    } else {
-        IDLE_DEADLINE
     }
 }
 
@@ -240,33 +316,6 @@ fn draw<B: Backend>(
     })?;
     tracing::trace!(render_us = started.elapsed().as_micros(), "frame");
     Ok(())
-}
-
-/// A theme in the default colors of the terminal. Phase C builds the
-/// theme from the palettes and the configuration.
-fn default_theme() -> Theme {
-    let c = Color::Reset;
-    Theme {
-        palette: Palette {
-            bg: c,
-            surface: c,
-            fg: c,
-            fg_dim: c,
-            fg_mute: c,
-            primary: c,
-            success: c,
-            danger: c,
-            warn: c,
-            info: c,
-            merge: c,
-            magenta: c,
-            orange: c,
-            purple: c,
-            pink: c,
-        },
-        grunge: false,
-        textures: false,
-    }
 }
 
 /// Puts the terminal in raw mode on the alternate screen, and restores it
@@ -533,9 +582,74 @@ fn spawn_signals(tx: mpsc::Sender<Msg>) -> io::Result<signal_hook::iterator::Han
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use ratatui::backend::TestBackend;
 
     use super::*;
+    use crate::domain::keys::RepoKey;
+
+    fn repo(owner: &str, name: &str, path: Option<&str>) -> Repo {
+        Repo {
+            key: RepoKey {
+                owner: owner.into(),
+                name: name.into(),
+            },
+            path: path.map(PathBuf::from),
+            settings: None,
+        }
+    }
+
+    #[test]
+    fn session_repos_add_the_command_line_repos_once() {
+        let config = Config::parse(
+            "[[repo]]\nname = \"chaosteil/chaoshub\"\npath = \"/code/chaoshub\"\n",
+            None,
+        )
+        .unwrap();
+        let extra = ["acme/deploy".to_owned(), "chaosteil/chaoshub".to_owned()];
+        assert_eq!(
+            session_repos(&config, &extra).unwrap(),
+            [
+                repo("chaosteil", "chaoshub", Some("/code/chaoshub")),
+                repo("acme", "deploy", None),
+            ]
+        );
+        assert!(session_repos(&config, &["chaoshub".to_owned()]).is_err());
+    }
+
+    fn rex() -> RexLauncher {
+        RexLauncher {
+            bin: PathBuf::from("rex"),
+            block: "block:01".into(),
+            session: "session:01".into(),
+            split: "right".into(),
+            ratio: None,
+        }
+    }
+
+    #[test]
+    fn launcher_follows_the_setting() {
+        let with = |text: &str| Config::parse(text, None).unwrap();
+        let auto = with("[codeview]\nsplit = \"below\"\nratio = 70\n");
+        assert_eq!(
+            launcher(&auto, Some(rex())).unwrap(),
+            Some(RexLauncher {
+                split: "below".into(),
+                ratio: Some(70),
+                ..rex()
+            })
+        );
+        assert_eq!(launcher(&auto, None).unwrap(), None);
+        let forced = with("launcher = \"rex\"\n");
+        assert_eq!(launcher(&forced, Some(rex())).unwrap(), Some(rex()));
+        assert_eq!(launcher(&forced, None).unwrap(), None);
+        let explicit_auto = with("launcher = \"auto\"\n");
+        assert_eq!(launcher(&explicit_auto, Some(rex())).unwrap(), Some(rex()));
+        let inline = with("launcher = \"inline\"\n");
+        assert_eq!(launcher(&inline, Some(rex())).unwrap(), None);
+        assert!(launcher(&with("launcher = \"tmux\"\n"), Some(rex())).is_err());
+    }
 
     #[test]
     fn remove_cache_deletes_the_file_once() {
@@ -545,12 +659,6 @@ mod tests {
         assert!(remove_cache(&path).unwrap());
         assert!(!path.exists());
         assert!(!remove_cache(&path).unwrap());
-    }
-
-    #[test]
-    fn deadline_is_one_frame_while_a_transition_runs() {
-        assert_eq!(deadline(true), Duration::from_millis(16));
-        assert_eq!(deadline(false), Duration::from_secs(1));
     }
 
     #[test]
@@ -695,12 +803,13 @@ mod tests {
             height: 6,
         };
         let mut app = App::new(size, Keymap::default());
-        let mut transitions = Transitions::new(true, ANIMATION_MS);
+        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let mut transitions = Transitions::new(true, 160).with_theme(theme);
         draw(
             &mut terminal,
             &mut app,
             &mut transitions,
-            &default_theme(),
+            &theme,
             Duration::ZERO,
         )
         .unwrap();
