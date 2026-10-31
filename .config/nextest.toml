@@ -1,0 +1,9 @@
+# The startup load test measures time. It runs alone, so the load of
+# other tests in parallel does not slow it down.
+[test-groups]
+timing = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "test(=store::tests::startup_load_of_500_prs_is_fast)"
+test-group = "timing"
+threads-required = "num-test-threads"
