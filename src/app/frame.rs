@@ -278,6 +278,7 @@ fn list_hints(
             key: key_text(chord),
             label: label.to_owned(),
             primary: false,
+            chord: Some(chord),
         }));
     }
     if let Some(target) = list
@@ -321,6 +322,7 @@ fn action_hints(
                 key: key_text(chord),
                 label: action.id().replace('_', " "),
                 primary,
+                chord: Some(chord),
             });
         }
     }
@@ -340,12 +342,12 @@ fn filter_hints() -> Vec<KeyHint> {
     .collect()
 }
 
-/// The hint text of a key without modifiers.
-fn plain_key(code: KeyCode) -> String {
-    key_text(KeyChord {
+/// The chord of a key without modifiers.
+fn plain_key(code: KeyCode) -> KeyChord {
+    KeyChord {
         code,
         mods: KeyModifiers::NONE,
-    })
+    }
 }
 
 /// The hints of an overlay. They are all primary, except the action
@@ -361,16 +363,16 @@ fn overlay_hints(
     let hints = match overlay {
         OverlayState::Popup(popup) => {
             let target = pr_target(data, &popup.key);
-            let mut keys: Vec<String> = target
+            let mut keys: Vec<KeyChord> = target
                 .as_ref()
                 .map(|target| {
                     applicable(panes, target)
                         .into_iter()
-                        .map(|i| panes[i].key().to_string())
+                        .map(|i| plain_key(KeyCode::Char(panes[i].key())))
                         .collect()
                 })
                 .unwrap_or_default();
-            keys.extend(first_keys(keymap, &["next_tab"]));
+            keys.extend(first_chords(keymap, &["next_tab"]));
             let mut hints: Vec<KeyHint> = [
                 hint(&keys, "pane tabs"),
                 app_hint(keymap, &["open"], "expand", true),
@@ -406,33 +408,44 @@ fn overlay_hints(
 }
 
 /// The hint of the bindings `names`: the first chord of each binding,
-/// joined with `/`. `None` when no binding has a chord.
+/// joined with `/`. A click presses the first of these chords. `None`
+/// when no binding has a chord.
 fn app_hint(keymap: &Keymap, names: &[&str], label: &str, primary: bool) -> Option<KeyHint> {
-    let keys = first_keys(keymap, names);
-    (!keys.is_empty()).then(|| KeyHint {
-        key: keys.join("/"),
+    let chords = first_chords(keymap, names);
+    (!chords.is_empty()).then(|| KeyHint {
+        key: keys_text(&chords),
         label: label.to_owned(),
         primary,
+        chord: chords.first().copied(),
     })
 }
 
-/// A primary hint of `keys`, joined with `/`. `None` when `keys` is
-/// empty.
-fn hint(keys: &[String], label: &str) -> Option<KeyHint> {
-    (!keys.is_empty()).then(|| KeyHint {
-        key: keys.join("/"),
+/// A primary hint of `chords`, joined with `/`. A click presses the
+/// first chord. `None` when `chords` is empty.
+fn hint(chords: &[KeyChord], label: &str) -> Option<KeyHint> {
+    (!chords.is_empty()).then(|| KeyHint {
+        key: keys_text(chords),
         label: label.to_owned(),
         primary: true,
+        chord: chords.first().copied(),
     })
 }
 
-/// The text of the first chord of each binding in `names` that has one.
-fn first_keys(keymap: &Keymap, names: &[&str]) -> Vec<String> {
+/// The first chord of each binding in `names` that has one.
+fn first_chords(keymap: &Keymap, names: &[&str]) -> Vec<KeyChord> {
     names
         .iter()
-        .filter_map(|name| keymap.chords(name).first())
-        .map(|&chord| key_text(chord))
+        .filter_map(|name| keymap.chords(name).first().copied())
         .collect()
+}
+
+/// The text of `chords` in a hint, joined with `/`.
+fn keys_text(chords: &[KeyChord]) -> String {
+    chords
+        .iter()
+        .map(|&chord| key_text(chord))
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// The text of a chord in a hint: the text of the key map, with a
@@ -497,6 +510,7 @@ fn fit(hints: Vec<KeyHint>, width: usize) -> Vec<KeyHint> {
             key: String::new(),
             label: HINT_CUT.to_owned(),
             primary: false,
+            chord: None,
         });
     }
     kept

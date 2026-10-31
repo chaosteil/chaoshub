@@ -257,6 +257,7 @@ pub(crate) fn hints() -> KeyHintsModel {
         key: key.to_owned(),
         label: label.to_owned(),
         primary: true,
+        chord: None,
     };
     KeyHintsModel {
         hints: vec![

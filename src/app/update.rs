@@ -66,6 +66,7 @@ pub(crate) fn update_full(
 ) -> Vec<Cmd> {
     match msg {
         Msg::Key(event) => key(state, keymap, tabs, panes, actions, &event),
+        Msg::Mouse { .. } => Vec::new(),
         Msg::Resize(size) => resize(state, size),
         Msg::Tick => tick(state, tabs, Utc::now()),
         Msg::TransitionsDone => transitions_done(state),

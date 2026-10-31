@@ -37,6 +37,38 @@ pub(crate) struct KeyChord {
     pub mods: KeyModifiers,
 }
 
+/// The kind of a mouse event that `app` acts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum MouseKind {
+    /// A press of the left button.
+    Click,
+    ScrollUp,
+    ScrollDown,
+}
+
+/// The target that `ui` drew at a cell. `run` finds it from the mouse
+/// position, so `app` knows no screen geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Hit {
+    /// The tab label at this index in the tab bar.
+    Tab(usize),
+    /// The list row at this absolute index.
+    Row(usize),
+    /// The key hint of this chord.
+    Key(KeyChord),
+    /// The pane tab at this index in the tabs of the popup.
+    PaneTab(usize),
+    /// The table row or tree node at this absolute index in the active
+    /// pane.
+    PaneRow(usize),
+    /// The picker item at this index.
+    Item(usize),
+    /// A cell of the top overlay with no other target.
+    Inside,
+    /// A cell outside of the overlays while an overlay shows.
+    Outside,
+}
+
 /// A terminal size in cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Size {
@@ -292,6 +324,14 @@ pub(crate) enum ActionEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Msg {
     Key(KeyEvent),
+    /// A mouse event at the cell `x`, `y`. The reader sends `hit: None`,
+    /// and `run` sets the hit from the last drawn frame.
+    Mouse {
+        kind: MouseKind,
+        x: u16,
+        y: u16,
+        hit: Option<Hit>,
+    },
     Resize(Size),
     Tick,
     TransitionsDone,
