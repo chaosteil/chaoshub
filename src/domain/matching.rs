@@ -1,7 +1,88 @@
 //! Matches pull requests to local changes and groups stacks.
 
+use crate::domain::keys::PrKey;
+use crate::domain::local::{LocalChange, LocalMatch};
 use crate::domain::pr::PullRequest;
 use crate::domain::stack::StackGroup;
+
+/// The shortest branch suffix that counts as a change id prefix.
+const MIN_CHANGE_PREFIX: usize = 8;
+
+/// Matches each pull request to a local change of its repo. The rules, in
+/// this order:
+///
+/// 1. The head commit equals the commit of a change: `Synced`.
+/// 2. The head branch is a bookmark of a change: `Synced` when the commit
+///    equals the head commit, else `Diverged`.
+/// 3. The last `/` segment of the head branch is a prefix of a change id
+///    (at least 8 letters of the jj alphabet `k` to `z`): the same test.
+///
+/// Every pull request gets one entry; `LocalMatch::None` when no rule
+/// matches. `changes` are the changes of the repo of the pull requests.
+pub(crate) fn match_prs(prs: &[&PullRequest], changes: &[LocalChange]) -> Vec<(PrKey, LocalMatch)> {
+    prs.iter()
+        .map(|pr| (pr.key.clone(), match_pr(pr, changes)))
+        .collect()
+}
+
+/// The match of one pull request.
+fn match_pr(pr: &PullRequest, changes: &[LocalChange]) -> LocalMatch {
+    let head = &pr.head.value;
+    if let Some(change) = changes
+        .iter()
+        .find(|change| same_commit(&change.commit_id, &head.head_oid))
+    {
+        return synced(change);
+    }
+    if let Some(change) = changes
+        .iter()
+        .find(|change| change.bookmarks.contains(&head.head_ref))
+    {
+        return compare(change, &head.head_oid);
+    }
+    let suffix = head.head_ref.rsplit('/').next().unwrap_or_default();
+    if is_change_prefix(suffix)
+        && let Some(change) = changes
+            .iter()
+            .find(|change| change.change_id.starts_with(suffix))
+    {
+        return compare(change, &head.head_oid);
+    }
+    LocalMatch::None
+}
+
+/// True when two commit ids name the same commit. One of them can be a
+/// short form of the other.
+fn same_commit(a: &str, b: &str) -> bool {
+    !a.is_empty() && !b.is_empty() && (a.starts_with(b) || b.starts_with(a))
+}
+
+/// True for a text that can be a change id prefix: at least 8 letters,
+/// each from `k` to `z`.
+fn is_change_prefix(text: &str) -> bool {
+    text.len() >= MIN_CHANGE_PREFIX && text.chars().all(|c| ('k'..='z').contains(&c))
+}
+
+/// `Synced` for a change.
+fn synced(change: &LocalChange) -> LocalMatch {
+    LocalMatch::Synced {
+        workspace: change.workspace.clone(),
+        change_id: change.change_id.clone(),
+        commit_id: change.commit_id.clone(),
+    }
+}
+
+/// `Synced` when the change has the head commit, else `Diverged`.
+fn compare(change: &LocalChange, head_oid: &str) -> LocalMatch {
+    if same_commit(&change.commit_id, head_oid) {
+        return synced(change);
+    }
+    LocalMatch::Diverged {
+        workspace: change.workspace.clone(),
+        change_id: change.change_id.clone(),
+        commit_id: change.commit_id.clone(),
+    }
+}
 
 /// Groups pull requests by stack. Pull requests with the same `stack.id`
 /// form one group, top of the stack (highest position) first. A pull
@@ -113,6 +194,118 @@ mod tests {
             ci_state: observed(CiState::None),
             checks: observed(Vec::new()),
         }
+    }
+
+    fn change(
+        workspace: &str,
+        change_id: &str,
+        commit_id: &str,
+        bookmarks: &[&str],
+    ) -> LocalChange {
+        LocalChange {
+            workspace: workspace.into(),
+            change_id: change_id.into(),
+            commit_id: commit_id.into(),
+            bookmarks: bookmarks.iter().map(|b| (*b).to_owned()).collect(),
+            empty: false,
+            parents: Vec::new(),
+            description: "a change".into(),
+        }
+    }
+
+    /// A pull request with a head branch and a head commit.
+    fn headed(head_ref: &str, head_oid: &str) -> PullRequest {
+        let mut pr = pr(1, "", 0);
+        pr.head.value.head_ref = head_ref.into();
+        pr.head.value.head_oid = head_oid.into();
+        pr
+    }
+
+    #[test]
+    fn match_prs_cases() {
+        let synced = |ws: &str, id: &str, commit: &str| LocalMatch::Synced {
+            workspace: ws.into(),
+            change_id: id.into(),
+            commit_id: commit.into(),
+        };
+        let diverged = |ws: &str, id: &str, commit: &str| LocalMatch::Diverged {
+            workspace: ws.into(),
+            change_id: id.into(),
+            commit_id: commit.into(),
+        };
+        let changes = vec![
+            change("default", "kxyzkxyzkxyzmmmm", "aaa111", &[]),
+            change("feature", "qrstqrstqrstnnnn", "bbb222", &["topic"]),
+            change("feature", "wwwwvvvvuuuu0000", "ccc333", &[]),
+        ];
+        let cases = [
+            (
+                "same commit",
+                headed("x/y", "aaa111"),
+                synced("default", "kxyzkxyzkxyzmmmm", "aaa111"),
+            ),
+            (
+                "short commit id",
+                headed("x/y", "aaa1"),
+                synced("default", "kxyzkxyzkxyzmmmm", "aaa111"),
+            ),
+            (
+                "bookmark, same commit",
+                headed("topic", "bbb222"),
+                synced("feature", "qrstqrstqrstnnnn", "bbb222"),
+            ),
+            (
+                "bookmark, other commit",
+                headed("topic", "fff999"),
+                diverged("feature", "qrstqrstqrstnnnn", "bbb222"),
+            ),
+            (
+                "change id suffix, home prefix",
+                headed("chaosteil/kxyzkxyzkxyz", "fff999"),
+                diverged("default", "kxyzkxyzkxyzmmmm", "aaa111"),
+            ),
+            (
+                "change id suffix, work prefix",
+                headed("dominykas/qrstqrst", "fff999"),
+                diverged("feature", "qrstqrstqrstnnnn", "bbb222"),
+            ),
+            (
+                "suffix too short",
+                headed("chaosteil/kxyzkxy", "fff999"),
+                LocalMatch::None,
+            ),
+            (
+                "suffix outside the jj alphabet",
+                headed("chaosteil/wwwwvvvvuuuu0", "fff999"),
+                LocalMatch::None,
+            ),
+            ("no match", headed("main-fix", "fff999"), LocalMatch::None),
+            ("empty head oid", headed("main-fix", ""), LocalMatch::None),
+        ];
+        for (name, pr, expected) in cases {
+            assert_eq!(
+                match_prs(&[&pr], &changes),
+                vec![(pr.key.clone(), expected)],
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_commit_rule_comes_before_the_bookmark_rule() {
+        let changes = vec![
+            change("one", "kkkkkkkkkkkk", "aaa111", &["topic"]),
+            change("two", "llllllllllll", "bbb222", &[]),
+        ];
+        let pr = headed("topic", "bbb222");
+        assert_eq!(
+            match_prs(&[&pr], &changes)[0].1,
+            LocalMatch::Synced {
+                workspace: "two".into(),
+                change_id: "llllllllllll".into(),
+                commit_id: "bbb222".into(),
+            }
+        );
     }
 
     /// The stack id and the numbers of each group.
