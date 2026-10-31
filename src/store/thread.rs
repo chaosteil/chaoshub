@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use chrono::Utc;
 use rusqlite::{Connection, Transaction};
 use tokio::sync::mpsc;
 
@@ -30,6 +31,10 @@ fn run(conn: Connection, path: PathBuf, mut rx: mpsc::Receiver<StoreOp>) {
         conn: Some(conn),
         path,
     };
+    match store.transact(|tx| rows::sweep_closed(tx, Utc::now())) {
+        Ok(swept) => tracing::debug!(swept, "swept closed pull requests"),
+        Err(err) => tracing::warn!(%err, "sweep of closed pull requests failed"),
+    }
     while let Some(op) = rx.blocking_recv() {
         store.handle(op);
     }
@@ -50,6 +55,32 @@ impl StoreThread {
                 if let Err(err) = self.transact(|tx| rows::persist(tx, &persist)) {
                     tracing::warn!(%err, ?persist, "store write failed");
                 }
+            }
+            StoreOp::PutPrs { scope, prs, reply } => {
+                let _ = reply.send(self.transact(|tx| rows::put_prs(tx, scope, &prs)));
+            }
+            StoreOp::DropGone {
+                keys,
+                started_at,
+                reply,
+            } => {
+                let _ = reply.send(self.transact(|tx| rows::drop_gone(tx, &keys, started_at)));
+            }
+            StoreOp::SyncState {
+                scope,
+                repo_set,
+                reply,
+            } => {
+                let _ = reply.send(self.transact(|tx| rows::sync_state(tx, scope, &repo_set)));
+            }
+            StoreOp::PutSyncState {
+                scope,
+                repo_set,
+                state,
+                reply,
+            } => {
+                let _ = reply
+                    .send(self.transact(|tx| rows::put_sync_state(tx, scope, &repo_set, &state)));
             }
             #[cfg(test)]
             StoreOp::Exec { sql, reply } => {

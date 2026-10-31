@@ -12,9 +12,14 @@ mod thread;
 
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use tokio::sync::mpsc;
 
+use crate::bus::Scope;
+use crate::domain::keys::RepoKey;
+use crate::domain::pr::PullRequest;
+use crate::domain::repo::RepoSettings;
 use crate::store::error::StoreError;
 use crate::store::handle::{CHANNEL_CAPACITY, StoreHandle};
 
@@ -33,14 +38,34 @@ pub(crate) struct Store;
 /// The cached data that `Store::open` reads before the store thread
 /// starts.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct Snapshot {}
+pub(crate) struct Snapshot {
+    /// The open pull requests and the scope of their last sync.
+    pub prs: Vec<(Scope, PullRequest)>,
+    /// The merge settings of every cached repo.
+    pub repos: Vec<(RepoKey, RepoSettings)>,
+    /// The newest sync time of the open pull requests: the age of the
+    /// cache. `None` when the cache holds none.
+    pub synced_at: Option<DateTime<Utc>>,
+}
+
+/// The sync progress of one scope and one repo set.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "the fields follow the columns of the sync_state table"
+)]
+pub(crate) struct SyncState {
+    pub last_full: Option<DateTime<Utc>>,
+    pub last_delta: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+}
 
 impl Store {
     /// Opens the cache at `path`, reads the snapshot directly, then moves
     /// the connection to the store thread.
     pub(crate) fn open(path: &Path) -> Result<(Snapshot, StoreHandle), StoreError> {
         let conn = open_connection(path)?;
-        let snapshot = Snapshot::default();
+        let snapshot = rows::load_snapshot(&conn)?;
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         thread::spawn(conn, path.to_path_buf(), rx)?;
         Ok((snapshot, StoreHandle::new(tx)))
@@ -93,8 +118,68 @@ fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::TimeDelta;
+    use pretty_assertions::assert_eq;
+
     use super::*;
     use crate::bus::Persist;
+    use crate::domain::keys::PrKey;
+    use crate::domain::observed::Observed;
+    use crate::domain::pr::{CiState, MergeStateStatus, Mergeable, PrHead, PrState};
+    use crate::domain::test_time;
+
+    /// A pull request of `o/r` observed at `observed_at`.
+    pub(crate) fn sample_pr(
+        number: u64,
+        state: PrState,
+        observed_at: DateTime<Utc>,
+    ) -> PullRequest {
+        let observed = |value| Observed { value, observed_at };
+        PullRequest {
+            key: PrKey {
+                repo: RepoKey {
+                    owner: "o".into(),
+                    name: "r".into(),
+                },
+                number,
+            },
+            node_id: format!("PR_{number}"),
+            head: Observed {
+                value: PrHead {
+                    title: format!("Change {number}"),
+                    body: "Body".into(),
+                    author: "chaosteil".into(),
+                    state,
+                    is_draft: false,
+                    head_ref: format!("chaosteil/change{number}"),
+                    head_oid: format!("oid{number}"),
+                    base_ref: "main".into(),
+                    review_decision: None,
+                    review_requested: false,
+                    reviewers: Vec::new(),
+                    stack: None,
+                    auto_merge: false,
+                    in_merge_queue: false,
+                    mergeable: Mergeable::Unknown,
+                    merge_state: MergeStateStatus::Unknown,
+                    url: format!("https://github.com/o/r/pull/{number}"),
+                    updated_at: observed_at,
+                    repo_settings: RepoSettings {
+                        squash: true,
+                        merge: false,
+                        rebase: true,
+                        default_branch: None,
+                    },
+                },
+                observed_at,
+            },
+            ci_state: observed(CiState::Success),
+            checks: Observed {
+                value: Vec::new(),
+                observed_at,
+            },
+        }
+    }
 
     fn version(conn: &Connection) -> i64 {
         conn.pragma_query_value(None, "user_version", |row| row.get(0))
@@ -225,5 +310,142 @@ mod tests {
         let (snapshot, handle) = Store::open(Path::new(":memory:")).unwrap();
         assert_eq!(snapshot, Snapshot::default());
         handle.exec("SELECT count(*) FROM ui_state").await.unwrap();
+    }
+
+    fn reopen(path: &Path) -> Snapshot {
+        Store::open(path).unwrap().0
+    }
+
+    #[tokio::test]
+    async fn put_prs_shows_open_prs_in_the_next_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chaoshub.db");
+        let (_, handle) = Store::open(&path).unwrap();
+        let t = test_time();
+        let open = sample_pr(1, PrState::Open, t);
+        let merged = sample_pr(2, PrState::Merged, t);
+        let team = sample_pr(3, PrState::Open, t + TimeDelta::seconds(5));
+        handle
+            .put_prs(Scope::Mine, vec![open.clone(), merged])
+            .await
+            .unwrap();
+        handle
+            .put_prs(Scope::Team, vec![team.clone()])
+            .await
+            .unwrap();
+
+        let snapshot = reopen(&path);
+        assert_eq!(snapshot.prs, [(Scope::Mine, open), (Scope::Team, team)]);
+        assert_eq!(snapshot.synced_at, Some(t + TimeDelta::seconds(5)));
+        assert_eq!(
+            snapshot.repos,
+            [(
+                RepoKey {
+                    owner: "o".into(),
+                    name: "r".into()
+                },
+                RepoSettings {
+                    squash: true,
+                    merge: false,
+                    rebase: true,
+                    default_branch: None,
+                }
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn put_prs_replaces_a_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chaoshub.db");
+        let (_, handle) = Store::open(&path).unwrap();
+        let t = test_time();
+        handle
+            .put_prs(Scope::Mine, vec![sample_pr(1, PrState::Open, t)])
+            .await
+            .unwrap();
+        handle
+            .put_prs(Scope::Mine, vec![sample_pr(1, PrState::Closed, t)])
+            .await
+            .unwrap();
+        assert_eq!(reopen(&path).prs, []);
+    }
+
+    #[tokio::test]
+    async fn drop_gone_keeps_prs_synced_after_the_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chaoshub.db");
+        let (_, handle) = Store::open(&path).unwrap();
+        let started = test_time();
+        let old = sample_pr(1, PrState::Open, started - TimeDelta::seconds(60));
+        let fresh = sample_pr(2, PrState::Open, started + TimeDelta::seconds(1));
+        handle
+            .put_prs(Scope::Mine, vec![old.clone(), fresh.clone()])
+            .await
+            .unwrap();
+        let deleted = handle
+            .drop_gone(vec![old.key.clone(), fresh.key.clone()], started)
+            .await
+            .unwrap();
+        assert_eq!(deleted, 1);
+        assert_eq!(reopen(&path).prs, [(Scope::Mine, fresh)]);
+    }
+
+    #[test]
+    fn sweep_deletes_closed_prs_after_30_days() {
+        let conn = open_connection(Path::new(":memory:")).unwrap();
+        let now = test_time();
+        let prs = [
+            sample_pr(1, PrState::Merged, now - TimeDelta::days(31)),
+            sample_pr(2, PrState::Closed, now - TimeDelta::days(29)),
+            sample_pr(3, PrState::Open, now - TimeDelta::days(90)),
+        ];
+        rows::put_prs(&conn, Scope::Mine, &prs).unwrap();
+        assert_eq!(rows::sweep_closed(&conn, now).unwrap(), 1);
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM pull_requests", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(left, 2);
+    }
+
+    #[test]
+    fn snapshot_skips_a_row_that_does_not_parse() {
+        let conn = open_connection(Path::new(":memory:")).unwrap();
+        let t = test_time();
+        rows::put_prs(&conn, Scope::Mine, &[sample_pr(1, PrState::Open, t)]).unwrap();
+        conn.execute(
+            "INSERT INTO pull_requests(owner, name, number, scope, state, synced_at, json) \
+             VALUES ('o', 'r', 2, 'mine', 'OPEN', ?1, x'00')",
+            [t],
+        )
+        .unwrap();
+        let snapshot = rows::load_snapshot(&conn).unwrap();
+        assert_eq!(snapshot.prs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn sync_state_round_trip() {
+        let (_, handle) = Store::open(Path::new(":memory:")).unwrap();
+        assert_eq!(
+            handle.sync_state(Scope::Mine, "set1".into()).await.unwrap(),
+            None
+        );
+        let state = SyncState {
+            last_full: Some(test_time()),
+            last_delta: Some(test_time() + TimeDelta::milliseconds(1500)),
+            last_error: Some("offline".into()),
+        };
+        handle
+            .put_sync_state(Scope::Mine, "set1".into(), state.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            handle.sync_state(Scope::Mine, "set1".into()).await.unwrap(),
+            Some(state)
+        );
+        assert_eq!(
+            handle.sync_state(Scope::Team, "set1".into()).await.unwrap(),
+            None
+        );
     }
 }
