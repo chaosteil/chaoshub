@@ -26,6 +26,10 @@ impl Action for Approve {
         })
     }
 
+    fn hint(&self) -> crate::actions::Hint {
+        crate::actions::Hint::Primary
+    }
+
     /// An open pull request.
     fn applies(&self, sel: &Selection) -> Applicability {
         match &sel.target {
