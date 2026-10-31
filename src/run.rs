@@ -8,13 +8,14 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Stdout, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle, ThreadId};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
+use clap::ValueEnum as _;
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, MouseButton, MouseEvent, MouseEventKind,
@@ -32,15 +33,15 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
 
 use crate::actions::REGISTRY;
-use crate::app::App;
 use crate::app::exec::{ActionEnv, Runtime, Senders};
 use crate::app::keymap::Keymap;
+use crate::app::{App, DetailPane};
 use crate::bus::{
     Cmd, Hit, Interest, JjReq, LaunchRequest, MouseKind, Msg, Progress, Scope, Session, Size,
     SyncReq, TargetKey, TermState, TermStatus,
 };
 use crate::cli::{CacheAction, Cli, Command};
-use crate::config::schema::parse_repo_name;
+use crate::config::schema::{DetailMode, parse_repo_name};
 use crate::config::{self, Config, paths};
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::repo::Repo;
@@ -114,6 +115,18 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         config.terminal.progress.unwrap_or(detected),
     );
     let launcher = launcher(&config, RexLauncher::from_env())?;
+    let detail = detail_pane(&DetailArgs {
+        mode: config.detail.mode,
+        launcher: launcher.is_some(),
+        pinned: pinned.is_some(),
+        exe: std::env::current_exe(),
+        config_path: config_path.clone(),
+        theme_arg,
+        palette_arg,
+        repos: repo.clone(),
+        split: config.detail.split.clone(),
+        ratio: config.detail.ratio,
+    });
     let settings = Settings {
         repos: session_repos(&config, &repo, pinned.as_ref().map(|key| &key.repo))?,
         launcher,
@@ -146,7 +159,8 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         settings.repos.clone(),
         chrono::Utc::now(),
     )
-    .with_action_config(action_tables(&settings.config));
+    .with_action_config(action_tables(&settings.config))
+    .with_detail_pane(detail);
     // The pinned app comes before the first interest, so the workers
     // start with the pinned interest.
     let app = match &pinned {
@@ -421,6 +435,81 @@ fn session_repos(
         add(key.clone());
     }
     Ok(repos)
+}
+
+/// What `detail_pane` needs from the configuration, the command line and
+/// the environment.
+#[derive(Debug)]
+struct DetailArgs {
+    /// The `[detail] mode`.
+    mode: DetailMode,
+    /// True when a launcher opens detached panes.
+    launcher: bool,
+    /// True in the pinned mode.
+    pinned: bool,
+    /// The chaoshub binary, from `std::env::current_exe`.
+    exe: io::Result<PathBuf>,
+    /// The resolved configuration file.
+    config_path: PathBuf,
+    /// `--theme`, when the user gave it.
+    theme_arg: Option<crate::cli::ThemeArg>,
+    /// `--palette`, when the user gave it.
+    palette_arg: Option<crate::cli::PaletteArg>,
+    /// The `--repo` repos.
+    repos: Vec<String>,
+    /// The `[detail] split`.
+    split: String,
+    /// The `[detail] ratio`.
+    ratio: Option<u8>,
+}
+
+/// The command of the detail pane: this binary with the configuration,
+/// the theme flags and the repos of the list process, always with
+/// `--no-prefetch`, because the list process already prefetches the
+/// pull request of its cursor row. `None` opens the sidebar: in the
+/// pinned mode, with `mode = "sidebar"`, with `mode = "auto"` outside
+/// Rex, and when the binary is unknown.
+fn detail_pane(args: &DetailArgs) -> Option<DetailPane> {
+    if args.pinned {
+        return None;
+    }
+    match args.mode {
+        DetailMode::Sidebar => return None,
+        DetailMode::Auto if !args.launcher => return None,
+        DetailMode::Auto | DetailMode::Pane => {}
+    }
+    let exe = match &args.exe {
+        Ok(exe) => exe,
+        Err(err) => {
+            tracing::warn!(%err, "cannot find the chaoshub binary, the detail opens in the sidebar");
+            return None;
+        }
+    };
+    let text = |path: &Path| path.to_string_lossy().into_owned();
+    let name = |value: Option<clap::builder::PossibleValue>| {
+        value.map(|value| value.get_name().to_owned())
+    };
+    let mut command = vec![
+        text(exe),
+        "--config".to_owned(),
+        text(&args.config_path),
+        "--no-prefetch".to_owned(),
+    ];
+    if let Some(theme) = name(args.theme_arg.and_then(|arg| arg.to_possible_value())) {
+        command.extend(["--theme".to_owned(), theme]);
+    }
+    if let Some(palette) = name(args.palette_arg.and_then(|arg| arg.to_possible_value())) {
+        command.extend(["--palette".to_owned(), palette]);
+    }
+    for repo in &args.repos {
+        command.extend(["--repo".to_owned(), repo.clone()]);
+    }
+    Some(DetailPane {
+        argv: command,
+        cwd: std::env::current_dir().unwrap_or_default(),
+        split: Some(args.split.clone()),
+        ratio: args.ratio,
+    })
 }
 
 /// The key of the pull request of `chaoshub pr OWNER/NAME NUMBER`.
@@ -1219,6 +1308,99 @@ mod tests {
         let inline = with("launcher = \"inline\"\n");
         assert_eq!(launcher(&inline, Some(rex())).unwrap(), None);
         assert!(launcher(&with("launcher = \"tmux\"\n"), Some(rex())).is_err());
+    }
+
+    /// The detail arguments of a list process inside Rex with the
+    /// default `[detail]`.
+    fn detail_args() -> DetailArgs {
+        DetailArgs {
+            mode: DetailMode::Auto,
+            launcher: true,
+            pinned: false,
+            exe: Ok(PathBuf::from("/bin/chaoshub")),
+            config_path: PathBuf::from("/home/me/.config/chaoshub/config.toml"),
+            theme_arg: None,
+            palette_arg: None,
+            repos: Vec::new(),
+            split: "right".into(),
+            ratio: None,
+        }
+    }
+
+    #[test]
+    fn the_detail_pane_follows_the_mode_the_launcher_and_the_pinned_mode() {
+        use DetailMode::{Auto, Pane, Sidebar};
+        for (mode, launcher, pinned, pane) in [
+            (Auto, true, false, true),
+            (Auto, false, false, false),
+            (Pane, true, false, true),
+            (Pane, false, false, true),
+            (Sidebar, true, false, false),
+            (Sidebar, false, false, false),
+            (Auto, true, true, false),
+            (Pane, true, true, false),
+            (Pane, false, true, false),
+        ] {
+            let args = DetailArgs {
+                mode,
+                launcher,
+                pinned,
+                ..detail_args()
+            };
+            assert_eq!(
+                detail_pane(&args).is_some(),
+                pane,
+                "{mode:?} launcher {launcher} pinned {pinned}"
+            );
+        }
+        let no_exe = DetailArgs {
+            exe: Err(io::Error::other("gone")),
+            ..detail_args()
+        };
+        assert_eq!(detail_pane(&no_exe), None);
+    }
+
+    #[test]
+    fn the_detail_argv_carries_the_flags_and_the_config_path() {
+        let args = DetailArgs {
+            theme_arg: Some(crate::cli::ThemeArg::Punk),
+            palette_arg: Some(crate::cli::PaletteArg::Ansi16),
+            repos: vec!["chaosteil/chaoshub".into(), "acme/deploy".into()],
+            split: "below".into(),
+            ratio: Some(40),
+            ..detail_args()
+        };
+        let detail = detail_pane(&args).unwrap();
+        assert_eq!(
+            detail.argv,
+            [
+                "/bin/chaoshub",
+                "--config",
+                "/home/me/.config/chaoshub/config.toml",
+                "--no-prefetch",
+                "--theme",
+                "punk",
+                "--palette",
+                "ansi16",
+                "--repo",
+                "chaosteil/chaoshub",
+                "--repo",
+                "acme/deploy",
+            ]
+        );
+        assert_eq!(detail.cwd, std::env::current_dir().unwrap());
+        assert_eq!(detail.split.as_deref(), Some("below"));
+        assert_eq!(detail.ratio, Some(40));
+        assert_eq!(
+            detail_pane(&detail_args()).unwrap().argv,
+            [
+                "/bin/chaoshub",
+                "--config",
+                "/home/me/.config/chaoshub/config.toml",
+                "--no-prefetch",
+            ],
+            "no theme flags without the command line flags"
+        );
     }
 
     #[test]

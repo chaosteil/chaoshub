@@ -27,7 +27,8 @@ use chrono::{DateTime, Utc};
 use crate::app::keymap::Keymap;
 use crate::app::layout::Areas;
 use crate::app::models::FrameModel;
-use crate::app::state::{AppState, DetailPane};
+use crate::app::state::AppState;
+pub(crate) use crate::app::state::DetailPane;
 use crate::bus::{Cmd, Interest, Msg, Size, UiEvent};
 use crate::domain::keys::PrKey;
 use crate::domain::repo::Repo;
@@ -70,7 +71,6 @@ impl App {
 
     /// Sets the command of the detail pane. With `Some`, `enter` opens the
     /// pull request in a pane. With `None`, it opens the sidebar.
-    #[expect(dead_code, reason = "run builds the detail pane in a later commit")]
     pub(crate) fn with_detail_pane(mut self, detail: Option<DetailPane>) -> Self {
         self.state.data.detail = detail;
         self
