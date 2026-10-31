@@ -8,13 +8,23 @@
 //! `[merge.repos."owner/name"]`: `method` and `bypass_rules` (off by
 //! default).
 
-use crate::bus::{ConfirmSpec, Selection, Target};
+use std::time::Duration;
+
+use futures::future::BoxFuture;
+use tokio::time::Instant;
+
+use crate::bus::{
+    ActionEvent, ActionInput, ConfirmSpec, KeyChord, KeyCode, KeyModifiers, MergeProgress, Msg,
+    Selection, Target, TargetKey,
+};
 use crate::config::schema::{MergeConfig, RepoMerge};
-use crate::domain::merge::{MergeMethod, merge_blockers, resolve_method};
+use crate::domain::merge::{MergeMethod, merge_blockers, resolve_method, squash_message};
 use crate::domain::pr::{CiState, PullRequest, ReviewDecision};
 use crate::domain::repo::Repo;
+use crate::github::rest::MergeArgs;
+use crate::vcs::jj;
 
-use super::{Applicability, Prepare};
+use super::{Action, Applicability, Prepare, Services};
 
 /// The id of the merge action.
 pub(crate) const ID: &str = "merge";
@@ -60,6 +70,169 @@ impl MergeAction {
             lines: confirm_lines(&entries, repo, &settings),
             danger: true,
         })
+    }
+}
+
+impl Action for MergeAction {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn label(&self) -> &'static str {
+        "Merge"
+    }
+
+    fn default_key(&self) -> Option<KeyChord> {
+        Some(KeyChord {
+            code: KeyCode::Char('m'),
+            mods: KeyModifiers::NONE,
+        })
+    }
+
+    fn applies(&self, sel: &Selection) -> Applicability {
+        Self::applies(sel)
+    }
+
+    fn prepare(&self, sel: &Selection) -> Prepare {
+        Self::prepare(sel)
+    }
+
+    fn execute(
+        &self,
+        sel: Selection,
+        _input: ActionInput,
+        svc: Services,
+    ) -> BoxFuture<'static, Result<String, String>> {
+        Box::pin(merge(sel, svc, SCHEDULE))
+    }
+}
+
+/// When the action polls the state of an async merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Schedule {
+    /// The poll interval at the start.
+    fast: Duration,
+    /// How long the action polls at the `fast` interval.
+    fast_for: Duration,
+    /// The poll interval after `fast_for`.
+    slow: Duration,
+    /// The time after which the action stops the poll.
+    limit: Duration,
+}
+
+/// Every 2 s for 30 s, then every 5 s, up to 5 min.
+const SCHEDULE: Schedule = Schedule {
+    fast: Duration::from_secs(2),
+    fast_for: Duration::from_secs(30),
+    slow: Duration::from_secs(5),
+    limit: Duration::from_mins(5),
+};
+
+impl Schedule {
+    /// The wait before the next poll, `elapsed` after the merge request.
+    /// `None` when the poll must stop.
+    fn delay(&self, elapsed: Duration) -> Option<Duration> {
+        if elapsed >= self.limit {
+            None
+        } else if elapsed < self.fast_for {
+            Some(self.fast)
+        } else {
+            Some(self.slow)
+        }
+    }
+}
+
+/// Requests the async merge, polls its state, and runs `jj git fetch`
+/// after a merge. Every state goes to `app` as
+/// `ActionEvent::MergeStatus`. A cancel stops the poll, not the merge on
+/// GitHub.
+async fn merge(sel: Selection, svc: Services, schedule: Schedule) -> Result<String, String> {
+    let Target::Pr { pr, repo, .. } = &sel.target else {
+        return Err("merge needs a pull request".to_owned());
+    };
+    let key = sel.target.key();
+    let number = pr.key.number;
+    let settings = repo_merge(&sel)?;
+    let method = method(repo, &settings);
+    let (title, body) = squash_message(pr);
+    let args = MergeArgs {
+        method: method.as_str(),
+        commit_title: &title,
+        commit_message: &body,
+        sha: &pr.head.value.head_oid,
+        bypass_rules: settings.bypass_rules,
+    };
+    let started = match svc.client.merge_async(&pr.key, &args).await {
+        Ok(started) => started,
+        Err(err) => return fail(&svc, &key, err.to_string()).await,
+    };
+    let mut progress = started.progress;
+    send(&svc, &key, ActionEvent::MergeStatus(progress.clone())).await;
+    let start = Instant::now();
+    while progress == MergeProgress::Pending {
+        let Some(uuid) = &started.uuid else {
+            return fail(&svc, &key, "GitHub gave no merge id".to_owned()).await;
+        };
+        let Some(delay) = schedule.delay(start.elapsed()) else {
+            let text = format!("merge of #{number} still pending, see GitHub");
+            return fail(&svc, &key, text).await;
+        };
+        tokio::select! {
+            () = svc.cancel.cancelled() => {
+                return Err(format!("stopped the poll, the merge of #{number} goes on"));
+            }
+            () = tokio::time::sleep(delay) => {}
+        }
+        progress = match svc.client.merge_async_status(&pr.key, uuid).await {
+            Ok(progress) => progress,
+            Err(err) => return fail(&svc, &key, format!("merge state unknown: {err}")).await,
+        };
+        send(&svc, &key, ActionEvent::MergeStatus(progress.clone())).await;
+    }
+    match progress {
+        MergeProgress::Merged { .. } => Ok(fetch(&svc, &key, repo, number).await),
+        MergeProgress::Enqueued => Ok(format!("#{number} in merge queue")),
+        MergeProgress::Failed(message) => Err(message),
+        MergeProgress::Pending => Err(format!("merge of #{number} still pending")),
+    }
+}
+
+/// Runs `jj git fetch` in the repo after a merge, under the repo lock,
+/// and sends `Progress("fetched")`. A repo without a path has nothing to
+/// fetch. A failed fetch does not fail the merge.
+async fn fetch(svc: &Services, key: &TargetKey, repo: &Repo, number: u64) -> String {
+    let Some(path) = &repo.path else {
+        return format!("merged #{number}");
+    };
+    match jj::git_fetch(&svc.locks, path).await {
+        Ok(()) => {
+            send(svc, key, ActionEvent::Progress("fetched".to_owned())).await;
+            format!("merged #{number}")
+        }
+        Err(err) => {
+            tracing::warn!(pr = number, %err, "jj git fetch after the merge failed");
+            format!("merged #{number}, jj git fetch failed: {err}")
+        }
+    }
+}
+
+/// Sends `MergeStatus(Failed)` and returns the failure.
+async fn fail(svc: &Services, key: &TargetKey, text: String) -> Result<String, String> {
+    let event = ActionEvent::MergeStatus(MergeProgress::Failed(text.clone()));
+    send(svc, key, event).await;
+    Err(text)
+}
+
+/// Sends an event of the merge action to `app`. A closed channel means
+/// that `app` is gone, so the event has no reader.
+async fn send(svc: &Services, key: &TargetKey, event: ActionEvent) {
+    let msg = Msg::ActionEvent {
+        id: ID,
+        key: key.clone(),
+        event,
+    };
+    if svc.tx.send(msg).await.is_err() {
+        tracing::debug!("app is gone, merge event dropped");
     }
 }
 
@@ -381,6 +554,201 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// A schedule in milliseconds, so the poll tests run fast.
+    const FAST: Schedule = Schedule {
+        fast: Duration::from_millis(5),
+        fast_for: Duration::from_millis(50),
+        slow: Duration::from_millis(10),
+        limit: Duration::from_secs(5),
+    };
+
+    #[test]
+    fn schedule_polls_fast_then_slow_then_stops() {
+        let secs = Duration::from_secs;
+        let cases = [
+            (secs(0), Some(secs(2))),
+            (secs(29), Some(secs(2))),
+            (secs(30), Some(secs(5))),
+            (secs(299), Some(secs(5))),
+            (secs(300), None),
+        ];
+        for (elapsed, delay) in cases {
+            assert_eq!(SCHEDULE.delay(elapsed), delay, "{elapsed:?}");
+        }
+    }
+
+    fn pending(uuid: &str) -> serde_json::Value {
+        serde_json::json!({
+            "status": "pending",
+            "details": { "message": "Merge request accepted", "uuid": uuid }
+        })
+    }
+
+    /// Runs the merge of #7 against `server` and returns the result and
+    /// the events.
+    async fn run_merge(
+        server: &wiremock::MockServer,
+        path: Option<std::path::PathBuf>,
+    ) -> (Result<String, String>, Vec<ActionEvent>) {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let client = crate::github::GithubClient::new(
+            crate::github::TokenSource::command("echo", &["tok"]),
+            &server.uri(),
+        )
+        .unwrap();
+        let svc = Services {
+            client: std::sync::Arc::new(client),
+            locks: crate::vcs::lock::RepoLocks::default(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            tx,
+        };
+        let mut sel = select(entry(7, 0), Vec::new(), None);
+        if let Target::Pr { repo, .. } = &mut sel.target {
+            repo.path = path;
+        }
+        let result = merge(sel, svc, FAST).await;
+        let mut events = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            let Msg::ActionEvent { id, key, event } = msg else {
+                panic!("unexpected message {msg:?}");
+            };
+            assert_eq!(id, ID);
+            assert_eq!(key, TargetKey::Pr(entry(7, 0).key));
+            events.push(event);
+        }
+        (result, events)
+    }
+
+    async fn mount_put(server: &wiremock::MockServer, status: u16, body: serde_json::Value) {
+        use wiremock::matchers::{method, path};
+        wiremock::Mock::given(method("PUT"))
+            .and(path("/repos/o/r/pulls/7/merge-async"))
+            .respond_with(wiremock::ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn accepted_then_pending_then_merged() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, ResponseTemplate};
+        let server = wiremock::MockServer::start().await;
+        mount_put(&server, 202, pending("u-1")).await;
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/pulls/7/merge-async/u-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pending("u-1")))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/pulls/7/merge-async/u-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "merged",
+                "details": { "message": "Pull request merged", "sha": "def456" }
+            })))
+            .mount(&server)
+            .await;
+
+        let (result, events) = run_merge(&server, None).await;
+
+        assert_eq!(result, Ok("merged #7".to_owned()));
+        assert_eq!(
+            events,
+            [
+                ActionEvent::MergeStatus(MergeProgress::Pending),
+                ActionEvent::MergeStatus(MergeProgress::Pending),
+                ActionEvent::MergeStatus(MergeProgress::Merged {
+                    sha: "def456".into()
+                }),
+            ]
+        );
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "merge_method": "squash",
+                "commit_title": "Change 7 (#7)",
+                "commit_message": "",
+                "sha": "oid7",
+                "merge_action": "default"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn accepted_then_failed() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, ResponseTemplate};
+        let server = wiremock::MockServer::start().await;
+        mount_put(&server, 202, pending("u-2")).await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "failed",
+                "details": { "message": "Required status check \"ci\" is failing" }
+            })))
+            .mount(&server)
+            .await;
+
+        let (result, events) = run_merge(&server, None).await;
+
+        let message = "Required status check \"ci\" is failing".to_owned();
+        assert_eq!(result, Err(message.clone()));
+        assert_eq!(
+            events,
+            [
+                ActionEvent::MergeStatus(MergeProgress::Pending),
+                ActionEvent::MergeStatus(MergeProgress::Failed(message)),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn conflict_gives_the_message_of_github() {
+        let server = wiremock::MockServer::start().await;
+        let message = "Head branch was modified. Review and try the merge again.";
+        mount_put(
+            &server,
+            409,
+            serde_json::json!({ "status": "failed", "details": { "message": message } }),
+        )
+        .await;
+
+        let (result, events) = run_merge(&server, None).await;
+
+        assert_eq!(result, Err(message.to_owned()));
+        assert_eq!(
+            events,
+            [ActionEvent::MergeStatus(MergeProgress::Failed(
+                message.to_owned()
+            ))]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_fetch_does_not_fail_the_merge() {
+        let server = wiremock::MockServer::start().await;
+        mount_put(
+            &server,
+            200,
+            serde_json::json!({ "status": "merged", "details": { "sha": "def456" } }),
+        )
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+
+        let (result, events) = run_merge(&server, Some(dir.path().to_path_buf())).await;
+
+        let text = result.unwrap();
+        assert!(text.starts_with("merged #7, jj git fetch failed"), "{text}");
+        assert_eq!(
+            events,
+            [ActionEvent::MergeStatus(MergeProgress::Merged {
+                sha: "def456".into()
+            })]
+        );
     }
 
     #[test]
