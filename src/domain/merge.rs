@@ -1,9 +1,9 @@
-//! Merge method, squash message and merge blockers.
+//! Merge method, squash message, stack merge strategy and merge blockers.
 
 use serde::{Deserialize, Serialize};
 
 use crate::domain::pr::{MergeStateStatus, Mergeable, PullRequest};
-use crate::domain::repo::Repo;
+use crate::domain::repo::{Repo, RepoSettings, SquashMessageDefault, SquashTitleDefault};
 
 /// A GitHub merge method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -48,6 +48,49 @@ pub(crate) fn squash_message(pr: &PullRequest) -> (String, String) {
     let title = format!("{} (#{})", head.title.trim(), pr.key.number);
     let body = head.body.replace("\r\n", "\n").trim_end().to_owned();
     (title, body)
+}
+
+/// How the merge action merges more than one entry of a stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StackStrategy {
+    /// One merge request for the top entry. GitHub merges the entries
+    /// below it in the same operation, with the default squash message
+    /// of the repo.
+    Atomic,
+    /// One merge request per entry, bottom first, each with its own
+    /// title and body.
+    Sequential,
+}
+
+/// The stack strategy that the configuration forces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StackOverride {
+    Atomic,
+    Sequential,
+}
+
+/// The stack strategy for a repo. An override wins. Without one, the
+/// strategy is `Atomic` when the squash defaults of the repo are the pull
+/// request title and body, because the lower entries then get the right
+/// message anyway. Else it is `Sequential`, also when the defaults are
+/// not known.
+pub(crate) fn stack_strategy(
+    settings: &RepoSettings,
+    stack_override: Option<StackOverride>,
+) -> StackStrategy {
+    match stack_override {
+        Some(StackOverride::Atomic) => StackStrategy::Atomic,
+        Some(StackOverride::Sequential) => StackStrategy::Sequential,
+        None => match (
+            settings.squash_title_default,
+            settings.squash_message_default,
+        ) {
+            (Some(SquashTitleDefault::PrTitle), Some(SquashMessageDefault::PrBody)) => {
+                StackStrategy::Atomic
+            }
+            _ => StackStrategy::Sequential,
+        },
+    }
 }
 
 /// What stops a merge, and what the user must know before it.
@@ -174,6 +217,78 @@ mod tests {
                 squash_message(&pr),
                 (want_title.to_owned(), want_body.to_owned()),
                 "{title:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn stack_strategy_cases() {
+        use SquashMessageDefault::{Blank, CommitMessages, PrBody};
+        use SquashTitleDefault::{CommitOrPrTitle, PrTitle};
+
+        let settings = |title, message| RepoSettings {
+            squash: true,
+            merge: false,
+            rebase: false,
+            default_branch: None,
+            squash_title_default: title,
+            squash_message_default: message,
+        };
+        let cases = [
+            (
+                "title and body",
+                settings(Some(PrTitle), Some(PrBody)),
+                None,
+                StackStrategy::Atomic,
+            ),
+            (
+                "commit title",
+                settings(Some(CommitOrPrTitle), Some(PrBody)),
+                None,
+                StackStrategy::Sequential,
+            ),
+            (
+                "commit messages",
+                settings(Some(PrTitle), Some(CommitMessages)),
+                None,
+                StackStrategy::Sequential,
+            ),
+            (
+                "blank body",
+                settings(Some(PrTitle), Some(Blank)),
+                None,
+                StackStrategy::Sequential,
+            ),
+            (
+                "GitHub defaults",
+                settings(Some(CommitOrPrTitle), Some(CommitMessages)),
+                None,
+                StackStrategy::Sequential,
+            ),
+            (
+                "unknown defaults",
+                settings(None, None),
+                None,
+                StackStrategy::Sequential,
+            ),
+            (
+                "atomic override",
+                settings(Some(CommitOrPrTitle), Some(CommitMessages)),
+                Some(StackOverride::Atomic),
+                StackStrategy::Atomic,
+            ),
+            (
+                "sequential override",
+                settings(Some(PrTitle), Some(PrBody)),
+                Some(StackOverride::Sequential),
+                StackStrategy::Sequential,
+            ),
+        ];
+        for (name, settings, stack_override, expected) in cases {
+            assert_eq!(
+                stack_strategy(&settings, stack_override),
+                expected,
+                "{name}"
             );
         }
     }
