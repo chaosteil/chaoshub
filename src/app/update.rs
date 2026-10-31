@@ -12,7 +12,7 @@ use crate::actions::{Action, Applicability, Prepare, REGISTRY};
 use crate::app::frame;
 use crate::app::help::help_model;
 use crate::app::keymap::{self, Keymap};
-use crate::app::layout::layout;
+use crate::app::layout::Areas;
 use crate::app::models::{CellStyle, Direction, PaneModel, RowItem};
 use crate::app::nav::{self, Motion};
 use crate::app::panes::{PANES, Pane, applicable, items};
@@ -243,10 +243,10 @@ fn key(
         return cmds;
     }
     let index = state.ui.active;
+    let areas = frame::areas(state);
     let (Some(tab), Some(ts)) = (tabs.get(index), state.ui.tabs.get_mut(index)) else {
         return Vec::new();
     };
-    let areas = layout(state.data.size);
     let cx = KeyCx {
         data: &state.data,
         target: None,
@@ -386,7 +386,7 @@ fn open_authors(state: &mut AppState, tabs: &[Box<dyn Tab>]) {
     let Some(tab) = tabs.get(index) else {
         return;
     };
-    let areas = layout(state.data.size);
+    let areas = frame::areas(state);
     let cx = KeyCx {
         data: &state.data,
         target: None,
@@ -441,6 +441,7 @@ fn open_popup(state: &mut AppState, tabs: &[Box<dyn Tab>], panes: &[Box<dyn Pane
 /// nothing handled the key.
 fn popup_key(
     data: &AppData,
+    areas: &Areas,
     keymap: &Keymap,
     panes: &[Box<dyn Pane>],
     popup: &mut PopupState,
@@ -469,7 +470,6 @@ fn popup_key(
     }
     let pane = panes.get(popup.active)?;
     let ps = popup.panes.get_mut(popup.active)?;
-    let areas = layout(data.size);
     let size = Size {
         width: areas.popup_body.width,
         height: areas.popup_body.height,
@@ -477,7 +477,7 @@ fn popup_key(
     let cx = KeyCx {
         data,
         target: Some(&target),
-        areas: &areas,
+        areas,
         keys: keymap,
     };
     if let Some(motion) = motion(keymap, chord) {
@@ -532,6 +532,7 @@ fn overlay_key(
         close_overlay(state);
         return Vec::new();
     }
+    let areas = frame::areas(state);
     let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
         return Vec::new();
     };
@@ -541,7 +542,7 @@ fn overlay_key(
     }
     match &mut overlay.state {
         OverlayState::Popup(popup) => {
-            let Some(handled) = popup_key(&state.data, keymap, panes, popup, chord) else {
+            let Some(handled) = popup_key(&state.data, &areas, keymap, panes, popup, chord) else {
                 return Vec::new();
             };
             if handled.changed {
@@ -666,7 +667,7 @@ pub(crate) fn start(state: &mut AppState) {
 /// where their text or the data moved, and a changed interest goes to the
 /// workers.
 fn after_change(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
-    let areas = layout(state.data.size);
+    let areas = frame::areas(state);
     let cx = KeyCx {
         data: &state.data,
         target: None,
@@ -762,7 +763,7 @@ fn navigate(state: &mut AppState, tabs: &[Box<dyn Tab>], motion: Motion) {
 fn refresh_interest(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Option<Cmd> {
     let index = state.ui.active;
     let (tab, ts) = (tabs.get(index)?, state.ui.tabs.get(index)?);
-    let areas = layout(state.data.size);
+    let areas = frame::areas(state);
     let cx = KeyCx {
         data: &state.data,
         target: None,
