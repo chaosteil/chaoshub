@@ -5,7 +5,7 @@
 //! keys `1` to `9` and the slide direction.
 #![allow(
     dead_code,
-    reason = "update and the frame builder call the tabs in later commits"
+    reason = "the filter, the target and the help are read in later phases"
 )]
 
 mod mine;
@@ -81,7 +81,7 @@ pub(crate) trait Tab: Send + Sync {
 }
 
 /// The tab registry, in tab bar order.
-pub(crate) static TABS: LazyLock<Vec<Box<dyn Tab>>> = LazyLock::new(Vec::new);
+pub(crate) static TABS: LazyLock<Vec<Box<dyn Tab>>> = LazyLock::new(|| vec![Box::new(mine::Mine)]);
 
 /// The values that occur more than once, sorted.
 #[cfg(test)]
