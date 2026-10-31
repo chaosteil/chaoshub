@@ -622,7 +622,7 @@ mod tests {
         RexLauncher {
             bin: PathBuf::from("rex"),
             block: "block:01".into(),
-            session: "session:01".into(),
+            session: Some("session:01".into()),
             split: "right".into(),
             ratio: None,
         }
