@@ -8,7 +8,7 @@ use tracing_appender::rolling::{RollingFileAppender, Rotation};
 fn main() -> anyhow::Result<()> {
     let _log_guard = init_logging()?;
     tracing::info!("chaoshub started");
-    Ok(())
+    chaoshub::run()
 }
 
 /// Sends tracing output to `chaoshub.log` in the state directory. The log

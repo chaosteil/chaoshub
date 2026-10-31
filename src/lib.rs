@@ -31,6 +31,11 @@ mod workers;
 
 pub use config::paths::state_dir;
 
+/// Starts the TUI and runs it until the user quits.
+pub fn run() -> anyhow::Result<()> {
+    run::run()
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
