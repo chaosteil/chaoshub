@@ -878,6 +878,27 @@ mod tests {
         insta::assert_snapshot!(screen(&mut app));
     }
 
+    /// The seeded app with the team fixtures, on the team tab.
+    fn team_app(width: u16, height: u16) -> App {
+        let mut app = seeded_app(width, height, crate::app::testdata::team_snapshot());
+        let two = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('2'),
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(two));
+        app
+    }
+
+    #[test]
+    fn team_list_100() {
+        insta::assert_snapshot!(screen(&mut team_app(100, 12)));
+    }
+
+    #[test]
+    fn team_list_160() {
+        insta::assert_snapshot!(screen(&mut team_app(160, 12)));
+    }
+
     #[test]
     fn empty_frame() {
         let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();

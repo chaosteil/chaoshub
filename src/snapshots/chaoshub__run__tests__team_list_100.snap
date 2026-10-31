@@ -1,0 +1,17 @@
+---
+source: src/run.rs
+assertion_line: 894
+expression: "screen(&mut team_app(100, 12))"
+---
+"  1 M I N E ▌ 2 T E A M     ░         ˙                ˙                            ˙      chaoshub "
+" ready for review · 3 · t shows all open                                                            "
+"▌★  docs(readme): keymap table                     #88 chaoshub     alice            2h  ✓   ○      "
+"    perf(store): batch inserts                     #87 chaoshub     bob              3h  ✓   ○      "
+"    perf(ui): cache the texture                    #86 codeview     bob              2d  ✓   ✓      "
+"  ˙ ·           ░              ˙               ░              ·    ˙          ·  ·    ·             "
+"       ·                  ˙                    ░░  ░   ˙       ·    ·     ·           ░        ░    "
+"    ░˙ ·    ˙                     ·      ˙    ˙      ˙  ░              ˙ ˙ ˙     ˙ ░ ˙    ░       ░ "
+" ░   ˙                  ·                        ·        · ·     ·        ˙          ░˙░         ˙ "
+"     ·    ·        ˙                  ░˙      ˙             ░               ░                       "
+"                          ˙                                 ·              ░  ░                     "
+" [TEAM] 0 repos · cache from 5m ago                                                          ? help "

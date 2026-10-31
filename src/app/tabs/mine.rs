@@ -495,6 +495,7 @@ mod tests {
             data: &state.data,
             target: None,
             areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
         };
         Mine.model(&cx, ts, SIZE)
     }
@@ -573,6 +574,7 @@ mod tests {
             data: &state.data,
             target: None,
             areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
         };
         let titles = |width| {
             let model = Mine.model(&cx, &TabState::default(), Size { width, height: 20 });
@@ -610,6 +612,7 @@ mod tests {
             data: &state.data,
             target: None,
             areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
         };
         let mut ts = Mine.init_state();
         ts.filter = "middle".into();
@@ -701,6 +704,7 @@ mod tests {
             data: &state.data,
             target: None,
             areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
         };
         let narrow = Size {
             width: 70,
@@ -732,6 +736,7 @@ mod tests {
             data: &state.data,
             target: None,
             areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
         };
         let ts = TabState {
             cursor: 2,
@@ -754,7 +759,7 @@ mod tests {
     fn the_frame_shows_the_mine_tab() {
         let mut state = seeded();
         let frame = crate::app::frame::frame_model(&mut state);
-        assert_eq!(frame.tab_bar.titles, vec!["Mine"]);
+        assert_eq!(frame.tab_bar.titles, vec!["Mine", "Team"]);
         assert_eq!(frame.list.rows.len(), 5);
     }
 }

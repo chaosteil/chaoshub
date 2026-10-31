@@ -192,3 +192,47 @@ pub(crate) fn mine_snapshot() -> crate::store::Snapshot {
         ..crate::store::Snapshot::default()
     }
 }
+
+/// The pull requests of colleagues: three ready ones (#88 requests the
+/// review of the user), a draft (#85, requested) and one with failing CI
+/// (#84). Ages at `mine_snapshot` time plus 5 minutes.
+pub(crate) fn team_prs() -> Vec<PullRequest> {
+    use crate::domain::pr::ReviewDecision;
+
+    let colleague = |number: u64, title: &str, author: &str, hours: i64| {
+        let mut pr = pr("chaoshub", number, title);
+        pr.head.value.author = author.into();
+        pr.head.value.updated_at = test_time() - chrono::TimeDelta::hours(hours);
+        pr.ci_state.value = CiState::Success;
+        pr.head.value.review_decision = Some(ReviewDecision::ReviewRequired);
+        pr
+    };
+    let mut requested = colleague(88, "docs(readme): keymap table", "alice", 2);
+    requested.head.value.review_requested = true;
+    let mut draft = colleague(85, "wip(sync): adaptive page size", "carol", 1);
+    draft.head.value.is_draft = true;
+    draft.head.value.review_requested = true;
+    let mut failing = colleague(84, "fix(vcs): parse empty bookmarks", "dave", 30);
+    failing.ci_state.value = CiState::Failure;
+    let mut other = colleague(86, "perf(ui): cache the texture", "bob", 50);
+    other.key.repo = repo_key("codeview");
+    other.head.value.review_decision = Some(ReviewDecision::Approved);
+    vec![
+        requested,
+        colleague(87, "perf(store): batch inserts", "bob", 3),
+        other,
+        draft,
+        failing,
+    ]
+}
+
+/// A startup snapshot with `mine_snapshot` and the `team_prs`.
+pub(crate) fn team_snapshot() -> crate::store::Snapshot {
+    let mut snapshot = mine_snapshot();
+    snapshot.prs.extend(
+        team_prs()
+            .into_iter()
+            .map(|pr| (crate::bus::Scope::Team, pr)),
+    );
+    snapshot
+}
