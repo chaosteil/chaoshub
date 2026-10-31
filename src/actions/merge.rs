@@ -44,13 +44,11 @@ pub(crate) const ID: &str = "merge";
 pub(crate) struct MergeAction;
 
 impl MergeAction {
-    /// Hidden for a local-only change. Disabled when the configuration
-    /// table is invalid, when the stack entries up to the position are
-    /// not loaded, or when an entry has a hard blocker.
+    /// Disabled when the configuration table is invalid, when the stack
+    /// entries up to the position are not loaded, or when an entry has a
+    /// hard blocker.
     pub(crate) fn applies(sel: &Selection) -> Applicability {
-        let Target::Pr { pr, stack, .. } = &sel.target else {
-            return Applicability::Hidden;
-        };
+        let Target::Pr { pr, stack, .. } = &sel.target;
         if repo_merge(sel).is_err() {
             return Applicability::Disabled("invalid [actions.merge] configuration");
         }
@@ -69,10 +67,7 @@ impl MergeAction {
     pub(crate) fn prepare(sel: &Selection) -> Prepare {
         let Target::Pr {
             pr, stack, repo, ..
-        } = &sel.target
-        else {
-            return Prepare::Run;
-        };
+        } = &sel.target;
         let entries = merged_entries(pr, stack).unwrap_or_else(|| vec![pr.clone()]);
         let settings = repo_merge(sel).unwrap_or_default();
         Prepare::Confirm(ConfirmSpec {
@@ -203,10 +198,7 @@ async fn merge(
 ) -> Result<String, String> {
     let Target::Pr {
         pr, stack, repo, ..
-    } = &sel.target
-    else {
-        return Err("merge needs a pull request".to_owned());
-    };
+    } = &sel.target;
     let settings = repo_merge(&sel)?;
     let run = Run {
         svc: &svc,
@@ -572,7 +564,7 @@ mod tests {
 
     use super::*;
     use crate::domain::keys::RepoKey;
-    use crate::domain::local::{LocalChange, LocalMatch};
+    use crate::domain::local::LocalMatch;
     use crate::domain::matching::tests::pr;
     use crate::domain::pr::{MergeStateStatus, Mergeable};
     use crate::domain::repo::{RepoSettings, SquashMessageDefault, SquashTitleDefault};
@@ -907,9 +899,8 @@ mod tests {
         path: Option<std::path::PathBuf>,
     ) -> (Result<String, String>, Vec<ActionEvent>) {
         let mut sel = select(entry(7, 0), Vec::new(), None);
-        if let Target::Pr { repo, .. } = &mut sel.target {
-            repo.path = path;
-        }
+        let Target::Pr { repo, .. } = &mut sel.target;
+        repo.path = path;
         run_selection(server, sel).await
     }
 
@@ -1296,26 +1287,5 @@ mod tests {
                 ActionEvent::MergeStatus(MergeProgress::Failed(message.to_owned())),
             ]
         );
-    }
-
-    #[test]
-    fn a_local_change_hides_the_action() {
-        let sel = Selection {
-            target: Target::Local {
-                change: LocalChange {
-                    workspace: "default".into(),
-                    change_id: "kxyz".into(),
-                    commit_id: "abc".into(),
-                    bookmarks: Vec::new(),
-                    empty: false,
-                    parents: Vec::new(),
-                    description: "local".into(),
-                },
-                repo: repo(),
-            },
-            me: "me".into(),
-            action_config: None,
-        };
-        assert_eq!(MergeAction::applies(&sel), Applicability::Hidden);
     }
 }

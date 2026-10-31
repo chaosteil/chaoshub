@@ -31,7 +31,6 @@ impl Action for Draft {
         match &sel.target {
             Target::Pr { pr, .. } if pr.head.value.state == PrState::Open => Applicability::Enabled,
             Target::Pr { .. } => Applicability::Disabled("the pull request is not open"),
-            Target::Local { .. } => Applicability::Hidden,
         }
     }
 
@@ -48,9 +47,7 @@ impl Action for Draft {
         svc: Services,
     ) -> BoxFuture<'static, Result<String, String>> {
         Box::pin(async move {
-            let Target::Pr { pr, .. } = sel.target else {
-                return Err("a local change has no draft state".to_owned());
-            };
+            let Target::Pr { pr, .. } = sel.target;
             let number = pr.key.number;
             if pr.head.value.is_draft {
                 svc.client
@@ -149,9 +146,8 @@ mod tests {
         assert_eq!(Draft.applies(&sel), Applicability::Enabled);
         assert_eq!(Draft.prepare(&sel), Prepare::Run);
         let mut merged = selection(false);
-        if let Target::Pr { pr, .. } = &mut merged.target {
-            pr.head.value.state = PrState::Merged;
-        }
+        let Target::Pr { pr, .. } = &mut merged.target;
+        pr.head.value.state = PrState::Merged;
         assert_eq!(
             Draft.applies(&merged),
             Applicability::Disabled("the pull request is not open")

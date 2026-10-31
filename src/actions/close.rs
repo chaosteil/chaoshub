@@ -31,15 +31,12 @@ impl Action for Close {
         match &sel.target {
             Target::Pr { pr, .. } if pr.head.value.state == PrState::Open => Applicability::Enabled,
             Target::Pr { .. } => Applicability::Disabled("the pull request is not open"),
-            Target::Local { .. } => Applicability::Hidden,
         }
     }
 
     /// A danger confirm with the number and the title.
     fn prepare(&self, sel: &Selection) -> Prepare {
-        let Target::Pr { pr, .. } = &sel.target else {
-            unreachable!("applies hides the close of a local change")
-        };
+        let Target::Pr { pr, .. } = &sel.target;
         let number = pr.key.number;
         Prepare::Confirm(ConfirmSpec {
             title: format!("close #{number}?"),
@@ -59,9 +56,7 @@ impl Action for Close {
         svc: Services,
     ) -> BoxFuture<'static, Result<String, String>> {
         Box::pin(async move {
-            let Target::Pr { pr, .. } = sel.target else {
-                return Err("a local change cannot close".to_owned());
-            };
+            let Target::Pr { pr, .. } = sel.target;
             svc.client
                 .close_pr(&pr.node_id)
                 .await
@@ -120,9 +115,8 @@ mod tests {
     fn applies_to_an_open_pull_request() {
         assert_eq!(Close.applies(&selection()), Applicability::Enabled);
         let mut closed = selection();
-        if let Target::Pr { pr, .. } = &mut closed.target {
-            pr.head.value.state = PrState::Closed;
-        }
+        let Target::Pr { pr, .. } = &mut closed.target;
+        pr.head.value.state = PrState::Closed;
         assert_eq!(
             Close.applies(&closed),
             Applicability::Disabled("the pull request is not open")

@@ -116,7 +116,6 @@ pub(crate) mod fake {
             match (target, self.only) {
                 (_, None) => true,
                 (Target::Pr { pr, .. }, Some(number)) => pr.key.number == number,
-                (Target::Local { .. }, Some(_)) => false,
             }
         }
 

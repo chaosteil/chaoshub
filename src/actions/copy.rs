@@ -9,8 +9,7 @@ use crate::domain::local::LocalMatch;
 /// The action that copies the url of a pull request.
 pub(crate) struct CopyUrl;
 
-/// The action that copies the jj change id of a pull request or of a
-/// local-only change.
+/// The action that copies the jj change id of a pull request.
 pub(crate) struct CopyChangeId;
 
 /// A key without modifiers.
@@ -21,18 +20,15 @@ fn key(c: char) -> KeyChord {
     }
 }
 
-/// The change id of the target: the change of a local-only row, or the
-/// local change that matches a pull request. `None` for a pull request
-/// without a local change.
+/// The change id of the local change that matches the pull request of the
+/// target. `None` for a pull request without a local change.
 fn change_id(target: &Target) -> Option<&str> {
-    match target {
-        Target::Local { change, .. } => Some(&change.change_id),
-        Target::Pr { local, .. } => match local {
-            LocalMatch::Synced { change_id, .. } | LocalMatch::Diverged { change_id, .. } => {
-                Some(change_id)
-            }
-            LocalMatch::None => None,
-        },
+    let Target::Pr { local, .. } = target;
+    match local {
+        LocalMatch::Synced { change_id, .. } | LocalMatch::Diverged { change_id, .. } => {
+            Some(change_id)
+        }
+        LocalMatch::None => None,
     }
 }
 
@@ -49,18 +45,13 @@ impl Action for CopyUrl {
         Some(key('y'))
     }
 
-    /// A pull request. A local-only change has no url.
-    fn applies(&self, sel: &Selection) -> Applicability {
-        match &sel.target {
-            Target::Pr { .. } => Applicability::Enabled,
-            Target::Local { .. } => Applicability::Hidden,
-        }
+    /// A pull request.
+    fn applies(&self, _sel: &Selection) -> Applicability {
+        Applicability::Enabled
     }
 
     fn prepare(&self, sel: &Selection) -> Prepare {
-        let Target::Pr { pr, .. } = &sel.target else {
-            unreachable!("applies hides the url copy for a local change")
-        };
+        let Target::Pr { pr, .. } = &sel.target;
         Prepare::Command(Cmd::Copy(pr.head.value.url.clone()))
     }
 
@@ -89,11 +80,11 @@ impl Action for CopyChangeId {
         Some(key('Y'))
     }
 
-    /// A local-only change, or a pull request with a local change.
+    /// A pull request with a local change.
     fn applies(&self, sel: &Selection) -> Applicability {
         match change_id(&sel.target) {
             Some(_) => Applicability::Enabled,
-            None => Applicability::Disabled("no local change for this pull request"),
+            None => Applicability::Hidden,
         }
     }
 
@@ -117,7 +108,6 @@ impl Action for CopyChangeId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::local::LocalChange;
     use crate::domain::pr::PullRequest;
     use crate::domain::repo::Repo;
 
@@ -139,27 +129,6 @@ mod tests {
         }
     }
 
-    fn local_selection() -> Selection {
-        let mut sel = selection(LocalMatch::None);
-        sel.target = Target::Local {
-            change: LocalChange {
-                workspace: "default".into(),
-                change_id: "zzmqxkrtzzmq".into(),
-                commit_id: "c0ffee".into(),
-                bookmarks: Vec::new(),
-                empty: false,
-                parents: Vec::new(),
-                description: "wip".into(),
-            },
-            repo: Repo {
-                key: sel.target.repo().clone(),
-                path: Some("/code/chaoshub".into()),
-                settings: None,
-            },
-        };
-        sel
-    }
-
     #[test]
     fn y_copies_the_url_of_a_pull_request() {
         let sel = selection(LocalMatch::None);
@@ -170,11 +139,10 @@ mod tests {
                 "https://github.com/chaosteil/chaoshub/pull/7".into()
             ))
         );
-        assert_eq!(CopyUrl.applies(&local_selection()), Applicability::Hidden);
     }
 
     #[test]
-    fn shift_y_copies_the_change_id_of_a_local_change_or_a_match() {
+    fn shift_y_copies_the_change_id_of_a_match() {
         let copy = |sel: &Selection| (CopyChangeId.applies(sel), CopyChangeId.prepare(sel));
         let enabled = |id: &str| {
             (
@@ -182,7 +150,6 @@ mod tests {
                 Prepare::Command(Cmd::Copy(id.to_owned())),
             )
         };
-        assert_eq!(copy(&local_selection()), enabled("zzmqxkrtzzmq"));
         let synced = selection(LocalMatch::Synced {
             workspace: "default".into(),
             change_id: "kpqvxwyz".into(),
@@ -197,7 +164,7 @@ mod tests {
         assert_eq!(copy(&diverged), enabled("mnoplqrs"));
         assert_eq!(
             CopyChangeId.applies(&selection(LocalMatch::None)),
-            Applicability::Disabled("no local change for this pull request")
+            Applicability::Hidden
         );
     }
 }
