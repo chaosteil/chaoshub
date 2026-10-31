@@ -39,6 +39,155 @@ pub fn run(cli: cli::Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     run::run(cli, theme_kind)
 }
 
+/// Entry points for the live tests in `tests/live.rs`. The GitHub client
+/// and its calls are `pub(crate)`, so this module wraps the calls that the
+/// live tests use in `pub` items. It is not a stable API.
+#[doc(hidden)]
+pub mod testing {
+    use crate::bus::MergeProgress;
+    use crate::domain::keys::{PrKey, RepoKey};
+    use crate::github::parse::Me;
+    use crate::github::rest::MergeArgs;
+    use crate::github::{GITHUB_API, GithubClient, TokenSource};
+
+    /// The crate's GitHub client on github.com, with the token of
+    /// `gh auth token`.
+    #[derive(Debug)]
+    pub struct LiveClient {
+        client: GithubClient,
+    }
+
+    /// The fields of a pull request that the GraphQL client reads.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct LivePr {
+        pub number: u64,
+        pub title: String,
+        pub body: String,
+        /// `Open`, `Closed` or `Merged`.
+        pub state: String,
+        pub head_oid: String,
+        pub base_ref: String,
+        /// The `mergeStateStatus`, for example `Clean` or `Unknown`.
+        pub merge_state: String,
+        /// The `mergeable` value, for example `Mergeable` or `Unknown`.
+        pub mergeable: String,
+        /// `None` when the pull request is not in a stack.
+        pub stack_size: Option<u32>,
+        /// `None` when the pull request is not in a stack.
+        pub stack_position: Option<u32>,
+    }
+
+    /// The state of an async merge.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum LiveMergeProgress {
+        Pending,
+        Merged { sha: String },
+        Enqueued,
+        Failed(String),
+    }
+
+    impl From<MergeProgress> for LiveMergeProgress {
+        fn from(progress: MergeProgress) -> Self {
+            match progress {
+                MergeProgress::Pending => Self::Pending,
+                MergeProgress::Merged { sha } => Self::Merged { sha },
+                MergeProgress::Enqueued => Self::Enqueued,
+                MergeProgress::Failed(message) => Self::Failed(message),
+            }
+        }
+    }
+
+    /// The pull request `number` of `owner/name`.
+    fn key(owner: &str, name: &str, number: u64) -> PrKey {
+        PrKey {
+            repo: RepoKey {
+                owner: owner.to_owned(),
+                name: name.to_owned(),
+            },
+            number,
+        }
+    }
+
+    impl LiveClient {
+        /// A client for github.com that runs `gh auth token`.
+        pub fn gh() -> anyhow::Result<Self> {
+            Ok(Self {
+                client: GithubClient::new(TokenSource::gh(), GITHUB_API)?,
+            })
+        }
+
+        /// The login of the token owner, from `viewer { login }`.
+        pub async fn viewer_login(&self) -> anyhow::Result<String> {
+            Ok(self.client.viewer().await?.0)
+        }
+
+        /// The pull request with the GraphQL node id `node_id`, read for the
+        /// user `login`. `None` when the id names no pull request.
+        pub async fn pr_by_node_id(
+            &self,
+            node_id: &str,
+            login: &str,
+        ) -> anyhow::Result<Option<LivePr>> {
+            let me = Me { login, teams: &[] };
+            let (prs, _) = self.client.pr_by_ids(&[node_id.to_owned()], &me).await?;
+            Ok(prs.into_iter().next().map(|pr| {
+                let head = pr.head.value;
+                LivePr {
+                    number: pr.key.number,
+                    title: head.title,
+                    body: head.body,
+                    state: format!("{:?}", head.state),
+                    head_oid: head.head_oid,
+                    base_ref: head.base_ref,
+                    merge_state: format!("{:?}", head.merge_state),
+                    mergeable: format!("{:?}", head.mergeable),
+                    stack_size: head.stack.as_ref().map(|stack| stack.size),
+                    stack_position: head.stack.as_ref().map(|stack| stack.position),
+                }
+            }))
+        }
+
+        /// Requests an async merge of the pull request `number` of
+        /// `owner/name` with `merge_action: "default"` and no rule bypass.
+        /// It returns the uuid to poll and the first progress.
+        pub async fn merge_async(
+            &self,
+            (owner, name, number): (&str, &str, u64),
+            method: &str,
+            commit_title: &str,
+            commit_message: &str,
+            sha: &str,
+        ) -> anyhow::Result<(Option<String>, LiveMergeProgress)> {
+            let args = MergeArgs {
+                method,
+                commit_title,
+                commit_message,
+                sha,
+                bypass_rules: false,
+            };
+            let started = self
+                .client
+                .merge_async(&key(owner, name, number), &args)
+                .await?;
+            Ok((started.uuid, started.progress.into()))
+        }
+
+        /// The state of the async merge `uuid` of the pull request `number`
+        /// of `owner/name`.
+        pub async fn merge_async_status(
+            &self,
+            (owner, name, number): (&str, &str, u64),
+            uuid: &str,
+        ) -> anyhow::Result<LiveMergeProgress> {
+            let progress = self
+                .client
+                .merge_async_status(&key(owner, name, number), uuid)
+                .await?;
+            Ok(progress.into())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
