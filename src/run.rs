@@ -80,6 +80,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         repo,
         config: config_path,
         no_prefetch,
+        theme: theme_arg,
         command,
     } = cli;
     if let Some(CacheCommand::Cache(CacheAction::Clear)) = command {
@@ -93,7 +94,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         config.prefetch.enabled = false;
     }
     let keymap = Keymap::new(&config.keys)?;
-    let theme = Theme::new(theme_kind, config.theme.grunge, config.theme.textures);
+    let theme = session_theme(theme_kind, theme_arg, &config);
     let transitions =
         Transitions::new(config.theme.animations, config.theme.animation_ms).with_theme(theme);
     let detected = term_status_detected();
@@ -179,6 +180,33 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     drop(guard);
     tokio.shutdown_timeout(Duration::from_millis(500));
     result
+}
+
+/// The theme of the session: the style of `--theme` or `[theme] style`,
+/// for the terminal kind.
+fn session_theme(kind: ThemeKind, arg: Option<crate::cli::ThemeArg>, config: &Config) -> Theme {
+    Theme::styled(
+        kind,
+        theme_style(arg, config.theme.style),
+        config.theme.grunge,
+        config.theme.textures,
+    )
+}
+
+/// The theme style of the session: `--theme` when the user gave it, else
+/// `[theme] style`.
+fn theme_style(
+    arg: Option<crate::cli::ThemeArg>,
+    setting: crate::config::schema::ThemeStyleSetting,
+) -> crate::theme::ThemeStyle {
+    use crate::cli::ThemeArg;
+    use crate::config::schema::ThemeStyleSetting;
+    use crate::theme::ThemeStyle;
+    match (arg, setting) {
+        (Some(ThemeArg::Grunge), _) | (None, ThemeStyleSetting::Grunge) => ThemeStyle::Grunge,
+        (Some(ThemeArg::Punk), _) | (None, ThemeStyleSetting::Punk) => ThemeStyle::Punk,
+        (Some(ThemeArg::Plain), _) | (None, ThemeStyleSetting::Plain) => ThemeStyle::Plain,
+    }
 }
 
 /// The context of the workers: the GitHub client, the store, the
@@ -922,6 +950,26 @@ mod tests {
 
     use super::*;
     use crate::domain::keys::RepoKey;
+
+    #[test]
+    fn the_theme_flag_wins_over_the_config() {
+        use crate::cli::ThemeArg;
+        use crate::config::schema::ThemeStyleSetting;
+        use crate::theme::ThemeStyle;
+        assert_eq!(theme_style(None, ThemeStyleSetting::Punk), ThemeStyle::Punk);
+        assert_eq!(
+            theme_style(Some(ThemeArg::Plain), ThemeStyleSetting::Punk),
+            ThemeStyle::Plain
+        );
+        assert_eq!(
+            theme_style(Some(ThemeArg::Punk), ThemeStyleSetting::Grunge),
+            ThemeStyle::Punk
+        );
+        assert_eq!(
+            theme_style(None, ThemeStyleSetting::default()),
+            ThemeStyle::Grunge
+        );
+    }
 
     fn repo(owner: &str, name: &str, path: Option<&str>) -> Repo {
         Repo {

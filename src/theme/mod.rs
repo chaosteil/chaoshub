@@ -60,6 +60,15 @@ pub(crate) enum Skin {
     Plain,
 }
 
+/// The theme style that the user picks with `[theme] style` or
+/// `--theme`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThemeStyle {
+    Grunge,
+    Punk,
+    Plain,
+}
+
 /// The palette and the skin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Theme {
@@ -118,6 +127,21 @@ impl Theme {
                 palette: Palette::ansi16(),
                 skin: Skin::Plain,
             },
+        }
+    }
+
+    /// Builds the theme of a style for a terminal kind. `grunge` and
+    /// `textures` apply to the grunge style only.
+    pub(crate) const fn styled(
+        kind: ThemeKind,
+        style: ThemeStyle,
+        grunge: bool,
+        textures: bool,
+    ) -> Self {
+        match style {
+            ThemeStyle::Grunge => Self::new(kind, grunge, textures),
+            ThemeStyle::Punk => Self::punk(kind),
+            ThemeStyle::Plain => Self::new(kind, false, false),
         }
     }
 
@@ -330,6 +354,22 @@ mod tests {
         assert_eq!(theme.skin, Skin::Plain);
         assert!(!theme.grunge());
         assert!(!theme.textures());
+    }
+
+    #[test]
+    fn styled_picks_the_skin() {
+        let kind = ThemeKind::TrueColor;
+        assert_eq!(
+            Theme::styled(kind, ThemeStyle::Grunge, true, true),
+            Theme::new(kind, true, true)
+        );
+        assert_eq!(
+            Theme::styled(kind, ThemeStyle::Punk, true, true),
+            Theme::punk(kind)
+        );
+        let plain = Theme::styled(kind, ThemeStyle::Plain, true, true);
+        assert_eq!(plain.skin, Skin::Plain);
+        assert_eq!(plain.palette, Palette::pierre());
     }
 
     #[test]
