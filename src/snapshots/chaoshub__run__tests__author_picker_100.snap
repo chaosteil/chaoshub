@@ -16,5 +16,5 @@ expression: screen(&mut app)
 "    ·     ·        ˙      ░     ˙  ·                    · ░   ·        ·░           ░░░      ░      "
 " ░░       ░ ░  ··░       ˙  ˙                               ·      ˙            ˙                  ˙"
 "˙   ░    ░ ░            ˙            ˙  ░  ░  ·   ·            ·   ˙    ˙     ░                   ˙ "
-"▌ Enter select  Esc clear                                                                           "
+"▌ Enter select  Esc close                                                                           "
 " [TEAM] 0 repos · cache from 5m ago                                                          ? help "

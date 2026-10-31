@@ -225,7 +225,8 @@ fn popup_content(data: &AppData, popup: &PopupState, panes: &[Box<dyn Pane>]) ->
 }
 
 /// The key hint bar of the active context: the top overlay that is not
-/// closing, or else the list. `None` when the key hints are off.
+/// closing, else the filter line while the user types the filter, else
+/// the list. `None` when the key hints are off.
 fn hints_model(
     state: &AppState,
     tabs: &[Box<dyn Tab>],
@@ -239,6 +240,7 @@ fn hints_model(
     let keymap = &state.cache.keymap;
     let hints = match state.ui.overlays.iter().rev().find(|o| !o.closing) {
         Some(overlay) => overlay_hints(&state.data, keymap, panes, &overlay.state),
+        None if state.ui.filter_edit => filter_hints(),
         None => list_hints(state, keymap, tabs, actions, list),
     };
     Some(KeyHintsModel {
@@ -328,6 +330,27 @@ fn action_hints(
     hints
 }
 
+/// The hints while the user types the filter: Enter keeps the filter,
+/// Esc cancels it. The filter line reads these keys directly, not from
+/// the key map.
+fn filter_hints() -> Vec<KeyHint> {
+    [
+        hint(&[plain_key(KeyCode::Enter)], "apply"),
+        hint(&[plain_key(KeyCode::Esc)], "cancel"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// The hint text of a key without modifiers.
+fn plain_key(code: KeyCode) -> String {
+    key_text(KeyChord {
+        code,
+        mods: KeyModifiers::NONE,
+    })
+}
+
 /// The hints of an overlay. They are all primary.
 fn overlay_hints(
     data: &AppData,
@@ -356,21 +379,13 @@ fn overlay_hints(
             app_hint(keymap, &["confirm"], "confirm", true),
             app_hint(keymap, &["cancel", "close_overlay"], "cancel", true),
         ],
-        OverlayState::Prompt { .. } => {
-            let key = |code| {
-                [key_text(KeyChord {
-                    code,
-                    mods: KeyModifiers::NONE,
-                })]
-            };
-            vec![
-                hint(&key(KeyCode::Enter), "submit"),
-                hint(&key(KeyCode::Esc), "cancel"),
-            ]
-        }
+        OverlayState::Prompt { .. } => vec![
+            hint(&[plain_key(KeyCode::Enter)], "submit"),
+            hint(&[plain_key(KeyCode::Esc)], "cancel"),
+        ],
         OverlayState::Authors(_) => vec![
             app_hint(keymap, &["open"], "select", true),
-            app_hint(keymap, &["close_overlay"], "clear", true),
+            app_hint(keymap, &["close_overlay"], "close", true),
         ],
         OverlayState::Output { .. } | OverlayState::Help(_) => {
             vec![app_hint(keymap, &["close_overlay"], "close", true)]
