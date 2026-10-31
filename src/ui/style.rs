@@ -20,7 +20,6 @@ pub(crate) fn cell_style(cell: CellStyle, palette: &Palette) -> Style {
         // The merge color is too dark for text on the background, so merge
         // text uses the lighter purple.
         CellStyle::Merge => palette.purple,
-        CellStyle::Local => palette.orange,
     };
     let style = Style::new().fg(fg);
     // Danger and warn carry a state, so they stand out from plain text.
@@ -50,7 +49,6 @@ mod tests {
         let p = Palette::pierre();
         assert_eq!(cell_style(CellStyle::Normal, &p).fg, Some(p.fg));
         assert_eq!(cell_style(CellStyle::Dim, &p).fg, Some(p.fg_mute));
-        assert_eq!(cell_style(CellStyle::Local, &p).fg, Some(p.orange));
         assert_eq!(cell_style(CellStyle::Merge, &p).fg, Some(p.purple));
         assert!(
             cell_style(CellStyle::Danger, &p)

@@ -137,7 +137,7 @@ pub(crate) fn change(
 }
 
 /// The jj scan of `chaoshub` for `mine_prs`: #103 synced, #102 diverged
-/// by its bookmark, a local-only change on top of #103, a loose change in
+/// by its bookmark, a change without a pull request on top of #103, one in
 /// the `spike` workspace, and a fresh empty working copy.
 pub(crate) fn mine_local() -> (RepoKey, Observed<crate::domain::local::LocalState>) {
     let mut diverged = change(

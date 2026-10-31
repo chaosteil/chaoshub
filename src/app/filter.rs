@@ -10,15 +10,13 @@ use std::collections::HashSet;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
-use crate::domain::keys::{PrKey, RepoKey};
-use crate::domain::local::LocalChange;
+use crate::domain::keys::PrKey;
 use crate::domain::pr::PullRequest;
 
 /// What the filter matches.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum ItemKey {
     Pr(PrKey),
-    Local { repo: RepoKey, change_id: String },
 }
 
 /// The fuzzy filter state of one tab.
@@ -93,21 +91,6 @@ pub(crate) fn pr_candidate(pr: &PullRequest) -> (ItemKey, String) {
     )
 }
 
-/// The filter candidate of a local change: its description, change id
-/// and workspace.
-pub(crate) fn local_candidate(repo: &RepoKey, change: &LocalChange) -> (ItemKey, String) {
-    (
-        ItemKey::Local {
-            repo: repo.clone(),
-            change_id: change.change_id.clone(),
-        },
-        format!(
-            "{} {} {}",
-            change.description, change.change_id, change.workspace
-        ),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,10 +110,7 @@ mod tests {
         let mut numbers: Vec<u64> = candidates()
             .into_iter()
             .filter(|(key, _)| filter.keeps(key))
-            .filter_map(|(key, _)| match key {
-                ItemKey::Pr(pr) => Some(pr.number),
-                ItemKey::Local { .. } => None,
-            })
+            .map(|(ItemKey::Pr(pr), _)| pr.number)
             .collect();
         numbers.sort_unstable();
         numbers
@@ -169,25 +149,5 @@ mod tests {
         assert!(filter.rescore("tab", 2, candidates()), "the text moved");
         assert!(filter.rescore("", 2, candidates()));
         assert_eq!(kept(&filter), [1, 2, 31]);
-    }
-
-    #[test]
-    fn a_local_change_matches_its_description() {
-        let repo = testdata::repo_key("chaoshub");
-        let change = LocalChange {
-            workspace: "layout".into(),
-            change_id: "zzmqxkrt".into(),
-            commit_id: "9a8b7c6d".into(),
-            bookmarks: Vec::new(),
-            empty: false,
-            parents: Vec::new(),
-            description: "wip: try the new layout".into(),
-        };
-        let mut filter = Filter::default();
-        filter.rescore("wip", 0, [local_candidate(&repo, &change)]);
-        assert!(filter.keeps(&ItemKey::Local {
-            repo,
-            change_id: "zzmqxkrt".into(),
-        }));
     }
 }

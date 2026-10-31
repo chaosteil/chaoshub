@@ -59,7 +59,7 @@ fn row_style(row: &Row, selected: bool, theme: &Theme) -> Style {
     let base = Style::new().bg(p.bg).fg(p.fg);
     let base = match row.style {
         RowStyle::Normal | RowStyle::Selected => base,
-        RowStyle::Dim | RowStyle::LocalOnly => base.fg(p.fg_mute),
+        RowStyle::Dim => base.fg(p.fg_mute),
         RowStyle::Header => base.fg(p.fg_dim).add_modifier(Modifier::BOLD),
     };
     if selected || row.style == RowStyle::Selected {
@@ -70,11 +70,10 @@ fn row_style(row: &Row, selected: bool, theme: &Theme) -> Style {
     }
 }
 
-/// The style of a cell in a row. Plain text in a dim or local-only row
-/// turns grey; markers keep their color.
+/// The style of a cell in a row. Plain text in a dim row turns grey; markers keep their color.
 fn cell_style(cell: &Cell, row: &Row, theme: &Theme) -> Style {
     let semantic = match (row.style, cell.style) {
-        (RowStyle::Dim | RowStyle::LocalOnly, CellStyle::Normal) => CellStyle::Dim,
+        (RowStyle::Dim, CellStyle::Normal) => CellStyle::Dim,
         (_, s) => s,
     };
     style::cell_style(semantic, &theme.palette)
@@ -171,7 +170,7 @@ fn render_row(frame: &Frame<'_>, row: &Row, y: u16, selected: bool, buf: &mut Bu
             }
             return;
         }
-        RowItem::Pr(_) | RowItem::Local { .. } => {}
+        RowItem::Pr(_) => {}
     }
     let mut x = x0;
     for (i, ((column, &w), cell)) in columns.iter().zip(widths).zip(&row.cells).enumerate() {
@@ -353,7 +352,7 @@ mod tests {
     fn scrolled_list() {
         let mut model = testdata::mine_list();
         model.scroll = 2;
-        model.cursor = 3;
+        model.cursor = 2;
         insta::assert_snapshot!(lines(&draw(&model, 100, 4, &testdata::ansi16())));
     }
 
@@ -366,21 +365,13 @@ mod tests {
         assert_eq!(buf[(0, 1)].symbol(), "▌");
         assert_eq!(buf[(0, 1)].fg, p.primary);
         assert_eq!(buf[(10, 1)].bg, p.surface);
-        // Row 2 is local-only: grey title, orange marker.
-        assert_eq!(buf[(6, 2)].fg, p.fg_mute);
-        let flags = lines(&buf)
-            .lines()
-            .nth(2)
-            .and_then(|l| l.chars().position(|c| c == '+'))
-            .unwrap();
-        assert_eq!(buf[(u16::try_from(flags).unwrap(), 2)].fg, p.orange);
-        // Row 4 has a red CI glyph.
+        // Row 3 has a red CI glyph.
         let ci = lines(&buf)
             .lines()
-            .nth(4)
+            .nth(3)
             .and_then(|l| l.chars().position(|c| c == '✗'))
             .unwrap();
-        assert_eq!(buf[(u16::try_from(ci).unwrap(), 4)].fg, p.danger);
+        assert_eq!(buf[(u16::try_from(ci).unwrap(), 3)].fg, p.danger);
         assert_ne!(buf[(10, 3)].bg, Color::Reset);
     }
 

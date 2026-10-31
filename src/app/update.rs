@@ -3183,38 +3183,6 @@ mod tests {
     }
 
     #[test]
-    fn a_local_row_selects_its_change() {
-        let (repo, scan) = testdata::mine_local();
-        let change = scan
-            .value
-            .changes
-            .iter()
-            .find(|change| change.change_id == "zzmqxkrtzzmq")
-            .unwrap()
-            .clone();
-        let item = RowItem::Local {
-            repo: repo.clone(),
-            change_id: change.change_id.clone(),
-        };
-        let mut state = action_state(&|_| item.clone());
-        let actions = fake(FakeAction::new("copy_change", 'Y'));
-        let cmds = act(&mut state, &actions, KeyCode::Char('Y'));
-        let [Cmd::RunAction { selection, .. }] = cmds.as_slice() else {
-            panic!("no action: {cmds:?}");
-        };
-        assert_eq!(
-            selection.target.key(),
-            TargetKey::Local {
-                repo,
-                change_id: change.change_id.clone(),
-            }
-        );
-        assert!(
-            matches!(&selection.target, crate::bus::Target::Local { change: got, .. } if *got == change)
-        );
-    }
-
-    #[test]
     fn keys_override_the_default_key_of_an_action() {
         let mut state = action_state(&pr_row(102));
         let actions = fake(FakeAction::new("approve", 'A'));

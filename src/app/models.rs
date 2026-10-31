@@ -3,7 +3,6 @@
 #![allow(dead_code, reason = "app and ui build on the models in later phases")]
 
 use crate::bus::{ConfirmSpec, OverlayKind, PrRef, PromptSpec, TermStatus};
-use crate::domain::keys::RepoKey;
 
 /// Everything that `ui::view` draws in one frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,7 +122,6 @@ pub(crate) struct Row {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RowItem {
     Pr(PrRef),
-    Local { repo: RepoKey, change_id: String },
     StackHeader { stack_id: String },
     Separator,
 }
@@ -146,8 +144,6 @@ pub(crate) enum CellStyle {
     Warn,
     Info,
     Merge,
-    /// The marker of a local-only change.
-    Local,
     /// A comment body in markdown. `ui` renders it through tui-markdown
     /// and wraps it to the width of the pane.
     Markdown,
@@ -158,7 +154,6 @@ pub(crate) enum CellStyle {
 pub(crate) enum RowStyle {
     Normal,
     Dim,
-    LocalOnly,
     Header,
     Selected,
 }
