@@ -6,8 +6,8 @@ use ratatui::backend::TestBackend;
 use crate::app::layout::{Areas, layout};
 use crate::app::models::{
     Align, Cell, CellStyle, Column, ColumnWidth, Direction, FrameModel, HelpModel, HelpSection,
-    ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, Row, RowItem, RowStyle,
-    StatusModel, TabBarModel, TreeNode,
+    KeyHint, KeyHintsModel, ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, Row,
+    RowItem, RowStyle, StatusModel, TabBarModel, TreeNode,
 };
 use crate::bus::{
     ConfirmSpec, OverlayKind, PrRef, Progress, PromptSpec, Size, TermState, TermStatus,
@@ -268,6 +268,25 @@ pub(crate) fn frame() -> FrameModel {
         },
         filter: None,
         hints: None,
+    }
+}
+
+/// The key hints of the list.
+pub(crate) fn hints() -> KeyHintsModel {
+    let hint = |key: &str, label: &str| KeyHint {
+        key: key.to_owned(),
+        label: label.to_owned(),
+        primary: true,
+    };
+    KeyHintsModel {
+        hints: vec![
+            hint("j/k", "move"),
+            hint("Enter", "open"),
+            hint("v", "review"),
+            hint("m", "merge"),
+            hint("/", "filter"),
+            hint("?", "help"),
+        ],
     }
 }
 
