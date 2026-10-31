@@ -18,7 +18,7 @@ use crate::app::panes::PaneState;
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{
     ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, Scope, Selection, Session, Size,
-    SyncError, UiEvent,
+    SyncError, TargetKey, UiEvent,
 };
 use crate::domain::detail::PrDetail;
 use crate::domain::keys::{PrKey, RepoKey};
@@ -73,6 +73,25 @@ pub(crate) struct AppData {
     pub now: DateTime<Utc>,
     /// The `[actions.<id>]` tables of the configuration, by action id.
     pub action_config: BTreeMap<String, toml::Table>,
+    /// The panes of the terminal actions, by action id and target. One
+    /// pane per key.
+    pub panes: HashMap<(&'static str, TargetKey), PaneHandleState>,
+}
+
+impl AppData {
+    /// True while a pane of any action is open for `key`.
+    pub(crate) fn pane_open(&self, key: &TargetKey) -> bool {
+        self.panes.keys().any(|(_, open)| open == key)
+    }
+}
+
+/// The state of a pane of a terminal action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaneHandleState {
+    /// `Cmd::RunTerminal` went out; the pane did not start yet.
+    Starting,
+    /// `Msg::PaneStarted` came.
+    Running,
 }
 
 /// The state of the UI.
@@ -266,6 +285,7 @@ impl AppState {
                 revision: 0,
                 now: DateTime::UNIX_EPOCH,
                 action_config: BTreeMap::new(),
+                panes: HashMap::new(),
             },
             ui: UiState {
                 active: 0,

@@ -12,7 +12,7 @@ use crate::app::models::{
 use crate::app::nav::place;
 use crate::app::tabs::cells::{self, cell};
 use crate::app::tabs::{Handled, KeyCx, Tab, TabState, list_interest, pr_ref};
-use crate::bus::{Interest, KeyChord, Scope, Size};
+use crate::bus::{Interest, KeyChord, Scope, Size, TargetKey};
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::team::{is_ready, team_order};
 
@@ -201,7 +201,7 @@ fn pr_row(pr: &PullRequest, cx: &KeyCx<'_>) -> Row {
         cell(age(head.updated_at, cx.data.now), CellStyle::Dim),
         cells::ci(pr.ci_state.value),
         cells::review(head.review_decision),
-        cells::flags(pr),
+        cells::flags(pr, cx.data.pane_open(&TargetKey::Pr(pr.key.clone()))),
     ];
     Row {
         item: RowItem::Pr(pr_ref(pr)),
