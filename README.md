@@ -48,6 +48,7 @@ Command line options:
 | `--repo OWNER/NAME` | Adds a repo for this session. Repeat the option for more repos. A repo from this option has no local path. |
 | `--config PATH` | Reads the configuration from `PATH` instead of `~/.config/chaoshub/config.toml`. |
 | `--no-prefetch` | Turns off the prefetch of pull request refs for this session. |
+| `--theme STYLE` | Uses `grunge`, `punk` or `plain` for this session, in place of `[theme] style`. |
 | `cache clear` | Deletes the cache file. The next start syncs from GitHub again. |
 
 ## Files
@@ -158,7 +159,8 @@ bypass_rules = true
 |---|---|---|
 | `method` | none | The merge method: `merge`, `squash` or `rebase`. Without it, chaoshub uses `squash` when the repo permits it, else `merge`, else `rebase`. |
 | `bypass_rules` | `false` | Asks GitHub to bypass the branch rules on a merge. |
-| `repos."owner/name"` | none | A table with `method` and `bypass_rules` for one repo. Each key that it sets overrides the top-level key for that repo. |
+| `stack` | `auto` | How chaoshub merges a stack: `auto`, `atomic` or `sequential`. See "Actions" below. |
+| `repos."owner/name"` | none | A table with `method`, `bypass_rules` and `stack` for one repo. Each key that it sets overrides the top-level key for that repo. |
 
 chaoshub copies these keys into `[actions.merge]`. If you set a key in
 `[actions.merge]`, that value wins over the value in `[merge]`.
@@ -170,7 +172,7 @@ Each action reads the table with its id. Two actions use a table:
 | Table | Key | Meaning |
 |---|---|---|
 | `[actions.review]` | `zoom` | Zooms the review pane. The default is the value of `[codeview] zoom`. |
-| `[actions.merge]` | `method`, `bypass_rules`, `repos` | The same keys as `[merge]`. |
+| `[actions.merge]` | `method`, `bypass_rules`, `stack`, `repos` | The same keys as `[merge]`. |
 
 The other actions ignore their table. A new action can read its own
 table (see "How to extend").
@@ -179,11 +181,15 @@ table (see "How to extend").
 
 | Key | Default | Meaning |
 |---|---|---|
-| `grunge` | `true` | Draws the rough block borders. |
-| `textures` | `true` | Fills empty areas with noise textures. |
+| `style` | `grunge` | The look: `grunge`, `punk` or `plain`. |
+| `grunge` | `true` | Draws the rough block borders. Applies to the grunge style only. |
+| `textures` | `true` | Fills empty areas with noise textures. Applies to the grunge style only. |
 | `animations` | `true` | Turns the transitions on: tab slides, popup slides, scrolls and the status message fade. |
 | `animation_ms` | `160` | The duration of one transition, in milliseconds. The confirm and prompt popups always take 100 ms, and the status fade takes 300 ms. |
 | `key_hints` | `true` | Shows the key hint bar above the status bar. |
+
+The punk style uses black, white and hard red, with cut corners and
+diagonal accents. To try it, start chaoshub with `--theme punk`.
 
 If two frames in a row take longer than 12 ms to draw, chaoshub turns
 the transitions off until it quits, and writes a line in the log.
@@ -267,7 +273,7 @@ action cannot run, the status line says why.
 | Binding | Key | What it does |
 |---|---|---|
 | `review` | `v` | Reviews the pull request in codeview. Needs a repo with a `path`. A second press focuses the open pane. |
-| `merge` | `m` | Merges the pull request after a confirm popup. For a stacked pull request, GitHub merges every entry up to it, bottom first. |
+| `merge` | `m` | Merges the pull request after a confirm popup. For a stacked pull request, see the stack merge paragraph below. |
 | `approve` | `A` | Approves the pull request. Not for your own pull request. |
 | `request_changes` | `R` | Asks for a message, then requests changes. Not for your own pull request. The message must not be empty. |
 | `rerun_checks` | `x` | Runs the failed checks again. |
@@ -276,6 +282,15 @@ action cannot run, the status line says why.
 | `browser` | `o` | Opens the pull request in the browser. |
 | `copy_url` | `y` | Copies the pull request URL. |
 | `copy_change_id` | `Y` | Copies the jj change id of the row. Also works on a local change without a pull request. |
+
+A merge of a stacked pull request includes every entry up to it. The
+`[merge] stack` key sets how chaoshub sends the merge. In `auto` mode,
+chaoshub reads the squash defaults of the repo. When they are the PR
+title and the PR body, or when the method is `merge` or `rebase`,
+chaoshub sends one atomic request. Else chaoshub merges each entry
+itself, bottom first, each with its own title and body. Thus every
+squash commit carries its PR body. The confirm popup says which way
+chaoshub merges.
 
 ## Rex, Ghostty and codeview
 
