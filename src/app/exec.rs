@@ -856,6 +856,8 @@ mod tests {
                 env: Vec::new(),
                 label: format!("pane-{number}"),
                 zoom: true,
+                split: None,
+                ratio: None,
             },
         }
     }

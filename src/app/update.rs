@@ -3343,7 +3343,10 @@ mod tests {
             env: Vec::new(),
             label: "chaoshub-review".into(),
             zoom: true,
+            split: None,
+            ratio: None,
         };
+
         let mut review = FakeAction::new("review", 'v');
         review.prepare = Prepare::Terminal(request.clone());
         let mut browser = FakeAction::new("browser", 'o');
@@ -3459,7 +3462,10 @@ mod tests {
             env: Vec::new(),
             label: "chaoshub-review".into(),
             zoom: true,
+            split: None,
+            ratio: None,
         };
+
         let mut review = FakeAction::new("review", 'v');
         review.prepare = Prepare::Terminal(request.clone());
         let actions = fake(review);
@@ -3655,7 +3661,10 @@ mod tests {
             env: Vec::new(),
             label: "chaoshub-review".into(),
             zoom: true,
+            split: None,
+            ratio: None,
         };
+
         let mut review = FakeAction::new("review", 'v');
         review.prepare = Prepare::Terminal(request.clone());
         let actions = fake(review);

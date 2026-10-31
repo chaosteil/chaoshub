@@ -74,6 +74,8 @@ impl Action for Review {
                 rand::random::<u16>()
             ),
             zoom,
+            split: None,
+            ratio: None,
         })
     }
 

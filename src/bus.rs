@@ -227,6 +227,12 @@ pub(crate) struct LaunchRequest {
     pub label: String,
     /// True when the pane fills the window.
     pub zoom: bool,
+    /// The direction of the new pane. `None` uses the default of the
+    /// launcher.
+    pub split: Option<String>,
+    /// The percent of the split that the new pane gets. `None` uses the
+    /// default of the launcher.
+    pub ratio: Option<u8>,
 }
 
 /// A sync failure, mapped from the adapter errors by the workers.
