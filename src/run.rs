@@ -28,8 +28,9 @@ use tokio::runtime::Handle;
 use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
 
+use crate::actions::REGISTRY;
 use crate::app::App;
-use crate::app::exec::{Runtime, Senders};
+use crate::app::exec::{ActionEnv, Runtime, Senders};
 use crate::app::keymap::Keymap;
 use crate::app::layout::layout;
 use crate::bus::{
@@ -133,10 +134,18 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         repos: settings.repos.clone(),
     };
     let (senders, channels) = channels(store.clone(), first_interest(&app), session);
-    let ctx = worker_ctx(&settings.config, store, tx, channels)?;
+    let client = Arc::new(GithubClient::new(TokenSource::gh(), GITHUB_API)?);
+    let locks = RepoLocks::default();
+    let env = ActionEnv {
+        registry: REGISTRY.as_slice(),
+        client: Arc::clone(&client),
+        locks: locks.clone(),
+        tx: tx.clone(),
+    };
+    let ctx = worker_ctx(&settings.config, store, tx, channels, client, locks);
     let mut event_loop = EventLoop {
         app,
-        runtime: Runtime::new(tokio.handle().clone(), senders),
+        runtime: Runtime::new(tokio.handle().clone(), senders, env),
         handle: tokio.handle().clone(),
         transitions,
         theme,
@@ -169,18 +178,20 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     result
 }
 
-/// The context of the workers: the GitHub client with the token of
-/// `gh auth token`, the store, the configuration, the message channel, the
-/// watches and the request channels, and the repo locks.
+/// The context of the workers: the GitHub client, the store, the
+/// configuration, the message channel, the watches and the request
+/// channels, and the repo locks. The action tasks share the client and
+/// the locks.
 fn worker_ctx(
     config: &Config,
     store: StoreHandle,
     tx: mpsc::Sender<Msg>,
     channels: WorkerChannels,
-) -> anyhow::Result<WorkerCtx> {
-    let client = GithubClient::new(TokenSource::gh(), GITHUB_API)?;
-    Ok(WorkerCtx {
-        client: Arc::new(client),
+    client: Arc<GithubClient>,
+    locks: RepoLocks,
+) -> WorkerCtx {
+    WorkerCtx {
+        client,
         store,
         config: Arc::new(config.clone()),
         tx,
@@ -188,8 +199,8 @@ fn worker_ctx(
         session: channels.session,
         sync_rx: Arc::new(tokio::sync::Mutex::new(channels.sync)),
         jj_rx: Arc::new(tokio::sync::Mutex::new(channels.jj)),
-        locks: RepoLocks::default(),
-    })
+        locks,
+    }
 }
 
 /// The capacity of the request channels of the sync and the jj worker.
