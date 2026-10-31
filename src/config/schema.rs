@@ -89,6 +89,44 @@ impl Default for CodeviewConfig {
     }
 }
 
+/// The `[detail]` section: where `enter` opens the detail of a pull
+/// request.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub(crate) struct DetailConfig {
+    /// A Rex pane or the sidebar.
+    pub mode: DetailMode,
+    /// The `rex split` direction of the pane.
+    pub split: String,
+    /// The `rex split --ratio` value of the pane in percent. `None` uses
+    /// the Rex default.
+    pub ratio: Option<u8>,
+}
+
+impl Default for DetailConfig {
+    fn default() -> Self {
+        Self {
+            mode: DetailMode::Auto,
+            split: "right".to_owned(),
+            ratio: None,
+        }
+    }
+}
+
+/// A `[detail] mode` in the configuration file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum DetailMode {
+    /// Opens a pane inside Rex, and the sidebar elsewhere.
+    #[default]
+    Auto,
+    /// Always opens the pane. Without Rex, the pane runs in the
+    /// foreground.
+    Pane,
+    /// Always opens the sidebar.
+    Sidebar,
+}
+
 /// The `[merge]` section. `Config::parse` also copies its keys into
 /// `[actions.merge]`, the table that the merge action reads, unless
 /// `[actions.merge]` sets the key. So `[merge.repos."owner/name"]` and
@@ -327,6 +365,40 @@ mod tests {
         assert!(terminal.mouse);
         let terminal: TerminalConfig = toml::from_str("mouse = false").unwrap();
         assert!(!terminal.mouse);
+    }
+
+    #[test]
+    fn detail_defaults() {
+        let detail: DetailConfig = toml::from_str("").unwrap();
+        assert_eq!(
+            detail,
+            DetailConfig {
+                mode: DetailMode::Auto,
+                split: "right".into(),
+                ratio: None,
+            }
+        );
+    }
+
+    #[test]
+    fn detail_section_parses() {
+        let detail: DetailConfig =
+            toml::from_str("mode = \"sidebar\"\nsplit = \"below\"\nratio = 40").unwrap();
+        assert_eq!(
+            detail,
+            DetailConfig {
+                mode: DetailMode::Sidebar,
+                split: "below".into(),
+                ratio: Some(40),
+            }
+        );
+        let detail: DetailConfig = toml::from_str("mode = \"pane\"").unwrap();
+        assert_eq!(detail.mode, DetailMode::Pane);
+    }
+
+    #[test]
+    fn an_unknown_detail_mode_fails() {
+        assert!(toml::from_str::<DetailConfig>("mode = \"window\"").is_err());
     }
 
     #[test]
