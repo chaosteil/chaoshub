@@ -444,4 +444,67 @@ mod tests {
         insta::assert_snapshot!("popup_slide_out_progress_0.5", frames[1]);
         insta::assert_snapshot!("popup_slide_out_progress_1.0", frames[2]);
     }
+
+    /// The punk themes with their snapshot names.
+    fn punk_themes() -> [(&'static str, Theme); 2] {
+        [
+            ("truecolor", testdata::punk()),
+            ("ansi16", testdata::punk_ansi16()),
+        ]
+    }
+
+    /// The screen sizes of the punk snapshots.
+    const PUNK_SIZES: [(u16, u16); 2] = [(100, 30), (160, 40)];
+
+    /// Snapshots a frame model in both punk themes at both sizes.
+    fn punk_snapshots(name: &str, model: &FrameModel) {
+        for (kind, theme) in punk_themes() {
+            for (width, height) in PUNK_SIZES {
+                insta::assert_snapshot!(
+                    format!("punk_{name}_{width}_{kind}"),
+                    draw(model, width, height, &theme)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn punk_list() {
+        let model = FrameModel {
+            hints: Some(testdata::hints()),
+            ..testdata::frame()
+        };
+        punk_snapshots("list", &model);
+    }
+
+    #[test]
+    fn punk_popup() {
+        punk_snapshots("popup", &popup());
+    }
+
+    #[test]
+    fn punk_confirm() {
+        punk_snapshots(
+            "confirm",
+            &testdata::with_overlay(testdata::confirm_overlay(true)),
+        );
+    }
+
+    #[test]
+    fn punk_help() {
+        punk_snapshots("help", &help());
+    }
+
+    #[test]
+    fn punk_hints() {
+        for (kind, theme) in punk_themes() {
+            for (width, _) in PUNK_SIZES {
+                let area = Rect::new(0, 0, width, 1);
+                let mut buf = ratatui::buffer::Buffer::empty(area);
+                hints::render(&testdata::hints(), area, &mut buf, &theme);
+                let row: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+                insta::assert_snapshot!(format!("punk_hints_{width}_{kind}"), row);
+            }
+        }
+    }
 }
