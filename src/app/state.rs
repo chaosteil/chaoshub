@@ -209,7 +209,18 @@ pub(crate) enum OverlayState {
     },
     /// The help overlay: the key bindings that it shows.
     Help(HelpModel),
+    /// The output popup of an action: the lines of its
+    /// `ActionEvent::Output` events, at most `OUTPUT_LINES`.
+    Output {
+        id: &'static str,
+        key: TargetKey,
+        title: String,
+        lines: Vec<String>,
+    },
 }
+
+/// The most lines that an output popup keeps. Older lines go first.
+pub(crate) const OUTPUT_LINES: usize = 2000;
 
 /// The action that a confirm or a prompt popup runs, and its selection.
 #[derive(Debug)]
