@@ -9,7 +9,7 @@ use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 
 use crate::bus::PromptSpec;
 use crate::theme::Theme;
-use crate::theme::grunge::{GrungeBlock, stencil};
+use crate::theme::ThemeBlock;
 
 /// The key hint on the last row.
 const HINT: &str = "Enter send · Esc cancel";
@@ -19,13 +19,12 @@ pub(crate) fn render(spec: &PromptSpec, text: &str, area: Rect, buf: &mut Buffer
     let p = &theme.palette;
     let area = area.intersection(buf.area);
     Clear.render(area, buf);
-    GrungeBlock::new(theme)
-        .title(stencil(&spec.title, Style::new().fg(p.warn)))
-        .border_style(Style::new().fg(p.warn).bg(p.bg))
-        .style(Style::new().bg(p.bg).fg(p.fg))
+    theme
+        .block(&spec.title)
+        .accent(p.warn)
         .seed(13)
         .render(area, buf);
-    let inner = GrungeBlock::inner(area);
+    let inner = ThemeBlock::inner(area);
     if inner.height < 2 || inner.width < 2 {
         return;
     }

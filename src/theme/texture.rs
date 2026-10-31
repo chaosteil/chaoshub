@@ -28,7 +28,7 @@ impl Texture {
     /// Creates a texture for the theme.
     pub(crate) fn new(theme: &Theme) -> Self {
         Self {
-            enabled: theme.textures,
+            enabled: theme.textures(),
             color: theme.palette.surface,
             seed: 0,
         }

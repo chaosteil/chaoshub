@@ -7,7 +7,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Clear, Widget};
 
 use crate::theme::Theme;
-use crate::theme::grunge::{GrungeBlock, stencil};
+use crate::theme::ThemeBlock;
 use crate::ui::text;
 
 /// Draws the output popup into its area.
@@ -15,13 +15,13 @@ pub(crate) fn render(title: &str, lines: &[String], area: Rect, buf: &mut Buffer
     let p = &theme.palette;
     let area = area.intersection(buf.area);
     Clear.render(area, buf);
-    GrungeBlock::new(theme)
-        .title(stencil(title, Style::new().fg(p.info)))
-        .border_style(Style::new().fg(p.fg_mute).bg(p.bg))
-        .style(Style::new().bg(p.bg).fg(p.fg))
+    theme
+        .block(title)
+        .accent(p.info)
+        .border(p.fg_mute)
         .seed(17)
         .render(area, buf);
-    let inner = GrungeBlock::inner(area);
+    let inner = ThemeBlock::inner(area);
     if inner.height < 2 || inner.width < 2 {
         return;
     }

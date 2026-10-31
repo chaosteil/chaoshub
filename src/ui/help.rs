@@ -8,7 +8,7 @@ use ratatui::widgets::{Clear, Widget};
 
 use crate::app::models::HelpModel;
 use crate::theme::Theme;
-use crate::theme::grunge::{GrungeBlock, stencil};
+use crate::theme::ThemeBlock;
 use crate::ui::text;
 
 /// The minimum width of the key column.
@@ -19,13 +19,12 @@ pub(crate) fn render(model: &HelpModel, area: Rect, buf: &mut Buffer, theme: &Th
     let p = &theme.palette;
     let area = area.intersection(buf.area);
     Clear.render(area, buf);
-    GrungeBlock::new(theme)
-        .title(stencil("help", Style::new().fg(p.info)))
-        .border_style(Style::new().fg(p.info).bg(p.bg))
-        .style(Style::new().bg(p.bg).fg(p.fg))
+    theme
+        .block("help")
+        .accent(p.info)
         .seed(11)
         .render(area, buf);
-    let inner = GrungeBlock::inner(area);
+    let inner = ThemeBlock::inner(area);
     let inner = Rect::new(
         inner.x + 1,
         inner.y + 1,
@@ -41,7 +40,8 @@ pub(crate) fn render(model: &HelpModel, area: Rect, buf: &mut Buffer, theme: &Th
         if y >= inner.bottom() {
             return;
         }
-        stencil(&section.title, Style::new().fg(p.primary))
+        theme
+            .header(&section.title, p.primary)
             .render(Rect::new(inner.x, y, inner.width, 1), buf);
         y += 1;
         let key_width = section

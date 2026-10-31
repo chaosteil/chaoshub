@@ -9,7 +9,7 @@ use ratatui::widgets::{Clear, Widget};
 
 use crate::bus::ConfirmSpec;
 use crate::theme::Theme;
-use crate::theme::grunge::{GrungeBlock, stencil};
+use crate::theme::ThemeBlock;
 use crate::ui::text;
 
 /// Draws the confirm popup into its area.
@@ -18,13 +18,12 @@ pub(crate) fn render(spec: &ConfirmSpec, area: Rect, buf: &mut Buffer, theme: &T
     let accent = if spec.danger { p.danger } else { p.primary };
     let area = area.intersection(buf.area);
     Clear.render(area, buf);
-    GrungeBlock::new(theme)
-        .title(stencil(&spec.title, Style::new().fg(accent)))
-        .border_style(Style::new().fg(accent).bg(p.bg))
-        .style(Style::new().bg(p.bg).fg(p.fg))
+    theme
+        .block(&spec.title)
+        .accent(accent)
         .seed(19)
         .render(area, buf);
-    let inner = GrungeBlock::inner(area);
+    let inner = ThemeBlock::inner(area);
     if inner.height < 1 || inner.width < 2 {
         return;
     }

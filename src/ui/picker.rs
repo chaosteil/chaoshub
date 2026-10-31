@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Clear, Widget};
 
 use crate::theme::Theme;
-use crate::theme::grunge::{GrungeBlock, stencil};
+use crate::theme::ThemeBlock;
 use crate::ui::text;
 
 /// Draws the picker popup into its area.
@@ -22,13 +22,12 @@ pub(crate) fn render(
     let p = &theme.palette;
     let area = area.intersection(buf.area);
     Clear.render(area, buf);
-    GrungeBlock::new(theme)
-        .title(stencil(title, Style::new().fg(p.primary)))
-        .border_style(Style::new().fg(p.primary).bg(p.bg))
-        .style(Style::new().bg(p.bg).fg(p.fg))
+    theme
+        .block(title)
+        .accent(p.primary)
         .seed(23)
         .render(area, buf);
-    let inner = GrungeBlock::inner(area);
+    let inner = ThemeBlock::inner(area);
     if inner.height == 0 || inner.width < 2 {
         return;
     }

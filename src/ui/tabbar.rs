@@ -2,26 +2,15 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::style::Style;
+use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
 use crate::app::models::TabBarModel;
 use crate::theme::Theme;
-use crate::theme::texture::Texture;
 
 /// The name on the right end of the bar.
 const NAME: &str = "chaoshub";
-
-/// A title in uppercase with spaced letters.
-fn spaced(title: &str) -> String {
-    title
-        .to_uppercase()
-        .chars()
-        .map(String::from)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
 
 /// Draws the tab bar. The active tab has the `▌` marker and the surface
 /// background. The free cells get the texture.
@@ -31,15 +20,8 @@ pub(crate) fn render(model: &TabBarModel, area: Rect, buf: &mut Buffer, theme: &
     buf.set_style(area, base);
     let mut spans = Vec::new();
     for (i, title) in model.titles.iter().enumerate() {
-        let label = format!(" {} {} ", i + 1, spaced(title));
-        if i == model.active {
-            let active = Style::new().bg(p.surface).fg(p.fg);
-            spans.push(Span::styled("▌", active.fg(p.primary)));
-            spans.push(Span::styled(label, active.add_modifier(Modifier::BOLD)));
-        } else {
-            spans.push(Span::styled(" ", base));
-            spans.push(Span::styled(label, base));
-        }
+        let label = format!(" {} {} ", i + 1, theme.tab_title(title));
+        spans.extend(theme.tab(&label, i == model.active));
     }
     let line = Line::from(spans);
     let used = u16::try_from(line.width())
@@ -57,7 +39,7 @@ pub(crate) fn render(model: &TabBarModel, area: Rect, buf: &mut Buffer, theme: &
         let x = area.right() - name_width;
         buf.set_string(x, area.y, NAME, Style::new().bg(p.bg).fg(p.fg_mute));
         let texture = Rect::new(free.x + 1, free.y, free.width - name_width - 2, 1);
-        Texture::new(theme).seed(1).render(texture, buf);
+        theme.fill(texture, buf, 1);
     }
 }
 
