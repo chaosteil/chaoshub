@@ -332,8 +332,9 @@ struct PaneRun {
 
 impl PaneRun {
     /// Launches the pane, watches it until it ends or the token is
-    /// cancelled, and closes it on a cancel. `PaneEnded` comes last, also
-    /// when the launch fails.
+    /// cancelled, and closes it on a cancel. `PaneEnded` comes last. A
+    /// failed launch sends `Done` with the error only: no `PaneStarted`
+    /// came, so no `PaneEnded` follows, and the follow-up runs once.
     async fn run(&self, request: &LaunchRequest) {
         let handle = match self.launcher.launch(request).await {
             Ok(handle) => handle,
@@ -343,11 +344,6 @@ impl PaneRun {
                     id: self.id,
                     key: self.key.clone(),
                     event: ActionEvent::Done(Err(format!("cannot open the pane: {err}"))),
-                })
-                .await;
-                self.send(Msg::PaneEnded {
-                    id: self.id,
-                    key: self.key.clone(),
                 })
                 .await;
                 return;
@@ -959,7 +955,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_launch_reports_its_error_and_ends_the_pane() {
+    fn a_failed_launch_sends_only_done_with_its_error() {
         let tokio = tokio();
         let launcher = Arc::new(FakeLauncher {
             launch_fails: true,
@@ -977,7 +973,15 @@ mod tests {
                 ),
             })
         );
-        assert_eq!(f.msgs.blocking_recv(), Some(ended(3)));
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while f.runtime.running() > 0 {
+            assert!(std::time::Instant::now() < deadline, "timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            f.msgs.try_recv().is_err(),
+            "no PaneEnded after a failed launch"
+        );
         assert_eq!(launcher.calls(), ["launch pane-3"]);
     }
 
