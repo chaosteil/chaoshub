@@ -3,10 +3,9 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::widgets::Widget;
 
-use crate::app::models::StatusModel;
+use crate::app::models::{CellStyle, StatusModel};
 use crate::theme::Theme;
 use crate::ui::style;
 
@@ -15,25 +14,42 @@ const PAD: u16 = 1;
 /// The minimum space between the message and its neighbors.
 const SPACE: u16 = 2;
 
-/// Draws the status bar.
+/// Draws the status bar. The theme picks the bar style, an optional band
+/// behind the left part with a diagonal end, and the message color.
 pub(crate) fn render(model: &StatusModel, area: Rect, buf: &mut Buffer, theme: &Theme) {
     let palette = &theme.palette;
-    buf.set_style(area, Style::new().bg(palette.surface).fg(palette.fg));
+    let band = theme.status_band();
+    buf.set_style(area, band.bar);
     if area.width <= 2 * PAD || area.height == 0 {
         return;
     }
     let inner = Rect::new(area.x + PAD, area.y, area.width - 2 * PAD, 1);
-    let left = style::line(&model.left, palette);
+    let mut left = style::line(&model.left, palette);
+    if let Some(style) = band.left {
+        for span in &mut left.spans {
+            span.style = style;
+        }
+    }
     let right = style::line(&model.right, palette);
     let right_width = u16::try_from(right.width())
         .unwrap_or(u16::MAX)
         .min(inner.width);
     let right_x = inner.right() - right_width;
     right.render(Rect::new(right_x, inner.y, right_width, 1), buf);
+    // The band takes one cell after the text and one for its end.
+    let tail = if band.end.is_some() { 2 } else { 0 };
     let left_width = u16::try_from(left.width())
         .unwrap_or(u16::MAX)
-        .min(right_x - inner.x);
+        .min((right_x - inner.x).saturating_sub(tail));
+    if let Some(style) = band.left {
+        let width = inner.x - area.x + left_width + tail.saturating_sub(1);
+        buf.set_style(Rect::new(area.x, area.y, width, 1), style);
+    }
     left.render(Rect::new(inner.x, inner.y, left_width, 1), buf);
+    if let Some((glyph, style)) = band.end {
+        buf.set_string(inner.x + left_width + 1, inner.y, glyph, style);
+    }
+    let left_width = left_width + tail;
     let Some(center) = &model.center else {
         return;
     };
@@ -49,18 +65,19 @@ pub(crate) fn render(model: &StatusModel, area: Rect, buf: &mut Buffer, theme: &
     let width = u16::try_from(crate::ui::text::width(&text)).unwrap_or(free);
     let middle = (area.x + area.width / 2).saturating_sub(width / 2);
     let x = middle.clamp(lo, hi - width);
-    buf.set_string(
-        x,
-        inner.y,
-        text,
-        style::cell_style(center.style, palette).bg(palette.surface),
-    );
+    let mut message = band.bar.patch(style::cell_style(center.style, palette));
+    // A message with a state keeps its state color.
+    if !matches!(center.style, CellStyle::Danger | CellStyle::Warn)
+        && let Some(fg) = band.message_fg
+    {
+        message = message.fg(fg);
+    }
+    buf.set_string(x, inner.y, text, message);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::models::CellStyle;
     use crate::ui::testdata::{self, cell};
 
     fn draw(model: &StatusModel, width: u16, theme: &Theme) -> Buffer {
@@ -128,5 +145,43 @@ mod tests {
         let x = u16::try_from(row(&buf).find("rate").unwrap()).unwrap();
         assert_eq!(buf[(x, 0)].fg, theme.palette.danger);
         assert_eq!(buf[(x, 0)].bg, theme.palette.surface);
+    }
+
+    #[test]
+    fn punk_status_has_a_red_band_on_the_left() {
+        let theme = testdata::punk();
+        let p = theme.palette;
+        let buf = draw(&testdata::status(), 100, &theme);
+        let text = row(&buf);
+        assert!(text.starts_with(" [MINE] 3 repos"), "{text}");
+        let end = text.chars().position(|c| c == '◤').unwrap();
+        for x in 0..u16::try_from(end).unwrap() {
+            assert_eq!(buf[(x, 0)].bg, p.primary, "x {x}");
+            assert_eq!(buf[(x, 0)].fg, p.bg, "x {x}");
+        }
+        let end = u16::try_from(end).unwrap();
+        assert_eq!(buf[(end, 0)].fg, p.primary);
+        assert_eq!(buf[(end, 0)].bg, p.bg);
+        let x = u16::try_from(text.chars().position(|c| c == 'm').unwrap()).unwrap();
+        assert_eq!(
+            text.chars()
+                .skip(usize::from(x))
+                .take(6)
+                .collect::<String>(),
+            "merged"
+        );
+        assert_eq!(buf[(x, 0)].fg, p.fg);
+        assert_eq!(buf[(x, 0)].bg, p.bg);
+        assert!(text.ends_with("? help "), "{text}");
+    }
+
+    #[test]
+    fn punk_errors_keep_the_danger_color() {
+        let mut model = testdata::status();
+        model.center = Some(cell("rate limited until 14:05", CellStyle::Danger));
+        let theme = testdata::punk();
+        let buf = draw(&model, 100, &theme);
+        let x = u16::try_from(row(&buf).find("rate").unwrap()).unwrap();
+        assert_eq!(buf[(x, 0)].fg, theme.palette.danger);
     }
 }

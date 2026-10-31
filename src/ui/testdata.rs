@@ -25,6 +25,16 @@ pub(crate) fn ansi16() -> Theme {
     Theme::new(ThemeKind::Ansi16, true, true)
 }
 
+/// The punk theme on a true-color terminal.
+pub(crate) fn punk() -> Theme {
+    Theme::punk(ThemeKind::TrueColor)
+}
+
+/// The punk theme on a 16-color terminal.
+pub(crate) fn punk_ansi16() -> Theme {
+    Theme::punk(ThemeKind::Ansi16)
+}
+
 /// The areas of a screen size.
 pub(crate) fn areas(width: u16, height: u16) -> Areas {
     layout(Size { width, height })

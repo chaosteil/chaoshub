@@ -8,7 +8,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 
 use crate::app::models::{Cell, CellStyle, Column, ColumnWidth, ListModel, Row, RowItem, RowStyle};
 use crate::theme::Theme;
@@ -89,6 +89,23 @@ fn tree_prefix(row: &Row) -> String {
     }
 }
 
+/// The cells at the right end of every row that the selection tail of
+/// the theme keeps free.
+fn tail_width(theme: &Theme) -> u16 {
+    u16::from(theme.selected_row().tail.is_some())
+}
+
+/// The width of the columns of a list `width` cells wide: the width
+/// without the cursor gutter and the selection tail.
+pub(crate) fn content_width(width: u16, theme: &Theme) -> u16 {
+    width.saturating_sub(GUTTER + tail_width(theme))
+}
+
+/// The style with the text color `fg`, or the style as it is.
+fn with_fg(style: Style, fg: Option<Color>) -> Style {
+    fg.map_or(style, |fg| style.fg(fg))
+}
+
 /// What every row of one draw shares.
 struct Frame<'a> {
     columns: &'a [Column],
@@ -108,8 +125,14 @@ fn render_row(frame: &Frame<'_>, row: &Row, y: u16, selected: bool, buf: &mut Bu
     let line = Rect::new(area.x, y, area.width, 1);
     let base = row_style(row, selected, theme);
     buf.set_style(line, base);
+    let selection = theme.selected_row();
+    let banded = selected || row.style == RowStyle::Selected;
+    // A band can force one text color on its cells.
+    let fg = if banded { selection.cell_fg } else { None };
+    if banded && let Some((glyph, style)) = selection.tail {
+        buf.set_string(line.right() - 1, y, glyph, style);
+    }
     if selected {
-        let selection = theme.selected_row();
         buf.set_string(
             area.x,
             y,
@@ -118,7 +141,7 @@ fn render_row(frame: &Frame<'_>, row: &Row, y: u16, selected: bool, buf: &mut Bu
         );
     }
     let x0 = area.x + GUTTER;
-    let right = area.right();
+    let right = area.right().saturating_sub(tail_width(theme)).max(x0);
     match row.item {
         RowItem::Separator => {
             let width = right.saturating_sub(x0);
@@ -139,8 +162,10 @@ fn render_row(frame: &Frame<'_>, row: &Row, y: u16, selected: bool, buf: &mut Bu
                 if x >= right {
                     break;
                 }
-                let style =
-                    base.patch(cell_style(cell, row, theme).remove_modifier(Modifier::BOLD));
+                let style = with_fg(
+                    base.patch(cell_style(cell, row, theme).remove_modifier(Modifier::BOLD)),
+                    fg,
+                );
                 let (nx, _) = buf.set_stringn(x, y, &cell.text, usize::from(right - x), style);
                 x = nx;
             }
@@ -158,13 +183,13 @@ fn render_row(frame: &Frame<'_>, row: &Row, y: u16, selected: bool, buf: &mut Bu
         let mut cell_w = usize::from(w);
         if i == 0 {
             let prefix = tree_prefix(row);
-            let glyph_style = base.fg(theme.palette.fg_mute);
+            let glyph_style = with_fg(base.fg(theme.palette.fg_mute), fg);
             let (px, _) = buf.set_stringn(cell_x, y, &prefix, cell_w, glyph_style);
             cell_w = cell_w.saturating_sub(usize::from(px - cell_x));
             cell_x = px;
         }
         let fitted = text::fit(&cell.text, cell_w, column.align);
-        let style = base.patch(cell_style(cell, row, theme));
+        let style = with_fg(base.patch(cell_style(cell, row, theme)), fg);
         buf.set_stringn(cell_x, y, fitted, cell_w, style);
         x = x.saturating_add(w + GAP);
     }
@@ -216,7 +241,7 @@ pub(crate) fn render_rows(
     {
         buf[(x, y)].set_symbol(" ");
     }
-    let widths = column_widths(columns, area.width.saturating_sub(GUTTER));
+    let widths = column_widths(columns, content_width(area.width, theme));
     let visible = rows
         .iter()
         .enumerate()
@@ -244,8 +269,6 @@ pub(crate) fn render_rows(
 
 #[cfg(test)]
 mod tests {
-    use ratatui::style::Color;
-
     use super::*;
     use crate::app::models::Align;
     use crate::ui::testdata;
@@ -375,5 +398,26 @@ mod tests {
         model.cursor = 9;
         let text = lines(&draw(&model, 20, 2, &testdata::ansi16()));
         assert_eq!(text.lines().nth(1), Some(" ───────────────────"));
+    }
+
+    #[test]
+    fn punk_selected_row_is_a_band() {
+        let theme = testdata::punk();
+        let p = theme.palette;
+        let buf = draw(&testdata::mine_list(), 100, 9, &theme);
+        let row = lines(&buf).lines().nth(1).unwrap().to_owned();
+        assert!(row.starts_with('▶'), "{row}");
+        assert!(row.ends_with('╱'), "{row}");
+        assert_eq!(buf[(0, 1)].fg, p.fg);
+        assert_eq!(buf[(0, 1)].bg, p.band);
+        // Every cell on the band is white, colored markers too.
+        for x in 1..99 {
+            assert_eq!(buf[(x, 1)].bg, p.band, "x {x}");
+            assert_eq!(buf[(x, 1)].fg, p.fg, "x {x}");
+        }
+        assert_eq!(buf[(99, 1)].fg, p.band);
+        assert_eq!(buf[(99, 1)].bg, p.bg);
+        // Other rows keep the last cell free.
+        assert_eq!(buf[(99, 4)].symbol(), " ");
     }
 }

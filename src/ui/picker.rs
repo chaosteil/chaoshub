@@ -33,13 +33,18 @@ pub(crate) fn render(
     }
     let rows = usize::from(inner.height);
     let offset = cursor.saturating_sub(rows - 1);
-    let width = usize::from(inner.width - 2);
+    let selection = theme.selected_row();
+    let tail = u16::from(selection.tail.is_some());
+    let width = usize::from(inner.width.saturating_sub(2 + tail));
     for (y, (index, item)) in (inner.y..).zip(items.iter().enumerate().skip(offset).take(rows)) {
         let line = Rect::new(inner.x, y, inner.width, 1);
         if index == cursor {
-            let style = Style::new().bg(p.surface).fg(p.fg);
+            let style = Style::new().fg(p.fg).patch(selection.patch);
             buf.set_style(line, style);
-            buf.set_string(inner.x, y, "▌", style.fg(p.primary));
+            buf.set_string(inner.x, y, selection.marker, style.fg(selection.marker_fg));
+            if let Some((glyph, tail)) = selection.tail {
+                buf.set_string(line.right() - 1, y, glyph, tail);
+            }
             buf.set_string(
                 inner.x + 2,
                 y,
