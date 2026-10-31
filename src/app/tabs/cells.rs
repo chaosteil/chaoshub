@@ -32,8 +32,9 @@ pub(crate) fn review(decision: Option<ReviewDecision>) -> Cell {
     }
 }
 
-/// The flags: `D` draft, `C` conflicting, `Q` merge queue.
-pub(crate) fn flags(pr: &PullRequest) -> Cell {
+/// The flags: `D` draft, `C` conflicting, `Q` merge queue, `▶` an open
+/// pane.
+pub(crate) fn flags(pr: &PullRequest, pane: bool) -> Cell {
     let head = &pr.head.value;
     let mut text = String::new();
     if head.is_draft {
@@ -44,6 +45,9 @@ pub(crate) fn flags(pr: &PullRequest) -> Cell {
     }
     if head.in_merge_queue {
         text.push('Q');
+    }
+    if pane {
+        text.push('▶');
     }
     cell(text, CellStyle::Warn)
 }
@@ -85,10 +89,12 @@ mod tests {
     #[test]
     fn flags_in_order() {
         let mut pr = testdata::pr("r", 1, "One");
-        assert_eq!(flags(&pr).text, "");
+        assert_eq!(flags(&pr, false).text, "");
+        assert_eq!(flags(&pr, true).text, "▶");
         pr.head.value.is_draft = true;
         pr.head.value.mergeable = Mergeable::Conflicting;
         pr.head.value.in_merge_queue = true;
-        assert_eq!(flags(&pr), cell("DCQ", CellStyle::Warn));
+        assert_eq!(flags(&pr, false), cell("DCQ", CellStyle::Warn));
+        assert_eq!(flags(&pr, true), cell("DCQ▶", CellStyle::Warn));
     }
 }

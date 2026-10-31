@@ -17,7 +17,7 @@ use crate::app::nav::{self, Motion};
 use crate::app::panes::{PANES, Pane, applicable, items};
 use crate::app::state::{
     AUTHOR_KEY, ActionDialog, AppData, AppState, AuthorPicker, FILTER_KEY, Failure, Overlay,
-    OverlayState, PopupState, error_text, ui_key,
+    OverlayState, PaneHandleState, PopupState, error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, pr_ref};
 use crate::app::target::{pr_target, row_target};
@@ -122,8 +122,18 @@ pub(crate) fn update_full(
             key,
             event: ActionEvent::Done(_),
             ..
+        } => follow_up(&state.data, &key),
+        Msg::PaneStarted { id, key } => {
+            state.data.panes.insert((id, key), PaneHandleState::Running);
+            state.bump();
+            Vec::new()
         }
-        | Msg::PaneEnded { key, .. } => follow_up(&state.data, &key),
+        Msg::PaneEnded { id, key } => {
+            if state.data.panes.remove(&(id, key.clone())).is_some() {
+                state.bump();
+            }
+            follow_up(&state.data, &key)
+        }
         _ => {
             tracing::trace!("message not handled yet");
             Vec::new()
@@ -278,11 +288,18 @@ fn action_key(
             open_overlay(state, OverlayKind::Prompt, prompt);
             Vec::new()
         }
-        Prepare::Terminal(request) => vec![Cmd::RunTerminal {
-            id,
-            key: selection.target.key(),
-            request,
-        }],
+        Prepare::Terminal(request) => {
+            let key = selection.target.key();
+            if state.data.panes.contains_key(&(id, key.clone())) {
+                return Some(vec![Cmd::FocusPane { id, key }]);
+            }
+            state
+                .data
+                .panes
+                .insert((id, key.clone()), PaneHandleState::Starting);
+            state.bump();
+            vec![Cmd::RunTerminal { id, key, request }]
+        }
         Prepare::Command(cmd) => vec![cmd],
     };
     Some(cmds)
@@ -2682,5 +2699,80 @@ mod tests {
             cmds.as_slice(),
             [Cmd::RunAction { id: "approve", .. }]
         ));
+    }
+
+    /// The flags cell of the row of `#number` of `chaoshub`.
+    fn flags_of(state: &mut AppState, number: u64) -> String {
+        let model = frame::active_list(state, &TABS);
+        let row = model
+            .rows
+            .iter()
+            .find(|row| matches!(&row.item, RowItem::Pr(pr) if pr.key.number == number))
+            .unwrap();
+        row.cells.last().unwrap().text.clone()
+    }
+
+    #[test]
+    fn one_pane_per_key_and_a_second_press_focuses_it() {
+        let mut state = action_state(&pr_row(99));
+        let request = crate::bus::LaunchRequest {
+            argv: vec!["nvim".into()],
+            cwd: "/code/chaoshub".into(),
+            env: Vec::new(),
+            label: "chaoshub-review".into(),
+            zoom: true,
+        };
+        let mut review = FakeAction::new("review", 'v');
+        review.prepare = Prepare::Terminal(request.clone());
+        let actions = fake(review);
+        let key = TargetKey::Pr(testdata::pr_key("chaoshub", 99));
+        let run_terminal = Cmd::RunTerminal {
+            id: "review",
+            key: key.clone(),
+            request,
+        };
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Char('v')),
+            vec![run_terminal.clone()]
+        );
+        let pane = ("review", key.clone());
+        assert_eq!(
+            state.data.panes.get(&pane),
+            Some(&PaneHandleState::Starting)
+        );
+        assert_eq!(flags_of(&mut state, 99), "▶");
+        let focus = Cmd::FocusPane {
+            id: "review",
+            key: key.clone(),
+        };
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Char('v')),
+            vec![focus.clone()]
+        );
+        let started = Msg::PaneStarted {
+            id: "review",
+            key: key.clone(),
+        };
+        assert_eq!(run_msg(&mut state, &actions, started), vec![]);
+        assert_eq!(state.data.panes.get(&pane), Some(&PaneHandleState::Running));
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('v')), vec![focus]);
+        let ended = Msg::PaneEnded {
+            id: "review",
+            key: key.clone(),
+        };
+        let refs = vec![pr_ref(&state.data.prs[&testdata::pr_key("chaoshub", 99)])];
+        assert_eq!(
+            run_msg(&mut state, &actions, ended),
+            vec![
+                Cmd::ScanJj(testdata::repo_key("chaoshub")),
+                Cmd::RefreshPr(refs)
+            ]
+        );
+        assert!(state.data.panes.is_empty());
+        assert_eq!(flags_of(&mut state, 99), "");
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Char('v')),
+            vec![run_terminal]
+        );
     }
 }

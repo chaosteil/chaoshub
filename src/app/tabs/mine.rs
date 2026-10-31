@@ -16,7 +16,7 @@ use crate::app::models::{
 use crate::app::nav::place;
 use crate::app::tabs::cells::{self, cell};
 use crate::app::tabs::{Handled, KeyCx, Tab, TabState, list_interest, pr_ref};
-use crate::bus::{Interest, KeyChord, Scope, Size};
+use crate::bus::{Interest, KeyChord, Scope, Size, TargetKey};
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::{LocalChange, LocalMatch};
 use crate::domain::matching::{group_stacks, local_only, match_prs, nearest_pr};
@@ -306,7 +306,8 @@ fn group_rows(
             rows.push(local_row(repo, change, set, 1, '│'));
         }
         let local = view.matches.get(&pr.key).unwrap_or(&LocalMatch::None);
-        rows.push(pr_row(pr, local, set, glyph));
+        let pane = cx.data.pane_open(&TargetKey::Pr(pr.key.clone()));
+        rows.push(pr_row(pr, local, set, glyph, pane));
     }
 }
 
@@ -381,8 +382,9 @@ fn local_cells(local: &LocalMatch, set: Columns) -> Vec<Cell> {
     cells
 }
 
-/// The row of one pull request.
-fn pr_row(pr: &PullRequest, local: &LocalMatch, set: Columns, glyph: char) -> Row {
+/// The row of one pull request. `pane` is true while a pane of it is
+/// open.
+fn pr_row(pr: &PullRequest, local: &LocalMatch, set: Columns, glyph: char, pane: bool) -> Row {
     let head = &pr.head.value;
     let mut cells: Vec<Cell> = vec![
         cell(head.title.clone(), CellStyle::Normal),
@@ -392,7 +394,7 @@ fn pr_row(pr: &PullRequest, local: &LocalMatch, set: Columns, glyph: char) -> Ro
     cells.extend([
         cells::ci(pr.ci_state.value),
         cells::review(head.review_decision),
-        cells::flags(pr),
+        cells::flags(pr, pane),
     ]);
     Row {
         item: RowItem::Pr(pr_ref(pr)),

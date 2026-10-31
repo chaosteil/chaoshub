@@ -41,6 +41,7 @@ use crate::config::schema::parse_repo_name;
 use crate::config::{self, Config, paths};
 use crate::domain::repo::Repo;
 use crate::github::{GITHUB_API, GithubClient, TokenSource};
+use crate::launch::Launcher;
 use crate::launch::rex::RexLauncher;
 use crate::osc;
 use crate::store::handle::StoreHandle;
@@ -136,12 +137,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     let (senders, channels) = channels(store.clone(), first_interest(&app), session);
     let client = Arc::new(GithubClient::new(TokenSource::gh(), GITHUB_API)?);
     let locks = RepoLocks::default();
-    let env = ActionEnv {
-        registry: REGISTRY.as_slice(),
-        client: Arc::clone(&client),
-        locks: locks.clone(),
-        tx: tx.clone(),
-    };
+    let env = action_env(&settings, Arc::clone(&client), locks.clone(), tx.clone());
     let ctx = worker_ctx(&settings.config, store, tx, channels, client, locks);
     let mut event_loop = EventLoop {
         app,
@@ -200,6 +196,27 @@ fn worker_ctx(
         sync_rx: Arc::new(tokio::sync::Mutex::new(channels.sync)),
         jj_rx: Arc::new(tokio::sync::Mutex::new(channels.jj)),
         locks,
+    }
+}
+
+/// The environment of the action tasks: the registry, the client and the
+/// locks that the workers share, the message channel, and the launcher of
+/// the settings.
+fn action_env(
+    settings: &Settings,
+    client: Arc<GithubClient>,
+    locks: RepoLocks,
+    tx: mpsc::Sender<Msg>,
+) -> ActionEnv {
+    ActionEnv {
+        registry: REGISTRY.as_slice(),
+        client,
+        locks,
+        tx,
+        launcher: settings
+            .launcher
+            .clone()
+            .map(|rex| Arc::new(rex) as Arc<dyn Launcher>),
     }
 }
 
@@ -280,7 +297,6 @@ fn open_store() -> (Snapshot, StoreHandle) {
 /// The settings that `run` builds from the configuration and the command
 /// line, for the parts of the app that start after the first frame.
 #[derive(Debug)]
-#[allow(dead_code, reason = "phase E gives the launcher to the runtime")]
 struct Settings {
     /// The configuration, with `--no-prefetch` applied.
     config: Config,

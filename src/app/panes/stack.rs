@@ -5,7 +5,7 @@ use crate::app::models::{Cell, CellStyle, PaneModel};
 use crate::app::panes::{Pane, PaneState};
 use crate::app::tabs::cells::{self, cell};
 use crate::app::tabs::{Handled, KeyCx};
-use crate::bus::{KeyChord, Size, Target};
+use crate::bus::{KeyChord, Size, Target, TargetKey};
 
 /// The stack pane.
 pub(crate) struct StackPane;
@@ -79,7 +79,7 @@ impl Pane for StackPane {
                 cell(" ", CellStyle::Dim),
                 cells::review(entry.head.value.review_decision),
                 cell(" ", CellStyle::Dim),
-                cells::flags(entry),
+                cells::flags(entry, cx.data.pane_open(&TargetKey::Pr(entry.key.clone()))),
             ]);
         }
         PaneModel::Lines { lines, wrap: false }
