@@ -1,6 +1,7 @@
 //! The serde schema of the configuration file. Every section has defaults,
 //! so an empty file is a valid configuration.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer};
@@ -90,7 +91,31 @@ impl Default for CodeviewConfig {
 /// The `[merge]` section.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
-pub(crate) struct MergeConfig {}
+pub(crate) struct MergeConfig {
+    /// The `[merge.repos."owner/name"]` tables: per-repo overrides.
+    #[serde(deserialize_with = "repo_map")]
+    pub repos: BTreeMap<RepoKey, RepoMerge>,
+}
+
+/// The merge overrides of one repo.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub(crate) struct RepoMerge {
+    /// The merge method. `None` picks squash, then merge, then rebase,
+    /// from what the repo permits.
+    pub method: Option<MergeMethodSetting>,
+    /// Asks GitHub to bypass the branch rules on a merge. Off by default.
+    pub bypass_rules: bool,
+}
+
+/// A merge method in the configuration file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum MergeMethodSetting {
+    Merge,
+    Squash,
+    Rebase,
+}
 
 /// The `[theme]` section.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -165,6 +190,24 @@ fn repo_key<'de, D: Deserializer<'de>>(deserializer: D) -> Result<RepoKey, D::Er
     parse_repo_name(&text).ok_or_else(|| {
         serde::de::Error::custom(format!("repo `{text}` is not in the owner/name form"))
     })
+}
+
+/// Deserializes a table with `owner/name` keys.
+fn repo_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<RepoKey, V>, D::Error>
+where
+    D: Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    BTreeMap::<String, V>::deserialize(deserializer)?
+        .into_iter()
+        .map(|(text, value)| {
+            parse_repo_name(&text)
+                .map(|key| (key, value))
+                .ok_or_else(|| {
+                    serde::de::Error::custom(format!("repo `{text}` is not in the owner/name form"))
+                })
+        })
+        .collect()
 }
 
 #[cfg(test)]

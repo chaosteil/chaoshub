@@ -20,7 +20,12 @@ enabled = false
 zoom = false
 ratio = 70
 
-[merge]
+[merge.repos."pierredotco/deploy"]
+method = "rebase"
+bypass_rules = true
+
+[merge.repos."chaosteil/chaoshub"]
+method = "merge"
 
 [theme]
 textures = false
