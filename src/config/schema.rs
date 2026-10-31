@@ -89,7 +89,10 @@ impl Default for CodeviewConfig {
     }
 }
 
-/// The `[merge]` section.
+/// The `[merge]` section. `Config::parse` also copies its keys into
+/// `[actions.merge]`, the table that the merge action reads, unless
+/// `[actions.merge]` sets the key. So `[merge.repos."owner/name"]` and
+/// `[actions.merge.repos."owner/name"]` both work, and the second wins.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub(crate) struct MergeConfig {

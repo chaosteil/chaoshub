@@ -43,6 +43,10 @@ pub(crate) struct Config {
     /// Key binding overrides: an action id or app key name to a key.
     pub keys: BTreeMap<String, String>,
     /// The `[actions.<id>]` tables. Each action reads its own table.
+    /// `parse` copies the `method`, `bypass_rules` and `repos` keys of
+    /// `[merge]` into the `merge` table, so the merge action reads
+    /// `[merge.repos."owner/name"]`. A key that `[actions.merge]` sets
+    /// stays: `[actions.merge.repos]` overrides `[merge.repos]`.
     pub actions: BTreeMap<String, toml::Table>,
     pub workspaces: WorkspacesConfig,
     /// Teams whose review requests count as requests for the user, in the
@@ -51,6 +55,9 @@ pub(crate) struct Config {
     /// Forces a launcher, for example `rex`. `None` detects it.
     pub launcher: Option<String>,
 }
+
+/// The keys of `[merge]` that `parse` copies into `[actions.merge]`.
+const MERGE_KEYS: &[&str] = &["method", "bypass_rules", "repos"];
 
 /// An error that stops the configuration from loading.
 #[derive(Debug, thiserror::Error)]
@@ -71,9 +78,13 @@ pub(crate) enum ConfigError {
 
 impl Config {
     /// Parses the text of a configuration file and expands `~` to `home`.
-    /// Without a home directory, paths stay as they are.
+    /// Without a home directory, paths stay as they are. The keys of
+    /// `[merge]` go into `[actions.merge]` when that table does not set
+    /// them.
     pub(crate) fn parse(text: &str, home: Option<&Path>) -> Result<Self, toml::de::Error> {
         let mut config: Self = toml::from_str(text)?;
+        let raw: toml::Table = toml::from_str(text)?;
+        config.mirror_merge(&raw);
         if let Some(home) = home {
             config.expand_paths(home);
         }
@@ -102,6 +113,21 @@ impl Config {
     /// The `[actions.<id>]` table of one action.
     pub(crate) fn action(&self, id: &str) -> Option<&toml::Table> {
         self.actions.get(id)
+    }
+
+    /// Copies each key of `MERGE_KEYS` from the `[merge]` table of `raw`
+    /// into `actions["merge"]`, unless `[actions.merge]` sets the key.
+    fn mirror_merge(&mut self, raw: &toml::Table) {
+        let Some(toml::Value::Table(merge)) = raw.get("merge") else {
+            return;
+        };
+        for &key in MERGE_KEYS {
+            let Some(value) = merge.get(key) else {
+                continue;
+            };
+            let table = self.actions.entry("merge".to_owned()).or_default();
+            table.entry(key).or_insert_with(|| value.clone());
+        }
     }
 
     fn expand_paths(&mut self, home: &Path) {
@@ -225,7 +251,10 @@ mod tests {
         let agent = config.action("pr_agent").unwrap();
         assert_eq!(agent["command"].as_str(), Some("pr-agent"));
         assert_eq!(agent["env"]["OPENAI_KEY"].as_str(), Some("secret"));
-        assert_eq!(config.action("merge"), None);
+        let merge: MergeConfig = toml::Value::Table(config.action("merge").unwrap().clone())
+            .try_into()
+            .unwrap();
+        assert_eq!(merge, config.merge);
         assert_eq!(config.workspaces.root, PathBuf::from("/home/me/work/ws"));
         assert_eq!(
             config.merge_for(&key("acme", "deploy")),
@@ -253,6 +282,65 @@ mod tests {
                 bypass_rules: false,
             }
         );
+    }
+
+    /// The `[actions.merge]` table of `text` as the merge action reads it.
+    fn merge_action_config(text: &str) -> Option<MergeConfig> {
+        let config = Config::parse(text, None).unwrap();
+        let table = config.action("merge")?.clone();
+        Some(toml::Value::Table(table).try_into().unwrap())
+    }
+
+    #[test]
+    fn merge_repos_reach_the_merge_action() {
+        let text = "[merge.repos.\"o/r\"]\nmethod = \"rebase\"\nbypass_rules = true\n";
+        let merge = merge_action_config(text).unwrap();
+        assert_eq!(
+            merge.repos.get(&key("o", "r")),
+            Some(&RepoMerge {
+                method: Some(MergeMethodSetting::Rebase),
+                bypass_rules: true,
+            })
+        );
+    }
+
+    #[test]
+    fn actions_merge_repos_override_merge_repos() {
+        let text = concat!(
+            "[merge.repos.\"o/r\"]\nmethod = \"rebase\"\n",
+            "[merge.repos.\"o/other\"]\nmethod = \"rebase\"\n",
+            "[actions.merge.repos.\"o/r\"]\nmethod = \"merge\"\n",
+        );
+        let merge = merge_action_config(text).unwrap();
+        assert_eq!(
+            merge.repos,
+            BTreeMap::from([(
+                key("o", "r"),
+                RepoMerge {
+                    method: Some(MergeMethodSetting::Merge),
+                    bypass_rules: false,
+                }
+            )])
+        );
+    }
+
+    #[test]
+    fn merge_keys_are_copied_one_by_one() {
+        let text = concat!(
+            "[merge]\nmethod = \"squash\"\nbypass_rules = true\n",
+            "[actions.merge]\nbypass_rules = false\nother = 1\n",
+        );
+        let config = Config::parse(text, None).unwrap();
+        let table = config.action("merge").unwrap();
+        assert_eq!(table["method"].as_str(), Some("squash"));
+        assert_eq!(table["bypass_rules"].as_bool(), Some(false));
+        assert_eq!(table["other"].as_integer(), Some(1));
+        assert!(!table.contains_key("repos"));
+    }
+
+    #[test]
+    fn no_merge_section_adds_no_merge_action_table() {
+        assert_eq!(merge_action_config("login = \"me\"\n"), None);
     }
 
     #[test]
