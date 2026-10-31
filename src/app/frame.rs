@@ -105,6 +105,11 @@ fn overlay_models(state: &AppState, panes: &[Box<dyn Pane>]) -> Vec<OverlayModel
                     items: picker.items(),
                     cursor: picker.cursor,
                 },
+                OverlayState::Confirm { spec, .. } => OverlayContent::Confirm(spec.clone()),
+                OverlayState::Prompt { spec, text, .. } => OverlayContent::Prompt {
+                    spec: spec.clone(),
+                    text: text.clone(),
+                },
             },
         })
         .collect()

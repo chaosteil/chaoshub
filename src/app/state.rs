@@ -16,7 +16,10 @@ use crate::app::frame::ModelCache;
 use crate::app::models::{CellStyle, Direction, ListModel};
 use crate::app::panes::PaneState;
 use crate::app::tabs::{TABS, Tab, TabState};
-use crate::bus::{Interest, OverlayKind, RateInfo, Scope, Session, Size, SyncError, UiEvent};
+use crate::bus::{
+    ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, Scope, Selection, Session, Size,
+    SyncError, UiEvent,
+};
 use crate::domain::detail::PrDetail;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
@@ -68,6 +71,8 @@ pub(crate) struct AppData {
     /// The time of the last `Msg::Tick`. Ages are relative to it, so
     /// the models stay pure functions of the state.
     pub now: DateTime<Utc>,
+    /// The `[actions.<id>]` tables of the configuration, by action id.
+    pub action_config: BTreeMap<String, toml::Table>,
 }
 
 /// The state of the UI.
@@ -172,6 +177,24 @@ pub(crate) enum OverlayState {
     Popup(PopupState),
     /// The author picker of a tab.
     Authors(AuthorPicker),
+    /// The confirm popup of an action: `y` or Enter runs it.
+    Confirm {
+        action: ActionDialog,
+        spec: ConfirmSpec,
+    },
+    /// The prompt popup of an action: Enter runs it with the text.
+    Prompt {
+        action: ActionDialog,
+        spec: PromptSpec,
+        text: String,
+    },
+}
+
+/// The action that a confirm or a prompt popup runs, and its selection.
+#[derive(Debug)]
+pub(crate) struct ActionDialog {
+    pub id: &'static str,
+    pub selection: Box<Selection>,
 }
 
 /// The pull request popup: the pull request, the active pane and one
@@ -242,6 +265,7 @@ impl AppState {
                 sync: SyncInfo::default(),
                 revision: 0,
                 now: DateTime::UNIX_EPOCH,
+                action_config: BTreeMap::new(),
             },
             ui: UiState {
                 active: 0,
