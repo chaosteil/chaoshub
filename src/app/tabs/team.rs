@@ -59,10 +59,13 @@ impl Tab for Team {
         let ext = ts.ext.downcast_ref::<TeamState>();
         let all_open = ext.is_some_and(|ext| ext.all_open);
         let mut prs = team_prs(cx, all_open);
+        if let Some(author) = &ts.author {
+            prs.retain(|pr| pr.head.value.author == *author);
+        }
         if let Some(ext) = ext {
             prs.retain(|pr| ext.filter.keeps(&ItemKey::Pr(pr.key.clone())));
         }
-        let mut rows = vec![mode_row(all_open, prs.len())];
+        let mut rows = vec![mode_row(all_open, ts.author.as_deref(), prs.len())];
         rows.extend(prs.into_iter().map(|pr| pr_row(pr, cx)));
         let (cursor, scroll) = place(
             &rows,
@@ -94,6 +97,16 @@ impl Tab for Team {
         };
         let candidates: Vec<_> = team_prs(cx, true).into_iter().map(pr_candidate).collect();
         ext.filter.rescore(&ts.filter, cx.data.revision, candidates);
+    }
+
+    fn authors(&self, cx: &KeyCx<'_>) -> Vec<String> {
+        let mut authors: Vec<String> = team_prs(cx, true)
+            .into_iter()
+            .map(|pr| pr.head.value.author.clone())
+            .collect();
+        authors.sort();
+        authors.dedup();
+        authors
     }
 
     fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ts: &mut TabState) -> Option<Handled> {
@@ -155,12 +168,14 @@ fn team_prs<'a>(cx: &KeyCx<'a>, all_open: bool) -> Vec<&'a PullRequest> {
     prs
 }
 
-/// The header row that names the mode and the key that changes it.
-fn mode_row(all_open: bool, count: usize) -> Row {
+/// The header row that names the mode, the author filter and the key
+/// that changes the mode.
+fn mode_row(all_open: bool, author: Option<&str>, count: usize) -> Row {
+    let by = author.map(|a| format!(" · by {a}")).unwrap_or_default();
     let text = if all_open {
-        format!("all open · {count} · t shows ready only")
+        format!("all open · {count}{by} · t shows ready only")
     } else {
-        format!("ready for review · {count} · t shows all open")
+        format!("ready for review · {count}{by} · t shows all open")
     };
     Row {
         item: RowItem::StackHeader {
@@ -266,6 +281,29 @@ mod tests {
             mods: KeyModifiers::NONE,
         };
         assert_eq!(Team.handle_key(x, &cx, &mut ts), None);
+    }
+
+    #[test]
+    fn authors_and_the_author_filter() {
+        let state = seeded();
+        let areas = layout(SIZE);
+        let cx = KeyCx {
+            data: &state.data,
+            target: None,
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        assert_eq!(Team.authors(&cx), ["alice", "bob", "carol", "dave"]);
+        let ts = TabState {
+            author: Some("bob".into()),
+            ..Team.init_state()
+        };
+        let model = Team.model(&cx, &ts, SIZE);
+        assert_eq!(numbers(&model), [87, 86]);
+        assert_eq!(
+            model.rows[0].cells[0].text,
+            "ready for review · 2 · by bob · t shows all open"
+        );
     }
 
     #[test]

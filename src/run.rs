@@ -307,7 +307,7 @@ impl EventLoop {
                 }
             }
             let active = self.transitions.active();
-            if self.was_active && !active {
+            if !active && (self.was_active || self.app.transition_leftovers()) {
                 self.update(Msg::TransitionsDone);
             }
             self.was_active = active;
@@ -894,6 +894,22 @@ mod tests {
     #[test]
     fn team_list_160() {
         insta::assert_snapshot!(screen(&mut team_app(160, 12)));
+    }
+
+    fn press(app: &mut App, c: char) {
+        let key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(c),
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(key));
+    }
+
+    #[test]
+    fn author_picker_100() {
+        let mut app = team_app(100, 16);
+        press(&mut app, 'a');
+        press(&mut app, 'j');
+        insta::assert_snapshot!(screen(&mut app));
     }
 
     #[test]

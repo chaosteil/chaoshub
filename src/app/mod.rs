@@ -71,6 +71,13 @@ impl App {
         self.state.data.size
     }
 
+    /// True when the frame still holds what a transition shows: the list
+    /// of the previous tab or an overlay that slides out. Without a
+    /// running transition, `run` then sends `Msg::TransitionsDone`.
+    pub(crate) fn transition_leftovers(&self) -> bool {
+        self.state.ui.prev_list.is_some() || self.state.ui.overlays.iter().any(|o| o.closing)
+    }
+
     /// Takes the UI events for the transitions.
     pub(crate) fn take_ui_events(&mut self) -> Vec<UiEvent> {
         std::mem::take(&mut self.state.ui.ui_events)

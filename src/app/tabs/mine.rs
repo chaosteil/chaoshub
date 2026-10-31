@@ -133,6 +133,10 @@ impl Tab for Mine {
         filter.rescore(&ts.filter, cx.data.revision, candidates);
     }
 
+    fn authors(&self, _cx: &KeyCx<'_>) -> Vec<String> {
+        Vec::new()
+    }
+
     fn handle_key(&self, _key: KeyChord, _cx: &KeyCx<'_>, _ts: &mut TabState) -> Option<Handled> {
         None
     }

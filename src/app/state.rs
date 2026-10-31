@@ -8,7 +8,6 @@
     reason = "update, the tabs and the panes read the fields in later phases"
 )]
 
-use std::any::Any;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
@@ -149,7 +148,44 @@ pub(crate) struct Overlay {
     /// it.
     pub closing: bool,
     /// The own state of the overlay.
-    pub state: Box<dyn Any + Send + Sync>,
+    pub state: OverlayState,
+}
+
+/// The own state of each overlay kind.
+#[derive(Debug)]
+pub(crate) enum OverlayState {
+    /// The author picker of a tab.
+    Authors(AuthorPicker),
+}
+
+/// The author picker: the first item shows every author.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthorPicker {
+    /// The registry index of the tab that the picker filters.
+    pub tab: usize,
+    /// The authors, sorted. The picker shows `all authors` before them.
+    pub authors: Vec<String>,
+    /// The index in the picker items: 0 is `all authors`.
+    pub cursor: usize,
+}
+
+impl AuthorPicker {
+    /// The text of the first item.
+    pub(crate) const ALL: &'static str = "all authors";
+
+    /// The items of the picker: `all authors`, then the authors.
+    pub(crate) fn items(&self) -> Vec<String> {
+        std::iter::once(Self::ALL.to_owned())
+            .chain(self.authors.iter().cloned())
+            .collect()
+    }
+
+    /// The author of the cursor item. `None` for `all authors`.
+    pub(crate) fn chosen(&self) -> Option<String> {
+        self.cursor
+            .checked_sub(1)
+            .and_then(|i| self.authors.get(i).cloned())
+    }
 }
 
 impl AppState {

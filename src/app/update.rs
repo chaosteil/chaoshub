@@ -13,12 +13,14 @@ use crate::app::keymap::{self, Keymap};
 use crate::app::layout::layout;
 use crate::app::models::{CellStyle, Direction};
 use crate::app::nav::{self, Motion};
-use crate::app::state::{AppData, AppState, Failure, error_text};
+use crate::app::state::{
+    AppData, AppState, AuthorPicker, Failure, Overlay, OverlayState, error_text,
+};
 use crate::app::tabs::{KeyCx, TABS, Tab, pr_ref};
 use crate::app::term::term_status;
 use crate::bus::{
-    ActionEvent, Cmd, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Msg, PrRef, Scope,
-    Size, SyncError, TargetKey, UiEvent,
+    ActionEvent, Cmd, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Msg, OverlayKind,
+    PrRef, Scope, Size, SyncError, TargetKey, UiEvent,
 };
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
@@ -103,7 +105,14 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
     }
     let chord = keymap::chord(event);
     let control = chord.mods.contains(KeyModifiers::CONTROL);
-    if keymap.matches("quit", chord) && (control || !state.ui.filter_edit) {
+    let quits = keymap.matches("quit", chord);
+    if quits && control {
+        return quit();
+    }
+    if state.ui.overlays.iter().any(|overlay| !overlay.closing) {
+        return overlay_key(state, keymap, tabs, chord);
+    }
+    if quits && !state.ui.filter_edit {
         return quit();
     }
     if state.ui.filter_edit {
@@ -127,6 +136,10 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
         state.bump();
         return Vec::new();
     }
+    if keymap.matches("authors", chord) {
+        open_authors(state, tabs);
+        return Vec::new();
+    }
     let index = state.ui.active;
     let (Some(tab), Some(ts)) = (tabs.get(index), state.ui.tabs.get_mut(index)) else {
         return Vec::new();
@@ -148,6 +161,112 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
     let mut cmds = handled.cmds;
     cmds.extend(after_change(state, tabs));
     cmds
+}
+
+/// Opens the author picker of the active tab, with the cursor on the
+/// current author. A tab without authors shows a message.
+fn open_authors(state: &mut AppState, tabs: &[Box<dyn Tab>]) {
+    let index = state.ui.active;
+    let Some(tab) = tabs.get(index) else {
+        return;
+    };
+    let areas = layout(state.data.size);
+    let cx = KeyCx {
+        data: &state.data,
+        target: None,
+        areas: &areas,
+        keys: &keymap::DEFAULT,
+    };
+    let authors = tab.authors(&cx);
+    if authors.is_empty() {
+        state.message("no authors to pick here", CellStyle::Dim, INFO_TTL);
+        return;
+    }
+    let current = state.ui.tabs.get(index).and_then(|ts| ts.author.as_ref());
+    let cursor = current
+        .and_then(|author| authors.iter().position(|a| a == author))
+        .map_or(0, |i| i + 1);
+    open_overlay(
+        state,
+        OverlayKind::Picker,
+        OverlayState::Authors(AuthorPicker {
+            tab: index,
+            authors,
+            cursor,
+        }),
+    );
+}
+
+/// Pushes an overlay and starts its slide in.
+fn open_overlay(state: &mut AppState, kind: OverlayKind, overlay: OverlayState) {
+    state.ui.overlays.push(Overlay {
+        kind,
+        closing: false,
+        state: overlay,
+    });
+    state.ui.ui_events.push(UiEvent::OverlayOpened(kind));
+    state.bump();
+}
+
+/// Starts the slide out of the top overlay that is not closing. It stays
+/// in the stack until `Msg::TransitionsDone`.
+fn close_overlay(state: &mut AppState) {
+    let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
+        return;
+    };
+    overlay.closing = true;
+    let kind = overlay.kind;
+    state.ui.ui_events.push(UiEvent::OverlayClosed(kind));
+    state.bump();
+}
+
+/// A key for the top overlay that is not closing.
+fn overlay_key(
+    state: &mut AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    chord: KeyChord,
+) -> Vec<Cmd> {
+    if keymap.matches("close_overlay", chord) {
+        close_overlay(state);
+        return Vec::new();
+    }
+    let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
+        return Vec::new();
+    };
+    match &mut overlay.state {
+        OverlayState::Authors(picker) => {
+            if let Some(motion) = motion(keymap, chord) {
+                picker.cursor = move_in(picker.cursor, picker.authors.len() + 1, motion);
+                state.bump();
+                return Vec::new();
+            }
+            if !keymap.matches("open", chord) {
+                return Vec::new();
+            }
+            let (tab, author) = (picker.tab, picker.chosen());
+            close_overlay(state);
+            if let Some(ts) = state.ui.tabs.get_mut(tab) {
+                ts.author = author;
+            }
+            after_change(state, tabs)
+        }
+    }
+}
+
+/// The cursor in a list of `len` items after a move.
+fn move_in(cursor: usize, len: usize, motion: Motion) -> usize {
+    const PAGE: usize = 5;
+    let last = len.saturating_sub(1);
+    match motion {
+        Motion::Down => cursor + 1,
+        Motion::Up => cursor.saturating_sub(1),
+        Motion::Top => 0,
+        Motion::Bottom => last,
+        Motion::PageDown => cursor + PAGE,
+        Motion::PageUp => cursor.saturating_sub(PAGE),
+    }
+    .min(last)
 }
 
 /// A key while the user types the filter: characters and backspace edit
@@ -618,7 +737,7 @@ mod tests {
     use crate::app::tabs::Handled;
     use crate::app::tabs::fake::FakeTab;
     use crate::app::testdata;
-    use crate::bus::{Interest, OverlayKind, RateInfo};
+    use crate::bus::{Interest, RateInfo};
     use crate::domain::test_time;
 
     const SIZE: Size = Size {
@@ -878,7 +997,11 @@ mod tests {
         let overlay = |kind, closing| Overlay {
             kind,
             closing,
-            state: Box::new(()),
+            state: OverlayState::Authors(AuthorPicker {
+                tab: 0,
+                authors: Vec::new(),
+                cursor: 0,
+            }),
         };
         state.ui.prev_list = Some((empty_list(), Direction::Right));
         state.ui.overlays = vec![
@@ -1412,6 +1535,114 @@ mod tests {
         let generation = state.generation;
         key(&mut state, 't');
         assert_eq!(state.generation, generation, "the mine tab has no toggle");
+    }
+
+    fn team_state() -> AppState {
+        let mut state = AppState::new(SIZE);
+        state.load(testdata::team_snapshot(), Vec::new());
+        key(&mut state, '2');
+        state
+    }
+
+    fn picker(state: &AppState) -> Option<&AuthorPicker> {
+        state
+            .ui
+            .overlays
+            .iter()
+            .rev()
+            .find(|o| !o.closing)
+            .map(|o| match &o.state {
+                OverlayState::Authors(picker) => picker,
+            })
+    }
+
+    #[test]
+    fn the_author_picker_filters_the_team_tab() {
+        let mut state = team_state();
+        state.ui.ui_events.clear();
+        key(&mut state, 'a');
+        assert_eq!(
+            picker(&state).map(AuthorPicker::items),
+            Some(vec![
+                "all authors".to_owned(),
+                "alice".to_owned(),
+                "bob".to_owned(),
+                "carol".to_owned(),
+                "dave".to_owned(),
+            ])
+        );
+        assert_eq!(
+            state.ui.ui_events,
+            vec![UiEvent::OverlayOpened(OverlayKind::Picker)]
+        );
+        key(&mut state, 'j');
+        key(&mut state, 'j');
+        assert_eq!(picker(&state).map(|p| p.cursor), Some(2));
+        assert_eq!(state.ui.active, 1, "j moves the picker, not the list");
+        let enter = press(KeyCode::Enter, KeyModifiers::NONE);
+        let cmds = update(&mut state, &Keymap::default(), enter);
+        assert!(matches!(cmds.as_slice(), [Cmd::SetInterest(_)]));
+        assert_eq!(picker(&state), None);
+        assert!(state.ui.overlays[0].closing, "it slides out");
+        assert_eq!(
+            state.ui.ui_events.last(),
+            Some(&UiEvent::OverlayClosed(OverlayKind::Picker))
+        );
+        assert_eq!(state.ui.tabs[1].author.as_deref(), Some("bob"));
+        let model = frame::active_list(&mut state, &TABS);
+        assert_eq!(
+            model.rows.len(),
+            3,
+            "the mode row and the two pull requests of bob"
+        );
+        key(&mut state, 'a');
+        assert_eq!(
+            picker(&state).map(|p| p.cursor),
+            Some(2),
+            "the cursor on bob"
+        );
+        key(&mut state, 'g');
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(state.ui.tabs[1].author, None);
+    }
+
+    #[test]
+    fn esc_and_q_close_the_picker_and_ctrl_c_quits() {
+        let mut state = team_state();
+        key(&mut state, 'a');
+        assert_eq!(key(&mut state, 'q'), vec![], "q closes, it does not quit");
+        assert_eq!(picker(&state), None);
+        key(&mut state, 'a');
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert_eq!(picker(&state), None);
+        assert_eq!(state.ui.tabs[1].author, None);
+        key(&mut state, 'a');
+        let ctrl_c = press(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(
+            update(&mut state, &Keymap::default(), ctrl_c),
+            vec![Cmd::Quit]
+        );
+        update(&mut state, &Keymap::default(), Msg::TransitionsDone);
+        assert_eq!(state.ui.overlays.len(), 1, "the closed pickers are gone");
+    }
+
+    #[test]
+    fn the_mine_tab_has_no_author_picker() {
+        let mut state = mine_state(10);
+        key(&mut state, 'a');
+        assert_eq!(state.ui.overlays.len(), 0);
+        assert_eq!(
+            state.ui.status.as_ref().map(|m| m.text.as_str()),
+            Some("no authors to pick here")
+        );
     }
 
     #[test]
