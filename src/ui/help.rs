@@ -7,17 +7,27 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Clear, Widget};
 
 use crate::app::models::HelpModel;
+use crate::bus::Hit;
 use crate::theme::Theme;
 use crate::theme::ThemeBlock;
+use crate::ui::hits::HitMap;
 use crate::ui::text;
 
 /// The minimum width of the key column.
 const KEY_MIN: usize = 6;
 
-/// Draws the help overlay into its area.
-pub(crate) fn render(model: &HelpModel, area: Rect, buf: &mut Buffer, theme: &Theme) {
+/// Draws the help overlay into its area. The whole area is a
+/// `Hit::Inside`.
+pub(crate) fn render(
+    model: &HelpModel,
+    area: Rect,
+    buf: &mut Buffer,
+    theme: &Theme,
+    hits: &mut HitMap,
+) {
     let p = &theme.palette;
     let area = area.intersection(buf.area);
+    hits.push(area, Hit::Inside);
     Clear.render(area, buf);
     theme
         .block("help")
@@ -74,5 +84,28 @@ pub(crate) fn render(model: &HelpModel, area: Rect, buf: &mut Buffer, theme: &Th
             }
             y += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::testdata;
+
+    #[test]
+    fn the_area_is_inside() {
+        let area = Rect::new(10, 2, 40, 10);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 15));
+        let mut hits = HitMap::default();
+        let help = testdata::help_overlay();
+        let crate::app::models::OverlayContent::Help(model) = &help.content else {
+            unreachable!()
+        };
+        render(model, area, &mut buf, &testdata::ansi16(), &mut hits);
+        assert_eq!(hits.at(9, 5), None);
+        assert_eq!(hits.at(10, 2), Some(Hit::Inside));
+        assert_eq!(hits.at(30, 6), Some(Hit::Inside));
+        assert_eq!(hits.at(49, 11), Some(Hit::Inside));
+        assert_eq!(hits.at(50, 11), None);
     }
 }

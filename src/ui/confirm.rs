@@ -7,16 +7,25 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Widget};
 
-use crate::bus::ConfirmSpec;
+use crate::bus::{ConfirmSpec, Hit};
 use crate::theme::Theme;
 use crate::theme::ThemeBlock;
+use crate::ui::hits::HitMap;
 use crate::ui::text;
 
-/// Draws the confirm popup into its area.
-pub(crate) fn render(spec: &ConfirmSpec, area: Rect, buf: &mut Buffer, theme: &Theme) {
+/// Draws the confirm popup into its area. The whole area is a
+/// `Hit::Inside`.
+pub(crate) fn render(
+    spec: &ConfirmSpec,
+    area: Rect,
+    buf: &mut Buffer,
+    theme: &Theme,
+    hits: &mut HitMap,
+) {
     let p = &theme.palette;
     let accent = if spec.danger { p.danger } else { p.primary };
     let area = area.intersection(buf.area);
+    hits.push(area, Hit::Inside);
     Clear.render(area, buf);
     theme
         .block(&spec.title)
@@ -50,4 +59,27 @@ pub(crate) fn render(spec: &ConfirmSpec, area: Rect, buf: &mut Buffer, theme: &T
         Span::styled(" cancel", mute),
     ])
     .render(Rect::new(body.x, body.bottom() - 1, body.width, 1), buf);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::testdata;
+
+    #[test]
+    fn the_area_is_inside() {
+        let area = Rect::new(10, 2, 40, 10);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 15));
+        let mut hits = HitMap::default();
+        let overlay = testdata::confirm_overlay(true);
+        let crate::app::models::OverlayContent::Confirm(spec) = &overlay.content else {
+            unreachable!()
+        };
+        render(spec, area, &mut buf, &testdata::ansi16(), &mut hits);
+        assert_eq!(hits.at(9, 5), None);
+        assert_eq!(hits.at(10, 2), Some(Hit::Inside));
+        assert_eq!(hits.at(30, 6), Some(Hit::Inside));
+        assert_eq!(hits.at(49, 11), Some(Hit::Inside));
+        assert_eq!(hits.at(50, 11), None);
+    }
 }

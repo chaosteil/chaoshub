@@ -49,6 +49,7 @@ use crate::store::handle::StoreHandle;
 use crate::store::{Snapshot, Store};
 use crate::theme::{Theme, ThemeKind};
 use crate::ui;
+use crate::ui::hits::HitMap;
 use crate::ui::transition::Transitions;
 use crate::vcs::lock::RepoLocks;
 use crate::workers::ctx::WorkerCtx;
@@ -679,7 +680,7 @@ fn draw<B: Backend>(
     let model = app.frame();
     transitions.prepare(model, &areas);
     terminal.draw(|frame| {
-        ui::view(frame, model, &areas, theme);
+        ui::view(frame, model, &areas, theme, &mut HitMap::default());
         transitions.process(frame, elapsed);
     })?;
     let render = started.elapsed();

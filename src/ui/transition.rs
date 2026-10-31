@@ -25,6 +25,7 @@ use crate::app::layout::Areas;
 use crate::app::models::FrameModel;
 use crate::bus::{OverlayKind, UiEvent};
 use crate::theme::{Theme, ThemeKind};
+use crate::ui::hits::HitMap;
 use crate::ui::{list, overlay_area, rect, screen};
 
 /// The duration of the confirm and prompt slides, in milliseconds.
@@ -283,7 +284,13 @@ impl Transitions {
             && let Some((prev, _)) = &model.prev_list
         {
             let mut buf = Buffer::empty(screen(areas));
-            list::render(prev, list_area, &mut buf, &self.theme);
+            list::render(
+                prev,
+                list_area,
+                &mut buf,
+                &self.theme,
+                &mut HitMap::default(),
+            );
             skip_outside(&mut buf, list_area);
             *self.prev.borrow_mut() = buf;
         }
@@ -421,7 +428,7 @@ fn scroll_rows(
     let mut buf = Buffer::empty(area);
     let mut window = model.clone();
     window.scroll = top;
-    list::render(&window, area, &mut buf, theme);
+    list::render(&window, area, &mut buf, theme, &mut HitMap::default());
     buf
 }
 
@@ -449,7 +456,13 @@ mod tests {
         transitions.prepare(model, &areas);
         terminal
             .draw(|frame| {
-                list::render(&model.list, rect(areas.list), frame.buffer_mut(), &theme);
+                list::render(
+                    &model.list,
+                    rect(areas.list),
+                    frame.buffer_mut(),
+                    &theme,
+                    &mut HitMap::default(),
+                );
                 for overlay in &model.overlays {
                     let area = overlay_area(overlay, &areas);
                     for (x, y) in positions(area) {
