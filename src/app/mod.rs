@@ -15,26 +15,22 @@ mod update;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::models::{FrameModel, ListModel, StatusModel, TabBarModel};
+use crate::app::state::AppState;
 use crate::bus::{Cmd, Msg, Progress, Size, TermState, TermStatus, UiEvent};
 
 /// The app: the state and the message handler. `run` drives it.
 #[derive(Debug)]
 pub(crate) struct App {
-    size: Size,
-    /// Moves on every visible change. `run` draws when it moved.
-    generation: u64,
+    state: AppState,
     frame: FrameModel,
-    ui_events: Vec<UiEvent>,
 }
 
 impl App {
     /// Creates the app for a terminal size.
     pub(crate) fn new(size: Size) -> Self {
         Self {
-            size,
-            generation: 0,
+            state: AppState::new(size),
             frame: empty_frame(),
-            ui_events: Vec::new(),
         }
     }
 
@@ -48,8 +44,8 @@ impl App {
             Msg::Key(event) if is_quit(&event) => vec![Cmd::Quit],
             Msg::Signal => vec![Cmd::Quit],
             Msg::Resize(size) => {
-                self.size = size;
-                self.generation += 1;
+                self.state.data.size = size;
+                self.state.bump();
                 Vec::new()
             }
             _ => Vec::new(),
@@ -63,17 +59,17 @@ impl App {
 
     /// The redraw signal.
     pub(crate) fn generation(&self) -> u64 {
-        self.generation
+        self.state.generation
     }
 
     /// The terminal size.
     pub(crate) fn size(&self) -> Size {
-        self.size
+        self.state.data.size
     }
 
     /// Takes the UI events for the transitions.
     pub(crate) fn take_ui_events(&mut self) -> Vec<UiEvent> {
-        std::mem::take(&mut self.ui_events)
+        std::mem::take(&mut self.state.ui.ui_events)
     }
 }
 
