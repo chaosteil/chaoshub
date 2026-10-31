@@ -25,7 +25,8 @@ pub(crate) struct Areas {
     pub hints: Rect,
     /// The last row.
     pub status: Rect,
-    /// The PR popup: centered, 85% of the width and of the height.
+    /// The PR popup: a sidebar at the right edge, 80% of the width, over
+    /// the list rows.
     pub popup: Rect,
     /// The pane inside the PR popup: the popup without its border, its
     /// side padding and its header rows. `Pane::model` gets this size.
@@ -34,8 +35,8 @@ pub(crate) struct Areas {
     pub help: Rect,
 }
 
-/// The share of the screen for the popup, in percent.
-const POPUP_PERCENT: u16 = 85;
+/// The share of the width for the popup, in percent.
+const POPUP_PERCENT: u16 = 80;
 /// The share of the width for the help overlay, in percent.
 const HELP_PERCENT: u16 = 40;
 /// The minimum width of the help overlay.
@@ -91,12 +92,11 @@ pub(crate) fn layout_with(size: Size, key_hints: bool) -> Areas {
         height: height.saturating_sub(2 + hints.height),
     };
     let popup_width = percent(width, POPUP_PERCENT);
-    let popup_height = percent(height, POPUP_PERCENT);
     let popup = Rect {
-        x: (width - popup_width) / 2,
-        y: (height - popup_height) / 2,
+        x: width - popup_width,
+        y: list.y,
         width: popup_width,
-        height: popup_height,
+        height: list.height,
     };
     let popup_body = Rect {
         x: popup.x.saturating_add(POPUP_BORDER + POPUP_PADDING),
@@ -152,8 +152,8 @@ mod tests {
                 list: rect(0, 1, 100, 27),
                 hints: rect(0, 28, 100, 1),
                 status: rect(0, 29, 100, 1),
-                popup: rect(7, 2, 85, 25),
-                popup_body: rect(9, 7, 81, 19),
+                popup: rect(20, 1, 80, 27),
+                popup_body: rect(22, 6, 76, 21),
                 help: rect(60, 1, 40, 27),
             }
         );
@@ -172,8 +172,8 @@ mod tests {
                 list: rect(0, 1, 160, 47),
                 hints: rect(0, 48, 160, 1),
                 status: rect(0, 49, 160, 1),
-                popup: rect(12, 4, 136, 42),
-                popup_body: rect(14, 9, 132, 36),
+                popup: rect(32, 1, 128, 47),
+                popup_body: rect(34, 6, 124, 41),
                 help: rect(96, 1, 64, 47),
             }
         );
@@ -189,10 +189,14 @@ mod tests {
         assert_eq!(areas.hints, Rect::default());
         assert_eq!(areas.list, rect(0, 1, 100, 28));
         assert_eq!(areas.help, rect(60, 1, 40, 28));
+        assert_eq!(areas.popup, rect(20, 1, 80, 28));
+        assert_eq!(areas.popup_body, rect(22, 6, 76, 22));
         assert_eq!(
             Areas {
                 list: areas.list,
                 hints: areas.hints,
+                popup: areas.popup,
+                popup_body: areas.popup_body,
                 help: areas.help,
                 ..layout(size)
             },
