@@ -237,7 +237,7 @@ fn hints_model(
     }
     let keymap = &state.cache.keymap;
     let hints = match state.ui.overlays.iter().rev().find(|o| !o.closing) {
-        Some(overlay) => overlay_hints(&state.data, keymap, panes, &overlay.state),
+        Some(overlay) => overlay_hints(&state.data, keymap, panes, actions, &overlay.state),
         None if state.ui.filter_edit => filter_hints(),
         None => list_hints(state, keymap, tabs, actions, list),
     };
@@ -280,27 +280,26 @@ fn list_hints(
             primary: false,
         }));
     }
-    hints.extend(action_hints(&state.data, keymap, actions, list));
+    if let Some(target) = list
+        .rows
+        .get(list.cursor)
+        .and_then(|row| row_target(&state.data, &row.item))
+    {
+        hints.extend(action_hints(&state.data, keymap, actions, target));
+    }
     hints.sort_by_key(|hint| !hint.primary);
     hints
 }
 
-/// The hints of the actions that are enabled for the cursor row of
-/// `list`, in registry order. An action with `Hint::None` or without a
-/// key has no hint. The label is the action id with spaces.
+/// The hints of the actions that are enabled for `target`, in registry
+/// order. An action with `Hint::None` or without a key has no hint. The
+/// label is the action id with spaces.
 fn action_hints(
     data: &AppData,
     keymap: &Keymap,
     actions: &[Box<dyn Action>],
-    list: &ListModel,
+    target: Target,
 ) -> Vec<KeyHint> {
-    let Some(target) = list
-        .rows
-        .get(list.cursor)
-        .and_then(|row| row_target(data, &row.item))
-    else {
-        return Vec::new();
-    };
     let mut selection = Selection {
         target,
         me: data.session.login.clone().unwrap_or_default(),
@@ -349,29 +348,43 @@ fn plain_key(code: KeyCode) -> String {
     })
 }
 
-/// The hints of an overlay. They are all primary.
+/// The hints of an overlay. They are all primary, except the action
+/// hints of the pull request popup: they come after the pane hints, the
+/// primary ones first.
 fn overlay_hints(
     data: &AppData,
     keymap: &Keymap,
     panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
     overlay: &OverlayState,
 ) -> Vec<KeyHint> {
     let hints = match overlay {
         OverlayState::Popup(popup) => {
-            let mut keys: Vec<String> = pr_target(data, &popup.key)
+            let target = pr_target(data, &popup.key);
+            let mut keys: Vec<String> = target
+                .as_ref()
                 .map(|target| {
-                    applicable(panes, &target)
+                    applicable(panes, target)
                         .into_iter()
                         .map(|i| panes[i].key().to_string())
                         .collect()
                 })
                 .unwrap_or_default();
             keys.extend(first_keys(keymap, &["next_tab"]));
-            vec![
+            let mut hints: Vec<KeyHint> = [
                 hint(&keys, "pane tabs"),
                 app_hint(keymap, &["open"], "expand", true),
                 app_hint(keymap, &["close_overlay"], "close", true),
             ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if let Some(target) = target {
+                let mut actions = action_hints(data, keymap, actions, target);
+                actions.sort_by_key(|hint| !hint.primary);
+                hints.extend(actions);
+            }
+            return hints;
         }
         OverlayState::Confirm { .. } => vec![
             app_hint(keymap, &["confirm"], "confirm", true),
