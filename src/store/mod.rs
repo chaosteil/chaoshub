@@ -26,6 +26,9 @@ use crate::domain::repo::RepoSettings;
 use crate::store::error::StoreError;
 use crate::store::handle::{CHANNEL_CAPACITY, StoreHandle};
 
+/// The time that a statement waits for a lock of another connection.
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// The schema version. It must equal the `user_version` in `schema.sql`.
 const SCHEMA_VERSION: i64 = 1;
 
@@ -81,12 +84,15 @@ impl Store {
 
 /// Opens the database at `path` and brings the schema to
 /// `SCHEMA_VERSION`. It creates the parent directory. The path
-/// `:memory:` opens an in-memory database.
+/// `:memory:` opens an in-memory database. The busy timeout lets a
+/// statement wait for the lock of another process, because the detail
+/// pane of M17 is a second process on the same file.
 fn open_connection(path: &Path) -> Result<Connection, StoreError> {
     if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
     let mut conn = Connection::open(path)?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
     migrate(&mut conn)?;
     Ok(conn)
 }
@@ -236,6 +242,15 @@ mod tests {
                 "ui_state"
             ]
         );
+    }
+
+    #[test]
+    fn open_sets_a_busy_timeout() {
+        let conn = open_connection(Path::new(":memory:")).unwrap();
+        let timeout: i64 = conn
+            .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 1000);
     }
 
     #[test]
