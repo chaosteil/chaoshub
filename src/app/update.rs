@@ -17,6 +17,7 @@ use crate::app::models::{CellStyle, Direction, PaneModel, RowItem};
 use crate::app::nav::{self, Motion};
 use crate::app::panes::{PANES, Pane, applicable, items};
 use crate::app::state::MergeState;
+use crate::app::state::PrefetchBatch;
 use crate::app::state::{
     AUTHOR_KEY, ActionDialog, AppData, AppState, AuthorPicker, FILTER_KEY, Failure, OUTPUT_LINES,
     Overlay, OverlayState, PaneHandleState, PopupState, error_text, ui_key,
@@ -142,6 +143,20 @@ pub(crate) fn update_full(
             tracing::trace!("message not handled yet");
             Vec::new()
         }
+        Msg::PrefetchBatch { done, total } => {
+            prefetch_batch(state, done, total);
+            Vec::new()
+        }
+    }
+}
+
+/// Stores the progress of a prefetch batch. `done == total` ends the
+/// batch and clears it.
+fn prefetch_batch(state: &mut AppState, done: usize, total: usize) {
+    let batch = (done < total).then_some(PrefetchBatch { done, total });
+    if state.data.prefetch != batch {
+        state.data.prefetch = batch;
+        state.bump();
     }
 }
 
@@ -1568,6 +1583,33 @@ mod tests {
             state.ui.status.clone().unwrap().text,
             "sync worker restarting in 2s"
         );
+    }
+
+    #[test]
+    fn prefetch_batch_is_stored_until_done_equals_total() {
+        let mut state = AppState::new(SIZE);
+        let batch = |done, total| Msg::PrefetchBatch { done, total };
+        let generation = state.generation;
+        assert_eq!(update(&mut state, &Keymap::default(), batch(0, 3)), vec![]);
+        assert_eq!(
+            state.data.prefetch,
+            Some(PrefetchBatch { done: 0, total: 3 })
+        );
+        assert!(state.generation > generation);
+        update(&mut state, &Keymap::default(), batch(2, 3));
+        assert_eq!(
+            state.data.prefetch,
+            Some(PrefetchBatch { done: 2, total: 3 })
+        );
+        let term = term_status(&state);
+        assert_eq!(term.msg.as_deref(), Some("prefetching"));
+        let generation = state.generation;
+        update(&mut state, &Keymap::default(), batch(2, 3));
+        assert_eq!(state.generation, generation, "no change, no bump");
+        update(&mut state, &Keymap::default(), batch(3, 3));
+        assert_eq!(state.data.prefetch, None);
+        update(&mut state, &Keymap::default(), batch(0, 0));
+        assert_eq!(state.data.prefetch, None);
     }
 
     #[test]

@@ -7,7 +7,9 @@
 //! fetches that base ref once per sync period (`refresh.full_secs`). Each
 //! git process runs under the lock of its repo. A head is fetched again
 //! only when its oid changes. The worker sends `PrefetchDone` per pull
-//! request. It does nothing when `prefetch.enabled` is false.
+//! request, and `PrefetchBatch` at the start of a batch and after each
+//! pull request of it. A batch is the pull requests of one `Interest`
+//! that need a fetch. It does nothing when `prefetch.enabled` is false.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -48,6 +50,19 @@ impl Fetched {
         self.bases.clear();
         self.heads.retain(|_, (_, ok)| *ok);
     }
+
+    /// The pull requests of `order` that need a fetch of the base ref or
+    /// of the head, in order. A base ref counts once.
+    fn pending(&self, order: impl Iterator<Item = PrRef>) -> Vec<PrRef> {
+        let mut bases = self.bases.clone();
+        order
+            .filter(|pr| {
+                let base = bases.insert((pr.key.repo.clone(), pr.base_ref.clone()));
+                let known = self.heads.get(&pr.key).map(|(oid, _)| oid);
+                base || known != Some(&pr.head_oid)
+            })
+            .collect()
+    }
 }
 
 /// Serves `Interest` changes until `app` is gone.
@@ -60,6 +75,8 @@ async fn run(ctx: WorkerCtx) {
     let period = Duration::from_secs(ctx.config.refresh.full_secs.max(1));
     let mut period_start = Instant::now();
     let mut fetched = Fetched::default();
+    // True while `app` shows a batch that did not end.
+    let mut open_batch = false;
     loop {
         if interest.changed().await.is_err() || !settle(&mut interest, DEBOUNCE).await {
             return;
@@ -83,7 +100,13 @@ async fn run(ctx: WorkerCtx) {
                 .into_iter()
                 .filter(|pr| Some(pr) != selected.as_ref()),
         );
-        for pr in order {
+        let batch = fetched.pending(order.filter(|pr| paths.contains_key(&pr.key.repo)));
+        let total = batch.len();
+        if (total > 0 || open_batch) && !send_batch(&ctx, 0, total).await {
+            return;
+        }
+        open_batch = total > 0;
+        for (index, pr) in batch.iter().enumerate() {
             // A new selection starts over with the new order.
             if interest.has_changed().unwrap_or(true) {
                 break;
@@ -91,11 +114,23 @@ async fn run(ctx: WorkerCtx) {
             let Some(path) = paths.get(&pr.key.repo) else {
                 continue;
             };
-            if !prefetch(&ctx, &mut fetched, path, &pr).await {
+            if !prefetch(&ctx, &mut fetched, path, pr).await {
                 return;
             }
+            if !send_batch(&ctx, index + 1, total).await {
+                return;
+            }
+            open_batch = index + 1 < total;
         }
     }
+}
+
+/// Sends the progress of the batch. False when `app` is gone.
+async fn send_batch(ctx: &WorkerCtx, done: usize, total: usize) -> bool {
+    ctx.tx
+        .send(Msg::PrefetchBatch { done, total })
+        .await
+        .is_ok()
 }
 
 /// Fetches the base ref and the head of `pr` when they are not fetched
@@ -241,7 +276,15 @@ mod tests {
         harness.interest.send(interest.clone()).unwrap();
         assert_eq!(
             harness.recv().await,
+            Msg::PrefetchBatch { done: 0, total: 1 }
+        );
+        assert_eq!(
+            harness.recv().await,
             Msg::PrefetchDone(seven.key.clone(), Ok(()))
+        );
+        assert_eq!(
+            harness.recv().await,
+            Msg::PrefetchBatch { done: 1, total: 1 }
         );
         for name in ["refs/chaoshub/base/main", "refs/chaoshub/pr/7/head"] {
             assert_eq!(
@@ -258,6 +301,10 @@ mod tests {
             .interest
             .send(testkit::interest(None, vec![seven, eight.clone()]))
             .unwrap();
+        assert_eq!(
+            harness.recv().await,
+            Msg::PrefetchBatch { done: 0, total: 1 }
+        );
         match harness.recv().await {
             Msg::PrefetchDone(key, Err(err)) => {
                 assert_eq!(key, eight.key);
@@ -265,6 +312,10 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+        assert_eq!(
+            harness.recv().await,
+            Msg::PrefetchBatch { done: 1, total: 1 }
+        );
         worker.abort();
     }
 
@@ -278,6 +329,29 @@ mod tests {
             .await
             .unwrap();
         assert!(harness.quiet_for(Duration::from_millis(50)).await);
+    }
+
+    #[test]
+    fn pending_skips_fetched_refs_and_counts_a_base_once() {
+        let mut fetched = Fetched::default();
+        let known = testkit::pr_ref(1, "PR_1", "a");
+        let moved = testkit::pr_ref(2, "PR_2", "b");
+        let fresh = testkit::pr_ref(3, "PR_3", "c");
+        fetched
+            .bases
+            .insert((testkit::repo(), known.base_ref.clone()));
+        fetched.heads.insert(known.key.clone(), ("a".into(), true));
+        fetched
+            .heads
+            .insert(moved.key.clone(), ("old".into(), true));
+        let order = [known.clone(), moved.clone(), fresh.clone()];
+        assert_eq!(fetched.pending(order.into_iter()), [moved, fresh]);
+        let mut other_base = known.clone();
+        other_base.base_ref = "release".into();
+        assert_eq!(
+            fetched.pending([known, other_base.clone()].into_iter()),
+            [other_base]
+        );
     }
 
     #[test]
