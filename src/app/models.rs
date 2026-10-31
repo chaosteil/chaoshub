@@ -20,6 +20,34 @@ pub(crate) struct FrameModel {
     /// The filter line of the active tab, while the user edits it or
     /// while it has text. It takes the last row of the list area.
     pub filter: Option<FilterModel>,
+    /// The key hint bar. `None` when `[theme] key_hints = false`.
+    pub hints: Option<KeyHintsModel>,
+}
+
+/// The text before the first key hint: the stencil marker of the
+/// headers and one space.
+pub(crate) const HINT_PREFIX: &str = "▌ ";
+/// The space between two key hints.
+pub(crate) const HINT_GAP: &str = "  ";
+/// The label of the last hint when the bar cut hints.
+pub(crate) const HINT_CUT: &str = "…";
+
+/// The key hint bar: the hints that fit the width, in display order.
+/// When hints were cut, the last hint has no key and the label
+/// `HINT_CUT`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeyHintsModel {
+    pub hints: Vec<KeyHint>,
+}
+
+/// One key hint, for example `v review`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeyHint {
+    /// The keys as the user configured them, for example `j/k`.
+    pub key: String,
+    pub label: String,
+    /// True when the hint always shows.
+    pub primary: bool,
 }
 
 /// The filter line: the filter text and whether the user edits it.
