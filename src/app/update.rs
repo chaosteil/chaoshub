@@ -552,6 +552,10 @@ fn overlay_key(
             cmds
         }
         OverlayState::Confirm { action, .. } => {
+            if keymap.matches("cancel", chord) {
+                close_overlay(state);
+                return Vec::new();
+            }
             if !keymap.matches("confirm", chord) && !keymap.matches("open", chord) {
                 return Vec::new();
             }
@@ -2860,6 +2864,46 @@ mod tests {
             run_msg(&mut state, &actions, Msg::TransitionsDone);
         }
         act(&mut state, &actions, KeyCode::Char('m'));
+        assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
+    }
+
+    #[test]
+    fn n_cancels_a_confirm() {
+        let mut state = action_state(&pr_row(102));
+        let mut close = FakeAction::new("close", 'X');
+        close.prepare = Prepare::Confirm(crate::bus::ConfirmSpec {
+            title: "close #102?".into(),
+            lines: Vec::new(),
+            danger: true,
+        });
+        let actions = fake(close);
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('X')), vec![]);
+        assert!(state.ui.overlays.iter().any(|o| !o.closing));
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('n')), vec![]);
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
+    }
+
+    #[test]
+    fn n_is_text_in_a_prompt() {
+        let mut state = action_state(&pr_row(102));
+        let spec = crate::bus::PromptSpec {
+            title: "request changes".into(),
+            placeholder: "why".into(),
+        };
+        let mut request = FakeAction::new("request_changes", 'R');
+        request.prepare = Prepare::Prompt(spec.clone());
+        let actions = fake(request);
+        act(&mut state, &actions, KeyCode::Char('R'));
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('n')), vec![]);
+        let overlays = &frame::frame_model(&mut state).overlays;
+        assert_eq!(
+            overlays.last().map(|o| &o.content),
+            Some(&OverlayContent::Prompt {
+                spec,
+                text: "n".into(),
+            })
+        );
         assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
         assert!(state.ui.overlays.iter().all(|o| o.closing));
     }
