@@ -124,9 +124,12 @@ fn render_overlay(
         OverlayContent::Help(help) => help::render(help, area, buf, theme),
         OverlayContent::Prompt { spec, text } => prompt::render(spec, text, area, buf, theme),
         OverlayContent::Output { title, lines } => output::render(title, lines, area, buf, theme),
-        // The renderers of the other overlay kinds come in the next
-        // commits of this stack.
-        OverlayContent::Confirm(_) | OverlayContent::Picker { .. } => {}
+        OverlayContent::Confirm(spec) => confirm::render(spec, area, buf, theme),
+        OverlayContent::Picker {
+            title,
+            items,
+            cursor,
+        } => picker::render(title, items, *cursor, area, buf, theme),
     }
 }
 
@@ -327,6 +330,81 @@ mod tests {
     #[test]
     fn output_follows_the_tail() {
         insta::assert_snapshot!(draw(&output(60), 100, 30, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn confirm_100_pierre() {
+        let model = testdata::with_overlay(testdata::confirm_overlay(true));
+        insta::assert_snapshot!(draw(&model, 100, 30, &testdata::pierre()));
+    }
+
+    #[test]
+    fn confirm_160_pierre() {
+        let model = testdata::with_overlay(testdata::confirm_overlay(false));
+        insta::assert_snapshot!(draw(&model, 160, 40, &testdata::pierre()));
+    }
+
+    #[test]
+    fn confirm_100_ansi16() {
+        let model = testdata::with_overlay(testdata::confirm_overlay(true));
+        insta::assert_snapshot!(draw(&model, 100, 30, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn confirm_160_ansi16() {
+        let model = testdata::with_overlay(testdata::confirm_overlay(true));
+        insta::assert_snapshot!(draw(&model, 160, 40, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn danger_confirm_uses_the_danger_color() {
+        let theme = testdata::pierre();
+        let model = testdata::with_overlay(testdata::confirm_overlay(true));
+        let areas = testdata::areas(100, 30);
+        let mut terminal = testdata::terminal(100, 30);
+        terminal
+            .draw(|frame| view(frame, &model, &areas, &theme))
+            .unwrap();
+        let area = overlay_area(&model.overlays[0], &areas);
+        let corner = &terminal.backend().buffer()[(area.x, area.y)];
+        assert_eq!(corner.fg, theme.palette.danger);
+    }
+
+    #[test]
+    fn picker_100_pierre() {
+        let model = testdata::with_overlay(testdata::picker_overlay(5, 1));
+        insta::assert_snapshot!(draw(&model, 100, 30, &testdata::pierre()));
+    }
+
+    #[test]
+    fn picker_160_pierre() {
+        let model = testdata::with_overlay(testdata::picker_overlay(5, 1));
+        insta::assert_snapshot!(draw(&model, 160, 40, &testdata::pierre()));
+    }
+
+    #[test]
+    fn picker_100_ansi16() {
+        let model = testdata::with_overlay(testdata::picker_overlay(5, 1));
+        insta::assert_snapshot!(draw(&model, 100, 30, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn picker_160_ansi16() {
+        let model = testdata::with_overlay(testdata::picker_overlay(5, 1));
+        insta::assert_snapshot!(draw(&model, 160, 40, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn picker_scrolls_to_the_cursor() {
+        let model = testdata::with_overlay(testdata::picker_overlay(40, 35));
+        insta::assert_snapshot!(draw(&model, 100, 30, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn overlays_stack_bottom_first() {
+        let mut model = testdata::with_overlay(testdata::popup_overlay());
+        model.overlays.push(testdata::confirm_overlay(true));
+        insta::assert_snapshot!(draw(&model, 100, 30, &testdata::ansi16()));
     }
 
     #[test]

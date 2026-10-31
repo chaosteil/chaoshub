@@ -9,7 +9,9 @@ use crate::app::models::{
     ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, Row, RowItem, RowStyle,
     StatusModel, TabBarModel, TreeNode,
 };
-use crate::bus::{OverlayKind, PrRef, Progress, PromptSpec, Size, TermState, TermStatus};
+use crate::bus::{
+    ConfirmSpec, OverlayKind, PrRef, Progress, PromptSpec, Size, TermState, TermStatus,
+};
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::theme::{Theme, ThemeKind};
 
@@ -466,6 +468,37 @@ pub(crate) fn output_overlay(count: usize) -> OverlayModel {
             lines: (1..=count)
                 .map(|i| format!("{i:>3} | reviewing src/ui/list.rs hunk {i} of {count}"))
                 .collect(),
+        },
+    }
+}
+
+/// The confirm overlay of a stack merge.
+pub(crate) fn confirm_overlay(danger: bool) -> OverlayModel {
+    OverlayModel {
+        kind: OverlayKind::Confirm,
+        closing: false,
+        content: OverlayContent::Confirm(ConfirmSpec {
+            title: "merge #102".to_owned(),
+            lines: vec![
+                "Squash merge, merges 2 pull requests atomically:".to_owned(),
+                "  1 #101 feat(app): Pane trait, registry and overlay stack  ✓ ✓".to_owned(),
+                "  2 #102 feat(app): checks pane  ✓ ○".to_owned(),
+                "warning: #102 merge state is not known yet".to_owned(),
+            ],
+            danger,
+        }),
+    }
+}
+
+/// The author picker with `count` authors and the cursor on `cursor`.
+pub(crate) fn picker_overlay(count: usize, cursor: usize) -> OverlayModel {
+    OverlayModel {
+        kind: OverlayKind::Picker,
+        closing: false,
+        content: OverlayContent::Picker {
+            title: "author".to_owned(),
+            items: (0..count).map(|i| format!("colleague-{i:02}")).collect(),
+            cursor,
         },
     }
 }
