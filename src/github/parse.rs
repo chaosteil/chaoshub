@@ -37,6 +37,24 @@ impl Me<'_> {
     }
 }
 
+/// The CI state of one pull request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CiStatus {
+    pub node_id: String,
+    /// The head commit that the state belongs to.
+    pub head_oid: String,
+    pub state: Observed<CiState>,
+}
+
+/// The result of a CI poll.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CiPollResult {
+    /// The CI state of every visible pull request that still exists.
+    pub visible: Vec<CiStatus>,
+    /// The state and the checks of the selected pull request.
+    pub selected: Option<(CiStatus, Observed<Vec<Check>>)>,
+}
+
 /// Converts a GraphQL `Int` to an unsigned domain number.
 fn uint<T: TryFrom<i64>>(value: i64, field: &str) -> Result<T, GithubError> {
     T::try_from(value).map_err(|_| GithubError::Parse(format!("{field} out of range: {value}")))
@@ -386,6 +404,55 @@ pub(crate) mod stack_entries {
     }
 }
 
+/// Conversions for the `CiPoll` query.
+pub(crate) mod ci_poll {
+    #[allow(
+        clippy::wildcard_imports,
+        reason = "the macro bodies use the imports of the parent module"
+    )]
+    use super::*;
+    use crate::github::queries::ci_poll as q;
+
+    rollup_parser!();
+
+    /// The CI states of the visible pull requests and the checks of the
+    /// selected one. Nodes that are not pull requests are skipped.
+    pub(crate) fn result(data: q::ResponseData, observed_at: DateTime<Utc>) -> CiPollResult {
+        let visible = data
+            .visible
+            .into_iter()
+            .flatten()
+            .filter_map(|node| match node {
+                q::CiPollVisible::PullRequest(pr) => Some(CiStatus {
+                    node_id: pr.id,
+                    head_oid: pr.head_ref_oid,
+                    state: observed(
+                        pr.status_check_rollup
+                            .map_or(CiState::None, |rollup| ci_state(&rollup.state)),
+                        observed_at,
+                    ),
+                }),
+                _ => None,
+            })
+            .collect();
+        let selected = match data.selected {
+            Some(q::CiPollSelected::PullRequest(pr)) => {
+                let (state, checks) = rollup(pr.status_check_rollup);
+                Some((
+                    CiStatus {
+                        node_id: pr.id,
+                        head_oid: pr.head_ref_oid,
+                        state: observed(state, observed_at),
+                    },
+                    observed(checks, observed_at),
+                ))
+            }
+            _ => None,
+        };
+        CiPollResult { visible, selected }
+    }
+}
+
 /// Decodes a captured fixture: the `data` of a GraphQL response.
 #[cfg(test)]
 pub(crate) fn fixture<T: serde::de::DeserializeOwned>(json: &str) -> T {
@@ -569,6 +636,62 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(stack_entries::stack(data, test_time()).unwrap(), None);
+    }
+
+    #[test]
+    fn ci_poll_maps_visible_states_and_selected_checks() {
+        let data = fixture(include_str!("testdata/ci_poll.json"));
+        let result = ci_poll::result(data, test_time());
+        let states: Vec<CiState> = result
+            .visible
+            .iter()
+            .map(|status| status.state.value)
+            .collect();
+        assert_eq!(states, [CiState::Success, CiState::Failure]);
+        assert!(
+            result
+                .visible
+                .iter()
+                .all(|status| status.head_oid.len() == 40)
+        );
+        assert!(
+            result
+                .visible
+                .iter()
+                .all(|status| status.state.observed_at == test_time())
+        );
+        let (selected, checks) = result.selected.unwrap();
+        assert_eq!(selected.node_id, result.visible[1].node_id);
+        assert_eq!(selected.state.value, CiState::Failure);
+        assert_eq!(checks.observed_at, test_time());
+        assert_eq!(checks.value.len(), 19);
+        let failed: Vec<&Check> = checks
+            .value
+            .iter()
+            .filter(|check| check.conclusion == Some(CheckConclusion::Failure))
+            .collect();
+        assert!(
+            failed
+                .iter()
+                .all(|check| check.run_id.is_some() && check.suite_id.is_some())
+        );
+        assert_eq!(failed.len(), 1);
+    }
+
+    #[test]
+    fn ci_poll_without_selection_or_rollup() {
+        let data = serde_json::from_value(serde_json::json!({
+            "visible": [
+                { "__typename": "PullRequest", "id": "PR_1", "headRefOid": "abc", "statusCheckRollup": null },
+                null
+            ],
+            "rateLimit": null
+        }))
+        .unwrap();
+        let result = ci_poll::result(data, test_time());
+        assert_eq!(result.visible.len(), 1);
+        assert_eq!(result.visible[0].state.value, CiState::None);
+        assert_eq!(result.selected, None);
     }
 
     #[test]
