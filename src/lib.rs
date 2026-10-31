@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! domain <- bus <- github | vcs | store | launch <- workers | actions <- app <- ui <- run
-//! config: read by app, workers, actions, run.   theme: read by ui and run.   cli: read by main only.
+//! config: read by app, workers, actions, run.   theme: read by ui and run.   cli: read by main and run.
 //! osc: reads bus only; read by run and clipboard.   clipboard: read by app (exec).
 //! ```
 #![forbid(unsafe_code)]
@@ -30,10 +30,13 @@ mod vcs;
 mod workers;
 
 pub use config::paths::state_dir;
+pub use theme::ThemeKind;
 
-/// Starts the TUI and runs it until the user quits.
-pub fn run() -> anyhow::Result<()> {
-    run::run()
+/// Runs the command of `cli`: starts the TUI and runs it until the user
+/// quits, or runs `cache clear`. `theme_kind` is the color support of the
+/// terminal.
+pub fn run(cli: cli::Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
+    run::run(cli, theme_kind)
 }
 
 #[cfg(test)]
@@ -94,6 +97,7 @@ mod tests {
                 "theme",
                 "osc",
                 "clipboard",
+                "cli",
             ],
         ),
         ("config", &["domain"]),
