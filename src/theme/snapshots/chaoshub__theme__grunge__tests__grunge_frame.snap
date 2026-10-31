@@ -1,0 +1,10 @@
+---
+source: src/theme/grunge.rs
+expression: "text(&draw(&theme, 1))"
+---
+▛▀▌ C H E C K S▀░▀▀▀▓░▀▜
+▌                      ▐
+▌                      ▐
+▌                      ▐
+▌                      ▐
+▙▄▄▄▄▒▄▄▄▄▄▄▄▄▄▒▒▄▄▄▄▄▄▟
