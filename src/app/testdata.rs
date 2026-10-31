@@ -114,7 +114,73 @@ pub(crate) fn mine_prs() -> Vec<PullRequest> {
     vec![base, middle, top, single, old]
 }
 
-/// A startup snapshot with the pull requests of `mine_prs`.
+/// A local change of the `chaoshub` scan.
+pub(crate) fn change(
+    workspace: &str,
+    change_id: &str,
+    commit_id: &str,
+    parents: &[&str],
+    description: &str,
+) -> crate::domain::local::LocalChange {
+    crate::domain::local::LocalChange {
+        workspace: workspace.into(),
+        change_id: change_id.into(),
+        commit_id: commit_id.into(),
+        bookmarks: Vec::new(),
+        empty: description.is_empty(),
+        parents: parents.iter().map(|p| (*p).to_owned()).collect(),
+        description: description.into(),
+    }
+}
+
+/// The jj scan of `chaoshub` for `mine_prs`: #103 synced, #102 diverged
+/// by its bookmark, a local-only change on top of #103, a loose change in
+/// the `spike` workspace, and a fresh empty working copy.
+pub(crate) fn mine_local() -> (RepoKey, Observed<crate::domain::local::LocalState>) {
+    let mut diverged = change(
+        "default",
+        "xlmkrtpqxlmk",
+        "9f9f9f9f9f9f",
+        &["trptoqkqtrpt"],
+        "feat(app): checks pane",
+    );
+    diverged.bookmarks = vec!["chaosteil/102".into()];
+    let changes = vec![
+        change("default", "kkkkllllmmmm", "1234abcd", &["zzmqxkrtzzmq"], ""),
+        change(
+            "default",
+            "zzmqxkrtzzmq",
+            "5678ef01",
+            &["wqnvzxopwqnv"],
+            "wip: try the new layout",
+        ),
+        change(
+            "default",
+            "wqnvzxopwqnv",
+            "oid103",
+            &["xlmkrtpqxlmk"],
+            "feat(ui): popup frame with pane tabs",
+        ),
+        diverged,
+        change(
+            "spike",
+            "ppqqrrssttuu",
+            "aa55aa55",
+            &["trunk"],
+            "spike: a faster sync",
+        ),
+    ];
+    (
+        repo_key("chaoshub"),
+        observed(crate::domain::local::LocalState {
+            workspaces: Vec::new(),
+            changes,
+        }),
+    )
+}
+
+/// A startup snapshot with the pull requests of `mine_prs` and the jj
+/// scan of `mine_local`.
 pub(crate) fn mine_snapshot() -> crate::store::Snapshot {
     crate::store::Snapshot {
         prs: mine_prs()
@@ -122,6 +188,7 @@ pub(crate) fn mine_snapshot() -> crate::store::Snapshot {
             .map(|pr| (crate::bus::Scope::Mine, pr))
             .collect(),
         synced_at: Some(test_time()),
+        local: vec![mine_local()],
         ..crate::store::Snapshot::default()
     }
 }

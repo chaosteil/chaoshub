@@ -2,9 +2,14 @@
 //!
 //! A stack shows a header row (`stack #S -> main · 3 PRs`) and its pull
 //! requests top first with the tree glyphs `┌ ├ └`. A pull request
-//! without a stack is a single row with `─`.
+//! without a stack is a single row with `─`. The jj columns come from the
+//! matched local change. A local-only change shows right above the pull
+//! request of its nearest matched ancestor, else in a `local` group per
+//! workspace at the end.
 
-use crate::app::filter::{Filter, ItemKey, pr_candidate};
+use std::collections::HashMap;
+
+use crate::app::filter::{Filter, ItemKey, local_candidate, pr_candidate};
 use crate::app::models::{
     Align, Cell, CellStyle, Column, ColumnWidth, ListModel, Row, RowItem, RowStyle,
 };
@@ -12,7 +17,9 @@ use crate::app::nav::place;
 use crate::app::tabs::cells::{self, cell};
 use crate::app::tabs::{Handled, KeyCx, Tab, TabState, list_interest, pr_ref};
 use crate::bus::{Interest, KeyChord, Scope, Size};
-use crate::domain::matching::group_stacks;
+use crate::domain::keys::{PrKey, RepoKey};
+use crate::domain::local::{LocalChange, LocalMatch};
+use crate::domain::matching::{group_stacks, local_only, match_prs, nearest_pr};
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::stack::StackGroup;
 
@@ -114,7 +121,15 @@ impl Tab for Mine {
         let Some(filter) = ts.ext.downcast_mut::<Filter>() else {
             return;
         };
-        let candidates = mine_prs(cx).into_iter().map(pr_candidate);
+        let prs = mine_prs(cx);
+        let view = local_view(cx, &prs);
+        let locals = view
+            .anchored
+            .values()
+            .flatten()
+            .chain(&view.loose)
+            .map(|(repo, change)| local_candidate(repo, change));
+        let candidates: Vec<_> = prs.into_iter().map(pr_candidate).chain(locals).collect();
         filter.rescore(&ts.filter, cx.data.revision, candidates);
     }
 
@@ -181,48 +196,100 @@ fn mine_prs<'a>(cx: &KeyCx<'a>) -> Vec<&'a PullRequest> {
     prs
 }
 
-/// The rows of every stack group, of the pull requests that pass the
-/// filter.
-fn rows(cx: &KeyCx<'_>, set: Columns, filter: Option<&Filter>) -> Vec<Row> {
-    let mut prs = mine_prs(cx);
-    if let Some(filter) = filter {
-        prs.retain(|pr| filter.keeps(&ItemKey::Pr(pr.key.clone())));
+/// The jj view of the Mine tab: the local match of each pull request, and
+/// the local-only changes under a pull request or loose.
+#[derive(Debug, Default)]
+struct LocalView {
+    matches: HashMap<PrKey, LocalMatch>,
+    /// The local-only changes whose nearest matched ancestor is a pull
+    /// request of the list, by that pull request.
+    anchored: HashMap<PrKey, Vec<(RepoKey, LocalChange)>>,
+    /// The other local-only changes, by repo and scan order.
+    loose: Vec<(RepoKey, LocalChange)>,
+}
+
+/// Matches the scanned changes of each repo to the pull requests of that
+/// repo, and places the local-only changes. `shown` are the pull requests
+/// of the list; a change under another pull request is loose.
+fn local_view(cx: &KeyCx<'_>, shown: &[&PullRequest]) -> LocalView {
+    let mut view = LocalView::default();
+    for (repo, scan) in &cx.data.local {
+        let changes = &scan.value.changes;
+        let repo_prs: Vec<&PullRequest> = cx
+            .data
+            .prs
+            .values()
+            .filter(|pr| pr.key.repo == *repo)
+            .collect();
+        let matches = match_prs(&repo_prs, changes);
+        for change in local_only(changes, &matches) {
+            let anchor = nearest_pr(&change, changes, &matches)
+                .filter(|key| shown.iter().any(|pr| pr.key == *key));
+            match anchor {
+                Some(key) => view
+                    .anchored
+                    .entry(key)
+                    .or_default()
+                    .push((repo.clone(), change)),
+                None => view.loose.push((repo.clone(), change)),
+            }
+        }
+        view.matches.extend(matches);
     }
+    view
+}
+
+/// The rows of every stack group, of the pull requests and local changes
+/// that pass the filter. The loose local changes come last, one group per
+/// workspace.
+fn rows(cx: &KeyCx<'_>, set: Columns, filter: Option<&Filter>) -> Vec<Row> {
+    let keeps = |key: ItemKey| filter.is_none_or(|filter| filter.keeps(&key));
+    let mut prs = mine_prs(cx);
+    prs.retain(|pr| keeps(ItemKey::Pr(pr.key.clone())));
+    let mut view = local_view(cx, &prs);
+    let keeps_local = |(repo, change): &(RepoKey, LocalChange)| {
+        keeps(ItemKey::Local {
+            repo: repo.clone(),
+            change_id: change.change_id.clone(),
+        })
+    };
+    for changes in view.anchored.values_mut() {
+        changes.retain(keeps_local);
+    }
+    view.loose.retain(keeps_local);
     let mut rows = Vec::new();
     for group in group_stacks(&prs) {
-        group_rows(cx, set, &group, &mut rows);
+        group_rows(cx, set, &group, &view, &mut rows);
     }
+    loose_rows(set, &view.loose, &mut rows);
     rows
 }
 
 /// The rows of one group: a header and the tree for a stack, one row for
-/// a single pull request.
-fn group_rows(cx: &KeyCx<'_>, set: Columns, group: &StackGroup, rows: &mut Vec<Row>) {
+/// a single pull request. The local changes under a pull request come
+/// right above its row.
+fn group_rows(
+    cx: &KeyCx<'_>,
+    set: Columns,
+    group: &StackGroup,
+    view: &LocalView,
+    rows: &mut Vec<Row>,
+) {
     let prs: Vec<&PullRequest> = group
         .prs
         .iter()
         .filter_map(|key| cx.data.prs.get(key))
         .collect();
-    let Some(stack) = &group.stack else {
-        rows.extend(prs.into_iter().map(|pr| pr_row(pr, set, '─')));
-        return;
-    };
-    let noun = if stack.size == 1 { "PR" } else { "PRs" };
-    rows.push(Row {
-        item: RowItem::StackHeader {
-            stack_id: stack.id.clone(),
-        },
-        cells: vec![cell(
+    if let Some(stack) = &group.stack {
+        let noun = if stack.size == 1 { "PR" } else { "PRs" };
+        rows.push(header(
+            stack.id.clone(),
             format!(
                 "stack #{} -> {} · {} {noun}",
                 stack.number, stack.base_ref, stack.size
             ),
-            CellStyle::Dim,
-        )],
-        depth: 0,
-        glyph: None,
-        style: RowStyle::Header,
-    });
+        ));
+    }
     let last = prs.len().saturating_sub(1);
     for (i, pr) in prs.into_iter().enumerate() {
         let glyph = match i {
@@ -231,22 +298,93 @@ fn group_rows(cx: &KeyCx<'_>, set: Columns, group: &StackGroup, rows: &mut Vec<R
             i if i == last => '└',
             _ => '├',
         };
-        rows.push(pr_row(pr, set, glyph));
+        for (repo, change) in view.anchored.get(&pr.key).into_iter().flatten() {
+            rows.push(local_row(repo, change, set, 1, '│'));
+        }
+        let local = view.matches.get(&pr.key).unwrap_or(&LocalMatch::None);
+        rows.push(pr_row(pr, local, set, glyph));
     }
 }
 
+/// The loose local changes: a `local` header per repo and workspace, then
+/// the changes.
+fn loose_rows(set: Columns, loose: &[(RepoKey, LocalChange)], rows: &mut Vec<Row>) {
+    let mut current: Option<(&RepoKey, &str)> = None;
+    for (repo, change) in loose {
+        let group = (repo, change.workspace.as_str());
+        if current != Some(group) {
+            current = Some(group);
+            rows.push(header(
+                format!("local:{}/{}:{}", repo.owner, repo.name, change.workspace),
+                format!("local · {} · {}", repo.name, change.workspace),
+            ));
+        }
+        rows.push(local_row(repo, change, set, 0, '─'));
+    }
+}
+
+/// A header row that spans the list.
+fn header(stack_id: String, text: String) -> Row {
+    Row {
+        item: RowItem::StackHeader { stack_id },
+        cells: vec![cell(text, CellStyle::Dim)],
+        depth: 0,
+        glyph: None,
+        style: RowStyle::Header,
+    }
+}
+
+/// The first `n` characters of an id.
+fn short(id: &str, n: u16) -> String {
+    id.chars().take(usize::from(n)).collect()
+}
+
+/// The change id, commit and workspace cells of a local match.
+fn local_cells(local: &LocalMatch, set: Columns) -> Vec<Cell> {
+    let (change, commit, workspace, style) = match local {
+        LocalMatch::None => (String::new(), String::new(), String::new(), CellStyle::Dim),
+        LocalMatch::Synced {
+            workspace,
+            change_id,
+            commit_id,
+        } => (
+            change_id.clone(),
+            commit_id.clone(),
+            workspace.clone(),
+            CellStyle::Primary,
+        ),
+        LocalMatch::Diverged {
+            workspace,
+            change_id,
+            commit_id,
+        } => (
+            change_id.clone(),
+            commit_id.clone(),
+            workspace.clone(),
+            CellStyle::Warn,
+        ),
+    };
+    let commit_style = if style == CellStyle::Warn {
+        CellStyle::Warn
+    } else {
+        CellStyle::Dim
+    };
+    let mut cells = vec![cell(short(&change, set.change_width()), style)];
+    if set.local_details() {
+        cells.push(cell(short(&commit, 8), commit_style));
+        cells.push(cell(workspace, CellStyle::Dim));
+    }
+    cells
+}
+
 /// The row of one pull request.
-fn pr_row(pr: &PullRequest, set: Columns, glyph: char) -> Row {
+fn pr_row(pr: &PullRequest, local: &LocalMatch, set: Columns, glyph: char) -> Row {
     let head = &pr.head.value;
-    let empty = || cell("", CellStyle::Dim);
     let mut cells: Vec<Cell> = vec![
         cell(head.title.clone(), CellStyle::Normal),
         cell(format!("#{}", pr.key.number), CellStyle::Dim),
-        empty(),
     ];
-    if set.local_details() {
-        cells.extend([empty(), empty()]);
-    }
+    cells.extend(local_cells(local, set));
     cells.extend([
         cells::ci(pr.ci_state.value),
         cells::review(head.review_decision),
@@ -258,6 +396,43 @@ fn pr_row(pr: &PullRequest, set: Columns, glyph: char) -> Row {
         depth: 0,
         glyph: Some(glyph),
         style: RowStyle::Normal,
+    }
+}
+
+/// The row of a local-only change: grey text, `local` in the number
+/// column, and the orange `+` marker.
+fn local_row(repo: &RepoKey, change: &LocalChange, set: Columns, depth: u8, glyph: char) -> Row {
+    let title = if change.description.is_empty() {
+        "(no description)".to_owned()
+    } else {
+        change.description.clone()
+    };
+    let mut cells = vec![
+        cell(title, CellStyle::Dim),
+        cell("local", CellStyle::Dim),
+        cell(
+            short(&change.change_id, set.change_width()),
+            CellStyle::Local,
+        ),
+    ];
+    if set.local_details() {
+        cells.push(cell(short(&change.commit_id, 8), CellStyle::Dim));
+        cells.push(cell(change.workspace.clone(), CellStyle::Dim));
+    }
+    cells.extend([
+        cell("", CellStyle::Dim),
+        cell("", CellStyle::Dim),
+        cell("+", CellStyle::Local),
+    ]);
+    Row {
+        item: RowItem::Local {
+            repo: repo.clone(),
+            change_id: change.change_id.clone(),
+        },
+        cells,
+        depth,
+        glyph: Some(glyph),
+        style: RowStyle::LocalOnly,
     }
 }
 
@@ -446,6 +621,107 @@ mod tests {
         ];
         assert_eq!(outline(&model), expected);
         assert_eq!(model.cursor, 1, "the cursor skips the header");
+    }
+
+    /// The mine fixtures with the jj scan.
+    fn with_local() -> AppState {
+        let mut state = AppState::new(SIZE);
+        state.load(testdata::mine_snapshot(), Vec::new());
+        state
+    }
+
+    #[test]
+    fn jj_columns_and_local_only_rows() {
+        let state = with_local();
+        let model = model(&state, &Mine.init_state());
+        let row = |title: &str| {
+            model
+                .rows
+                .iter()
+                .find(|row| row.cells[0].text == title)
+                .unwrap()
+                .clone()
+        };
+        let top = row("feat(ui): popup frame with pane tabs");
+        assert_eq!(
+            top.cells[2..5],
+            [
+                cell("wqnvzxop", CellStyle::Primary),
+                cell("oid103", CellStyle::Dim),
+                cell("default", CellStyle::Dim),
+            ]
+        );
+        let middle = row("feat(app): checks pane");
+        assert_eq!(
+            middle.cells[2..5],
+            [
+                cell("xlmkrtpq", CellStyle::Warn),
+                cell("9f9f9f9f", CellStyle::Warn),
+                cell("default", CellStyle::Dim),
+            ],
+            "diverged by its bookmark"
+        );
+        let wip = row("wip: try the new layout");
+        assert_eq!(
+            wip.item,
+            RowItem::Local {
+                repo: testdata::repo_key("chaoshub"),
+                change_id: "zzmqxkrtzzmq".into(),
+            }
+        );
+        assert_eq!(
+            (wip.depth, wip.glyph, wip.style),
+            (1, Some('│'), RowStyle::LocalOnly)
+        );
+        assert_eq!(wip.cells[1], cell("local", CellStyle::Dim));
+        assert_eq!(wip.cells[2], cell("zzmqxkrt", CellStyle::Local));
+        assert_eq!(wip.cells[7], cell("+", CellStyle::Local));
+        let titles: Vec<&str> = model
+            .rows
+            .iter()
+            .map(|r| r.cells[0].text.as_str())
+            .collect();
+        let wip_at = titles.iter().position(|t| t.starts_with("wip")).unwrap();
+        assert_eq!(titles[wip_at + 1], "feat(ui): popup frame with pane tabs");
+        assert_eq!(
+            titles[titles.len() - 2..],
+            ["local · chaoshub · spike", "spike: a faster sync"]
+        );
+        assert!(
+            !titles.contains(&"(no description)"),
+            "the empty working copy is hidden"
+        );
+    }
+
+    #[test]
+    fn local_rows_follow_the_narrow_set_and_the_filter() {
+        let state = with_local();
+        let areas = layout(SIZE);
+        let cx = KeyCx {
+            data: &state.data,
+            target: None,
+            areas: &areas,
+        };
+        let narrow = Size {
+            width: 70,
+            height: 20,
+        };
+        let model = Mine.model(&cx, &Mine.init_state(), narrow);
+        for row in &model.rows {
+            if !matches!(row.item, RowItem::StackHeader { .. }) {
+                assert_eq!(row.cells.len(), model.columns.len());
+            }
+        }
+        let mut ts = Mine.init_state();
+        ts.filter = "spike".into();
+        Mine.rescore(&cx, &mut ts);
+        let titles: Vec<String> = Mine
+            .model(&cx, &ts, SIZE)
+            .rows
+            .iter()
+            .map(|r| r.cells[0].text.clone())
+            .collect();
+        assert_eq!(titles, ["local · chaoshub · spike", "spike: a faster sync"]);
     }
 
     #[test]

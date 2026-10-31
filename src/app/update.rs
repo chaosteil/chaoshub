@@ -20,7 +20,8 @@ use crate::bus::{
     ActionEvent, Cmd, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Msg, PrRef, Scope,
     Size, SyncError, TargetKey, UiEvent,
 };
-use crate::domain::keys::PrKey;
+use crate::domain::keys::{PrKey, RepoKey};
+use crate::domain::local::LocalState;
 use crate::domain::observed::{Observed, apply_newer};
 use crate::domain::pr::PullRequest;
 use crate::domain::repo::Repo;
@@ -59,6 +60,13 @@ pub(crate) fn update_with(
         }
         Msg::PrRefreshed(pr) => {
             if pr_refreshed(state, *pr) {
+                after_change(state, tabs)
+            } else {
+                Vec::new()
+            }
+        }
+        Msg::JjScanned { repo, state: scan } => {
+            if jj_scanned(state, repo, scan) {
                 after_change(state, tabs)
             } else {
                 Vec::new()
@@ -326,6 +334,30 @@ fn pr_refreshed(state: &mut AppState, pr: PullRequest) -> bool {
         return false;
     }
     data.revision += 1;
+    state.bump();
+    true
+}
+
+/// A jj scan of one repo, under the freshness rule. True when it changed
+/// the data.
+fn jj_scanned(state: &mut AppState, repo: RepoKey, scan: Observed<LocalState>) -> bool {
+    let local = &mut state.data.local;
+    match local.get_mut(&repo) {
+        None => {
+            local.insert(repo, scan);
+        }
+        Some(current) => {
+            let same = current.value == scan.value;
+            if !apply_newer(current, scan) {
+                tracing::debug!(?repo, "older jj scan dropped");
+                return false;
+            }
+            if same {
+                return false;
+            }
+        }
+    }
+    state.data.revision += 1;
     state.bump();
     true
 }
@@ -1088,14 +1120,18 @@ mod tests {
         assert_eq!(run(&mut state, &tabs, progress), vec![]);
     }
 
-    /// The real tabs with the mine fixtures, on a screen with a list of
-    /// `height` rows.
+    /// The real tabs with the mine pull requests and no jj scan, on a
+    /// screen with a list of `height` rows.
     fn mine_state(height: u16) -> AppState {
         let mut state = AppState::new(Size {
             width: 100,
             height: height + 2,
         });
-        state.load(testdata::mine_snapshot(), Vec::new());
+        let snapshot = crate::store::Snapshot {
+            local: Vec::new(),
+            ..testdata::mine_snapshot()
+        };
+        state.load(snapshot, Vec::new());
         state
     }
 
@@ -1334,6 +1370,27 @@ mod tests {
         };
         update(&mut state, &Keymap::default(), msg);
         assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 1);
+    }
+
+    #[test]
+    fn jj_scans_follow_the_freshness_rule() {
+        let mut state = mine_state(10);
+        let (repo, scan) = testdata::mine_local();
+        let mut newer = scan.clone();
+        newer.observed_at = at(10);
+        newer.value.changes.truncate(1);
+        let msg = |scan| Msg::JjScanned {
+            repo: repo.clone(),
+            state: scan,
+        };
+        let revision = state.data.revision;
+        update(&mut state, &Keymap::default(), msg(newer.clone()));
+        assert_eq!(state.data.local[&repo], newer);
+        assert_eq!(state.data.revision, revision + 1);
+        let generation = state.generation;
+        assert_eq!(update(&mut state, &Keymap::default(), msg(scan)), vec![]);
+        assert_eq!(state.data.local[&repo], newer, "the older scan is dropped");
+        assert_eq!(state.generation, generation);
     }
 
     #[test]
