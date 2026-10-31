@@ -51,18 +51,18 @@ pub(crate) fn default_workspaces_root() -> Option<PathBuf> {
 }
 
 /// The directory of the workspace `ws_name`: `repo_path` for `default`,
-/// else `<root>/<repo_name>/<ws_name>`. `jj workspace list` prints no
-/// paths, so this is a convention. The directory can be missing.
-pub(crate) fn workspace_path(
-    repo_path: &Path,
-    repo_name: &str,
-    ws_name: &str,
-    root: &Path,
-) -> PathBuf {
+/// else `<root>/<folder>/<ws_name>`. `<folder>` is the folder name of
+/// `repo_path`, not the GitHub name of the repo: `~/code/chaoshub` gives
+/// `chaoshub`, also when the repo is `chaosteil/hub`. `jj workspace list`
+/// prints no paths, so this is a convention. The directory can be
+/// missing. A `repo_path` without a folder name, for example `/`, gives
+/// `<root>/<ws_name>`.
+pub(crate) fn workspace_path(repo_path: &Path, ws_name: &str, root: &Path) -> PathBuf {
     if ws_name == "default" {
         repo_path.to_path_buf()
     } else {
-        root.join(repo_name).join(ws_name)
+        root.join(repo_path.file_name().unwrap_or_default())
+            .join(ws_name)
     }
 }
 
@@ -167,11 +167,29 @@ mod tests {
     fn workspace_paths() {
         let repo = Path::new("/home/me/code/chaoshub");
         let root = Path::new("/home/me/code/workspaces");
-        assert_eq!(workspace_path(repo, "chaoshub", "default", root), repo);
-        assert_eq!(
-            workspace_path(repo, "chaoshub", "b-vcs-launch", root),
-            Path::new("/home/me/code/workspaces/chaoshub/b-vcs-launch")
-        );
+        assert_eq!(workspace_path(repo, "default", root), repo);
+        let cases = [
+            (
+                "/home/me/code/chaoshub",
+                "/home/me/code/workspaces/chaoshub/b-vcs-launch",
+            ),
+            (
+                "/home/me/code/chaoshub/",
+                "/home/me/code/workspaces/chaoshub/b-vcs-launch",
+            ),
+            (
+                "/home/me/src/hub-main",
+                "/home/me/code/workspaces/hub-main/b-vcs-launch",
+            ),
+            ("/", "/home/me/code/workspaces/b-vcs-launch"),
+        ];
+        for (repo, expected) in cases {
+            assert_eq!(
+                workspace_path(Path::new(repo), "b-vcs-launch", root),
+                Path::new(expected),
+                "{repo}"
+            );
+        }
     }
 
     /// True when the `jj` binary is not on the path.

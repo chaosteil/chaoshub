@@ -158,8 +158,9 @@ pub(crate) struct TerminalConfig {
 #[serde(default)]
 pub(crate) struct WorkspacesConfig {
     /// The directory of the jj workspaces other than `default`:
-    /// `<root>/<repo name>/<workspace name>`. `~` expands to the home
-    /// directory.
+    /// `<root>/<folder>/<workspace name>`, where `<folder>` is the folder
+    /// name of the repo path, for example `chaoshub` for
+    /// `~/code/chaoshub`. `~` expands to the home directory.
     pub root: PathBuf,
 }
 
