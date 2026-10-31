@@ -12,6 +12,7 @@ mod nav;
 mod panes;
 mod state;
 mod tabs;
+mod target;
 mod term;
 #[cfg(test)]
 pub(crate) mod testdata;
