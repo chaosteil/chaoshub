@@ -27,6 +27,9 @@ use crate::domain::pr::PullRequest;
 pub(crate) struct TabState {
     pub cursor: usize,
     pub scroll: usize,
+    /// The item of the cursor row. The cursor follows it when the rows
+    /// change, for example after a sync.
+    pub selected: Option<RowItem>,
     /// The text of the fuzzy filter.
     pub filter: String,
     /// The own state of the tab, for example its toggles.
@@ -39,6 +42,7 @@ impl Default for TabState {
         Self {
             cursor: 0,
             scroll: 0,
+            selected: None,
             filter: String::new(),
             ext: Box::new(()),
         }

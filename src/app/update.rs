@@ -12,12 +12,13 @@ use crate::app::frame;
 use crate::app::keymap::{self, Keymap};
 use crate::app::layout::layout;
 use crate::app::models::CellStyle;
+use crate::app::nav::{self, Motion};
 use crate::app::state::{AppData, AppState, Failure, error_text};
 use crate::app::tabs::{KeyCx, TABS, Tab, pr_ref};
 use crate::app::term::term_status;
 use crate::bus::{
-    ActionEvent, Cmd, KeyEvent, KeyEventKind, Msg, PrRef, Scope, Size, SyncError, TargetKey,
-    UiEvent,
+    ActionEvent, Cmd, KeyChord, KeyEvent, KeyEventKind, Msg, PrRef, Scope, Size, SyncError,
+    TargetKey, UiEvent,
 };
 use crate::domain::keys::PrKey;
 use crate::domain::observed::{Observed, apply_newer};
@@ -101,6 +102,10 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
         cmds.extend(refresh_interest(state, tabs));
         return cmds;
     }
+    if let Some(motion) = motion(keymap, chord) {
+        navigate(state, tabs, motion);
+        return refresh_interest(state, tabs).into_iter().collect();
+    }
     let index = state.ui.active;
     let (Some(tab), Some(ts)) = (tabs.get(index), state.ui.tabs.get_mut(index)) else {
         return Vec::new();
@@ -121,6 +126,52 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
     let mut cmds = handled.cmds;
     cmds.extend(refresh_interest(state, tabs));
     cmds
+}
+
+/// The navigation binding of a chord, if any.
+fn motion(keymap: &Keymap, chord: KeyChord) -> Option<Motion> {
+    [
+        ("down", Motion::Down),
+        ("up", Motion::Up),
+        ("top", Motion::Top),
+        ("bottom", Motion::Bottom),
+        ("page_down", Motion::PageDown),
+        ("page_up", Motion::PageUp),
+    ]
+    .into_iter()
+    .find(|(name, _)| keymap.matches(name, chord))
+    .map(|(_, motion)| motion)
+}
+
+/// Moves the cursor of the active tab. A move that scrolls the list pushes
+/// `UiEvent::ScrollTo`; a move inside the visible rows is immediate.
+fn navigate(state: &mut AppState, tabs: &[Box<dyn Tab>], motion: Motion) {
+    let Some(tab) = tabs.get(state.ui.active) else {
+        return;
+    };
+    let height = usize::from(frame::list_size(state).height);
+    let model = frame::active_list(state, tabs);
+    let Some(cursor) = nav::step(&model.rows, model.cursor, motion, height) else {
+        return;
+    };
+    let scroll = nav::keep_visible(model.rows.len(), cursor, model.scroll, height);
+    let Some(ts) = state.ui.tabs.get_mut(state.ui.active) else {
+        return;
+    };
+    ts.cursor = cursor;
+    ts.scroll = scroll;
+    ts.selected = model.rows.get(cursor).map(|row| row.item.clone());
+    if cursor == model.cursor && scroll == model.scroll {
+        return;
+    }
+    if scroll != model.scroll {
+        state.ui.ui_events.push(UiEvent::ScrollTo {
+            tab: tab.id(),
+            from: model.scroll,
+            to: scroll,
+        });
+    }
+    state.bump();
 }
 
 /// `Cmd::SetInterest` when the interest of the active tab differs from
@@ -509,7 +560,7 @@ mod tests {
             changed: true,
         };
         let (tabs, mut state) = setup(Some(handled));
-        let j = press(KeyCode::Char('j'), KeyModifiers::NONE);
+        let j = press(KeyCode::Char('z'), KeyModifiers::NONE);
         let interest = Interest {
             tab: "one",
             scope: None,
@@ -535,7 +586,7 @@ mod tests {
     #[test]
     fn an_unhandled_key_changes_nothing() {
         let (tabs, mut state) = setup(None);
-        let j = press(KeyCode::Char('j'), KeyModifiers::NONE);
+        let j = press(KeyCode::Char('z'), KeyModifiers::NONE);
         assert_eq!(run(&mut state, &tabs, j), vec![]);
         assert_eq!(state.generation, 0);
     }
@@ -944,6 +995,112 @@ mod tests {
             event: ActionEvent::Progress("working".into()),
         };
         assert_eq!(run(&mut state, &tabs, progress), vec![]);
+    }
+
+    /// The real tabs with the mine fixtures, on a screen with a list of
+    /// `height` rows.
+    fn mine_state(height: u16) -> AppState {
+        let mut state = AppState::new(Size {
+            width: 100,
+            height: height + 2,
+        });
+        state.load(testdata::mine_snapshot(), Vec::new());
+        state
+    }
+
+    fn key(state: &mut AppState, c: char) -> Vec<Cmd> {
+        update(
+            state,
+            &Keymap::default(),
+            press(KeyCode::Char(c), KeyModifiers::NONE),
+        )
+    }
+
+    fn selected_number(state: &mut AppState) -> Option<u64> {
+        let model = frame::active_list(state, &TABS);
+        match &model.rows[model.cursor].item {
+            crate::app::models::RowItem::Pr(pr) => Some(pr.key.number),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn j_and_k_move_over_the_rows_and_skip_headers() {
+        // Rows: #99, header, #103, #102, #101, #7.
+        let mut state = mine_state(10);
+        assert_eq!(selected_number(&mut state), Some(99));
+        let cmds = key(&mut state, 'j');
+        assert_eq!(selected_number(&mut state), Some(103));
+        let selected = state.data.prs[&testdata::pr_key("chaoshub", 103)].clone();
+        assert!(matches!(
+            cmds.as_slice(),
+            [Cmd::SetInterest(interest)] if interest.selected == Some(pr_ref(&selected))
+                && interest.visible.len() == 5
+                && interest.tab == "mine"
+        ));
+        key(&mut state, 'G');
+        assert_eq!(selected_number(&mut state), Some(7));
+        key(&mut state, 'k');
+        assert_eq!(selected_number(&mut state), Some(101));
+        key(&mut state, 'g');
+        assert_eq!(selected_number(&mut state), Some(99));
+        let generation = state.generation;
+        assert_eq!(key(&mut state, 'k'), vec![], "no move at the top");
+        assert_eq!(state.generation, generation);
+        assert_eq!(state.ui.ui_events, vec![], "no scroll in a tall list");
+    }
+
+    #[test]
+    fn a_move_out_of_the_window_scrolls_with_an_event() {
+        let mut state = mine_state(4);
+        key(&mut state, 'j');
+        key(&mut state, 'j');
+        assert_eq!(state.ui.ui_events, vec![], "#103 and #102 are visible");
+        key(&mut state, 'j');
+        assert_eq!(
+            state.ui.ui_events,
+            vec![UiEvent::ScrollTo {
+                tab: "mine",
+                from: 0,
+                to: 1,
+            }]
+        );
+        assert_eq!(frame::active_list(&mut state, &TABS).scroll, 1);
+        let ctrl_u = press(KeyCode::Char('u'), KeyModifiers::CONTROL);
+        update(&mut state, &Keymap::default(), ctrl_u);
+        assert_eq!(selected_number(&mut state), Some(103));
+    }
+
+    #[test]
+    fn the_selection_survives_a_sync() {
+        let mut state = mine_state(10);
+        key(&mut state, 'j');
+        key(&mut state, 'j');
+        assert_eq!(selected_number(&mut state), Some(102));
+        let mut newer = testdata::pr("chaoshub", 200, "A new one on top");
+        newer.head.value.updated_at += TimeDelta::days(1);
+        newer.head.observed_at += TimeDelta::seconds(1);
+        let mut moved = state.data.prs[&testdata::pr_key("chaoshub", 102)].clone();
+        moved.head.value.head_oid = "pushed".into();
+        moved.head.observed_at += TimeDelta::seconds(1);
+        let msg = Msg::PrsSynced {
+            scope: Scope::Mine,
+            prs: vec![newer, moved.clone()],
+            gone: None,
+            started_at: at(1),
+        };
+        let cmds = update(&mut state, &Keymap::default(), msg);
+        assert_eq!(selected_number(&mut state), Some(102));
+        assert_eq!(frame::active_list(&mut state, &TABS).cursor, 4);
+        let interest = cmds.iter().find_map(|cmd| match cmd {
+            Cmd::SetInterest(interest) => Some(interest.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            interest.and_then(|interest| interest.selected),
+            Some(pr_ref(&moved)),
+            "the interest carries the new head"
+        );
     }
 
     #[test]

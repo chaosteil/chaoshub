@@ -7,6 +7,7 @@ mod frame;
 pub(crate) mod keymap;
 pub(crate) mod layout;
 pub(crate) mod models;
+mod nav;
 mod panes;
 mod state;
 mod tabs;
