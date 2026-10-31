@@ -144,6 +144,8 @@ pub(crate) struct ThemeConfig {
     pub animations: bool,
     /// The duration of a transition.
     pub animation_ms: u64,
+    /// Shows the key hint bar above the status bar.
+    pub key_hints: bool,
 }
 
 impl Default for ThemeConfig {
@@ -153,6 +155,7 @@ impl Default for ThemeConfig {
             textures: true,
             animations: true,
             animation_ms: 160,
+            key_hints: true,
         }
     }
 }
