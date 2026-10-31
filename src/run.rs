@@ -188,6 +188,7 @@ fn session_theme(kind: ThemeKind, arg: Option<crate::cli::ThemeArg>, config: &Co
     Theme::styled(
         kind,
         theme_style(arg, config.theme.style),
+        crate::theme::PaletteChoice::Pierre,
         config.theme.grunge,
         config.theme.textures,
     )

@@ -67,6 +67,14 @@ pub(crate) enum ThemeStyle {
     Plain,
 }
 
+/// The palette that the user picks with `[theme] palette` or
+/// `--palette`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaletteChoice {
+    Pierre,
+    Ansi16,
+}
+
 /// The palette and the skin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Theme {
@@ -112,47 +120,42 @@ impl Theme {
     /// from the configuration. Without `grunge`, the skin is plain. A
     /// 16-color terminal gets the ANSI palette and the plain skin.
     pub(crate) const fn new(kind: ThemeKind, grunge: bool, textures: bool) -> Self {
-        match kind {
-            ThemeKind::TrueColor => Self {
-                palette: Palette::pierre(),
-                skin: if grunge {
-                    Skin::Grunge { textures }
-                } else {
-                    Skin::Plain
-                },
-            },
-            ThemeKind::Ansi16 => Self {
-                palette: Palette::ansi16(),
-                skin: Skin::Plain,
-            },
-        }
+        Self::styled(
+            kind,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            grunge,
+            textures,
+        )
     }
 
-    /// Builds the theme of a style for a terminal kind. `grunge` and
-    /// `textures` apply to the grunge style only.
+    /// Builds the theme of a style and a palette for a terminal kind. The
+    /// Pierre palette needs a true-color terminal; else the theme uses the
+    /// ANSI palette. `grunge` and `textures` apply to the grunge style
+    /// only. The grunge style with the ANSI palette gets the plain skin.
     pub(crate) const fn styled(
         kind: ThemeKind,
         style: ThemeStyle,
+        palette: PaletteChoice,
         grunge: bool,
         textures: bool,
     ) -> Self {
-        match style {
-            ThemeStyle::Grunge => Self::new(kind, grunge, textures),
-            ThemeStyle::Punk => Self::punk(kind),
-            ThemeStyle::Plain => Self::new(kind, false, false),
-        }
+        let (palette, true_color) = match (palette, kind) {
+            (PaletteChoice::Pierre, ThemeKind::TrueColor) => (Palette::pierre(), true),
+            _ => (Palette::ansi16(), false),
+        };
+        let skin = match style {
+            ThemeStyle::Grunge if grunge && true_color => Skin::Grunge { textures },
+            ThemeStyle::Punk => Skin::Punk,
+            ThemeStyle::Grunge | ThemeStyle::Plain => Skin::Plain,
+        };
+        Self { palette, skin }
     }
 
     /// Builds the punk theme for a terminal kind: the Pierre palette, or
     /// the 16 ANSI colors, with the punk skin.
     pub(crate) const fn punk(kind: ThemeKind) -> Self {
-        Self {
-            palette: match kind {
-                ThemeKind::TrueColor => Palette::pierre(),
-                ThemeKind::Ansi16 => Palette::ansi16(),
-            },
-            skin: Skin::Punk,
-        }
+        Self::styled(kind, ThemeStyle::Punk, PaletteChoice::Pierre, true, true)
     }
 
     /// A framed block with a header on the top edge. An empty `title`
@@ -357,17 +360,38 @@ mod tests {
     #[test]
     fn styled_picks_the_skin() {
         let kind = ThemeKind::TrueColor;
+        let pierre = PaletteChoice::Pierre;
         assert_eq!(
-            Theme::styled(kind, ThemeStyle::Grunge, true, true),
+            Theme::styled(kind, ThemeStyle::Grunge, pierre, true, true),
             Theme::new(kind, true, true)
         );
         assert_eq!(
-            Theme::styled(kind, ThemeStyle::Punk, true, true),
+            Theme::styled(kind, ThemeStyle::Punk, pierre, true, true),
             Theme::punk(kind)
         );
-        let plain = Theme::styled(kind, ThemeStyle::Plain, true, true);
+        let plain = Theme::styled(kind, ThemeStyle::Plain, pierre, true, true);
         assert_eq!(plain.skin, Skin::Plain);
         assert_eq!(plain.palette, Palette::pierre());
+    }
+
+    #[test]
+    fn pierre_on_ansi16_is_the_ansi_palette() {
+        for style in [ThemeStyle::Grunge, ThemeStyle::Punk, ThemeStyle::Plain] {
+            let theme = Theme::styled(ThemeKind::Ansi16, style, PaletteChoice::Pierre, true, true);
+            assert_eq!(theme.palette, Palette::ansi16());
+        }
+    }
+
+    #[test]
+    fn ansi16_choice_on_true_color() {
+        let kind = ThemeKind::TrueColor;
+        let ansi16 = PaletteChoice::Ansi16;
+        let grunge = Theme::styled(kind, ThemeStyle::Grunge, ansi16, true, true);
+        assert_eq!(grunge.palette, Palette::ansi16());
+        assert_eq!(grunge.skin, Skin::Plain);
+        let punk = Theme::styled(kind, ThemeStyle::Punk, ansi16, true, true);
+        assert_eq!(punk.palette, Palette::ansi16());
+        assert_eq!(punk.skin, Skin::Punk);
     }
 
     #[test]
