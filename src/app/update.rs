@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 
+use crate::actions::{Action, Applicability, Prepare, REGISTRY};
 use crate::app::frame;
 use crate::app::keymap::{self, Keymap};
 use crate::app::layout::layout;
@@ -15,15 +16,15 @@ use crate::app::models::{CellStyle, Direction, PaneModel, RowItem};
 use crate::app::nav::{self, Motion};
 use crate::app::panes::{PANES, Pane, applicable, items};
 use crate::app::state::{
-    AUTHOR_KEY, AppData, AppState, AuthorPicker, FILTER_KEY, Failure, Overlay, OverlayState,
-    PopupState, error_text, ui_key,
+    AUTHOR_KEY, ActionDialog, AppData, AppState, AuthorPicker, FILTER_KEY, Failure, Overlay,
+    OverlayState, PopupState, error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, pr_ref};
-use crate::app::target::pr_target;
+use crate::app::target::{pr_target, row_target};
 use crate::app::term::term_status;
 use crate::bus::{
-    ActionEvent, Cmd, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Msg, OverlayKind,
-    Persist, PrRef, Scope, Size, SyncError, TargetKey, UiEvent,
+    ActionEvent, ActionInput, Cmd, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Msg,
+    OverlayKind, Persist, PrRef, Scope, Selection, Size, SyncError, TargetKey, UiEvent,
 };
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;
@@ -38,28 +39,29 @@ pub(crate) fn update(state: &mut AppState, keymap: &Keymap, msg: Msg) -> Vec<Cmd
     update_with(state, keymap, &TABS, msg)
 }
 
-/// Applies one message to the state, with the tabs of `tabs` and the
-/// panes of `PANES`.
+/// Applies one message to the state, with the tabs of `tabs`, the panes
+/// of `PANES` and the actions of `REGISTRY`.
 pub(crate) fn update_with(
     state: &mut AppState,
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
     msg: Msg,
 ) -> Vec<Cmd> {
-    update_full(state, keymap, tabs, &PANES, msg)
+    update_full(state, keymap, tabs, &PANES, &REGISTRY, msg)
 }
 
-/// Applies one message to the state, with the tabs of `tabs` and the
-/// panes of `panes`.
+/// Applies one message to the state, with the tabs of `tabs`, the panes
+/// of `panes` and the actions of `actions`.
 pub(crate) fn update_full(
     state: &mut AppState,
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
     panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
     msg: Msg,
 ) -> Vec<Cmd> {
     match msg {
-        Msg::Key(event) => key(state, keymap, tabs, panes, &event),
+        Msg::Key(event) => key(state, keymap, tabs, panes, actions, &event),
         Msg::Resize(size) => resize(state, size),
         Msg::Tick => tick(state, tabs, Utc::now()),
         Msg::TransitionsDone => transitions_done(state),
@@ -129,14 +131,16 @@ pub(crate) fn update_full(
     }
 }
 
-/// A key press: the quit keys quit, every other key goes to the active
-/// tab. After a handled key, the generation moves when the tab says so,
-/// the UI events queue up, and a changed `Interest` goes to the workers.
+/// A key press: the quit keys quit, the app keys and the action keys
+/// act, every other key goes to the active tab. After a handled key, the
+/// generation moves when the tab says so, the UI events queue up, and a
+/// changed `Interest` goes to the workers.
 fn key(
     state: &mut AppState,
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
     panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
     event: &KeyEvent,
 ) -> Vec<Cmd> {
     if event.kind == KeyEventKind::Release {
@@ -186,6 +190,9 @@ fn key(
         open_popup(state, tabs, panes);
         return Vec::new();
     }
+    if let Some(cmds) = action_key(state, keymap, tabs, actions, chord) {
+        return cmds;
+    }
     let index = state.ui.active;
     let (Some(tab), Some(ts)) = (tabs.get(index), state.ui.tabs.get_mut(index)) else {
         return Vec::new();
@@ -207,6 +214,113 @@ fn key(
     let mut cmds = handled.cmds;
     cmds.extend(after_change(state, tabs));
     cmds
+}
+
+/// An action key on the cursor row: `applies`, then `prepare`, then the
+/// route of the preparation. `None` when no action has the key, when the
+/// row has no target, or when the action is hidden for it; the key then
+/// goes to the tab.
+fn action_key(
+    state: &mut AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    actions: &[Box<dyn Action>],
+    chord: KeyChord,
+) -> Option<Vec<Cmd>> {
+    let action = actions
+        .iter()
+        .find(|action| keymap.matches(action.id(), chord))?;
+    let model = frame::active_list(state, tabs);
+    let item = &model.rows.get(model.cursor)?.item;
+    let target = row_target(&state.data, item)?;
+    let id = action.id();
+    let selection = Selection {
+        target,
+        me: state.data.session.login.clone().unwrap_or_default(),
+        action_config: state.data.action_config.get(id).cloned(),
+    };
+    match action.applies(&selection) {
+        Applicability::Enabled => {}
+        Applicability::Hidden => return None,
+        Applicability::Disabled(reason) => {
+            state.message(reason, CellStyle::Warn, INFO_TTL);
+            return Some(Vec::new());
+        }
+    }
+    let cmds = match action.prepare(&selection) {
+        Prepare::Run => vec![Cmd::RunAction {
+            id,
+            selection: Box::new(selection),
+            input: ActionInput::None,
+        }],
+        Prepare::Confirm(spec) => {
+            let action = ActionDialog {
+                id,
+                selection: Box::new(selection),
+            };
+            open_overlay(
+                state,
+                OverlayKind::Confirm,
+                OverlayState::Confirm { action, spec },
+            );
+            Vec::new()
+        }
+        Prepare::Prompt(spec) => {
+            let action = ActionDialog {
+                id,
+                selection: Box::new(selection),
+            };
+            let prompt = OverlayState::Prompt {
+                action,
+                spec,
+                text: String::new(),
+            };
+            open_overlay(state, OverlayKind::Prompt, prompt);
+            Vec::new()
+        }
+        Prepare::Terminal(request) => vec![Cmd::RunTerminal {
+            id,
+            key: selection.target.key(),
+            request,
+        }],
+        Prepare::Command(cmd) => vec![cmd],
+    };
+    Some(cmds)
+}
+
+/// A key for the prompt popup on top of the overlay stack: characters
+/// and backspace edit the text, Enter runs the action with it, Esc
+/// closes the popup. `None` when the top overlay is not a prompt.
+fn prompt_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
+    let overlay = state.ui.overlays.iter_mut().rev().find(|o| !o.closing)?;
+    let OverlayState::Prompt { action, text, .. } = &mut overlay.state else {
+        return None;
+    };
+    let cmd = match chord.code {
+        KeyCode::Esc => None,
+        KeyCode::Enter => Some(Cmd::RunAction {
+            id: action.id,
+            selection: action.selection.clone(),
+            input: ActionInput::Text(text.clone()),
+        }),
+        KeyCode::Backspace => {
+            text.pop();
+            state.bump();
+            return Some(Vec::new());
+        }
+        KeyCode::Char(c)
+            if !chord
+                .mods
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            text.push(c);
+            state.bump();
+            return Some(Vec::new());
+        }
+        _ => return Some(Vec::new()),
+    };
+    close_overlay(state);
+    Some(cmd.into_iter().collect())
 }
 
 /// Opens the author picker of the active tab, with the cursor on the
@@ -355,6 +469,9 @@ fn overlay_key(
     panes: &[Box<dyn Pane>],
     chord: KeyChord,
 ) -> Vec<Cmd> {
+    if let Some(cmds) = prompt_key(state, chord) {
+        return cmds;
+    }
     if keymap.matches("close_overlay", chord) {
         close_overlay(state);
         return Vec::new();
@@ -395,6 +512,19 @@ fn overlay_key(
             cmds.extend(after_change(state, tabs));
             cmds
         }
+        OverlayState::Confirm { action, .. } => {
+            if !keymap.matches("confirm", chord) && !keymap.matches("open", chord) {
+                return Vec::new();
+            }
+            let cmd = Cmd::RunAction {
+                id: action.id,
+                selection: action.selection.clone(),
+                input: ActionInput::Confirmed,
+            };
+            close_overlay(state);
+            vec![cmd]
+        }
+        OverlayState::Prompt { .. } => Vec::new(),
     }
 }
 
@@ -1015,6 +1145,7 @@ fn quit() -> Vec<Cmd> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::actions::fake::FakeAction;
     use crate::app::models::{ListModel, OverlayContent};
     use crate::app::state::Overlay;
     use crate::app::tabs::fake::FakeTab;
@@ -1837,7 +1968,9 @@ mod tests {
             .find(|o| !o.closing)
             .and_then(|o| match &o.state {
                 OverlayState::Authors(picker) => Some(picker),
-                OverlayState::Popup(_) => None,
+                OverlayState::Popup(_)
+                | OverlayState::Confirm { .. }
+                | OverlayState::Prompt { .. } => None,
             })
     }
 
@@ -1997,7 +2130,7 @@ mod tests {
         let panes = fake_panes();
         let mut state = mine_state(10);
         let send = |state: &mut AppState, msg: Msg| {
-            update_full(state, &Keymap::default(), &TABS, &panes, msg)
+            update_full(state, &Keymap::default(), &TABS, &panes, &REGISTRY, msg)
         };
         let enter = press(KeyCode::Enter, KeyModifiers::NONE);
         let j = press(KeyCode::Char('j'), KeyModifiers::NONE);
@@ -2270,5 +2403,269 @@ mod tests {
         assert_eq!(run(&mut state, &tabs, Msg::Rate(info.clone())), vec![]);
         assert_eq!(state.data.sync.rate, Some(info));
         assert_eq!(state.generation, 0);
+    }
+
+    /// The real tabs with the mine fixtures and the jj scan, the login
+    /// `chaosteil`, and the cursor on the row of `item`.
+    fn action_state(item: &dyn Fn(&AppData) -> RowItem) -> AppState {
+        let mut state = AppState::new(SIZE);
+        state.load(testdata::mine_snapshot(), Vec::new());
+        state.data.session.login = Some("chaosteil".into());
+        let item = item(&state.data);
+        state.ui.tabs[0].selected = Some(item);
+        state.bump();
+        state
+    }
+
+    /// The row item of the pull request `#number` of `chaoshub`.
+    fn pr_row(number: u64) -> impl Fn(&AppData) -> RowItem {
+        move |data: &AppData| RowItem::Pr(pr_ref(&data.prs[&testdata::pr_key("chaoshub", number)]))
+    }
+
+    /// A key press with the fake `actions` and their default keys.
+    fn act(state: &mut AppState, actions: &[Box<dyn Action>], code: KeyCode) -> Vec<Cmd> {
+        let keymap = Keymap::with_actions(actions, &std::collections::BTreeMap::new()).unwrap();
+        act_with(state, actions, &keymap, code)
+    }
+
+    fn act_with(
+        state: &mut AppState,
+        actions: &[Box<dyn Action>],
+        keymap: &Keymap,
+        code: KeyCode,
+    ) -> Vec<Cmd> {
+        update_full(
+            state,
+            keymap,
+            &TABS,
+            &PANES,
+            actions,
+            press(code, KeyModifiers::NONE),
+        )
+    }
+
+    /// The selection of `#number` of `chaoshub` for the login
+    /// `chaosteil`.
+    fn pr_selection(state: &AppState, number: u64) -> Box<Selection> {
+        Box::new(Selection {
+            target: pr_target(&state.data, &testdata::pr_key("chaoshub", number)).unwrap(),
+            me: "chaosteil".into(),
+            action_config: None,
+        })
+    }
+
+    fn fake(action: FakeAction) -> Vec<Box<dyn Action>> {
+        vec![Box::new(action)]
+    }
+
+    #[test]
+    fn a_run_action_becomes_run_action_with_the_selection() {
+        let mut state = action_state(&pr_row(102));
+        let actions = fake(FakeAction::new("approve", 'A'));
+        let table: toml::Table = toml::from_str("body = \"lgtm\"").unwrap();
+        state
+            .data
+            .action_config
+            .insert("approve".into(), table.clone());
+        let mut selection = pr_selection(&state, 102);
+        selection.action_config = Some(table);
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Char('A')),
+            vec![Cmd::RunAction {
+                id: "approve",
+                selection,
+                input: ActionInput::None,
+            }]
+        );
+        assert!(state.ui.overlays.is_empty());
+    }
+
+    #[test]
+    fn a_terminal_and_a_command_route_without_execute() {
+        let mut state = action_state(&pr_row(99));
+        let request = crate::bus::LaunchRequest {
+            argv: vec!["nvim".into()],
+            cwd: "/code/chaoshub".into(),
+            env: Vec::new(),
+            label: "chaoshub-review".into(),
+            zoom: true,
+        };
+        let mut review = FakeAction::new("review", 'v');
+        review.prepare = Prepare::Terminal(request.clone());
+        let mut browser = FakeAction::new("browser", 'o');
+        browser.prepare = Prepare::Command(Cmd::OpenUrl("https://example.com".into()));
+        let actions: Vec<Box<dyn Action>> = vec![Box::new(review), Box::new(browser)];
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Char('v')),
+            vec![Cmd::RunTerminal {
+                id: "review",
+                key: TargetKey::Pr(testdata::pr_key("chaoshub", 99)),
+                request,
+            }]
+        );
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Char('o')),
+            vec![Cmd::OpenUrl("https://example.com".into())]
+        );
+    }
+
+    #[test]
+    fn disabled_shows_the_reason_and_hidden_passes_the_key_on() {
+        let mut state = action_state(&pr_row(102));
+        let mut merge = FakeAction::new("merge", 'm');
+        merge.applies = Applicability::Disabled("stack not loaded");
+        let mut hidden = FakeAction::new("hidden", 'h');
+        hidden.applies = Applicability::Hidden;
+        let actions: Vec<Box<dyn Action>> = vec![Box::new(merge), Box::new(hidden)];
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('m')), vec![]);
+        assert_eq!(
+            state.ui.status.as_ref().map(|msg| msg.text.as_str()),
+            Some("stack not loaded")
+        );
+        state.ui.status = None;
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('h')), vec![]);
+        assert_eq!(state.ui.status, None, "a hidden action says nothing");
+    }
+
+    #[test]
+    fn a_header_row_runs_no_action() {
+        let mut state = action_state(&|_| RowItem::StackHeader {
+            stack_id: "S_1".into(),
+        });
+        state.ui.tabs[0].cursor = 0;
+        let actions = fake(FakeAction::new("approve", 'A'));
+        let model = frame::active_list(&mut state, &TABS);
+        assert!(matches!(
+            model.rows[model.cursor].item,
+            RowItem::StackHeader { .. }
+        ));
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('A')), vec![]);
+    }
+
+    #[test]
+    fn a_confirm_opens_the_popup_and_y_or_enter_runs() {
+        let mut state = action_state(&pr_row(102));
+        let spec = crate::bus::ConfirmSpec {
+            title: "merge #102?".into(),
+            lines: vec!["merges 2 pull requests atomically".into()],
+            danger: true,
+        };
+        let mut merge = FakeAction::new("merge", 'm');
+        merge.prepare = Prepare::Confirm(spec.clone());
+        let actions = fake(merge);
+        for confirm in [KeyCode::Char('y'), KeyCode::Enter] {
+            assert_eq!(act(&mut state, &actions, KeyCode::Char('m')), vec![]);
+            let overlays = &frame::frame_model(&mut state).overlays;
+            assert_eq!(
+                overlays.last().map(|o| &o.content),
+                Some(&OverlayContent::Confirm(spec.clone()))
+            );
+            assert_eq!(act(&mut state, &actions, KeyCode::Char('j')), vec![]);
+            assert_eq!(
+                act(&mut state, &actions, confirm),
+                vec![Cmd::RunAction {
+                    id: "merge",
+                    selection: pr_selection(&state, 102),
+                    input: ActionInput::Confirmed,
+                }]
+            );
+            assert!(state.ui.overlays.iter().all(|o| o.closing));
+            run_msg(&mut state, &actions, Msg::TransitionsDone);
+        }
+        act(&mut state, &actions, KeyCode::Char('m'));
+        assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
+    }
+
+    fn run_msg(state: &mut AppState, actions: &[Box<dyn Action>], msg: Msg) -> Vec<Cmd> {
+        update_full(state, &Keymap::default(), &TABS, &PANES, actions, msg)
+    }
+
+    #[test]
+    fn a_prompt_collects_text_and_enter_runs() {
+        let mut state = action_state(&pr_row(102));
+        let spec = crate::bus::PromptSpec {
+            title: "request changes".into(),
+            placeholder: "why".into(),
+        };
+        let mut request = FakeAction::new("request_changes", 'R');
+        request.prepare = Prepare::Prompt(spec.clone());
+        let actions = fake(request);
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('R')), vec![]);
+        for c in "fix qx".chars() {
+            assert_eq!(act(&mut state, &actions, KeyCode::Char(c)), vec![]);
+        }
+        assert_eq!(act(&mut state, &actions, KeyCode::Backspace), vec![]);
+        let overlays = &frame::frame_model(&mut state).overlays;
+        assert_eq!(
+            overlays.last().map(|o| &o.content),
+            Some(&OverlayContent::Prompt {
+                spec: spec.clone(),
+                text: "fix q".into(),
+            })
+        );
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Enter),
+            vec![Cmd::RunAction {
+                id: "request_changes",
+                selection: pr_selection(&state, 102),
+                input: ActionInput::Text("fix q".into()),
+            }]
+        );
+        run_msg(&mut state, &actions, Msg::TransitionsDone);
+        act(&mut state, &actions, KeyCode::Char('R'));
+        assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
+    }
+
+    #[test]
+    fn a_local_row_selects_its_change() {
+        let (repo, scan) = testdata::mine_local();
+        let change = scan
+            .value
+            .changes
+            .iter()
+            .find(|change| change.change_id == "zzmqxkrtzzmq")
+            .unwrap()
+            .clone();
+        let item = RowItem::Local {
+            repo: repo.clone(),
+            change_id: change.change_id.clone(),
+        };
+        let mut state = action_state(&|_| item.clone());
+        let actions = fake(FakeAction::new("copy_change", 'Y'));
+        let cmds = act(&mut state, &actions, KeyCode::Char('Y'));
+        let [Cmd::RunAction { selection, .. }] = cmds.as_slice() else {
+            panic!("no action: {cmds:?}");
+        };
+        assert_eq!(
+            selection.target.key(),
+            TargetKey::Local {
+                repo,
+                change_id: change.change_id.clone(),
+            }
+        );
+        assert!(
+            matches!(&selection.target, crate::bus::Target::Local { change: got, .. } if *got == change)
+        );
+    }
+
+    #[test]
+    fn keys_override_the_default_key_of_an_action() {
+        let mut state = action_state(&pr_row(102));
+        let actions = fake(FakeAction::new("approve", 'A'));
+        let overrides =
+            std::collections::BTreeMap::from([("approve".to_owned(), "ctrl-a".to_owned())]);
+        let keymap = Keymap::with_actions(&actions, &overrides).unwrap();
+        assert_eq!(
+            act_with(&mut state, &actions, &keymap, KeyCode::Char('A')),
+            vec![]
+        );
+        let ctrl_a = press(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        let cmds = update_full(&mut state, &keymap, &TABS, &PANES, &actions, ctrl_a);
+        assert!(matches!(
+            cmds.as_slice(),
+            [Cmd::RunAction { id: "approve", .. }]
+        ));
     }
 }

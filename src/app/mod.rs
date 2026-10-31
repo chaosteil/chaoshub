@@ -19,6 +19,8 @@ mod term;
 pub(crate) mod testdata;
 mod update;
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 
 use crate::app::keymap::Keymap;
@@ -51,6 +53,13 @@ impl App {
         state.load(snapshot, repos);
         update::start(&mut state);
         Self { state, keymap }
+    }
+
+    /// Sets the `[actions.<id>]` tables of the configuration. Each
+    /// selection carries the table of its action.
+    pub(crate) fn with_action_config(mut self, tables: BTreeMap<String, toml::Table>) -> Self {
+        self.state.data.action_config = tables;
+        self
     }
 
     /// Applies one message and returns the commands to execute.

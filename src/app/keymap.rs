@@ -4,11 +4,14 @@
 //! chord is written like `q`, `A`, `ctrl-d`, `alt-x`, `F5`, `enter` or
 //! `shift-tab`. The overrides map a binding name to chords separated by
 //! spaces. An override replaces every default chord of that name. An
-//! empty value removes the binding.
+//! empty value removes the binding. The binding name of an action is its
+//! id, and its default chord is `Action::default_key`.
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use crate::actions::{Action, REGISTRY};
+use crate::app::models::HelpSection;
 use crate::bus::{KeyChord, KeyCode, KeyEvent, KeyModifiers};
 
 /// The default bindings of the app keys (section 1.8 of the plan). The
@@ -33,6 +36,7 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("open", &["enter"]),
     ("open_url", &["o"]),
     ("close_overlay", &["esc", "q"]),
+    ("confirm", &["y"]),
     ("filter", &["/"]),
     ("authors", &["a"]),
     ("toggle_all", &["t"]),
@@ -60,24 +64,45 @@ pub(crate) struct Keymap {
 }
 
 impl Default for Keymap {
-    /// The default bindings.
+    /// The default bindings of the app keys and of the actions of
+    /// `REGISTRY`.
     fn default() -> Self {
-        let bindings = DEFAULTS
+        Self::defaults(&REGISTRY)
+    }
+}
+
+impl Keymap {
+    /// The default bindings of the app keys and of `actions`. An action
+    /// without a default key has no chord.
+    fn defaults(actions: &[Box<dyn Action>]) -> Self {
+        let mut bindings: BTreeMap<String, Vec<KeyChord>> = DEFAULTS
             .iter()
             .map(|(name, keys)| {
                 let chords = keys.iter().filter_map(|key| parse_chord(key)).collect();
                 ((*name).to_owned(), chords)
             })
             .collect();
+        for action in actions {
+            let chords = action.default_key().into_iter().collect();
+            bindings.insert(action.id().to_owned(), chords);
+        }
         Self { bindings }
     }
-}
 
-impl Keymap {
-    /// The default bindings with `overrides` (binding name to chords)
-    /// applied. A name that has no default adds a binding.
+    /// The default bindings of the app keys and of the actions of
+    /// `REGISTRY`, with `overrides` (binding name to chords) applied. A
+    /// name that has no default adds a binding.
     pub(crate) fn new(overrides: &BTreeMap<String, String>) -> Result<Self, KeymapError> {
-        let mut keymap = Self::default();
+        Self::with_actions(&REGISTRY, overrides)
+    }
+
+    /// The default bindings of the app keys and of `actions`, with
+    /// `overrides` applied.
+    pub(crate) fn with_actions(
+        actions: &[Box<dyn Action>],
+        overrides: &BTreeMap<String, String>,
+    ) -> Result<Self, KeymapError> {
+        let mut keymap = Self::defaults(actions);
         for (name, keys) in overrides {
             let chords = keys
                 .split_whitespace()
@@ -99,6 +124,70 @@ impl Keymap {
             .get(name)
             .is_some_and(|chords| chords.contains(&chord))
     }
+
+    /// The chords of the binding `name`. Empty when it has none.
+    pub(crate) fn chords(&self, name: &str) -> &[KeyChord] {
+        self.bindings.get(name).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// The help section of `actions`: the chords of each action and its
+/// label, in registry order.
+#[allow(dead_code, reason = "the help overlay of phase E2 shows this section")]
+pub(crate) fn action_help(keymap: &Keymap, actions: &[Box<dyn Action>]) -> HelpSection {
+    let entries = actions
+        .iter()
+        .map(|action| {
+            let keys: Vec<String> = keymap
+                .chords(action.id())
+                .iter()
+                .map(|&chord| chord_text(chord))
+                .collect();
+            (keys.join(" "), action.label().to_owned())
+        })
+        .collect();
+    HelpSection {
+        title: "actions".to_owned(),
+        entries,
+    }
+}
+
+/// The text of a chord in the form that `parse_chord` reads, for example
+/// `ctrl-d`, `A` or `enter`.
+pub(crate) fn chord_text(chord: KeyChord) -> String {
+    let mut text = String::new();
+    for (modifier, name) in [
+        (KeyModifiers::CONTROL, "ctrl-"),
+        (KeyModifiers::ALT, "alt-"),
+        (KeyModifiers::SHIFT, "shift-"),
+    ] {
+        if chord.mods.contains(modifier) {
+            text.push_str(name);
+        }
+    }
+    let key = match chord.code {
+        KeyCode::Char(' ') => "space".to_owned(),
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Enter => "enter".to_owned(),
+        KeyCode::Esc => "esc".to_owned(),
+        KeyCode::Tab => "tab".to_owned(),
+        KeyCode::BackTab => "shift-tab".to_owned(),
+        KeyCode::Backspace => "backspace".to_owned(),
+        KeyCode::Delete => "delete".to_owned(),
+        KeyCode::Insert => "insert".to_owned(),
+        KeyCode::Home => "home".to_owned(),
+        KeyCode::End => "end".to_owned(),
+        KeyCode::PageUp => "pageup".to_owned(),
+        KeyCode::PageDown => "pagedown".to_owned(),
+        KeyCode::Up => "up".to_owned(),
+        KeyCode::Down => "down".to_owned(),
+        KeyCode::Left => "left".to_owned(),
+        KeyCode::Right => "right".to_owned(),
+        KeyCode::F(n) => format!("F{n}"),
+        other => format!("{other:?}").to_lowercase(),
+    };
+    text.push_str(&key);
+    text
 }
 
 /// The chord of a key event.
@@ -276,6 +365,64 @@ mod tests {
                 key: "ctrl-nope".into(),
             })
         );
+    }
+
+    #[test]
+    fn action_keys_come_from_the_actions_and_the_overrides() {
+        use crate::actions::fake::FakeAction;
+
+        let mut no_key = FakeAction::new("quiet", 'z');
+        no_key.key = None;
+        let actions: Vec<Box<dyn Action>> = vec![
+            Box::new(FakeAction::new("merge", 'm')),
+            Box::new(FakeAction::new("review", 'v')),
+            Box::new(no_key),
+        ];
+        let none = KeyModifiers::NONE;
+        let keymap = Keymap::with_actions(&actions, &BTreeMap::new()).unwrap();
+        assert!(keymap.matches("merge", key(KeyCode::Char('m'), none)));
+        assert!(keymap.matches("review", key(KeyCode::Char('v'), none)));
+        assert_eq!(keymap.chords("quiet"), []);
+        let overrides = BTreeMap::from([("merge".to_owned(), "M ctrl-m".to_owned())]);
+        let keymap = Keymap::with_actions(&actions, &overrides).unwrap();
+        assert!(!keymap.matches("merge", key(KeyCode::Char('m'), none)));
+        assert!(keymap.matches("merge", key(KeyCode::Char('M'), none)));
+        assert_eq!(
+            action_help(&keymap, &actions),
+            HelpSection {
+                title: "actions".into(),
+                entries: vec![
+                    ("M ctrl-m".into(), "merge".into()),
+                    ("v".into(), "review".into()),
+                    (String::new(), "quiet".into()),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn chord_text_reads_back() {
+        for text in [
+            "q",
+            "A",
+            "/",
+            "ctrl-d",
+            "alt-x",
+            "ctrl-alt-x",
+            "F5",
+            "enter",
+            "esc",
+            "tab",
+            "shift-tab",
+            "space",
+            "pagedown",
+            "shift-up",
+            "backspace",
+        ] {
+            let chord = parse_chord(text).unwrap();
+            assert_eq!(chord_text(chord), text);
+            assert_eq!(parse_chord(&chord_text(chord)), Some(chord), "{text}");
+        }
     }
 
     #[test]

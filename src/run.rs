@@ -126,7 +126,8 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         snapshot,
         settings.repos.clone(),
         chrono::Utc::now(),
-    );
+    )
+    .with_action_config(settings.config.actions.clone());
     let session = Session {
         login: None,
         repos: settings.repos.clone(),
