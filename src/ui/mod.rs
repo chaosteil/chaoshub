@@ -13,6 +13,7 @@ mod popup;
 mod prompt;
 mod status;
 mod style;
+mod tabbar;
 #[cfg(test)]
 mod testdata;
 mod text;
@@ -80,8 +81,46 @@ pub(crate) fn overlay_area(overlay: &OverlayModel, areas: &Areas) -> Rect {
 }
 
 /// Draws one frame: the tab bar, the list, the status bar and the overlay
-/// stack. For now it draws the status bar.
+/// stack.
 pub(crate) fn view(frame: &mut Frame<'_>, model: &FrameModel, areas: &Areas, theme: &Theme) {
     let buf = frame.buffer_mut();
+    tabbar::render(&model.tab_bar, rect(areas.tab_bar), buf, theme);
+    list::render(&model.list, rect(areas.list), buf, theme);
     status::render(&model.status, rect(areas.status), buf, theme);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::testdata;
+
+    /// Draws a frame model at a size with a theme.
+    pub(crate) fn draw(model: &FrameModel, width: u16, height: u16, theme: &Theme) -> String {
+        let mut terminal = testdata::terminal(width, height);
+        let areas = testdata::areas(width, height);
+        terminal
+            .draw(|frame| view(frame, model, &areas, theme))
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    #[test]
+    fn main_screen_100_pierre() {
+        insta::assert_snapshot!(draw(&testdata::frame(), 100, 30, &testdata::pierre()));
+    }
+
+    #[test]
+    fn main_screen_160_pierre() {
+        insta::assert_snapshot!(draw(&testdata::frame(), 160, 40, &testdata::pierre()));
+    }
+
+    #[test]
+    fn main_screen_100_ansi16() {
+        insta::assert_snapshot!(draw(&testdata::frame(), 100, 30, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn main_screen_160_ansi16() {
+        insta::assert_snapshot!(draw(&testdata::frame(), 160, 40, &testdata::ansi16()));
+    }
 }

@@ -1,0 +1,5 @@
+---
+source: src/ui/tabbar.rs
+expression: "row(&draw(100, 0, &testdata::pierre()))"
+---
+▌ 1 M I N E   2 T E A M     ░         ˙                ˙                            ˙      chaoshub
