@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
 use super::error::VcsError;
+use super::lock::RepoLocks;
 use super::{parse, run};
 use crate::domain::local::{LocalChange, Workspace};
 
@@ -34,8 +35,10 @@ pub(crate) async fn read_stack(
     parse::stack(ws_name, &run(read_stack_command(repo_path, ws_name)).await?)
 }
 
-/// Runs `jj git fetch` in the repo at `repo_path`.
-pub(crate) async fn git_fetch(repo_path: &Path) -> Result<(), VcsError> {
+/// Runs `jj git fetch` in the repo at `repo_path`, under the lock of the
+/// repo.
+pub(crate) async fn git_fetch(locks: &RepoLocks, repo_path: &Path) -> Result<(), VcsError> {
+    let _guard = locks.lock(repo_path).await;
     run(git_fetch_command(repo_path)).await.map(drop)
 }
 
