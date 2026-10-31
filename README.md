@@ -252,14 +252,14 @@ for `[keys]`.
 
 | Binding | Keys | What it does |
 |---|---|---|
-| `tab_1` to `tab_9` | `1` to `9` | Selects a tab. In the pull request popup, the number keys select a pane. |
-| `next_tab` | `tab` | The next tab. In the popup, the next pane. |
+| `tab_1` to `tab_9` | `1` to `9` | Selects a tab. In the pull request sidebar, the number keys select a pane. |
+| `next_tab` | `tab` | The next tab. In the sidebar, the next pane. |
 | `down`, `up` | `j`, `k` | Moves the cursor. |
 | `top`, `bottom` | `g`, `G` | Moves to the first or the last row. |
 | `page_down`, `page_up` | `ctrl-d`, `ctrl-u` | Moves one page. |
-| `open` | `enter` | Opens the pull request popup. In the conversation pane, expands a thread. |
+| `open` | `enter` | Opens the pull request sidebar. In the conversation pane, expands a thread. |
 | `open_url` | `o` | In the checks pane, opens the selected check in the browser. |
-| `close_overlay` | `esc`, `q` | Closes the popup or the overlay. |
+| `close_overlay` | `esc`, `q` | Closes the sidebar or the overlay. |
 | `confirm` | `y` | Confirms in a confirm popup. `enter` also confirms. |
 | `cancel` | `n` | Cancels a confirm popup. |
 | `filter` | `/` | Types a fuzzy filter for the active tab. |
@@ -271,10 +271,38 @@ for `[keys]`.
 
 In a prompt popup, `enter` submits the text and `esc` cancels.
 
+### Pull request sidebar
+
+`enter` on a pull request opens the sidebar. The sidebar slides in from
+the right and covers 80% of the width, over the list rows. The tab bar,
+the key hint bar and the status bar stay visible. `esc` or `q` closes
+the sidebar.
+
+The sidebar has four panes. The number keys select a pane, and `tab`
+selects the next pane:
+
+| Key | Pane | What it shows |
+|---|---|---|
+| `1` | Description | The body of the pull request as markdown. The sidebar opens on this pane. |
+| `2` | Checks | One row per check, with its state and its duration. |
+| `3` | Conversation | The comments, the reviews and the review threads, in time order. |
+| `4` | Stack | The entries of the stack. Only for a stacked pull request. |
+
+`j`, `k` and the other motion keys move the cursor of the pane. In the
+description pane and the stack pane, they scroll the text.
+
+The action keys also work in the sidebar, on the pull request of the
+sidebar. For example, `v` opens codeview, and `m` opens the merge
+confirm popup on top of the sidebar. The pane keys, the motion keys and
+the keys of the active pane come first: in the checks pane, `o` opens
+the selected check, not the pull request. The key hint bar shows the
+action keys that work for the pull request.
+
 ### Actions
 
-The actions work on the pull request of the selected row. When an
-action cannot run, the status line says why.
+The actions work on the pull request of the selected row, or on the
+pull request of the sidebar. When an action cannot run, the status line
+says why.
 
 | Binding | Key | What it does |
 |---|---|---|
@@ -421,7 +449,7 @@ The order of `TABS` is the order of the tab bar and of the keys `1` to
 
 1. Make a module in `src/app/panes/`, for example `src/app/panes/files.rs`.
 2. Implement the `Pane` trait of `src/app/panes/mod.rs`: `id`, `title`,
-   `key` (the character that selects the pane in the popup), `applies`,
+   `key` (the character that selects the pane in the sidebar), `applies`,
    `init_state`, `model` (a `PaneModel`: a table, lines or a tree) and
    `handle_key`.
 3. In `src/app/panes/mod.rs`, add `mod files;` and add one line to
@@ -431,7 +459,7 @@ The order of `TABS` is the order of the tab bar and of the keys `1` to
    Box::new(files::Files),
    ```
 
-The popup shows the panes whose `applies` is true, in the order of
+The sidebar shows the panes whose `applies` is true, in the order of
 `PANES`.
 
 ## Development
