@@ -76,6 +76,30 @@ pub(crate) struct AppData {
     /// The panes of the terminal actions, by action id and target. One
     /// pane per key.
     pub panes: HashMap<(&'static str, TargetKey), PaneHandleState>,
+    /// The state of the last async merge, from `ActionEvent::MergeStatus`.
+    /// A key press clears a final state.
+    pub merge: Option<MergeState>,
+    /// The prefetch batch that runs, for the terminal progress bar.
+    pub prefetch: Option<PrefetchBatch>,
+}
+
+/// The state of an async merge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MergeState {
+    /// The merged pull request: the top entry for a stack.
+    pub key: PrKey,
+    pub progress: crate::bus::MergeProgress,
+    /// When the state arrived.
+    pub at: DateTime<Utc>,
+}
+
+/// The progress of a prefetch batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PrefetchBatch {
+    /// The fetched refs.
+    pub done: usize,
+    /// The refs of the batch.
+    pub total: usize,
 }
 
 impl AppData {
@@ -299,6 +323,8 @@ impl AppState {
                 now: DateTime::UNIX_EPOCH,
                 action_config: BTreeMap::new(),
                 panes: HashMap::new(),
+                merge: None,
+                prefetch: None,
             },
             ui: UiState {
                 active: 0,
