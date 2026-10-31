@@ -2,7 +2,7 @@
 //! styles to theme colors.
 #![allow(dead_code, reason = "app and ui build on the models in later phases")]
 
-use crate::bus::{ConfirmSpec, OverlayKind, PrRef, PromptSpec, TermStatus};
+use crate::bus::{ConfirmSpec, KeyChord, OverlayKind, PrRef, PromptSpec, TermStatus};
 
 /// Everything that `ui::view` draws in one frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +47,9 @@ pub(crate) struct KeyHint {
     pub label: String,
     /// True when the hint always shows.
     pub primary: bool,
+    /// The first chord of the hint. A click on the hint presses it.
+    /// `None` for the cut marker.
+    pub chord: Option<KeyChord>,
 }
 
 /// The filter line: the filter text and whether the user edits it.
