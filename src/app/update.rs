@@ -25,10 +25,11 @@ use crate::bus::{
     ActionEvent, Cmd, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Msg, OverlayKind,
     Persist, PrRef, Scope, Size, SyncError, TargetKey, UiEvent,
 };
+use crate::domain::check::Check;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::{Observed, apply_newer};
-use crate::domain::pr::PullRequest;
+use crate::domain::pr::{CiState, PullRequest};
 use crate::domain::repo::Repo;
 
 /// Applies one message to the state, with the tabs of `TABS`.
@@ -81,6 +82,16 @@ pub(crate) fn update_full(
         }
         Msg::JjScanned { repo, state: scan } => {
             if jj_scanned(state, repo, scan) {
+                after_change(state, tabs)
+            } else {
+                Vec::new()
+            }
+        }
+        Msg::CiUpdated {
+            states,
+            selected_checks,
+        } => {
+            if ci_updated(state, states, selected_checks) {
                 after_change(state, tabs)
             } else {
                 Vec::new()
@@ -601,6 +612,36 @@ fn pr_refreshed(state: &mut AppState, pr: PullRequest) -> bool {
     data.revision += 1;
     state.bump();
     true
+}
+
+/// A CI poll: the CI state of each polled pull request whose head is
+/// still the polled head, and the checks of the selected pull request,
+/// under the freshness rule. True when it changed the data.
+fn ci_updated(
+    state: &mut AppState,
+    states: Vec<(PrKey, String, Observed<CiState>)>,
+    selected_checks: Option<(PrKey, Observed<Vec<Check>>)>,
+) -> bool {
+    let prs = &mut state.data.prs;
+    let mut changed = false;
+    for (key, head_oid, ci) in states {
+        match prs.get_mut(&key) {
+            Some(pr) if pr.head.value.head_oid == head_oid => {
+                changed |= apply(&mut pr.ci_state, ci, &key, "ci state");
+            }
+            _ => tracing::debug!(?key, "ci state for another head dropped"),
+        }
+    }
+    if let Some((key, checks)) = selected_checks
+        && let Some(pr) = prs.get_mut(&key)
+    {
+        changed |= apply(&mut pr.checks, checks, &key, "checks");
+    }
+    if changed {
+        state.data.revision += 1;
+        state.bump();
+    }
+    changed
 }
 
 /// A jj scan of one repo, under the freshness rule. True when it changed
@@ -1951,6 +1992,69 @@ mod tests {
             popup_content(&mut state, &PANES),
             OverlayContent::Popup { subtitle, .. } if subtitle == "this pull request is gone"
         ));
+    }
+
+    #[test]
+    fn ci_updates_apply_to_the_same_head_only() {
+        let (tabs, mut state) = setup(None);
+        run(
+            &mut state,
+            &tabs,
+            synced(vec![pr_at(1, "One", 0), pr_at(2, "Two", 0)], None, 0),
+        );
+        let ci = |secs| Observed {
+            value: CiState::Failure,
+            observed_at: at(secs),
+        };
+        let check = crate::domain::check::Check {
+            name: "build".into(),
+            kind: crate::domain::check::CheckKind::CheckRun,
+            status: crate::domain::check::CheckStatus::InProgress,
+            conclusion: None,
+            started: None,
+            completed: None,
+            url: None,
+            run_id: None,
+            suite_id: None,
+        };
+        let msg = Msg::CiUpdated {
+            states: vec![
+                (testdata::pr_key("chaoshub", 1), "oid1".into(), ci(5)),
+                (testdata::pr_key("chaoshub", 2), "an old head".into(), ci(5)),
+                (testdata::pr_key("chaoshub", 9), "oid9".into(), ci(5)),
+            ],
+            selected_checks: Some((
+                testdata::pr_key("chaoshub", 2),
+                Observed {
+                    value: vec![check],
+                    observed_at: at(5),
+                },
+            )),
+        };
+        let revision = state.data.revision;
+        run(&mut state, &tabs, msg);
+        let pr = |state: &AppState, n| state.data.prs[&testdata::pr_key("chaoshub", n)].clone();
+        assert_eq!(pr(&state, 1).ci_state, ci(5));
+        assert_eq!(
+            pr(&state, 2).ci_state.value,
+            CiState::None,
+            "the head moved"
+        );
+        assert_eq!(pr(&state, 2).checks.value.len(), 1);
+        assert_eq!(state.data.revision, revision + 1);
+        let older = Msg::CiUpdated {
+            states: vec![(
+                testdata::pr_key("chaoshub", 1),
+                "oid1".into(),
+                Observed {
+                    value: CiState::Success,
+                    observed_at: at(1),
+                },
+            )],
+            selected_checks: None,
+        };
+        assert_eq!(run(&mut state, &tabs, older), vec![]);
+        assert_eq!(pr(&state, 1).ci_state, ci(5));
     }
 
     #[test]

@@ -31,6 +31,7 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("page_down", &["ctrl-d"]),
     ("page_up", &["ctrl-u"]),
     ("open", &["enter"]),
+    ("open_url", &["o"]),
     ("close_overlay", &["esc", "q"]),
     ("filter", &["/"]),
     ("authors", &["a"]),
