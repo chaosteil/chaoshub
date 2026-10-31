@@ -1,0 +1,72 @@
+{
+  "data": {
+    "node": {
+      "__typename": "PullRequestStack",
+      "id": "PRS_kwDORX-Rqc4AKSuA",
+      "baseRefName": "main",
+      "entries": {
+        "nodes": [
+          {
+            "position": 1,
+            "pullRequest": {
+              "number": 1523,
+              "title": "Title 1",
+              "state": "MERGED",
+              "isDraft": false
+            }
+          },
+          {
+            "position": 2,
+            "pullRequest": {
+              "number": 1524,
+              "title": "Title 2",
+              "state": "MERGED",
+              "isDraft": false
+            }
+          },
+          {
+            "position": 3,
+            "pullRequest": {
+              "number": 1525,
+              "title": "Title 3",
+              "state": "MERGED",
+              "isDraft": false
+            }
+          },
+          {
+            "position": 4,
+            "pullRequest": {
+              "number": 1526,
+              "title": "Title 4",
+              "state": "MERGED",
+              "isDraft": false
+            }
+          },
+          {
+            "position": 5,
+            "pullRequest": {
+              "number": 1527,
+              "title": "Title 5",
+              "state": "MERGED",
+              "isDraft": false
+            }
+          },
+          {
+            "position": 6,
+            "pullRequest": {
+              "number": 1586,
+              "title": "Title 6",
+              "state": "MERGED",
+              "isDraft": false
+            }
+          }
+        ]
+      }
+    },
+    "rateLimit": {
+      "cost": 1,
+      "remaining": 4992,
+      "resetAt": "2026-10-31T05:50:43Z"
+    }
+  }
+}
