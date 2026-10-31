@@ -446,7 +446,8 @@ mod tests {
                 settings(config),
                 RepoMerge {
                     method,
-                    bypass_rules
+                    bypass_rules,
+                    stack: crate::config::schema::StackSetting::Auto,
                 },
                 "{config}"
             );

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Deserializer};
 
 use crate::domain::keys::RepoKey;
-use crate::domain::merge::MergeMethod;
+use crate::domain::merge::{MergeMethod, StackOverride};
 
 /// One `[[repo]]` entry: a repo to track and its local checkout.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -110,6 +110,8 @@ pub(crate) struct RepoMerge {
     pub method: Option<MergeMethodSetting>,
     /// Asks GitHub to bypass the branch rules on a merge. Off by default.
     pub bypass_rules: bool,
+    /// How the merge action merges more than one entry of a stack.
+    pub stack: StackSetting,
 }
 
 /// A merge method in the configuration file.
@@ -128,6 +130,32 @@ impl From<MergeMethodSetting> for MergeMethod {
             MergeMethodSetting::Merge => MergeMethod::Merge,
             MergeMethodSetting::Squash => MergeMethod::Squash,
             MergeMethodSetting::Rebase => MergeMethod::Rebase,
+        }
+    }
+}
+
+/// The `stack` key of `[merge]`: how a merge of a stack sends its
+/// requests.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum StackSetting {
+    /// Atomic when the squash defaults of the repo are the pull request
+    /// title and body, else sequential.
+    #[default]
+    Auto,
+    /// One request for the whole stack.
+    Atomic,
+    /// One request per entry, bottom first.
+    Sequential,
+}
+
+impl StackSetting {
+    /// The override of the stack strategy. `None` for `auto`.
+    pub(crate) fn stack_override(self) -> Option<StackOverride> {
+        match self {
+            StackSetting::Auto => None,
+            StackSetting::Atomic => Some(StackOverride::Atomic),
+            StackSetting::Sequential => Some(StackOverride::Sequential),
         }
     }
 }
@@ -283,6 +311,18 @@ mod tests {
         ];
         for (setting, method) in cases {
             assert_eq!(MergeMethod::from(setting), method);
+        }
+    }
+
+    #[test]
+    fn every_stack_setting_converts() {
+        let cases = [
+            (StackSetting::Auto, None),
+            (StackSetting::Atomic, Some(StackOverride::Atomic)),
+            (StackSetting::Sequential, Some(StackOverride::Sequential)),
+        ];
+        for (setting, stack_override) in cases {
+            assert_eq!(setting.stack_override(), stack_override);
         }
     }
 }
