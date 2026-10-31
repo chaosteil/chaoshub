@@ -121,13 +121,13 @@ fn render_overlay(
             };
             popup::render(&content, area, buf, theme);
         }
+        OverlayContent::Help(help) => help::render(help, area, buf, theme),
         // The renderers of the other overlay kinds come in the next
         // commits of this stack.
         OverlayContent::Confirm(_)
         | OverlayContent::Prompt { .. }
         | OverlayContent::Output { .. }
-        | OverlayContent::Picker { .. }
-        | OverlayContent::Help(_) => {}
+        | OverlayContent::Picker { .. } => {}
     }
 }
 
@@ -230,6 +230,44 @@ mod tests {
         insta::assert_snapshot!("popup_slide_in_progress_0.0", frames[0]);
         insta::assert_snapshot!("popup_slide_in_progress_0.5", frames[1]);
         insta::assert_snapshot!("popup_slide_in_progress_1.0", frames[2]);
+    }
+
+    fn help() -> FrameModel {
+        testdata::with_overlay(testdata::help_overlay())
+    }
+
+    #[test]
+    fn help_100_pierre() {
+        insta::assert_snapshot!(draw(&help(), 100, 30, &testdata::pierre()));
+    }
+
+    #[test]
+    fn help_160_pierre() {
+        insta::assert_snapshot!(draw(&help(), 160, 40, &testdata::pierre()));
+    }
+
+    #[test]
+    fn help_100_ansi16() {
+        insta::assert_snapshot!(draw(&help(), 100, 30, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn help_160_ansi16() {
+        insta::assert_snapshot!(draw(&help(), 160, 40, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn help_slides_in_from_the_right() {
+        let frames = animate(
+            &help(),
+            vec![crate::bus::UiEvent::OverlayOpened(
+                crate::bus::OverlayKind::Help,
+            )],
+            &[0, 80, 80],
+        );
+        insta::assert_snapshot!("help_slide_in_0ms", frames[0]);
+        insta::assert_snapshot!("help_slide_in_80ms", frames[1]);
+        insta::assert_snapshot!("help_slide_in_160ms", frames[2]);
     }
 
     #[test]
