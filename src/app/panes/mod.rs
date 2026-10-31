@@ -5,7 +5,7 @@
 //! module plus one line in `PANES`.
 
 mod checks;
-mod conversation;
+pub(crate) mod conversation;
 mod stack;
 
 use std::any::Any;
@@ -58,6 +58,7 @@ pub(crate) static PANES: LazyLock<Vec<Box<dyn Pane>>> = LazyLock::new(|| {
     vec![
         Box::new(checks::Checks),
         Box::new(conversation::Conversation),
+        Box::new(stack::StackPane),
     ]
 });
 

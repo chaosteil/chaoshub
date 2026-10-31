@@ -14,6 +14,7 @@ use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx};
 use crate::bus::{KeyChord, Size, Target};
 use crate::domain::detail::{Comment, PrDetail, Review, ReviewState, Thread};
+use crate::domain::pr::PullRequest;
 
 /// The conversation pane.
 pub(crate) struct Conversation;
@@ -172,6 +173,16 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<usi
         ));
         return out;
     };
+    if is_stale(&detail.value, pr) {
+        push(node(
+            0,
+            None,
+            vec![cell(
+                "stale: read at an older head, a new load is on its way",
+                CellStyle::Warn,
+            )],
+        ));
+    }
     let entries = entries(&detail.value);
     if entries.is_empty() {
         push(node(0, None, vec![cell("no comments yet", CellStyle::Dim)]));
@@ -199,6 +210,12 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<usi
         }
     }
     out
+}
+
+/// True when the conversation was read at another head than the pull
+/// request has now.
+pub(crate) fn is_stale(detail: &PrDetail, pr: &PullRequest) -> bool {
+    detail.head_oid != pr.head.value.head_oid
 }
 
 /// `author · <verb> 2h ago`.
@@ -401,6 +418,22 @@ mod tests {
             None,
             "Enter on a comment does nothing"
         );
+    }
+
+    #[test]
+    fn a_detail_of_an_older_head_is_stale() {
+        let mut detail = testdata::detail();
+        detail.head_oid = "an older head".into();
+        let state = state_with(Some(detail), None);
+        let mut ps = Conversation.init_state();
+        let model = model_and_keys(&state, &mut ps, &[]);
+        assert_eq!(
+            outline(&model)[0],
+            "stale: read at an older head, a new load is on its way"
+        );
+        let fresh = state_with(Some(testdata::detail()), None);
+        let model = model_and_keys(&fresh, &mut ps, &[]);
+        assert_eq!(outline(&model)[0], "alice · commented 3h ago");
     }
 
     #[test]

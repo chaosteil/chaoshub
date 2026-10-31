@@ -971,6 +971,26 @@ mod tests {
     }
 
     #[test]
+    fn popup_stack_100() {
+        let mut app = popup_app(100, 30);
+        press(&mut app, '3');
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
+    #[test]
+    fn popup_stale_detail_160() {
+        let mut app = popup_app(160, 40);
+        let key = crate::app::testdata::pr_key("chaoshub", 101);
+        let observed = crate::domain::observed::Observed {
+            value: crate::app::testdata::detail(),
+            observed_at: crate::domain::test_time(),
+        };
+        app.update(Msg::DetailLoaded(key, Ok(observed)));
+        press(&mut app, '2');
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
+    #[test]
     fn tab_slide_with_two_tabs() {
         let mut app = seeded_app(100, 12, crate::app::testdata::team_snapshot());
         let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();

@@ -11,6 +11,7 @@ use crate::app::models::{
     Cell, CellStyle, FilterModel, FrameModel, ListModel, OverlayContent, OverlayModel, PaneModel,
     PaneTab, StatusModel, TabBarModel,
 };
+use crate::app::panes::conversation::is_stale;
 use crate::app::panes::{PANES, Pane, applicable};
 use crate::app::state::{AppData, AppState, OverlayState, PopupState};
 use crate::app::tabs::{KeyCx, TABS, Tab};
@@ -136,6 +137,11 @@ fn popup_content(data: &AppData, popup: &PopupState, panes: &[Box<dyn Pane>]) ->
         PrState::Closed => "closed",
         PrState::Merged => "merged",
     };
+    let old_detail = data
+        .details
+        .get(&pr.key)
+        .is_some_and(|detail| is_stale(&detail.value, pr));
+    let tag = if old_detail { " · stale" } else { "" };
     let order = applicable(panes, &target);
     let tabs = order
         .iter()
@@ -171,7 +177,7 @@ fn popup_content(data: &AppData, popup: &PopupState, panes: &[Box<dyn Pane>]) ->
     OverlayContent::Popup {
         title: format!("#{} {}", pr.key.number, head.title),
         subtitle: format!(
-            "{} · {} -> {} · {state}",
+            "{} · {} -> {} · {state}{tag}",
             head.author, head.head_ref, head.base_ref
         ),
         tabs,
