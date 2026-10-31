@@ -23,7 +23,13 @@ use crate::workers::ctx::WorkerCtx;
 use crate::workers::supervisor::{FIRST_BACKOFF, Worker, supervise};
 
 /// The workers that `spawn_all` starts.
-const WORKERS: &[Worker] = &[startup::WORKER, ci::WORKER, jj::WORKER, detail::WORKER];
+const WORKERS: &[Worker] = &[
+    startup::WORKER,
+    ci::WORKER,
+    jj::WORKER,
+    detail::WORKER,
+    prefetch::WORKER,
+];
 
 /// Spawns every worker into one `JoinSet`, each one inside its own
 /// supervisor. A drop of the set aborts the supervisors and the workers.
