@@ -10,7 +10,7 @@ use ratatui::style::Color;
 /// The color support of the terminal, which `main` detects from
 /// `COLORTERM` and `TERM`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum ThemeKind {
+pub enum ThemeKind {
     TrueColor,
     Ansi16,
 }

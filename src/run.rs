@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle, ThreadId};
 use std::time::{Duration, Instant};
 
+use anyhow::Context as _;
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{self, Event};
 use crossterm::execute;
@@ -32,8 +33,10 @@ use crate::app::exec::Runtime;
 use crate::app::keymap::Keymap;
 use crate::app::layout::layout;
 use crate::bus::{Msg, Progress, Size, TermState, TermStatus};
+use crate::cli::{CacheAction, CacheCommand, Cli};
+use crate::config::paths;
 use crate::osc;
-use crate::theme::{Palette, Theme};
+use crate::theme::{Palette, Theme, ThemeKind};
 use crate::ui;
 use crate::ui::transition::Transitions;
 
@@ -58,8 +61,17 @@ const PROGRESS_KEEP_ALIVE: Duration = Duration::from_secs(1);
 /// The crossterm terminal of the event loop.
 type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
 
-/// Starts the TUI and runs it until the user quits.
-pub(crate) fn run() -> anyhow::Result<()> {
+/// Runs the command of `cli`: `cache clear`, or the TUI until the user
+/// quits.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "the next commit moves the repos and the config path out of cli"
+)]
+pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
+    if let Some(CacheCommand::Cache(CacheAction::Clear)) = cli.command {
+        return clear_cache();
+    }
+    tracing::debug!(?theme_kind, "terminal colors");
     let tokio = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -100,6 +112,28 @@ pub(crate) fn run() -> anyhow::Result<()> {
     drop(guard);
     tokio.shutdown_timeout(Duration::from_millis(500));
     result
+}
+
+/// `chaoshub cache clear`: deletes the cache file and says what it did.
+fn clear_cache() -> anyhow::Result<()> {
+    let path = paths::cache_db().context("the cache directory is unknown")?;
+    let deleted = remove_cache(&path)
+        .with_context(|| format!("cannot delete the cache {}", path.display()))?;
+    if deleted {
+        println!("deleted {}", path.display());
+    } else {
+        println!("no cache at {}", path.display());
+    }
+    Ok(())
+}
+
+/// Deletes the file at `path`. False when there was no file.
+fn remove_cache(path: &std::path::Path) -> io::Result<bool> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
 }
 
 /// The state of the event loop on the main thread.
@@ -502,6 +536,16 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::*;
+
+    #[test]
+    fn remove_cache_deletes_the_file_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chaoshub.db");
+        std::fs::write(&path, "cache").unwrap();
+        assert!(remove_cache(&path).unwrap());
+        assert!(!path.exists());
+        assert!(!remove_cache(&path).unwrap());
+    }
 
     #[test]
     fn deadline_is_one_frame_while_a_transition_runs() {
