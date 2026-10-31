@@ -5,7 +5,10 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::bus::{Persist, Scope};
-use crate::domain::keys::PrKey;
+use crate::domain::detail::PrDetail;
+use crate::domain::keys::{PrKey, RepoKey};
+use crate::domain::local::LocalState;
+use crate::domain::observed::Observed;
 use crate::domain::pr::PullRequest;
 use crate::store::SyncState;
 use crate::store::error::StoreError;
@@ -41,6 +44,20 @@ pub(crate) enum StoreOp {
         scope: Scope,
         repo_set: String,
         state: SyncState,
+        reply: Reply<()>,
+    },
+    PutDetail {
+        key: PrKey,
+        detail: Observed<PrDetail>,
+        reply: Reply<()>,
+    },
+    Detail {
+        key: PrKey,
+        reply: Reply<Option<Observed<PrDetail>>>,
+    },
+    PutLocal {
+        repo: RepoKey,
+        state: Observed<LocalState>,
         reply: Reply<()>,
     },
     /// Runs SQL on the connection. Tests use it to inject errors.
@@ -129,6 +146,35 @@ impl StoreHandle {
             reply,
         })
         .await
+    }
+
+    /// Writes the conversation of a pull request.
+    pub(crate) async fn put_detail(
+        &self,
+        key: PrKey,
+        detail: Observed<PrDetail>,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreOp::PutDetail { key, detail, reply })
+            .await
+    }
+
+    /// The cached conversation of a pull request. `None` when the cache
+    /// has none.
+    pub(crate) async fn detail(
+        &self,
+        key: PrKey,
+    ) -> Result<Option<Observed<PrDetail>>, StoreError> {
+        self.request(|reply| StoreOp::Detail { key, reply }).await
+    }
+
+    /// Writes the result of one jj scan of a repo.
+    pub(crate) async fn put_local(
+        &self,
+        repo: RepoKey,
+        state: Observed<LocalState>,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreOp::PutLocal { repo, state, reply })
+            .await
     }
 
     /// Sends the operation that `make` builds and waits for its reply.

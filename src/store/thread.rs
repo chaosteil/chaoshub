@@ -82,6 +82,15 @@ impl StoreThread {
                 let _ = reply
                     .send(self.transact(|tx| rows::put_sync_state(tx, scope, &repo_set, &state)));
             }
+            StoreOp::PutDetail { key, detail, reply } => {
+                let _ = reply.send(self.transact(|tx| rows::put_detail(tx, &key, &detail)));
+            }
+            StoreOp::Detail { key, reply } => {
+                let _ = reply.send(self.transact(|tx| rows::detail(tx, &key)));
+            }
+            StoreOp::PutLocal { repo, state, reply } => {
+                let _ = reply.send(self.transact(|tx| rows::put_local(tx, &repo, &state)));
+            }
             #[cfg(test)]
             StoreOp::Exec { sql, reply } => {
                 let result = self.transact(|tx| Ok(tx.execute_batch(&sql)?));
