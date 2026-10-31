@@ -1,0 +1,1 @@
+//! Renders a pane model.
