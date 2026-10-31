@@ -1,8 +1,9 @@
 //! Contracts between the layers: `Msg`, `Cmd`, `Interest`, `Session`,
 //! `Selection`, specs and errors. Plain data only.
 //!
-//! `bus` imports only `domain` and the crossterm key types. No adapter type
-//! appears here.
+//! `bus` imports only `domain` and the crossterm key types. It re-exports
+//! the key types, so `app` reads keys without a crossterm import. No
+//! adapter type appears here.
 #![allow(
     dead_code,
     reason = "the outer layers use the contracts in later phases"
@@ -12,7 +13,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+pub(crate) use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;

@@ -3,14 +3,12 @@
 //! There is one function per message family. Commands are plain data, so
 //! the tests compare them with `assert_eq!`.
 
-use crossterm::event::{KeyEvent, KeyEventKind};
-
 use crate::app::frame;
 use crate::app::keymap::{self, Keymap};
 use crate::app::layout::layout;
 use crate::app::state::AppState;
 use crate::app::tabs::{KeyCx, TABS, Tab};
-use crate::bus::{Cmd, Msg, Size};
+use crate::bus::{Cmd, KeyEvent, KeyEventKind, Msg, Size};
 
 /// Applies one message to the state, with the tabs of `TABS`.
 pub(crate) fn update(state: &mut AppState, keymap: &Keymap, msg: Msg) -> Vec<Cmd> {
@@ -114,14 +112,12 @@ fn quit() -> Vec<Cmd> {
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::{KeyCode, KeyEventState, KeyModifiers};
-
     use super::*;
     use crate::app::models::{Direction, ListModel};
     use crate::app::state::Overlay;
     use crate::app::tabs::Handled;
     use crate::app::tabs::fake::FakeTab;
-    use crate::bus::{Interest, OverlayKind, RateInfo, Scope, UiEvent};
+    use crate::bus::{Interest, KeyCode, KeyModifiers, OverlayKind, RateInfo, Scope, UiEvent};
     use crate::domain::test_time;
 
     const SIZE: Size = Size {
@@ -173,12 +169,11 @@ mod tests {
     #[test]
     fn a_key_release_does_nothing() {
         let (tabs, mut state) = setup(None);
-        let release = KeyEvent {
-            code: KeyCode::Char('q'),
-            modifiers: KeyModifiers::NONE,
-            kind: KeyEventKind::Release,
-            state: KeyEventState::NONE,
-        };
+        let release = KeyEvent::new_with_kind(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
         assert_eq!(run(&mut state, &tabs, Msg::Key(release)), vec![]);
     }
 
