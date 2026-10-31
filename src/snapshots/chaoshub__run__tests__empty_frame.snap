@@ -1,9 +1,9 @@
 ---
 source: src/run.rs
-assertion_line: 871
+assertion_line: 926
 expression: terminal.backend()
 ---
-"▌ 1 M I N E         ·  ·    ░  chaoshub "
+"▌ 1 M I N E   2 T E A M     ░  chaoshub "
 "    ░               ·  ·    ░         ˙ "
 "          ˙      ˙                      "
 "                ░            ˙       ˙  "

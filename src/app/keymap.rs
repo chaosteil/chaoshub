@@ -7,6 +7,7 @@
 //! empty value removes the binding.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use crate::bus::{KeyChord, KeyCode, KeyEvent, KeyModifiers};
 
@@ -38,6 +39,10 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("help", &["?"]),
     ("quit", &["q", "ctrl-c"]),
 ];
+
+/// The default bindings, for the code that builds models and needs no
+/// key.
+pub(crate) static DEFAULT: LazyLock<Keymap> = LazyLock::new(Keymap::default);
 
 /// A chord in the key map that does not parse.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

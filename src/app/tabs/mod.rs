@@ -15,6 +15,7 @@ mod team;
 use std::any::Any;
 use std::sync::LazyLock;
 
+use crate::app::keymap::Keymap;
 use crate::app::layout::Areas;
 use crate::app::models::{ListModel, RowItem};
 use crate::app::state::AppData;
@@ -56,6 +57,9 @@ pub(crate) struct KeyCx<'a> {
     /// The target of the selected row, if any.
     pub target: Option<&'a Target>,
     pub areas: &'a Areas,
+    /// The key bindings, so a tab or a pane matches its keys by binding
+    /// name, for example `toggle_all`.
+    pub keys: &'a Keymap,
 }
 
 /// The result of a key that a tab or a pane handled.
@@ -122,7 +126,8 @@ pub(crate) fn list_interest(tab: &dyn Tab, model: &ListModel, height: u16) -> In
 }
 
 /// The tab registry, in tab bar order.
-pub(crate) static TABS: LazyLock<Vec<Box<dyn Tab>>> = LazyLock::new(|| vec![Box::new(mine::Mine)]);
+pub(crate) static TABS: LazyLock<Vec<Box<dyn Tab>>> =
+    LazyLock::new(|| vec![Box::new(mine::Mine), Box::new(team::Team)]);
 
 /// The values that occur more than once, sorted.
 #[cfg(test)]

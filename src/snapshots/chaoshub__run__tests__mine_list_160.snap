@@ -3,7 +3,7 @@ source: src/run.rs
 assertion_line: 878
 expression: screen(&mut app)
 ---
-"▌ 1 M I N E         ·  ·    ░         ˙                ˙                            ˙                           ·     ░  ˙   ░˙˙  ░░               ˙   chaoshub "
+"▌ 1 M I N E   2 T E A M     ░         ˙                ˙                            ˙                           ·     ░  ˙   ░˙˙  ░░               ˙   chaoshub "
 "▌─ fix(store): reopen the connection after an error                                                            #99                                   ·   ·      "
 " stack #12 -> main · 3 PRs                                                                                                                                      "
 "   │ wip: try the new layout                                                                                 local zzmqxkrtzzmq 5678ef01 default            +   "

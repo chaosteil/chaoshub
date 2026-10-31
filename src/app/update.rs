@@ -136,6 +136,7 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
         data: &state.data,
         target: None,
         areas: &areas,
+        keys: keymap,
     };
     let Some(handled) = tab.handle_key(chord, &cx, ts) else {
         return Vec::new();
@@ -188,6 +189,7 @@ fn after_change(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
         data: &state.data,
         target: None,
         areas: &areas,
+        keys: &keymap::DEFAULT,
     };
     for (tab, ts) in tabs.iter().zip(state.ui.tabs.iter_mut()) {
         tab.rescore(&cx, ts);
@@ -283,6 +285,7 @@ fn refresh_interest(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Option<Cmd> 
         data: &state.data,
         target: None,
         areas: &areas,
+        keys: &keymap::DEFAULT,
     };
     let interest = tab.interest(&cx, ts);
     if state.ui.interest.as_ref() == Some(&interest) {
@@ -1391,6 +1394,24 @@ mod tests {
         assert_eq!(update(&mut state, &Keymap::default(), msg(scan)), vec![]);
         assert_eq!(state.data.local[&repo], newer, "the older scan is dropped");
         assert_eq!(state.generation, generation);
+    }
+
+    #[test]
+    fn t_on_the_team_tab_shows_all_open_and_keeps_the_selection() {
+        let mut state = AppState::new(SIZE);
+        state.load(testdata::team_snapshot(), Vec::new());
+        key(&mut state, '2');
+        key(&mut state, 'j');
+        assert_eq!(selected_number(&mut state), Some(87));
+        let generation = state.generation;
+        key(&mut state, 't');
+        assert_eq!(state.generation, generation + 1);
+        assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 6);
+        assert_eq!(selected_number(&mut state), Some(87));
+        key(&mut state, '1');
+        let generation = state.generation;
+        key(&mut state, 't');
+        assert_eq!(state.generation, generation, "the mine tab has no toggle");
     }
 
     #[test]

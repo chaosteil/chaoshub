@@ -5,6 +5,7 @@
 //! built for, so animation frames and idle ticks never rebuild it.
 
 use crate::app::age::age;
+use crate::app::keymap;
 use crate::app::layout::layout;
 use crate::app::models::{
     Cell, CellStyle, FilterModel, FrameModel, ListModel, StatusModel, TabBarModel,
@@ -119,6 +120,7 @@ fn list_model(state: &mut AppState, tabs: &[Box<dyn Tab>], index: usize, size: S
         data: &state.data,
         target: None,
         areas: &areas,
+        keys: &keymap::DEFAULT,
     };
     let model = tab.model(&cx, ts, size);
     if state.cache.lists.len() <= index {
