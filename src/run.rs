@@ -131,7 +131,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         settings.repos.clone(),
         chrono::Utc::now(),
     )
-    .with_action_config(settings.config.actions.clone());
+    .with_action_config(action_tables(&settings.config));
     let session = Session {
         login: None,
         repos: settings.repos.clone(),
@@ -328,6 +328,19 @@ fn session_repos(config: &Config, extra: &[String]) -> anyhow::Result<Vec<Repo>>
         }
     }
     Ok(repos)
+}
+
+/// The `[actions.<id>]` tables for the selections. The table of the
+/// review action gets `zoom` from `[codeview] zoom` when it has no
+/// `zoom` of its own.
+fn action_tables(config: &Config) -> std::collections::BTreeMap<String, toml::Table> {
+    let mut tables = config.actions.clone();
+    tables
+        .entry("review".to_owned())
+        .or_default()
+        .entry("zoom")
+        .or_insert(toml::Value::Boolean(config.codeview.zoom));
+    tables
 }
 
 /// The launcher for `launcher = "auto" | "rex" | "inline"`. `auto`, the
@@ -913,6 +926,17 @@ mod tests {
         let inline = with("launcher = \"inline\"\n");
         assert_eq!(launcher(&inline, Some(rex())).unwrap(), None);
         assert!(launcher(&with("launcher = \"tmux\"\n"), Some(rex())).is_err());
+    }
+
+    #[test]
+    fn the_review_table_gets_the_zoom_of_codeview() {
+        let parse = |text: &str| Config::parse(text, None).unwrap();
+        let zoom = |config: &Config| action_tables(config)["review"].get("zoom").cloned();
+        assert_eq!(zoom(&parse("")), Some(toml::Value::Boolean(true)));
+        let off = parse("[codeview]\nzoom = false\n");
+        assert_eq!(zoom(&off), Some(toml::Value::Boolean(false)));
+        let own = parse("[codeview]\nzoom = false\n[actions.review]\nzoom = true\n");
+        assert_eq!(zoom(&own), Some(toml::Value::Boolean(true)));
     }
 
     #[test]

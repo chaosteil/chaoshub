@@ -1,0 +1,47 @@
+{
+  "key": {
+    "repo": {
+      "owner": "chaosteil",
+      "name": "chaoshub"
+    },
+    "number": 7
+  },
+  "node_id": "PR_kwDO7",
+  "head": {
+    "value": {
+      "title": "Add the review action",
+      "body": "",
+      "author": "chaosteil",
+      "state": "Open",
+      "is_draft": false,
+      "head_ref": "chaosteil/7",
+      "head_oid": "oid7",
+      "base_ref": "main",
+      "review_decision": null,
+      "review_requested": false,
+      "reviewers": [],
+      "stack": null,
+      "auto_merge": false,
+      "in_merge_queue": false,
+      "mergeable": "Unknown",
+      "merge_state": "Unknown",
+      "url": "https://github.com/chaosteil/chaoshub/pull/7",
+      "updated_at": "2026-09-21T14:13:20Z",
+      "repo_settings": {
+        "squash": true,
+        "merge": true,
+        "rebase": true,
+        "default_branch": null
+      }
+    },
+    "observed_at": "2026-09-21T14:13:20Z"
+  },
+  "ci_state": {
+    "value": "None",
+    "observed_at": "2026-09-21T14:13:20Z"
+  },
+  "checks": {
+    "value": [],
+    "observed_at": "2026-09-21T14:13:20Z"
+  }
+}
