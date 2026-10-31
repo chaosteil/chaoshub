@@ -1351,6 +1351,29 @@ mod tests {
         insta::assert_snapshot!(screen(&mut app));
     }
 
+    /// The key hint row of a screen: the row above the status bar.
+    fn hint_row(screen: &str) -> String {
+        let rows: Vec<&str> = screen.lines().collect();
+        rows[rows.len() - 2].trim_matches('"').trim_end().to_owned()
+    }
+
+    #[test]
+    fn filter_typing_hints_show_apply_and_cancel_only() {
+        let mut app = mine_app(100);
+        press(&mut app, '/');
+        press(&mut app, 'f');
+        let screen = screen(&mut app);
+        assert_eq!(hint_row(&screen), "▌ Enter apply  Esc cancel", "{screen}");
+        insta::assert_snapshot!(screen);
+    }
+
+    #[test]
+    fn author_picker_hints_close_with_esc() {
+        let mut app = team_app(100, 16);
+        press(&mut app, 'a');
+        assert_eq!(hint_row(&screen(&mut app)), "▌ Enter select  Esc close");
+    }
+
     #[test]
     fn help_overlay_100() {
         let mut app = seeded_app(100, 30, crate::app::testdata::mine_snapshot());
