@@ -28,7 +28,7 @@ use crate::app::term::term_status;
 use crate::bus::MergeProgress;
 use crate::bus::{
     ActionEvent, ActionInput, Cmd, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Msg,
-    OverlayKind, Persist, PrRef, Scope, Selection, Size, SyncError, TargetKey, UiEvent,
+    OverlayKind, Persist, PrRef, Scope, Selection, Size, SyncError, Target, TargetKey, UiEvent,
 };
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;
@@ -200,7 +200,7 @@ fn key(
         return quit();
     }
     if state.ui.overlays.iter().any(|overlay| !overlay.closing) {
-        return overlay_key(state, keymap, tabs, panes, chord);
+        return overlay_key(state, keymap, tabs, panes, actions, chord);
     }
     if quits && !state.ui.filter_edit {
         return quit();
@@ -265,10 +265,9 @@ fn key(
     cmds
 }
 
-/// An action key on the cursor row: `applies`, then `prepare`, then the
-/// route of the preparation. `None` when no action has the key, when the
-/// row has no target, or when the action is hidden for it; the key then
-/// goes to the tab.
+/// An action key on the cursor row. `None` when no action has the key,
+/// when the row has no target, or when the action is hidden for it; the
+/// key then goes to the tab.
 fn action_key(
     state: &mut AppState,
     keymap: &Keymap,
@@ -276,12 +275,28 @@ fn action_key(
     actions: &[Box<dyn Action>],
     chord: KeyChord,
 ) -> Option<Vec<Cmd>> {
-    let action = actions
+    actions
         .iter()
         .find(|action| keymap.matches(action.id(), chord))?;
     let model = frame::active_list(state, tabs);
     let item = &model.rows.get(model.cursor)?.item;
     let target = row_target(&state.data, item)?;
+    run_action_key(state, keymap, actions, target, chord)
+}
+
+/// An action key on `target`: `applies`, then `prepare`, then the route
+/// of the preparation. `None` when no action has the key, or when the
+/// action is hidden for the target.
+fn run_action_key(
+    state: &mut AppState,
+    keymap: &Keymap,
+    actions: &[Box<dyn Action>],
+    target: Target,
+    chord: KeyChord,
+) -> Option<Vec<Cmd>> {
+    let action = actions
+        .iter()
+        .find(|action| keymap.matches(action.id(), chord))?;
     let id = action.id();
     let selection = Selection {
         target,
@@ -517,12 +532,15 @@ fn close_overlay(state: &mut AppState) {
     state.bump();
 }
 
-/// A key for the top overlay that is not closing.
+/// A key for the top overlay that is not closing. In the pull request
+/// popup, a key that no pane handles goes to the actions, with the pull
+/// request of the popup as the target.
 fn overlay_key(
     state: &mut AppState,
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
     panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
     chord: KeyChord,
 ) -> Vec<Cmd> {
     if let Some(cmds) = prompt_key(state, chord) {
@@ -543,7 +561,10 @@ fn overlay_key(
     match &mut overlay.state {
         OverlayState::Popup(popup) => {
             let Some(handled) = popup_key(&state.data, &areas, keymap, panes, popup, chord) else {
-                return Vec::new();
+                let Some(target) = pr_target(&state.data, &popup.key) else {
+                    return Vec::new();
+                };
+                return run_action_key(state, keymap, actions, target, chord).unwrap_or_default();
             };
             if handled.changed {
                 state.bump();
@@ -3075,6 +3096,110 @@ mod tests {
         act(&mut state, &actions, KeyCode::Char('m'));
         assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
         assert!(state.ui.overlays.iter().all(|o| o.closing));
+    }
+
+    /// The action state on `#number`, with the sidebar open on it.
+    fn sidebar_state(number: u64, actions: &[Box<dyn Action>]) -> AppState {
+        let mut state = action_state(&pr_row(number));
+        assert_eq!(act(&mut state, actions, KeyCode::Enter), vec![]);
+        assert!(sidebar(&state).is_some());
+        state
+    }
+
+    /// The pull request popup on top of the overlay stack, when it is not
+    /// closing.
+    fn sidebar(state: &AppState) -> Option<&PopupState> {
+        match state.ui.overlays.iter().rev().find(|o| !o.closing) {
+            Some(Overlay {
+                state: OverlayState::Popup(popup),
+                ..
+            }) => Some(popup),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn v_in_the_sidebar_runs_the_terminal_action() {
+        let request = crate::bus::LaunchRequest {
+            argv: vec!["nvim".into()],
+            cwd: "/code/chaoshub".into(),
+            env: Vec::new(),
+            label: "chaoshub-review".into(),
+            zoom: true,
+        };
+        let mut review = FakeAction::new("review", 'v');
+        review.prepare = Prepare::Terminal(request.clone());
+        let actions = fake(review);
+        let mut state = sidebar_state(99, &actions);
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Char('v')),
+            vec![Cmd::RunTerminal {
+                id: "review",
+                key: TargetKey::Pr(testdata::pr_key("chaoshub", 99)),
+                request,
+            }]
+        );
+        assert!(sidebar(&state).is_some(), "the sidebar stays open");
+    }
+
+    #[test]
+    fn a_confirm_in_the_sidebar_opens_on_top_of_it() {
+        let spec = crate::bus::ConfirmSpec {
+            title: "merge #102?".into(),
+            lines: Vec::new(),
+            danger: true,
+        };
+        let mut merge = FakeAction::new("merge", 'm');
+        merge.prepare = Prepare::Confirm(spec.clone());
+        let actions = fake(merge);
+        let mut state = sidebar_state(102, &actions);
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('m')), vec![]);
+        let kinds: Vec<(OverlayKind, bool)> = state
+            .ui
+            .overlays
+            .iter()
+            .map(|o| (o.kind, o.closing))
+            .collect();
+        assert_eq!(
+            kinds,
+            [(OverlayKind::Popup, false), (OverlayKind::Confirm, false)]
+        );
+        assert_eq!(
+            frame::frame_model(&mut state)
+                .overlays
+                .last()
+                .map(|o| &o.content),
+            Some(&OverlayContent::Confirm(spec))
+        );
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Char('y')),
+            vec![Cmd::RunAction {
+                id: "merge",
+                selection: pr_selection(&state, 102),
+                input: ActionInput::Confirmed,
+            }]
+        );
+        assert!(sidebar(&state).is_some(), "the sidebar stays open");
+    }
+
+    #[test]
+    fn a_key_without_an_action_does_nothing_in_the_sidebar() {
+        let actions = fake(FakeAction::new("approve", 'A'));
+        let mut state = sidebar_state(102, &actions);
+        let generation = state.generation;
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('z')), vec![]);
+        assert_eq!(state.generation, generation);
+        assert_eq!(state.ui.overlays.len(), 1);
+        assert!(sidebar(&state).is_some());
+    }
+
+    #[test]
+    fn a_pane_key_in_the_sidebar_selects_the_pane_before_an_action() {
+        let actions = fake(FakeAction::new("approve", '2'));
+        let mut state = sidebar_state(102, &actions);
+        assert_eq!(sidebar(&state).map(|popup| popup.active), Some(0));
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('2')), vec![]);
+        assert_eq!(sidebar(&state).map(|popup| popup.active), Some(1));
     }
 
     #[test]
