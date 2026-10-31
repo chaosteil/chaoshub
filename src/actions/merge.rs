@@ -3,10 +3,11 @@
 //! It merges a pull request through the async merge endpoint of GitHub.
 //! For a pull request at position k of a stack, GitHub merges the
 //! positions 1 to k atomically, so the blockers and the confirm lines
-//! cover every entry up to k. The per-repo overrides come from the
-//! `[actions.merge.repos."owner/name"]` tables, with the fields of
-//! `[merge.repos."owner/name"]`: `method` and `bypass_rules` (off by
-//! default).
+//! cover every entry up to k. The settings come from the
+//! `[actions.merge]` table, which also gets the keys of `[merge]`:
+//! `method` and `bypass_rules` (off by default) directly under the table
+//! are the defaults, and a `repos."owner/name"` table overrides each key
+//! that it sets for one repo.
 
 use std::time::Duration;
 
@@ -17,7 +18,7 @@ use crate::bus::{
     ActionEvent, ActionInput, ConfirmSpec, KeyChord, KeyCode, KeyModifiers, MergeProgress, Msg,
     Selection, Target, TargetKey,
 };
-use crate::config::schema::{MergeConfig, RepoMerge};
+use crate::config::schema::{MergeConfig, RepoMerge, parse_repo_name};
 use crate::domain::merge::{MergeMethod, merge_blockers, resolve_method, squash_message};
 use crate::domain::pr::{CiState, PullRequest, ReviewDecision};
 use crate::domain::repo::Repo;
@@ -240,21 +241,30 @@ async fn send(svc: &Services, key: &TargetKey, event: ActionEvent) {
     }
 }
 
-/// The merge overrides of the repo of the target, from the
-/// `[actions.merge]` table. The defaults without a table or without an
-/// entry for the repo. An error when the table does not parse.
+/// The merge settings of the repo of the target, from the
+/// `[actions.merge]` table: `method` and `bypass_rules` directly under
+/// the table, with the keys of the `repos."owner/name"` entry of the
+/// repo on top. The defaults without a table. An error when the table
+/// does not parse.
 pub(crate) fn repo_merge(sel: &Selection) -> Result<RepoMerge, String> {
     let Some(table) = &sel.action_config else {
         return Ok(RepoMerge::default());
     };
-    let config: MergeConfig = toml::Value::Table(table.clone())
-        .try_into()
-        .map_err(|err: toml::de::Error| err.to_string())?;
-    Ok(config
-        .repos
-        .get(sel.target.repo())
-        .cloned()
-        .unwrap_or_default())
+    let text = |err: toml::de::Error| err.to_string();
+    toml::Value::Table(table.clone())
+        .try_into::<MergeConfig>()
+        .map_err(text)?;
+    let mut layered = table.clone();
+    if let Some(toml::Value::Table(repos)) = layered.remove("repos") {
+        let repo = sel.target.repo();
+        let entry = repos
+            .into_iter()
+            .find(|(name, _)| parse_repo_name(name).as_ref() == Some(repo));
+        if let Some((_, toml::Value::Table(entry))) = entry {
+            layered.extend(entry);
+        }
+    }
+    toml::Value::Table(layered).try_into().map_err(text)
 }
 
 /// The merge method of the repo: the override of the configuration, else
@@ -399,6 +409,56 @@ mod tests {
             me: "me".into(),
             action_config: config.map(|text| toml::from_str(text).unwrap()),
         }
+    }
+
+    /// The settings of the repo `o/r` for the `[actions.merge]` table
+    /// `config`.
+    fn settings(config: &str) -> RepoMerge {
+        repo_merge(&select(entry(9, 0), Vec::new(), Some(config))).unwrap()
+    }
+
+    #[test]
+    fn top_level_settings_are_defaults_and_repo_entries_override_them() {
+        use crate::config::schema::MergeMethodSetting::{Merge, Rebase};
+
+        let top = "method = \"rebase\"\nbypass_rules = true\n";
+        let other = "[repos.\"o/other\"]\nmethod = \"merge\"\nbypass_rules = false\n";
+        let cases = [
+            ("", None, false),
+            (top, Some(Rebase), true),
+            (&format!("{top}{other}"), Some(Rebase), true),
+            (
+                &format!("{top}[repos.\"o/r\"]\nmethod = \"merge\"\n"),
+                Some(Merge),
+                true,
+            ),
+            (
+                &format!("{top}[repos.\"o/r\"]\nbypass_rules = false\n"),
+                Some(Rebase),
+                false,
+            ),
+            ("[repos.\"o/r\"]\nmethod = \"merge\"\n", Some(Merge), false),
+        ];
+        for (config, method, bypass_rules) in cases {
+            assert_eq!(
+                settings(config),
+                RepoMerge {
+                    method,
+                    bypass_rules
+                },
+                "{config}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bad_top_level_method_disables_the_merge() {
+        let sel = select(entry(9, 0), Vec::new(), Some("method = \"fast\"\n"));
+        assert!(repo_merge(&sel).is_err());
+        assert_eq!(
+            MergeAction::applies(&sel),
+            Applicability::Disabled("invalid [actions.merge] configuration")
+        );
     }
 
     fn stack3() -> Vec<PullRequest> {
