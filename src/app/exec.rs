@@ -97,11 +97,22 @@ pub(crate) struct Runtime {
     alive_poll: Duration,
     /// True after `Cmd::Quit`.
     quit: bool,
+    /// True when a quit closes the open panes. The pinned mode leaves
+    /// them open.
+    close_panes_on_quit: bool,
 }
 
 impl Runtime {
-    /// Creates the runtime on the tokio runtime of `handle`.
-    pub(crate) fn new(handle: Handle, senders: Senders, env: ActionEnv) -> Self {
+    /// Creates the runtime on the tokio runtime of `handle`. When
+    /// `close_panes_on_quit` is false, a quit ends the pane runners and
+    /// leaves the panes open. `Cmd::CancelAction` closes a pane in both
+    /// cases.
+    pub(crate) fn new(
+        handle: Handle,
+        senders: Senders,
+        env: ActionEnv,
+        close_panes_on_quit: bool,
+    ) -> Self {
         Self {
             handle,
             root: CancellationToken::new(),
@@ -113,6 +124,7 @@ impl Runtime {
             panes: Arc::default(),
             alive_poll: ALIVE_POLL,
             quit: false,
+            close_panes_on_quit,
         }
     }
 
@@ -181,6 +193,8 @@ impl Runtime {
             tx: self.env.tx.clone(),
             panes: Arc::clone(&self.panes),
             alive_poll: self.alive_poll,
+            quit: self.root.clone(),
+            close_on_quit: self.close_panes_on_quit,
         };
         self.tasks.spawn_on(
             async move {
@@ -329,11 +343,16 @@ struct PaneRun {
     tx: mpsc::Sender<Msg>,
     panes: PaneHandles,
     alive_poll: Duration,
+    /// The root token: a quit cancels it.
+    quit: CancellationToken,
+    /// True when a quit closes the pane.
+    close_on_quit: bool,
 }
 
 impl PaneRun {
     /// Launches the pane, watches it until it ends or the token is
-    /// cancelled, and closes it on a cancel. `PaneEnded` comes last. A
+    /// cancelled, and closes it on a cancel. A quit closes it only when
+    /// `close_on_quit` is true. `PaneEnded` comes last. A
     /// failed launch sends `Done` with the error only: no `PaneStarted`
     /// came, so no `PaneEnded` follows, and the follow-up runs once.
     async fn run(&self, request: &LaunchRequest) {
@@ -357,7 +376,9 @@ impl PaneRun {
         })
         .await;
         self.watch(&handle).await;
+        let closes = self.close_on_quit || !self.quit.is_cancelled();
         if self.cancel.is_cancelled()
+            && closes
             && let Err(err) = self.launcher.close(&handle).await
         {
             tracing::warn!(%err, label = handle.label, "cannot close the pane");
@@ -501,7 +522,7 @@ mod tests {
             launcher,
         };
         Fixture {
-            runtime: Runtime::new(handle, senders, env),
+            runtime: Runtime::new(handle, senders, env, true),
             interest,
             session,
             sync,
@@ -955,6 +976,37 @@ mod tests {
         f.runtime.exec(Cmd::Quit);
         assert!(launcher.calls().contains(&"close block:pane-2".to_owned()));
         assert_eq!(f.msgs.blocking_recv(), Some(ended(2)));
+    }
+
+    #[test]
+    fn a_quit_without_close_on_quit_leaves_the_pane_open() {
+        let tokio = tokio();
+        let launcher = Arc::new(FakeLauncher {
+            alive: true.into(),
+            ..FakeLauncher::default()
+        });
+        let mut f = pane_fixture(&tokio, &launcher);
+        f.runtime.close_panes_on_quit = false;
+        f.runtime.exec(run_terminal(1));
+        f.runtime.exec(run_terminal(2));
+        let mut first = vec![f.msgs.blocking_recv(), f.msgs.blocking_recv()];
+        first.sort_by_key(|msg| format!("{msg:?}"));
+        assert_eq!(first, [Some(started(1)), Some(started(2))]);
+        f.runtime.exec(Cmd::CancelAction {
+            id: "review",
+            key: pr_key(1),
+        });
+        assert_eq!(f.msgs.blocking_recv(), Some(ended(1)));
+        assert!(
+            launcher.calls().contains(&"close block:pane-1".to_owned()),
+            "a cancel still closes the pane"
+        );
+        f.runtime.exec(Cmd::Quit);
+        assert_eq!(f.msgs.blocking_recv(), Some(ended(2)));
+        assert!(
+            !launcher.calls().contains(&"close block:pane-2".to_owned()),
+            "a quit leaves the pane open"
+        );
     }
 
     #[test]

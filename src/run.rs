@@ -39,9 +39,10 @@ use crate::bus::{
     Cmd, Hit, Interest, JjReq, LaunchRequest, MouseKind, Msg, Progress, Scope, Session, Size,
     SyncReq, TargetKey, TermState, TermStatus,
 };
-use crate::cli::{CacheAction, CacheCommand, Cli};
+use crate::cli::{CacheAction, Cli, Command};
 use crate::config::schema::parse_repo_name;
 use crate::config::{self, Config, paths};
+use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::repo::Repo;
 use crate::github::{GITHUB_API, GithubClient, TokenSource};
 use crate::launch::Launcher;
@@ -76,7 +77,7 @@ const SLOW_FRAME: Duration = Duration::from_millis(12);
 type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
 
 /// Runs the command of `cli`: `cache clear`, or the TUI until the user
-/// quits.
+/// quits. `pr OWNER/NAME NUMBER` runs the TUI in the pinned mode.
 #[allow(
     clippy::too_many_lines,
     reason = "the composition root builds every part of the session in one place"
@@ -91,9 +92,11 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         palette: palette_arg,
         command,
     } = cli;
-    if let Some(CacheCommand::Cache(CacheAction::Clear)) = command {
-        return clear_cache();
-    }
+    let pinned = match command {
+        Some(Command::Cache(CacheAction::Clear)) => return clear_cache(),
+        Some(Command::Pr { repo, number }) => Some(pinned_key(&repo, number)?),
+        None => None,
+    };
     let config_path = config_path
         .or_else(paths::config_file)
         .context("the config directory is unknown")?;
@@ -112,7 +115,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     );
     let launcher = launcher(&config, RexLauncher::from_env())?;
     let settings = Settings {
-        repos: session_repos(&config, &repo)?,
+        repos: session_repos(&config, &repo, pinned.as_ref().map(|key| &key.repo))?,
         launcher,
         config,
     };
@@ -144,6 +147,12 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         chrono::Utc::now(),
     )
     .with_action_config(action_tables(&settings.config));
+    // The pinned app comes before the first interest, so the workers
+    // start with the pinned interest.
+    let app = match &pinned {
+        Some(key) => app.pinned(key.clone()),
+        None => app,
+    };
     let session = Session {
         login: None,
         repos: settings.repos.clone(),
@@ -152,10 +161,16 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     let client = Arc::new(GithubClient::new(TokenSource::gh(), GITHUB_API)?);
     let locks = RepoLocks::default();
     let env = action_env(&settings, Arc::clone(&client), locks.clone(), tx.clone());
-    let ctx = worker_ctx(&settings.config, store, tx, channels, client, locks);
+    let mode = match &pinned {
+        Some(key) => WorkerMode::Pinned(key.clone()),
+        None => WorkerMode::Lists,
+    };
+    let ctx = worker_ctx(&settings.config, store, tx, channels, client, locks, mode);
     let mut event_loop = EventLoop {
         app,
-        runtime: Runtime::new(tokio.handle().clone(), senders, env),
+        // The pinned process leaves the panes that it opened, for
+        // example a codeview review, open on quit.
+        runtime: Runtime::new(tokio.handle().clone(), senders, env, pinned.is_none()),
         handle: tokio.handle().clone(),
         transitions,
         theme,
@@ -243,8 +258,8 @@ fn palette_choice(
 
 /// The context of the workers: the GitHub client, the store, the
 /// configuration, the message channel, the watches and the request
-/// channels, and the repo locks. The action tasks share the client and
-/// the locks.
+/// channels, the repo locks and the mode. The action tasks share the
+/// client and the locks.
 fn worker_ctx(
     config: &Config,
     store: StoreHandle,
@@ -252,6 +267,7 @@ fn worker_ctx(
     channels: WorkerChannels,
     client: Arc<GithubClient>,
     locks: RepoLocks,
+    mode: WorkerMode,
 ) -> WorkerCtx {
     WorkerCtx {
         client,
@@ -263,7 +279,7 @@ fn worker_ctx(
         sync_rx: Arc::new(tokio::sync::Mutex::new(channels.sync)),
         jj_rx: Arc::new(tokio::sync::Mutex::new(channels.jj)),
         locks,
-        mode: WorkerMode::Lists,
+        mode,
     }
 }
 
@@ -377,13 +393,17 @@ struct Settings {
 }
 
 /// The repos of the session: the `[[repo]]` entries of the
-/// configuration, then each `--repo` that is not one of them. A `--repo`
-/// repo has no local path.
-fn session_repos(config: &Config, extra: &[String]) -> anyhow::Result<Vec<Repo>> {
+/// configuration, then each `--repo` that is not one of them, then the
+/// repo of the pinned pull request when it is not one of them. A
+/// `--repo` repo and the pinned repo have no local path; the discovery of
+/// the current directory fills it.
+fn session_repos(
+    config: &Config,
+    extra: &[String],
+    pinned: Option<&RepoKey>,
+) -> anyhow::Result<Vec<Repo>> {
     let mut repos = config.repos();
-    for text in extra {
-        let key = parse_repo_name(text)
-            .with_context(|| format!("--repo `{text}` is not in the owner/name form"))?;
+    let mut add = |key: RepoKey| {
         if !repos.iter().any(|repo| repo.key == key) {
             repos.push(Repo {
                 key,
@@ -391,8 +411,23 @@ fn session_repos(config: &Config, extra: &[String]) -> anyhow::Result<Vec<Repo>>
                 settings: None,
             });
         }
+    };
+    for text in extra {
+        let key = parse_repo_name(text)
+            .with_context(|| format!("--repo `{text}` is not in the owner/name form"))?;
+        add(key);
+    }
+    if let Some(key) = pinned {
+        add(key.clone());
     }
     Ok(repos)
+}
+
+/// The key of the pull request of `chaoshub pr OWNER/NAME NUMBER`.
+fn pinned_key(repo: &str, number: u64) -> anyhow::Result<PrKey> {
+    let repo =
+        parse_repo_name(repo).with_context(|| format!("`{repo}` is not in the owner/name form"))?;
+    Ok(PrKey { repo, number })
 }
 
 /// The `[actions.<id>]` tables for the selections. The table of the
@@ -1042,7 +1077,6 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::*;
-    use crate::domain::keys::RepoKey;
 
     #[test]
     fn the_theme_flag_wins_over_the_config() {
@@ -1107,13 +1141,51 @@ mod tests {
         .unwrap();
         let extra = ["acme/deploy".to_owned(), "chaosteil/chaoshub".to_owned()];
         assert_eq!(
-            session_repos(&config, &extra).unwrap(),
+            session_repos(&config, &extra, None).unwrap(),
             [
                 repo("chaosteil", "chaoshub", Some("/code/chaoshub")),
                 repo("acme", "deploy", None),
             ]
         );
-        assert!(session_repos(&config, &["chaoshub".to_owned()]).is_err());
+        assert!(session_repos(&config, &["chaoshub".to_owned()], None).is_err());
+    }
+
+    #[test]
+    fn session_repos_add_the_pinned_repo_once() {
+        let config = Config::parse(
+            "[[repo]]\nname = \"chaosteil/chaoshub\"\npath = \"/code/chaoshub\"\n",
+            None,
+        )
+        .unwrap();
+        let other = pinned_key("chaosteil/chaoshub-test", 7).unwrap();
+        assert_eq!(
+            session_repos(&config, &[], Some(&other.repo)).unwrap(),
+            [
+                repo("chaosteil", "chaoshub", Some("/code/chaoshub")),
+                repo("chaosteil", "chaoshub-test", None),
+            ]
+        );
+        let known = pinned_key("chaosteil/chaoshub", 7).unwrap();
+        assert_eq!(
+            session_repos(&config, &[], Some(&known.repo)).unwrap(),
+            [repo("chaosteil", "chaoshub", Some("/code/chaoshub"))]
+        );
+    }
+
+    #[test]
+    fn pinned_key_parses_the_repo() {
+        assert_eq!(
+            pinned_key("chaosteil/chaoshub", 7).unwrap(),
+            PrKey {
+                repo: RepoKey {
+                    owner: "chaosteil".into(),
+                    name: "chaoshub".into(),
+                },
+                number: 7,
+            }
+        );
+        let err = pinned_key("chaoshub", 7).unwrap_err();
+        assert_eq!(err.to_string(), "`chaoshub` is not in the owner/name form");
     }
 
     fn rex() -> RexLauncher {

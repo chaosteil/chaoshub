@@ -1,5 +1,5 @@
 //! Command line types (clap): `--repo`, `--config`, `--no-prefetch`,
-//! `--theme`, `--palette` and `cache clear`.
+//! `--theme`, `--palette`, `cache clear` and `pr OWNER/NAME NUMBER`.
 
 use std::path::PathBuf;
 
@@ -29,7 +29,7 @@ pub struct Cli {
     #[arg(long, value_name = "NAME")]
     pub palette: Option<PaletteArg>,
     #[command(subcommand)]
-    pub command: Option<CacheCommand>,
+    pub command: Option<Command>,
 }
 
 /// A theme style on the command line.
@@ -54,11 +54,19 @@ pub enum PaletteArg {
 }
 
 /// The subcommands. Without one, chaoshub starts the TUI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
-pub enum CacheCommand {
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum Command {
     /// Manages the SQLite cache.
     #[command(subcommand)]
     Cache(CacheAction),
+    /// Shows one pull request. The detail pane of the list runs it.
+    Pr {
+        /// The repo of the pull request, in the `owner/name` form.
+        #[arg(value_name = "OWNER/NAME")]
+        repo: String,
+        /// The number of the pull request.
+        number: u64,
+    },
 }
 
 /// The `cache` subcommands.
@@ -146,8 +154,21 @@ mod tests {
     fn cache_clear_parses() {
         assert_eq!(
             parse(&["cache", "clear"]).command,
-            Some(CacheCommand::Cache(CacheAction::Clear))
+            Some(Command::Cache(CacheAction::Clear))
         );
         assert!(Cli::try_parse_from(["chaoshub", "cache"]).is_err());
+    }
+
+    #[test]
+    fn pr_parses() {
+        assert_eq!(
+            parse(&["pr", "chaosteil/chaoshub", "7"]).command,
+            Some(Command::Pr {
+                repo: "chaosteil/chaoshub".into(),
+                number: 7,
+            })
+        );
+        assert!(Cli::try_parse_from(["chaoshub", "pr", "chaosteil/chaoshub"]).is_err());
+        assert!(Cli::try_parse_from(["chaoshub", "pr"]).is_err());
     }
 }
