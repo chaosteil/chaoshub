@@ -9,13 +9,24 @@ mod prefetch;
 mod startup;
 mod supervisor;
 mod sync;
+#[cfg(test)]
+mod testkit;
 
 use tokio::task::JoinSet;
 
 use crate::workers::ctx::WorkerCtx;
+use crate::workers::supervisor::{FIRST_BACKOFF, Worker, supervise};
 
-/// Spawns every worker into one `JoinSet`. It spawns nothing yet.
+/// The workers that `spawn_all` starts.
+const WORKERS: &[Worker] = &[];
+
+/// Spawns every worker into one `JoinSet`, each one inside its own
+/// supervisor. A drop of the set aborts the supervisors and the workers.
 pub(crate) fn spawn_all(ctx: WorkerCtx) -> JoinSet<()> {
-    drop(ctx);
-    JoinSet::new()
+    let mut set = JoinSet::new();
+    let contexts = std::iter::repeat_n(ctx, WORKERS.len());
+    for (&worker, ctx) in WORKERS.iter().zip(contexts) {
+        set.spawn(supervise(worker, ctx, FIRST_BACKOFF));
+    }
+    set
 }
