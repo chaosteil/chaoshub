@@ -92,7 +92,7 @@ fn tree_prefix(row: &Row) -> String {
 
 /// What every row of one draw shares.
 struct Frame<'a> {
-    model: &'a ListModel,
+    columns: &'a [Column],
     widths: &'a [u16],
     area: Rect,
     theme: &'a Theme,
@@ -101,7 +101,7 @@ struct Frame<'a> {
 /// Draws one row at `y`.
 fn render_row(frame: &Frame<'_>, row: &Row, y: u16, selected: bool, buf: &mut Buffer) {
     let Frame {
-        model,
+        columns,
         widths,
         area,
         theme,
@@ -152,7 +152,7 @@ fn render_row(frame: &Frame<'_>, row: &Row, y: u16, selected: bool, buf: &mut Bu
         RowItem::Pr(_) | RowItem::Local { .. } => {}
     }
     let mut x = x0;
-    for (i, ((column, &w), cell)) in model.columns.iter().zip(widths).zip(&row.cells).enumerate() {
+    for (i, ((column, &w), cell)) in columns.iter().zip(widths).zip(&row.cells).enumerate() {
         if x >= right {
             break;
         }
@@ -175,6 +175,43 @@ fn render_row(frame: &Frame<'_>, row: &Row, y: u16, selected: bool, buf: &mut Bu
 
 /// Draws a list model into an area, from the scroll offset down.
 pub(crate) fn render(model: &ListModel, area: Rect, buf: &mut Buffer, theme: &Theme) {
+    render_rows(
+        &model.columns,
+        &model.rows,
+        Window {
+            cursor: Some(model.cursor),
+            scroll: model.scroll,
+        },
+        area,
+        buf,
+        theme,
+    );
+}
+
+/// The cursor and the scroll offset of a list of rows.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Window {
+    /// The selected row, if rows can be selected.
+    pub cursor: Option<usize>,
+    /// The index of the first visible row.
+    pub scroll: usize,
+}
+
+/// The x offset of the first column, after the gutter.
+pub(crate) fn columns_x(area: Rect) -> u16 {
+    area.x + GUTTER
+}
+
+/// Draws rows with columns into an area. The list and the pane tables
+/// share it.
+pub(crate) fn render_rows(
+    columns: &[Column],
+    rows: &[Row],
+    window: Window,
+    area: Rect,
+    buf: &mut Buffer,
+    theme: &Theme,
+) {
     let area = area.intersection(buf.area);
     buf.set_style(area, Style::new().fg(theme.palette.fg).bg(theme.palette.bg));
     for (x, y) in
@@ -182,22 +219,21 @@ pub(crate) fn render(model: &ListModel, area: Rect, buf: &mut Buffer, theme: &Th
     {
         buf[(x, y)].set_symbol(" ");
     }
-    let widths = column_widths(&model.columns, area.width.saturating_sub(GUTTER));
-    let rows = model
-        .rows
+    let widths = column_widths(columns, area.width.saturating_sub(GUTTER));
+    let visible = rows
         .iter()
         .enumerate()
-        .skip(model.scroll)
+        .skip(window.scroll)
         .take(usize::from(area.height));
     let frame = Frame {
-        model,
+        columns,
         widths: &widths,
         area,
         theme,
     };
     let mut drawn = 0;
-    for (y, (index, row)) in (area.y..).zip(rows) {
-        render_row(&frame, row, y, index == model.cursor, buf);
+    for (y, (index, row)) in (area.y..).zip(visible) {
+        render_row(&frame, row, y, window.cursor == Some(index), buf);
         drawn += 1;
     }
     let empty = Rect::new(

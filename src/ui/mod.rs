@@ -87,6 +87,48 @@ pub(crate) fn view(frame: &mut Frame<'_>, model: &FrameModel, areas: &Areas, the
     tabbar::render(&model.tab_bar, rect(areas.tab_bar), buf, theme);
     list::render(&model.list, rect(areas.list), buf, theme);
     status::render(&model.status, rect(areas.status), buf, theme);
+    for overlay in &model.overlays {
+        render_overlay(overlay, areas, buf, theme);
+    }
+}
+
+/// Draws one overlay into its area.
+fn render_overlay(
+    overlay: &OverlayModel,
+    areas: &Areas,
+    buf: &mut ratatui::buffer::Buffer,
+    theme: &Theme,
+) {
+    let area = overlay_area(overlay, areas);
+    match &overlay.content {
+        OverlayContent::Popup {
+            title,
+            subtitle,
+            tabs,
+            active,
+            pane,
+            cursor,
+            scroll,
+        } => {
+            let content = popup::Popup {
+                title,
+                subtitle,
+                tabs,
+                active: *active,
+                pane,
+                cursor: *cursor,
+                scroll: *scroll,
+            };
+            popup::render(&content, area, buf, theme);
+        }
+        // The renderers of the other overlay kinds come in the next
+        // commits of this stack.
+        OverlayContent::Confirm(_)
+        | OverlayContent::Prompt { .. }
+        | OverlayContent::Output { .. }
+        | OverlayContent::Picker { .. }
+        | OverlayContent::Help(_) => {}
+    }
 }
 
 #[cfg(test)]
@@ -122,5 +164,87 @@ mod tests {
     #[test]
     fn main_screen_160_ansi16() {
         insta::assert_snapshot!(draw(&testdata::frame(), 160, 40, &testdata::ansi16()));
+    }
+
+    fn popup() -> FrameModel {
+        testdata::with_overlay(testdata::popup_overlay())
+    }
+
+    #[test]
+    fn popup_100_pierre() {
+        insta::assert_snapshot!(draw(&popup(), 100, 30, &testdata::pierre()));
+    }
+
+    #[test]
+    fn popup_160_pierre() {
+        insta::assert_snapshot!(draw(&popup(), 160, 40, &testdata::pierre()));
+    }
+
+    #[test]
+    fn popup_100_ansi16() {
+        insta::assert_snapshot!(draw(&popup(), 100, 30, &testdata::ansi16()));
+    }
+
+    #[test]
+    fn popup_160_ansi16() {
+        insta::assert_snapshot!(draw(&popup(), 160, 40, &testdata::ansi16()));
+    }
+
+    /// Draws frames through `view` and the transitions, one per elapsed
+    /// step, with a fixed clock.
+    pub(crate) fn animate(
+        model: &FrameModel,
+        events: Vec<crate::bus::UiEvent>,
+        steps_ms: &[u64],
+    ) -> Vec<String> {
+        let (width, height) = (100, 30);
+        let theme = testdata::pierre();
+        let areas = testdata::areas(width, height);
+        let mut terminal = testdata::terminal(width, height);
+        let mut fx = transition::Transitions::new(true, 160).with_theme(theme);
+        fx.apply(events);
+        steps_ms
+            .iter()
+            .map(|&ms| {
+                fx.prepare(model, &areas);
+                terminal
+                    .draw(|frame| {
+                        view(frame, model, &areas, &theme);
+                        fx.process(frame, std::time::Duration::from_millis(ms));
+                    })
+                    .unwrap();
+                terminal.backend().to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn popup_slides_in() {
+        let frames = animate(
+            &popup(),
+            vec![crate::bus::UiEvent::OverlayOpened(
+                crate::bus::OverlayKind::Popup,
+            )],
+            &[0, 80, 80],
+        );
+        insta::assert_snapshot!("popup_slide_in_progress_0.0", frames[0]);
+        insta::assert_snapshot!("popup_slide_in_progress_0.5", frames[1]);
+        insta::assert_snapshot!("popup_slide_in_progress_1.0", frames[2]);
+    }
+
+    #[test]
+    fn popup_slides_out() {
+        let mut model = popup();
+        model.overlays[0].closing = true;
+        let frames = animate(
+            &model,
+            vec![crate::bus::UiEvent::OverlayClosed(
+                crate::bus::OverlayKind::Popup,
+            )],
+            &[0, 80, 80],
+        );
+        insta::assert_snapshot!("popup_slide_out_progress_0.0", frames[0]);
+        insta::assert_snapshot!("popup_slide_out_progress_0.5", frames[1]);
+        insta::assert_snapshot!("popup_slide_out_progress_1.0", frames[2]);
     }
 }
