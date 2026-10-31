@@ -535,4 +535,49 @@ mod tests {
             BTreeMap::from([("team.filter".to_owned(), "deploy".to_owned())])
         );
     }
+
+    /// The startup budget is 30 ms for 500 pull requests. The test allows
+    /// five times that, so a slow machine does not fail it.
+    #[test]
+    fn startup_load_of_500_prs_is_fast() {
+        use std::time::{Duration, Instant};
+
+        use crate::domain::check::{Check, CheckConclusion, CheckKind, CheckStatus};
+
+        let conn = open_connection(Path::new(":memory:")).unwrap();
+        let t = test_time();
+        let prs: Vec<PullRequest> = (1..=500)
+            .map(|number| {
+                let mut pr = sample_pr(number, PrState::Open, t);
+                pr.head.value.body = "A pull request body with a few lines.\n".repeat(20);
+                pr.checks.value = (0..10)
+                    .map(|i| Check {
+                        name: format!("check {i}"),
+                        kind: CheckKind::CheckRun,
+                        status: CheckStatus::Completed,
+                        conclusion: Some(CheckConclusion::Success),
+                        started: Some(t),
+                        completed: Some(t),
+                        url: Some(format!("https://github.com/o/r/actions/runs/{i}")),
+                        run_id: Some(i),
+                        suite_id: Some(i),
+                    })
+                    .collect();
+                pr
+            })
+            .collect();
+        let (mine, team) = prs.split_at(250);
+        rows::put_prs(&conn, Scope::Mine, mine).unwrap();
+        rows::put_prs(&conn, Scope::Team, team).unwrap();
+
+        let start = Instant::now();
+        let snapshot = rows::load_snapshot(&conn).unwrap();
+        let elapsed = start.elapsed();
+
+        assert_eq!(snapshot.prs.len(), 500);
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "startup load took {elapsed:?}"
+        );
+    }
 }
