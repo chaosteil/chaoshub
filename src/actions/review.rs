@@ -35,6 +35,10 @@ impl Action for Review {
         })
     }
 
+    fn hint(&self) -> crate::actions::Hint {
+        crate::actions::Hint::Primary
+    }
+
     /// A pull request of a repo with a local path. A local-only change
     /// has no pull request to review.
     fn applies(&self, sel: &Selection) -> Applicability {

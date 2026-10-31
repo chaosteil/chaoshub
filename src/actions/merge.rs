@@ -89,6 +89,10 @@ impl Action for MergeAction {
         })
     }
 
+    fn hint(&self) -> crate::actions::Hint {
+        crate::actions::Hint::Primary
+    }
+
     fn applies(&self, sel: &Selection) -> Applicability {
         Self::applies(sel)
     }
