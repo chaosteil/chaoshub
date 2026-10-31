@@ -166,6 +166,8 @@ impl StackSetting {
 pub(crate) struct ThemeConfig {
     /// The look: grunge, punk or plain.
     pub style: ThemeStyleSetting,
+    /// The colors: Pierre or the 16 ANSI colors.
+    pub palette: PaletteSetting,
     /// Draws the rough block borders.
     pub grunge: bool,
     /// Fills empty areas with noise textures. Grunge only.
@@ -182,6 +184,7 @@ impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
             style: ThemeStyleSetting::Grunge,
+            palette: PaletteSetting::Pierre,
             grunge: true,
             textures: true,
             animations: true,
@@ -198,10 +201,22 @@ pub(crate) enum ThemeStyleSetting {
     /// Rough block borders and textures.
     #[default]
     Grunge,
-    /// Black, white and hard red with angular cuts.
+    /// Angular cuts, diagonal accents, inverted headers and a selection
+    /// band.
     Punk,
     /// Rounded borders, no textures.
     Plain,
+}
+
+/// A `[theme] palette` in the configuration file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum PaletteSetting {
+    /// The Pierre colors. A 16-color terminal gets the ANSI colors.
+    #[default]
+    Pierre,
+    /// The 16 ANSI colors.
+    Ansi16,
 }
 
 /// The `[terminal]` section: the terminal status sequences. `None` turns a
@@ -300,6 +315,15 @@ mod tests {
         let theme: ThemeConfig = toml::from_str("").unwrap();
         assert_eq!(theme.style, ThemeStyleSetting::Grunge);
         assert!(toml::from_str::<ThemeConfig>("style = \"neon\"").is_err());
+    }
+
+    #[test]
+    fn theme_palette_parses() {
+        let theme: ThemeConfig = toml::from_str("palette = \"ansi16\"").unwrap();
+        assert_eq!(theme.palette, PaletteSetting::Ansi16);
+        let theme: ThemeConfig = toml::from_str("").unwrap();
+        assert_eq!(theme.palette, PaletteSetting::Pierre);
+        assert!(toml::from_str::<ThemeConfig>("palette = \"neon\"").is_err());
     }
 
     #[test]

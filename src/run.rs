@@ -81,6 +81,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         config: config_path,
         no_prefetch,
         theme: theme_arg,
+        palette: palette_arg,
         command,
     } = cli;
     if let Some(CacheCommand::Cache(CacheAction::Clear)) = command {
@@ -94,7 +95,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         config.prefetch.enabled = false;
     }
     let keymap = Keymap::new(&config.keys)?;
-    let theme = session_theme(theme_kind, theme_arg, &config);
+    let theme = session_theme(theme_kind, theme_arg, palette_arg, &config);
     let transitions =
         Transitions::new(config.theme.animations, config.theme.animation_ms).with_theme(theme);
     let detected = term_status_detected();
@@ -182,13 +183,19 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     result
 }
 
-/// The theme of the session: the style of `--theme` or `[theme] style`,
-/// for the terminal kind.
-fn session_theme(kind: ThemeKind, arg: Option<crate::cli::ThemeArg>, config: &Config) -> Theme {
+/// The theme of the session: the style of `--theme` or `[theme] style`
+/// and the palette of `--palette` or `[theme] palette`, for the terminal
+/// kind.
+fn session_theme(
+    kind: ThemeKind,
+    arg: Option<crate::cli::ThemeArg>,
+    palette_arg: Option<crate::cli::PaletteArg>,
+    config: &Config,
+) -> Theme {
     Theme::styled(
         kind,
         theme_style(arg, config.theme.style),
-        crate::theme::PaletteChoice::Pierre,
+        palette_choice(palette_arg, config.theme.palette),
         config.theme.grunge,
         config.theme.textures,
     )
@@ -207,6 +214,21 @@ fn theme_style(
         (Some(ThemeArg::Grunge), _) | (None, ThemeStyleSetting::Grunge) => ThemeStyle::Grunge,
         (Some(ThemeArg::Punk), _) | (None, ThemeStyleSetting::Punk) => ThemeStyle::Punk,
         (Some(ThemeArg::Plain), _) | (None, ThemeStyleSetting::Plain) => ThemeStyle::Plain,
+    }
+}
+
+/// The palette of the session: `--palette` when the user gave it, else
+/// `[theme] palette`.
+fn palette_choice(
+    arg: Option<crate::cli::PaletteArg>,
+    setting: crate::config::schema::PaletteSetting,
+) -> crate::theme::PaletteChoice {
+    use crate::cli::PaletteArg;
+    use crate::config::schema::PaletteSetting;
+    use crate::theme::PaletteChoice;
+    match (arg, setting) {
+        (Some(PaletteArg::Pierre), _) | (None, PaletteSetting::Pierre) => PaletteChoice::Pierre,
+        (Some(PaletteArg::Ansi16), _) | (None, PaletteSetting::Ansi16) => PaletteChoice::Ansi16,
     }
 }
 
@@ -969,6 +991,29 @@ mod tests {
         assert_eq!(
             theme_style(None, ThemeStyleSetting::default()),
             ThemeStyle::Grunge
+        );
+    }
+
+    #[test]
+    fn the_palette_flag_wins_over_the_config() {
+        use crate::cli::PaletteArg;
+        use crate::config::schema::PaletteSetting;
+        use crate::theme::PaletteChoice;
+        assert_eq!(
+            palette_choice(None, PaletteSetting::Ansi16),
+            PaletteChoice::Ansi16
+        );
+        assert_eq!(
+            palette_choice(Some(PaletteArg::Pierre), PaletteSetting::Ansi16),
+            PaletteChoice::Pierre
+        );
+        assert_eq!(
+            palette_choice(Some(PaletteArg::Ansi16), PaletteSetting::Pierre),
+            PaletteChoice::Ansi16
+        );
+        assert_eq!(
+            palette_choice(None, PaletteSetting::default()),
+            PaletteChoice::Pierre
         );
     }
 
