@@ -5,7 +5,10 @@ use chrono::{DateTime, TimeDelta, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::bus::{Persist, Scope};
+use crate::domain::detail::PrDetail;
 use crate::domain::keys::{PrKey, RepoKey};
+use crate::domain::local::LocalState;
+use crate::domain::observed::Observed;
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::repo::RepoSettings;
 use crate::store::error::StoreError;
@@ -192,8 +195,76 @@ pub(crate) fn put_sync_state(
     Ok(())
 }
 
-/// Reads the startup data: the open pull requests and the repo settings.
-/// A row that does not parse is skipped and logged.
+/// Writes the conversation of a pull request. `fetched_at` is the time
+/// when it was observed.
+pub(crate) fn put_detail(
+    conn: &Connection,
+    key: &PrKey,
+    detail: &Observed<PrDetail>,
+) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO pr_details(owner, name, number, fetched_at, head_oid, json) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+         ON CONFLICT(owner, name, number) DO UPDATE SET \
+           fetched_at = excluded.fetched_at, head_oid = excluded.head_oid, json = excluded.json",
+        params![
+            key.repo.owner,
+            key.repo.name,
+            number(key.number)?,
+            detail.observed_at,
+            detail.value.head_oid,
+            serde_json::to_vec(&detail.value)?,
+        ],
+    )?;
+    Ok(())
+}
+
+/// The cached conversation of a pull request. `None` when the cache has
+/// none.
+pub(crate) fn detail(
+    conn: &Connection,
+    key: &PrKey,
+) -> Result<Option<Observed<PrDetail>>, StoreError> {
+    let row = conn
+        .query_row(
+            "SELECT fetched_at, json FROM pr_details WHERE owner = ?1 AND name = ?2 AND number = ?3",
+            params![key.repo.owner, key.repo.name, number(key.number)?],
+            |row| Ok((row.get::<_, DateTime<Utc>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()?;
+    let Some((observed_at, json)) = row else {
+        return Ok(None);
+    };
+    Ok(Some(Observed {
+        value: serde_json::from_slice(&json)?,
+        observed_at,
+    }))
+}
+
+/// Writes the result of one jj scan of a repo. `scanned_at` is the time
+/// when it was observed.
+pub(crate) fn put_local(
+    conn: &Connection,
+    repo: &RepoKey,
+    state: &Observed<LocalState>,
+) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO local_state(owner, name, scanned_at, json) VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT(owner, name) DO UPDATE SET \
+           scanned_at = excluded.scanned_at, json = excluded.json",
+        params![
+            repo.owner,
+            repo.name,
+            state.observed_at,
+            serde_json::to_vec(&state.value)?,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Reads the startup data: the open pull requests, the repo settings, the
+/// jj scans and the ui state. A row that does not parse is skipped and
+/// logged.
 pub(crate) fn load_snapshot(conn: &Connection) -> Result<Snapshot, StoreError> {
     let mut snapshot = Snapshot::default();
 
@@ -244,6 +315,35 @@ pub(crate) fn load_snapshot(conn: &Connection) -> Result<Snapshot, StoreError> {
     })?;
     for row in rows {
         snapshot.repos.push(row?);
+    }
+
+    let mut stmt =
+        conn.prepare("SELECT owner, name, scanned_at, json FROM local_state ORDER BY owner, name")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            RepoKey {
+                owner: row.get(0)?,
+                name: row.get(1)?,
+            },
+            row.get::<_, DateTime<Utc>>(2)?,
+            row.get::<_, Vec<u8>>(3)?,
+        ))
+    })?;
+    for row in rows {
+        let (repo, observed_at, json) = row?;
+        match serde_json::from_slice::<LocalState>(&json) {
+            Ok(value) => snapshot.local.push((repo, Observed { value, observed_at })),
+            Err(err) => tracing::warn!(%err, ?repo, "cached jj scan does not parse, skipped"),
+        }
+    }
+
+    let mut stmt = conn.prepare("SELECT key, value FROM ui_state")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+    })?;
+    for row in rows {
+        let (key, value) = row?;
+        snapshot.ui_state.insert(key, value.unwrap_or_default());
     }
     Ok(snapshot)
 }

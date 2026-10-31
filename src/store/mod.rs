@@ -10,6 +10,7 @@ pub(crate) mod handle;
 mod rows;
 mod thread;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -18,6 +19,8 @@ use tokio::sync::mpsc;
 
 use crate::bus::Scope;
 use crate::domain::keys::RepoKey;
+use crate::domain::local::LocalState;
+use crate::domain::observed::Observed;
 use crate::domain::pr::PullRequest;
 use crate::domain::repo::RepoSettings;
 use crate::store::error::StoreError;
@@ -46,6 +49,10 @@ pub(crate) struct Snapshot {
     /// The newest sync time of the open pull requests: the age of the
     /// cache. `None` when the cache holds none.
     pub synced_at: Option<DateTime<Utc>>,
+    /// The last jj scan of each repo.
+    pub local: Vec<(RepoKey, Observed<LocalState>)>,
+    /// The `ui_state` rows that `Cmd::Persist` wrote.
+    pub ui_state: BTreeMap<String, String>,
 }
 
 /// The sync progress of one scope and one repo set.
@@ -123,8 +130,9 @@ mod tests {
 
     use super::*;
     use crate::bus::Persist;
+    use crate::domain::detail::{Comment, PrDetail};
     use crate::domain::keys::PrKey;
-    use crate::domain::observed::Observed;
+    use crate::domain::local::Workspace;
     use crate::domain::pr::{CiState, MergeStateStatus, Mergeable, PrHead, PrState};
     use crate::domain::test_time;
 
@@ -446,6 +454,85 @@ mod tests {
         assert_eq!(
             handle.sync_state(Scope::Team, "set1".into()).await.unwrap(),
             None
+        );
+    }
+
+    fn key(number: u64) -> PrKey {
+        sample_pr(number, PrState::Open, test_time()).key
+    }
+
+    #[tokio::test]
+    async fn detail_round_trip() {
+        let (_, handle) = Store::open(Path::new(":memory:")).unwrap();
+        assert_eq!(handle.detail(key(1)).await.unwrap(), None);
+        let detail = Observed {
+            value: PrDetail {
+                comments: vec![Comment {
+                    author: "colleague".into(),
+                    body: "Looks good.".into(),
+                    created_at: test_time(),
+                    url: "https://github.com/o/r/pull/1#issuecomment-1".into(),
+                }],
+                reviews: Vec::new(),
+                threads: Vec::new(),
+                head_oid: "oid1".into(),
+            },
+            observed_at: test_time(),
+        };
+        handle.put_detail(key(1), detail.clone()).await.unwrap();
+        assert_eq!(handle.detail(key(1)).await.unwrap(), Some(detail.clone()));
+        assert_eq!(handle.detail(key(2)).await.unwrap(), None);
+
+        let newer = Observed {
+            value: PrDetail {
+                head_oid: "oid2".into(),
+                ..detail.value
+            },
+            observed_at: test_time() + TimeDelta::seconds(1),
+        };
+        handle.put_detail(key(1), newer.clone()).await.unwrap();
+        assert_eq!(handle.detail(key(1)).await.unwrap(), Some(newer));
+    }
+
+    #[tokio::test]
+    async fn local_state_and_ui_state_load_into_the_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chaoshub.db");
+        let (snapshot, handle) = Store::open(&path).unwrap();
+        assert_eq!(snapshot.local, []);
+        assert_eq!(snapshot.ui_state, BTreeMap::new());
+
+        let repo = key(1).repo;
+        let scan = |change_id: &str, offset| Observed {
+            value: LocalState {
+                workspaces: vec![Workspace {
+                    name: "default".into(),
+                    change_id: change_id.into(),
+                    commit_id: "abc123".into(),
+                }],
+                changes: Vec::new(),
+            },
+            observed_at: test_time() + TimeDelta::seconds(offset),
+        };
+        handle
+            .put_local(repo.clone(), scan("kxyz", 0))
+            .await
+            .unwrap();
+        handle
+            .put_local(repo.clone(), scan("kzzz", 1))
+            .await
+            .unwrap();
+        handle.try_persist(Persist::UiState {
+            key: "team.filter".into(),
+            value: "deploy".into(),
+        });
+        handle.exec("SELECT 1").await.unwrap();
+
+        let snapshot = reopen(&path);
+        assert_eq!(snapshot.local, [(repo, scan("kzzz", 1))]);
+        assert_eq!(
+            snapshot.ui_state,
+            BTreeMap::from([("team.filter".to_owned(), "deploy".to_owned())])
         );
     }
 }
