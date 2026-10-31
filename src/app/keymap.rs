@@ -37,6 +37,7 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("open_url", &["o"]),
     ("close_overlay", &["esc", "q"]),
     ("confirm", &["y"]),
+    ("cancel", &["n"]),
     ("filter", &["/"]),
     ("authors", &["a"]),
     ("toggle_all", &["t"]),
