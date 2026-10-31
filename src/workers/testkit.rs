@@ -37,9 +37,13 @@ impl Harness {
             .unwrap_or_else(|| panic!("channel closed"))
     }
 
-    /// True when no message comes within `wait`.
+    /// True when no message comes within `wait`. A closed channel is
+    /// quiet.
     pub(crate) async fn quiet_for(&mut self, wait: Duration) -> bool {
-        tokio::time::timeout(wait, self.rx.recv()).await.is_err()
+        !matches!(
+            tokio::time::timeout(wait, self.rx.recv()).await,
+            Ok(Some(_))
+        )
     }
 }
 
