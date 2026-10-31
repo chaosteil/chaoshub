@@ -14,7 +14,7 @@ use crate::github::{GithubClient, TokenSource};
 use crate::store::Store;
 use crate::store::handle::StoreHandle;
 use crate::vcs::lock::RepoLocks;
-use crate::workers::ctx::WorkerCtx;
+use crate::workers::ctx::{WorkerCtx, WorkerMode};
 
 /// The longest wait for a message in a test.
 const RECV_TIMEOUT: Duration = Duration::from_secs(10);
@@ -74,6 +74,7 @@ pub(crate) fn ctx_with(base_url: &str, config: Config, store: StoreHandle) -> (W
         sync_rx: Arc::new(Mutex::new(sync_rx)),
         jj_rx: Arc::new(Mutex::new(jj_rx)),
         locks: RepoLocks::default(),
+        mode: WorkerMode::Lists,
     };
     let harness = Harness {
         rx,

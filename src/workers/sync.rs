@@ -6,8 +6,15 @@
 //! `refresh.mine_secs` (60 s), of Team every `refresh.team_secs` (90 s).
 //! When the rate budget does not last until the reset, the intervals
 //! double. After a rate limit, no timed sync runs until its end. The
-//! worker also serves `SyncReq::Full(scope)` and `SyncReq::Refresh`, which
-//! reads pull requests by node id.
+//! worker also serves `SyncReq::Full(scope)`, `SyncReq::Refresh`, which
+//! reads pull requests by node id, and `SyncReq::Load`, which reads one
+//! pull request by number.
+//!
+//! In the pinned mode (`chaoshub pr`) the worker runs no list sync. It
+//! serves the refresh and load requests, and every `refresh.mine_secs` it
+//! refreshes the selected pull request, or loads the pinned one when it is
+//! not loaded yet. It writes no pull request rows, because the list
+//! process owns the rows of the cache.
 //!
 //! A full sync searches the open pull requests of the repo set, at most 5
 //! pages. A delta searches all states, updated since `last_delta` minus
@@ -26,14 +33,14 @@ use chrono::{DateTime, TimeDelta, Utc};
 use futures::FutureExt;
 use tokio::time::Instant;
 
-use crate::bus::{Msg, PrRef, RateInfo, Scope, SyncReq};
+use crate::bus::{Msg, PrRef, RateInfo, Scope, SyncError, SyncReq};
 use crate::domain::keys::PrKey;
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::repo::Repo;
 use crate::github::GithubError;
 use crate::github::budget::{RateBudget, page_size};
 use crate::github::parse::Me;
-use crate::workers::ctx::WorkerCtx;
+use crate::workers::ctx::{WorkerCtx, WorkerMode};
 use crate::workers::supervisor::Worker;
 use crate::workers::{sync_error, wait_for_login};
 
@@ -60,6 +67,10 @@ async fn run(ctx: WorkerCtx) {
     let sync_rx = Arc::clone(&ctx.sync_rx);
     let mut requests = sync_rx.lock().await;
     let refresh = ctx.config.refresh.clone();
+    if let WorkerMode::Pinned(key) = ctx.mode.clone() {
+        run_pinned(Syncer::new(ctx), &mut requests, &key, refresh.mine_secs).await;
+        return;
+    }
     let mut syncer = Syncer::new(ctx);
     let mut repos = syncer.target().map(|(_, repos)| repos);
     if !syncer.full_both().await {
@@ -79,6 +90,7 @@ async fn run(ctx: WorkerCtx) {
                 let alive = match request {
                     Some(SyncReq::Full(scope)) => syncer.full(scope).await,
                     Some(SyncReq::Refresh(refs)) => syncer.refresh(&refs).await,
+                    Some(SyncReq::Load(key)) => syncer.load(&key).await,
                     None => false,
                 };
                 if !alive {
@@ -118,6 +130,52 @@ async fn run(ctx: WorkerCtx) {
                     }
                     next_team = Instant::now() + syncer.interval(refresh.team_secs);
                 }
+            }
+        }
+    }
+}
+
+/// The loop of the pinned mode: the requests, and one tick every
+/// `mine_secs`. The tick refreshes the selected pull request of the
+/// interest, or loads the pinned pull request `key` while no pull request
+/// is selected. It returns when `app` is gone.
+async fn run_pinned(
+    mut syncer: Syncer,
+    requests: &mut tokio::sync::mpsc::Receiver<SyncReq>,
+    key: &PrKey,
+    mine_secs: u64,
+) {
+    let mut next = Instant::now() + syncer.interval(mine_secs);
+    loop {
+        let mut due = next;
+        if let Some(paused) = syncer.paused_until {
+            due = due.max(paused);
+        }
+        tokio::select! {
+            request = requests.recv() => {
+                let alive = match request {
+                    Some(SyncReq::Full(scope)) => {
+                        tracing::debug!(?scope, "full sync ignored in the pinned mode");
+                        true
+                    }
+                    Some(SyncReq::Refresh(refs)) => syncer.refresh(&refs).await,
+                    Some(SyncReq::Load(key)) => syncer.load(&key).await,
+                    None => false,
+                };
+                if !alive {
+                    return;
+                }
+            }
+            () = tokio::time::sleep_until(due) => {
+                let selected = syncer.ctx.interest.borrow().selected.clone();
+                let alive = match selected {
+                    Some(selected) => syncer.refresh(&[selected]).await,
+                    None => syncer.load(key).await,
+                };
+                if !alive {
+                    return;
+                }
+                next = Instant::now() + syncer.interval(mine_secs);
             }
         }
     }
@@ -346,20 +404,64 @@ impl Syncer {
         };
         let (prs, rate) = match self.ctx.client.pr_by_ids(&ids, &me).await {
             Ok(ok) => ok,
-            Err(err) => {
-                tracing::warn!(%err, "refresh failed");
-                let msg = Msg::SyncFailed {
-                    source: "sync",
-                    scope: None,
-                    err: sync_error(&err),
-                };
-                self.pause_on_limit(&err);
-                return self.ctx.tx.send(msg).await.is_ok();
-            }
+            Err(err) => return self.refresh_failed(&err).await,
         };
         if !self.rate(rate).await {
             return false;
         }
+        self.refreshed(&login, prs).await
+    }
+
+    /// Reads the pull request `key` by number and sends `PrRefreshed`, or
+    /// `SyncFailed` when the repo or the pull request does not exist.
+    /// False when `app` is gone.
+    async fn load(&mut self, key: &PrKey) -> bool {
+        let Some(login) = self.ctx.session.borrow().login.clone() else {
+            return true;
+        };
+        let teams = self.ctx.config.teams.clone();
+        let me = Me {
+            login: &login,
+            teams: &teams,
+        };
+        let (pr, rate) = match self.ctx.client.pr_by_number(key, &me).await {
+            Ok(ok) => ok,
+            Err(err) => return self.refresh_failed(&err).await,
+        };
+        if !self.rate(rate).await {
+            return false;
+        }
+        let Some(pr) = pr else {
+            let msg = Msg::SyncFailed {
+                source: "sync",
+                scope: None,
+                err: SyncError::Other(format!(
+                    "#{} is not in {}/{}",
+                    key.number, key.repo.owner, key.repo.name
+                )),
+            };
+            return self.ctx.tx.send(msg).await.is_ok();
+        };
+        self.refreshed(&login, vec![pr]).await
+    }
+
+    /// Sends `SyncFailed` for a failed refresh or load. False when `app`
+    /// is gone.
+    async fn refresh_failed(&mut self, err: &GithubError) -> bool {
+        tracing::warn!(%err, "refresh failed");
+        let msg = Msg::SyncFailed {
+            source: "sync",
+            scope: None,
+            err: sync_error(err),
+        };
+        self.pause_on_limit(err);
+        self.ctx.tx.send(msg).await.is_ok()
+    }
+
+    /// Notes the refreshed pull requests `prs` in the scope of their
+    /// author, sends one `PrRefreshed` per pull request, and caches them in
+    /// the `Lists` mode. False when `app` is gone.
+    async fn refreshed(&mut self, login: &str, prs: Vec<PullRequest>) -> bool {
         let (mine, team): (Vec<PullRequest>, Vec<PullRequest>) = prs
             .into_iter()
             .partition(|pr| pr.head.value.author == login);
@@ -379,7 +481,9 @@ impl Syncer {
                     return false;
                 }
             }
-            if let Err(err) = self.ctx.store.put_prs(scope, prs).await {
+            if self.ctx.mode == WorkerMode::Lists
+                && let Err(err) = self.ctx.store.put_prs(scope, prs).await
+            {
                 tracing::warn!(?scope, %err, "cannot cache the pull requests");
             }
         }
@@ -871,6 +975,154 @@ mod tests {
         assert_eq!(scope, Scope::Team);
         assert_eq!(gone, Some(Vec::new()));
         worker.abort();
+    }
+
+    const BY_NUMBER: &str = include_str!("../github/testdata/pr_by_number.json");
+
+    /// Serves `body` to the `PrByNumber` queries.
+    async fn serve_by_number(server: &MockServer, body: &str) {
+        Mock::given(method("POST"))
+            .and(body_string_contains("query PrByNumber"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(body.as_bytes().to_vec(), "application/json"),
+            )
+            .mount(server)
+            .await;
+    }
+
+    /// The numbers of the pull requests in the cache at `path`.
+    fn cached(path: &std::path::Path) -> Vec<u64> {
+        let (snapshot, _) = crate::store::Store::open(path).unwrap();
+        snapshot.prs.iter().map(|(_, pr)| pr.key.number).collect()
+    }
+
+    #[tokio::test]
+    async fn a_load_sends_the_pull_request_and_caches_it() {
+        let server = MockServer::start().await;
+        serve_by_number(&server, BY_NUMBER).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.db");
+        let store = crate::store::Store::open(&path).unwrap().1;
+        let (ctx, mut harness) =
+            testkit::ctx_with(&server.uri(), crate::config::Config::default(), store);
+        harness
+            .session
+            .send(Session {
+                login: Some("chaosteil".into()),
+                repos: Vec::new(),
+            })
+            .unwrap();
+        let mut syncer = Syncer::new(ctx);
+
+        assert!(syncer.load(&key(1550)).await);
+        assert!(matches!(harness.recv().await, Msg::Rate(_)));
+        match harness.recv().await {
+            Msg::PrRefreshed(pr) => assert_eq!(pr.key, key(1550)),
+            other => panic!("{other:?}"),
+        }
+        assert!(syncer.mine.known.contains(&key(1550)));
+        assert_eq!(cached(&path), [1550]);
+    }
+
+    #[tokio::test]
+    async fn a_load_of_a_null_pull_request_is_a_sync_failure() {
+        let server = MockServer::start().await;
+        let body = json!({
+            "data": {
+                "repository": { "pullRequest": null },
+                "rateLimit": { "cost": 1, "remaining": 4990, "resetAt": "2026-10-31T05:50:43Z" }
+            }
+        });
+        serve_by_number(&server, &body.to_string()).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let mut syncer = Syncer::new(ctx);
+
+        assert!(syncer.load(&key(7)).await);
+        assert!(matches!(harness.recv().await, Msg::Rate(_)));
+        assert_eq!(
+            harness.recv().await,
+            Msg::SyncFailed {
+                source: "sync",
+                scope: None,
+                err: SyncError::Other("#7 is not in acme/deploy".into()),
+            }
+        );
+    }
+
+    /// The operation names of the requests to `server`.
+    async fn operations(server: &MockServer) -> Vec<String> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                body["operationName"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_pinned_worker_loads_then_refreshes_and_writes_no_rows() {
+        let server = MockServer::start().await;
+        serve_by_number(&server, BY_NUMBER).await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("query PrByIds"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(BY_IDS.as_bytes(), "application/json"),
+            )
+            .mount(&server)
+            .await;
+        serve_pages(&server, true).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.db");
+        let store = crate::store::Store::open(&path).unwrap().1;
+        let mut config = crate::config::Config::default();
+        config.refresh.mine_secs = 1;
+        let (mut ctx, mut harness) = testkit::ctx_with(&server.uri(), config, store);
+        ctx.mode = WorkerMode::Pinned(key(1550));
+        harness
+            .session
+            .send(Session {
+                login: Some("chaosteil".into()),
+                repos: vec![Repo {
+                    key: key(0).repo,
+                    path: None,
+                    settings: None,
+                }],
+            })
+            .unwrap();
+        let worker = tokio::spawn(run(ctx));
+
+        assert!(matches!(harness.recv().await, Msg::Rate(_)));
+        match harness.recv().await {
+            Msg::PrRefreshed(pr) => assert_eq!(pr.key, key(1550)),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(operations(&server).await, ["PrByNumber"]);
+
+        harness
+            .interest
+            .send(testkit::interest(
+                Some(testkit::pr_ref(1550, "PR_1", "a")),
+                Vec::new(),
+            ))
+            .unwrap();
+        assert!(matches!(harness.recv().await, Msg::Rate(_)));
+        assert!(matches!(harness.recv().await, Msg::PrRefreshed(_)));
+        assert!(matches!(harness.recv().await, Msg::PrRefreshed(_)));
+        assert_eq!(operations(&server).await, ["PrByNumber", "PrByIds"]);
+
+        harness.sync.send(SyncReq::Full(Scope::Mine)).await.unwrap();
+        assert!(harness.quiet_for(Duration::from_millis(300)).await);
+        assert!(searches(&server).await.is_empty(), "no list sync");
+        worker.abort();
+        assert_eq!(cached(&path), Vec::<u64>::new(), "no pull request rows");
     }
 
     #[test]

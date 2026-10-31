@@ -133,6 +133,7 @@ impl Runtime {
             }
             Cmd::SyncNow(scope) => self.request(&self.senders.sync, SyncReq::Full(scope)),
             Cmd::RefreshPr(refs) => self.request(&self.senders.sync, SyncReq::Refresh(refs)),
+            Cmd::LoadPr(key) => self.request(&self.senders.sync, SyncReq::Load(key)),
             Cmd::ScanJj(repo) => self.request(&self.senders.jj, JjReq::Scan(repo)),
             Cmd::Persist(persist) => self.senders.store.try_persist(persist),
             Cmd::Copy(text) => {
