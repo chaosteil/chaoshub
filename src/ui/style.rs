@@ -10,7 +10,7 @@ use crate::theme::Palette;
 /// background comes from the row or the bar.
 pub(crate) fn cell_style(cell: CellStyle, palette: &Palette) -> Style {
     let fg = match cell {
-        CellStyle::Normal => palette.fg,
+        CellStyle::Normal | CellStyle::Markdown => palette.fg,
         CellStyle::Dim => palette.fg_mute,
         CellStyle::Primary => palette.primary,
         CellStyle::Success => palette.success,

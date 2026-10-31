@@ -7,10 +7,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
-use crate::app::models::{Column, PaneModel, Row, TreeNode};
-use crate::theme::Theme;
+use crate::app::models::{Cell, CellStyle, Column, PaneModel, Row, TreeNode};
+use crate::theme::{Palette, Theme};
 use crate::ui::list::{self, Window};
-use crate::ui::{style, text};
+use crate::ui::{markdown, style, text};
 
 /// The cells of indent per tree depth.
 const INDENT: usize = 2;
@@ -36,12 +36,38 @@ pub(crate) fn render(
         PaneModel::Lines { lines, wrap } => {
             let lines: Vec<Line<'static>> = lines
                 .iter()
-                .map(|cells| style::line(cells, &theme.palette))
+                .flat_map(|cells| expand(cells, area.width, &theme.palette))
                 .collect();
             render_lines(lines, *wrap, scroll, area, buf, theme);
         }
         PaneModel::Tree { nodes } => render_tree(nodes, cursor, scroll, area, buf, theme),
     }
+}
+
+/// The display lines of one line of cells. A markdown cell becomes the
+/// rendered body, wrapped to the width after the cells before it. The
+/// next rows of the body are indented under it.
+fn expand(cells: &[Cell], width: u16, palette: &Palette) -> Vec<Line<'static>> {
+    let Some(at) = cells.iter().position(|c| c.style == CellStyle::Markdown) else {
+        return vec![style::line(cells, palette)];
+    };
+    let mut first = style::line(&cells[..at], palette);
+    let indent = first.width();
+    let body_width = width.saturating_sub(u16::try_from(indent).unwrap_or(u16::MAX));
+    let mut body = markdown::render(&cells[at].text, body_width, palette).into_iter();
+    if let Some(line) = body.next() {
+        first.spans.extend(line.spans);
+    }
+    let mut out = vec![first];
+    out.extend(body.map(|mut line| {
+        line.spans.insert(0, Span::raw(" ".repeat(indent)));
+        line
+    }));
+    if let Some(last) = out.last_mut() {
+        last.spans
+            .extend(style::line(&cells[at + 1..], palette).spans);
+    }
+    out
 }
 
 /// A header row with the column titles, then the rows.
@@ -111,7 +137,8 @@ pub(crate) fn render_lines(
 }
 
 /// The nodes of a tree with indent and an expand marker, from the scroll
-/// offset down. The cursor node gets the `▌` marker.
+/// offset (in nodes) down. A node with a markdown body takes one row per
+/// body line. The cursor node gets the `▌` marker.
 fn render_tree(
     nodes: &[TreeNode],
     cursor: usize,
@@ -122,43 +149,48 @@ fn render_tree(
 ) {
     let p = &theme.palette;
     buf.set_style(area, Style::new().bg(p.bg).fg(p.fg));
-    let visible = nodes
-        .iter()
-        .enumerate()
-        .skip(scroll)
-        .take(usize::from(area.height));
-    for (y, (index, node)) in (area.y..).zip(visible) {
+    let text_width = area.width.saturating_sub(list::GUTTER);
+    let mut y = area.y;
+    for (index, node) in nodes.iter().enumerate().skip(scroll) {
+        if y >= area.bottom() {
+            break;
+        }
         let selected = index == cursor;
         let base = if selected {
             Style::new().bg(p.surface).fg(p.fg)
         } else {
             Style::new().bg(p.bg).fg(p.fg)
         };
-        buf.set_style(Rect::new(area.x, y, area.width, 1), base);
-        if selected {
-            buf.set_string(area.x, y, "▌", base.fg(p.primary));
-        }
         let marker = match node.expanded {
             Some(true) => "▾ ",
             Some(false) => "▸ ",
             None => "  ",
         };
-        let indent = " ".repeat(INDENT * usize::from(node.depth));
-        let mut spans = vec![Span::styled(
-            format!("{indent}{marker}"),
-            base.fg(p.fg_mute),
-        )];
-        spans.extend(style::line(&node.cells, p).spans.into_iter().map(|s| {
-            let style = base.patch(s.style);
-            s.style(style)
-        }));
-        let row = Rect::new(
-            list::columns_x(area),
-            y,
-            area.width.saturating_sub(list::GUTTER),
-            1,
-        );
-        Line::from(spans).render(row, buf);
+        let prefix = format!("{}{marker}", " ".repeat(INDENT * usize::from(node.depth)));
+        let prefix_width = u16::try_from(text::width(&prefix)).unwrap_or(text_width);
+        let lines = expand(&node.cells, text_width.saturating_sub(prefix_width), p);
+        for (row, line) in lines.into_iter().enumerate() {
+            if y >= area.bottom() {
+                break;
+            }
+            buf.set_style(Rect::new(area.x, y, area.width, 1), base);
+            if selected {
+                buf.set_string(area.x, y, "▌", base.fg(p.primary));
+            }
+            let lead = if row == 0 {
+                prefix.clone()
+            } else {
+                " ".repeat(usize::from(prefix_width))
+            };
+            let mut spans = vec![Span::styled(lead, base.fg(p.fg_mute))];
+            spans.extend(line.spans.into_iter().map(|s| {
+                let style = base.patch(s.style);
+                s.style(style)
+            }));
+            let rect = Rect::new(list::columns_x(area), y, text_width, 1);
+            Line::from(spans).render(rect, buf);
+            y += 1;
+        }
     }
 }
 
@@ -190,5 +222,40 @@ mod tests {
     #[test]
     fn tree_pane() {
         insta::assert_snapshot!(draw(&testdata::tree_pane(), 2, 60, 6));
+    }
+
+    #[test]
+    fn tree_pane_with_markdown_bodies() {
+        let PaneModel::Tree { mut nodes } = testdata::tree_pane() else {
+            unreachable!()
+        };
+        nodes.insert(
+            1,
+            TreeNode {
+                depth: 1,
+                expanded: None,
+                cells: vec![testdata::cell(
+                    "Looks good. Please call `Transitions::prepare` before **every** draw, \
+                     not only while a slide runs.",
+                    CellStyle::Markdown,
+                )],
+            },
+        );
+        insta::assert_snapshot!(draw(&PaneModel::Tree { nodes }, 1, 50, 8));
+    }
+
+    #[test]
+    fn lines_pane_with_a_markdown_cell() {
+        let model = PaneModel::Lines {
+            lines: vec![vec![
+                testdata::cell("alice: ", CellStyle::Info),
+                testdata::cell(
+                    "the *new* layout drops the `header` row in the list",
+                    CellStyle::Markdown,
+                ),
+            ]],
+            wrap: true,
+        };
+        insta::assert_snapshot!(draw(&model, 0, 30, 4));
     }
 }

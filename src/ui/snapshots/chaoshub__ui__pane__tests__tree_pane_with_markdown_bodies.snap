@@ -1,0 +1,11 @@
+---
+source: src/ui/pane.rs
+expression: "draw(&PaneModel::Tree { nodes }, 1, 50, 8)"
+---
+   alice · commented 2h ago                       
+▌    Looks good. Please call Transitions::prepare 
+▌    before every draw, not only while a slide    
+▌    runs.                                        
+ ▸ src/ui/list.rs:42 · 3 comments · resolved      
+ ▾ src/ui/pane.rs:7 · 1 comment                   
+     bob: the gutter eats one column

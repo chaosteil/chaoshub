@@ -1,0 +1,7 @@
+---
+source: src/ui/pane.rs
+expression: "draw(&model, 0, 30, 4)"
+---
+alice: the new layout drops   
+       the header row in the  
+       list
