@@ -10,6 +10,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::actions::{Action, Applicability, Prepare, REGISTRY};
 use crate::app::frame;
+use crate::app::help::help_model;
 use crate::app::keymap::{self, Keymap};
 use crate::app::layout::layout;
 use crate::app::models::{CellStyle, Direction, PaneModel, RowItem};
@@ -198,6 +199,11 @@ fn key(
     }
     if keymap.matches("open", chord) {
         open_popup(state, tabs, panes);
+        return Vec::new();
+    }
+    if keymap.matches("help", chord) {
+        let help = help_model(keymap, tabs, actions);
+        open_overlay(state, OverlayKind::Help, OverlayState::Help(help));
         return Vec::new();
     }
     if let Some(cmds) = action_key(state, keymap, tabs, actions, chord) {
@@ -496,6 +502,10 @@ fn overlay_key(
     let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
         return Vec::new();
     };
+    if matches!(overlay.state, OverlayState::Help(_)) && keymap.matches("help", chord) {
+        close_overlay(state);
+        return Vec::new();
+    }
     match &mut overlay.state {
         OverlayState::Popup(popup) => {
             let Some(handled) = popup_key(&state.data, keymap, panes, popup, chord) else {
@@ -541,7 +551,7 @@ fn overlay_key(
             close_overlay(state);
             vec![cmd]
         }
-        OverlayState::Prompt { .. } => Vec::new(),
+        OverlayState::Prompt { .. } | OverlayState::Help(_) => Vec::new(),
     }
 }
 
@@ -1462,6 +1472,35 @@ mod tests {
     }
 
     #[test]
+    fn question_mark_opens_the_help_and_closes_it_again() {
+        let (tabs, mut state) = setup(None);
+        let help = press(KeyCode::Char('?'), KeyModifiers::NONE);
+        assert_eq!(run(&mut state, &tabs, help.clone()), vec![]);
+        let expected = help_model(&Keymap::default(), &tabs, &REGISTRY);
+        let overlays = &frame::frame_model_with(&mut state, &tabs).overlays;
+        assert_eq!(
+            overlays.last().map(|o| (o.kind, &o.content)),
+            Some((OverlayKind::Help, &OverlayContent::Help(expected)))
+        );
+        assert_eq!(
+            state.ui.ui_events,
+            [UiEvent::OverlayOpened(OverlayKind::Help)]
+        );
+        assert_eq!(run(&mut state, &tabs, help.clone()), vec![]);
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
+        run(&mut state, &tabs, Msg::TransitionsDone);
+        assert!(state.ui.overlays.is_empty());
+        run(&mut state, &tabs, help);
+        let esc = press(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(run(&mut state, &tabs, esc), vec![]);
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
+        assert_eq!(
+            state.ui.ui_events.last(),
+            Some(&UiEvent::OverlayClosed(OverlayKind::Help))
+        );
+    }
+
+    #[test]
     fn transitions_done_drops_prev_list_and_closing_overlays() {
         let (tabs, mut state) = setup(None);
         let overlay = |kind, closing| Overlay {
@@ -2090,7 +2129,8 @@ mod tests {
                 OverlayState::Authors(picker) => Some(picker),
                 OverlayState::Popup(_)
                 | OverlayState::Confirm { .. }
-                | OverlayState::Prompt { .. } => None,
+                | OverlayState::Prompt { .. }
+                | OverlayState::Help(_) => None,
             })
     }
 

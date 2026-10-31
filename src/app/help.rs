@@ -10,30 +10,25 @@ use crate::app::models::{HelpModel, HelpSection};
 use crate::app::tabs::Tab;
 
 /// The app bindings that the help shows, with their labels, in help
-/// order. The tab bindings `tab_1` to `tab_9` come from the tabs.
-const APP_KEYS: &[(&str, &str)] = &[
-    ("next_tab", "next tab"),
-    ("down", "down"),
-    ("up", "up"),
-    ("top", "top"),
-    ("bottom", "bottom"),
-    ("page_down", "page down"),
-    ("page_up", "page up"),
-    ("open", "open the popup"),
-    ("open_url", "open the url in the popup"),
-    ("close_overlay", "close the popup"),
-    ("confirm", "confirm"),
-    ("filter", "filter"),
-    ("authors", "pick an author"),
-    ("toggle_all", "show all open"),
-    ("refresh", "refresh"),
-    ("help", "help"),
-    ("quit", "quit"),
+/// order. One entry can show more than one binding. The tab bindings
+/// `tab_1` to `tab_9` come from the tabs. The keys of the popups (for
+/// example `confirm`) show in the popups.
+const APP_KEYS: &[(&[&str], &str)] = &[
+    (&["next_tab"], "next tab"),
+    (&["down", "up"], "down, up"),
+    (&["top", "bottom"], "top, bottom"),
+    (&["page_down", "page_up"], "page down, page up"),
+    (&["open"], "open the popup"),
+    (&["close_overlay"], "close the popup"),
+    (&["filter"], "filter"),
+    (&["authors"], "pick an author"),
+    (&["toggle_all"], "show all open"),
+    (&["refresh"], "refresh"),
+    (&["quit"], "quit"),
 ];
 
 /// The help model: the app keys, the keys of each tab that has its own,
 /// and the actions. A binding without a chord is not in the app keys.
-#[allow(dead_code, reason = "the help overlay opens with this model")]
 pub(crate) fn help_model(
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
@@ -59,23 +54,25 @@ pub(crate) fn help_model(
 
 /// The app keys: one tab key per tab, then the bindings of `APP_KEYS`.
 fn app_section(keymap: &Keymap, tabs: &[Box<dyn Tab>]) -> HelpSection {
-    let tab_keys = tabs
-        .iter()
-        .take(9)
-        .enumerate()
-        .map(|(i, tab)| (format!("tab_{}", i + 1), format!("tab {}", tab.title())));
-    let app_keys = APP_KEYS
-        .iter()
-        .map(|&(name, label)| (name.to_owned(), label.to_owned()));
+    let tab_keys = tabs.iter().take(9).enumerate().map(|(i, tab)| {
+        (
+            vec![format!("tab_{}", i + 1)],
+            format!("tab {}", tab.title()),
+        )
+    });
+    let app_keys = APP_KEYS.iter().map(|&(names, label)| {
+        let names = names.iter().map(|&name| name.to_owned()).collect();
+        (names, label.to_owned())
+    });
     let entries = tab_keys
         .chain(app_keys)
-        .filter_map(|(name, label)| {
-            let chords = keymap.chords(&name);
-            if chords.is_empty() {
-                return None;
-            }
-            let keys: Vec<String> = chords.iter().map(|&c| keymap::chord_text(c)).collect();
-            Some((keys.join(" "), label))
+        .filter_map(|(names, label)| {
+            let keys: Vec<String> = names
+                .iter()
+                .flat_map(|name| keymap.chords(name))
+                .map(|&chord| keymap::chord_text(chord))
+                .collect();
+            (!keys.is_empty()).then(|| (keys.join(" "), label))
         })
         .collect();
     HelpSection {
@@ -118,6 +115,7 @@ mod tests {
         assert!(keys.contains(&entry("F5 r", "refresh")));
         assert!(keys.contains(&entry("q ctrl-c", "quit")));
         assert!(keys.contains(&entry("esc q", "close the popup")));
+        assert!(keys.contains(&entry("j k", "down, up")));
         assert!(
             !keys.iter().any(|(_, label)| label == "pick an author"),
             "an unbound key is not in the help"

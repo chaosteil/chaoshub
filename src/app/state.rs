@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use chrono::{DateTime, Utc};
 
 use crate::app::frame::ModelCache;
-use crate::app::models::{CellStyle, Direction, ListModel};
+use crate::app::models::{CellStyle, Direction, HelpModel, ListModel};
 use crate::app::panes::PaneState;
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{
@@ -207,6 +207,8 @@ pub(crate) enum OverlayState {
         spec: PromptSpec,
         text: String,
     },
+    /// The help overlay: the key bindings that it shows.
+    Help(HelpModel),
 }
 
 /// The action that a confirm or a prompt popup runs, and its selection.
