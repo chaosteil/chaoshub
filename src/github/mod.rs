@@ -6,7 +6,7 @@ pub(crate) mod error;
 mod graphql;
 pub(crate) mod parse;
 mod queries;
-mod rest;
+pub(crate) mod rest;
 pub(crate) mod token;
 
 use std::time::Duration;
