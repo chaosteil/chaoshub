@@ -4,6 +4,7 @@
 //! model of each tab is cached with the generation and the size it was
 //! built for, so animation frames and idle ticks never rebuild it.
 
+use crate::app::age::age;
 use crate::app::layout::layout;
 use crate::app::models::{Cell, CellStyle, FrameModel, ListModel, StatusModel, TabBarModel};
 use crate::app::state::AppState;
@@ -106,23 +107,43 @@ fn list_model(state: &mut AppState, tabs: &[Box<dyn Tab>], index: usize, size: S
     model
 }
 
-/// The status bar: the active tab on the left, the last message in the
-/// center.
+/// The status bar: the active tab, the repo count and the data age on
+/// the left, the last message in the center, the help hint on the right.
 pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusModel {
+    let mut left: Vec<Cell> = tabs
+        .get(state.ui.active)
+        .map(|tab| Cell {
+            text: format!("[{}]", tab.title().to_uppercase()),
+            style: CellStyle::Primary,
+        })
+        .into_iter()
+        .collect();
+    left.push(Cell {
+        text: sync_text(state),
+        style: CellStyle::Dim,
+    });
     StatusModel {
-        left: tabs
-            .get(state.ui.active)
-            .map(|tab| Cell {
-                text: format!("[{}]", tab.title().to_uppercase()),
-                style: CellStyle::Primary,
-            })
-            .into_iter()
-            .collect(),
+        left,
         center: state.ui.status.as_ref().map(|msg| Cell {
             text: msg.clone(),
             style: CellStyle::Normal,
         }),
-        right: Vec::new(),
+        right: vec![Cell {
+            text: "? help".into(),
+            style: CellStyle::Dim,
+        }],
+    }
+}
+
+/// The repo count and the age of the data, for example
+/// ` 3 repos · cache from 5m ago`.
+fn sync_text(state: &AppState) -> String {
+    let data = &state.data;
+    let repos = data.session.repos.len();
+    let noun = if repos == 1 { "repo" } else { "repos" };
+    match data.cache_at {
+        Some(at) => format!(" {repos} {noun} · cache from {} ago", age(at, data.now)),
+        None => format!(" {repos} {noun}"),
     }
 }
 
@@ -251,15 +272,24 @@ mod tests {
         assert_eq!(
             frame.status,
             StatusModel {
-                left: vec![Cell {
-                    text: "[TWO]".into(),
-                    style: CellStyle::Primary,
-                }],
+                left: vec![
+                    Cell {
+                        text: "[TWO]".into(),
+                        style: CellStyle::Primary,
+                    },
+                    Cell {
+                        text: " 0 repos".into(),
+                        style: CellStyle::Dim,
+                    },
+                ],
                 center: Some(Cell {
                     text: "synced".into(),
                     style: CellStyle::Normal,
                 }),
-                right: Vec::new(),
+                right: vec![Cell {
+                    text: "? help".into(),
+                    style: CellStyle::Dim,
+                }],
             }
         );
         assert_eq!(frame.prev_list, Some((empty_list(), Direction::Left)));
@@ -267,9 +297,31 @@ mod tests {
     }
 
     #[test]
-    fn empty_registry_gives_an_empty_frame() {
+    fn empty_registry_gives_an_empty_list() {
         let tabs: Vec<Box<dyn Tab>> = Vec::new();
         let mut state = AppState::with_tabs(SIZE, &tabs);
-        assert_eq!(frame_model_with(&mut state, &tabs), &empty_frame());
+        let frame = frame_model_with(&mut state, &tabs);
+        assert_eq!(frame.list, empty_list());
+        assert_eq!(frame.tab_bar.titles, [""; 0]);
+    }
+
+    #[test]
+    fn status_shows_the_repo_count_and_the_cache_age() {
+        let (tabs, mut state, _) = fake_tabs();
+        state.data.session.repos = vec![crate::domain::repo::Repo {
+            key: crate::domain::keys::RepoKey {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            path: None,
+            settings: None,
+        }];
+        assert_eq!(status_model(&state, &tabs).left[1].text, " 1 repo");
+        state.data.cache_at = Some(crate::domain::test_time());
+        state.data.now = crate::domain::test_time() + chrono::TimeDelta::seconds(330);
+        assert_eq!(
+            status_model(&state, &tabs).left[1].text,
+            " 1 repo · cache from 5m ago"
+        );
     }
 }

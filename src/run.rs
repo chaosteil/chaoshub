@@ -7,6 +7,7 @@
 //! runtime runs the workers and the action tasks.
 
 use std::io::{self, Stdout, Write};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle, ThreadId};
@@ -38,6 +39,8 @@ use crate::config::{self, Config, paths};
 use crate::domain::repo::Repo;
 use crate::launch::rex::RexLauncher;
 use crate::osc;
+use crate::store::handle::StoreHandle;
+use crate::store::{Snapshot, Store};
 use crate::theme::{Theme, ThemeKind};
 use crate::ui;
 use crate::ui::transition::Transitions;
@@ -60,6 +63,7 @@ type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
 /// Runs the command of `cli`: `cache clear`, or the TUI until the user
 /// quits.
 pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
+    let started = Instant::now();
     let Cli {
         repo,
         config: config_path,
@@ -92,6 +96,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         config,
     };
     tracing::debug!(?theme_kind, ?settings, "settings");
+    let (snapshot, _store) = open_store();
 
     let tokio = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -110,7 +115,13 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     let reader = Reader::spawn(tx.clone())?;
     let signals = spawn_signals(tx)?;
     let mut event_loop = EventLoop {
-        app: App::new(size, keymap),
+        app: App::new(
+            size,
+            keymap,
+            snapshot,
+            settings.repos.clone(),
+            chrono::Utc::now(),
+        ),
         runtime: Runtime::new(tokio.handle().clone()),
         handle: tokio.handle().clone(),
         transitions,
@@ -120,6 +131,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         drawn: None,
         was_active: false,
         last_draw: None,
+        started: Some(started),
     };
     let result = event_loop.run(&mut terminal, rx);
     if let Err(err) = event_loop.term.clear(&mut io::stdout()) {
@@ -130,6 +142,35 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     reader.stop();
     drop(guard);
     tokio.shutdown_timeout(Duration::from_millis(500));
+    result
+}
+
+/// Opens the cache and reads the startup snapshot. When the cache does
+/// not open, the app runs on an empty in-memory cache.
+fn open_store() -> (Snapshot, StoreHandle) {
+    let span = tracing::info_span!("store_open").entered();
+    let started = Instant::now();
+    let opened = paths::cache_db()
+        .context("the cache directory is unknown")
+        .and_then(|path| Store::open(&path).map_err(anyhow::Error::from));
+    let opened = opened.or_else(|err| {
+        tracing::warn!(%err, "cannot open the cache, using an empty one");
+        Store::open(Path::new(":memory:"))
+    });
+    let result = match opened {
+        Ok(opened) => opened,
+        Err(err) => {
+            tracing::error!(%err, "cannot open an in-memory cache");
+            let (tx, _rx) = mpsc::channel(1);
+            (Snapshot::default(), StoreHandle::new(tx))
+        }
+    };
+    tracing::info!(
+        ms = started.elapsed().as_millis(),
+        prs = result.0.prs.len(),
+        "store loaded"
+    );
+    drop(span);
     result
 }
 
@@ -235,6 +276,8 @@ struct EventLoop {
     was_active: bool,
     /// The time of the last draw.
     last_draw: Option<Instant>,
+    /// The start of `run`, until the first frame logs the startup time.
+    started: Option<Instant>,
 }
 
 impl EventLoop {
@@ -259,6 +302,9 @@ impl EventLoop {
                     &self.theme,
                     elapsed,
                 )?;
+                if let Some(started) = self.started.take() {
+                    tracing::info!(ms = started.elapsed().as_millis(), "startup: first frame");
+                }
             }
             let active = self.transitions.active();
             if self.was_active && !active {
@@ -805,7 +851,13 @@ mod tests {
             width: 40,
             height: 6,
         };
-        let mut app = App::new(size, Keymap::default());
+        let mut app = App::new(
+            size,
+            Keymap::default(),
+            Snapshot::default(),
+            Vec::new(),
+            chrono::DateTime::UNIX_EPOCH,
+        );
         let theme = Theme::new(ThemeKind::TrueColor, true, true);
         let mut transitions = Transitions::new(true, 160).with_theme(theme);
         draw(
