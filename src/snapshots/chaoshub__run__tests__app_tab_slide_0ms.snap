@@ -1,6 +1,5 @@
 ---
 source: src/run.rs
-assertion_line: 930
 expression: start
 ---
 "  1 M I N E ▌ 2 T E A M     ░         ˙                ˙                            ˙      chaoshub "
@@ -13,5 +12,5 @@ expression: start
 " ─ docs: describe the export file format in the RE…     #7                               ✓   ·      "
 " local · chaoshub · spike                                                                           "
 " ─ spike: a faster sync                              local ppqqrrss aa55aa55 spike              +   "
-"                          ˙                                 ·              ░  ░                     "
+"                                                                                                    "
 " [TEAM] 0 repos · cache from 5m ago                                                          ? help "

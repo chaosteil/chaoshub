@@ -1,6 +1,5 @@
 ---
 source: src/run.rs
-assertion_line: 915
 expression: screen(&mut app)
 ---
 "  1 M I N E ▌ 2 T E A M     ░         ˙                ˙                            ˙      chaoshub "
@@ -17,5 +16,5 @@ expression: screen(&mut app)
 "    ·     ·        ˙      ░     ˙  ·                    · ░   ·        ·░           ░░░      ░      "
 " ░░       ░ ░  ··░       ˙  ˙                               ·      ˙            ˙                  ˙"
 "˙   ░    ░ ░            ˙            ˙  ░  ░  ·   ·            ·   ˙    ˙     ░                   ˙ "
-"                          ˙      ░  ˙      ˙   ·      ˙             ·    ░      ˙    ·           ░  "
+"                                                                                                    "
 " [TEAM] 0 repos · cache from 5m ago                                                          ? help "

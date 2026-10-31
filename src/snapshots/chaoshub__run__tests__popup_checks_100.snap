@@ -1,6 +1,5 @@
 ---
 source: src/run.rs
-assertion_line: 934
 expression: "screen(&mut popup_app(100, 30))"
 ---
 "▌ 1 M I N E   2 T E A M     ░         ˙                ˙                            ˙      chaoshub "
@@ -31,5 +30,5 @@ expression: "screen(&mut popup_app(100, 30))"
 "       ▌ ·       ░           ˙       ░ ·           ˙˙ · ·             ░                    ░       ˙"
 " ·     ▙▄▄▄▄▄▄▒▄▄░▄▒▄▄▄▄░▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▒░▄▄▄▓▒▄▄▄▄▄▄▄▄▄▄▄▄▄░▄▄░▄▄▄▄▄▄▒▓▄▄▄▒▄▄▄▄▄▒▄▓▄▄▄▄▄▄▟        "
 "  ░                         ·          ˙                     ░         ·     ˙      ·         ·  ˙  "
-"   ░                  ˙   · ·  ·                  ░     ░                  ·          ░             "
+"                                                                                                    "
 " [MINE] 0 repos · cache from 5m ago                                                          ? help "

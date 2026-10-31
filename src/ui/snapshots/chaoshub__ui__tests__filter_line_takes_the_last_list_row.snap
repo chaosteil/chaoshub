@@ -1,6 +1,5 @@
 ---
 source: src/ui/mod.rs
-assertion_line: 166
 expression: "draw(&model, 100, 12, &testdata::ansi16())"
 ---
 "▌ 1 M I N E   2 T E A M                                                                    chaoshub "
@@ -12,6 +11,6 @@ expression: "draw(&model, 100, 12, &testdata::ansi16())"
 " ─ fix(store): reopen the connection after an error    #99 kxyzmmop 3ccf7581 default     ·   ·  ▶   "
 "                                                                                                    "
 "                                                                                                    "
-"                                                                                                    "
 " / pane▏                                                                                            "
+"                                                                                                    "
 " [MINE] 3 repos · synced 12s ago · prefetch 2  merged #101                                   ? help "
