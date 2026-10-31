@@ -17,8 +17,8 @@ use crate::app::models::{CellStyle, Direction, PaneModel, RowItem};
 use crate::app::nav::{self, Motion};
 use crate::app::panes::{PANES, Pane, applicable, items};
 use crate::app::state::{
-    AUTHOR_KEY, ActionDialog, AppData, AppState, AuthorPicker, FILTER_KEY, Failure, Overlay,
-    OverlayState, PaneHandleState, PopupState, error_text, ui_key,
+    AUTHOR_KEY, ActionDialog, AppData, AppState, AuthorPicker, FILTER_KEY, Failure, OUTPUT_LINES,
+    Overlay, OverlayState, PaneHandleState, PopupState, error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, pr_ref};
 use crate::app::target::{pr_target, row_target};
@@ -119,11 +119,7 @@ pub(crate) fn update_full(
             state.data.sync.rate = Some(info);
             Vec::new()
         }
-        Msg::ActionEvent {
-            key,
-            event: ActionEvent::Done(_),
-            ..
-        } => follow_up(&state.data, &key),
+        Msg::ActionEvent { id, key, event } => action_event(state, actions, id, key, event),
         Msg::PaneStarted { id, key } => {
             state.data.panes.insert((id, key), PaneHandleState::Running);
             state.bump();
@@ -135,7 +131,7 @@ pub(crate) fn update_full(
             }
             follow_up(&state.data, &key)
         }
-        _ => {
+        Msg::PrefetchDone(..) => {
             tracing::trace!("message not handled yet");
             Vec::new()
         }
@@ -551,7 +547,9 @@ fn overlay_key(
             close_overlay(state);
             vec![cmd]
         }
-        OverlayState::Prompt { .. } | OverlayState::Help(_) => Vec::new(),
+        OverlayState::Prompt { .. } | OverlayState::Help(_) | OverlayState::Output { .. } => {
+            Vec::new()
+        }
     }
 }
 
@@ -1038,6 +1036,95 @@ fn drop_gone(data: &mut AppData, key: &PrKey, started_at: DateTime<Utc>) -> bool
     data.scopes.remove(key);
     data.details.remove(key);
     true
+}
+
+/// An event of a running action. Output lines go to the output popup of
+/// the action and its target. Progress and the result show in the status
+/// line, and the result runs the follow-up rule.
+fn action_event(
+    state: &mut AppState,
+    actions: &[Box<dyn Action>],
+    id: &'static str,
+    key: TargetKey,
+    event: ActionEvent,
+) -> Vec<Cmd> {
+    let label = actions
+        .iter()
+        .find(|action| action.id() == id)
+        .map_or(id, |action| action.label());
+    match event {
+        ActionEvent::Output(lines) => {
+            output(state, id, key, label, lines);
+            Vec::new()
+        }
+        ActionEvent::Progress(text) => {
+            state.message(text, CellStyle::Info, INFO_TTL);
+            Vec::new()
+        }
+        ActionEvent::Done(result) => {
+            match result {
+                Ok(text) if text.is_empty() => {}
+                Ok(text) => state.message(text, CellStyle::Success, INFO_TTL),
+                Err(err) => {
+                    state.message(
+                        format!("{label} failed: {err}"),
+                        CellStyle::Danger,
+                        ERROR_TTL,
+                    );
+                }
+            }
+            follow_up(&state.data, &key)
+        }
+        ActionEvent::Popup(_) | ActionEvent::MergeStatus(_) => {
+            tracing::trace!(id, "action event not handled yet");
+            Vec::new()
+        }
+    }
+}
+
+/// Appends `lines` to the open output popup of `(id, key)`, or opens one.
+/// The popup keeps the last `OUTPUT_LINES` lines.
+fn output(
+    state: &mut AppState,
+    id: &'static str,
+    key: TargetKey,
+    label: &str,
+    mut lines: Vec<String>,
+) {
+    let open = state
+        .ui
+        .overlays
+        .iter_mut()
+        .find_map(|overlay| match &mut overlay.state {
+            OverlayState::Output {
+                id: open_id,
+                key: open_key,
+                lines,
+                ..
+            } if !overlay.closing && *open_id == id && *open_key == key => Some(lines),
+            _ => None,
+        });
+    let Some(open) = open else {
+        cap(&mut lines);
+        let title = format!("{label} output");
+        let overlay = OverlayState::Output {
+            id,
+            key,
+            title,
+            lines,
+        };
+        open_overlay(state, OverlayKind::Output, overlay);
+        return;
+    };
+    open.append(&mut lines);
+    cap(open);
+    state.bump();
+}
+
+/// Drops the oldest lines above `OUTPUT_LINES`.
+fn cap(lines: &mut Vec<String>) {
+    let extra = lines.len().saturating_sub(OUTPUT_LINES);
+    lines.drain(..extra);
 }
 
 /// The follow-up rule after an action or a pane: scan the repo of the
@@ -2130,7 +2217,8 @@ mod tests {
                 OverlayState::Popup(_)
                 | OverlayState::Confirm { .. }
                 | OverlayState::Prompt { .. }
-                | OverlayState::Help(_) => None,
+                | OverlayState::Help(_)
+                | OverlayState::Output { .. } => None,
             })
     }
 
@@ -2901,6 +2989,159 @@ mod tests {
         assert_eq!(
             act(&mut state, &actions, KeyCode::Char('v')),
             vec![run_terminal]
+        );
+    }
+
+    fn event(id: &'static str, number: u64, event: ActionEvent) -> Msg {
+        Msg::ActionEvent {
+            id,
+            key: TargetKey::Pr(testdata::pr_key("chaoshub", number)),
+            event,
+        }
+    }
+
+    fn lines(range: std::ops::Range<usize>) -> Vec<String> {
+        range.map(|i| format!("line {i}")).collect()
+    }
+
+    /// The title and the lines of each output popup that is not closing.
+    fn outputs(state: &AppState) -> Vec<(String, Vec<String>)> {
+        state
+            .ui
+            .overlays
+            .iter()
+            .filter(|o| !o.closing)
+            .filter_map(|o| match &o.state {
+                OverlayState::Output { title, lines, .. } => Some((title.clone(), lines.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn output_lines_open_one_popup_per_action_and_target() {
+        let mut state = action_state(&pr_row(102));
+        let actions = fake(FakeAction::new("agent", 'g'));
+        let out = |range| ActionEvent::Output(lines(range));
+        assert_eq!(
+            run_msg(&mut state, &actions, event("agent", 102, out(0..2))),
+            vec![]
+        );
+        assert_eq!(
+            state.ui.ui_events.last(),
+            Some(&UiEvent::OverlayOpened(OverlayKind::Output))
+        );
+        let generation = state.generation;
+        run_msg(&mut state, &actions, event("agent", 102, out(2..3)));
+        assert!(state.generation > generation);
+        assert_eq!(outputs(&state), [("agent output".to_owned(), lines(0..3))]);
+        let model = frame::frame_model(&mut state).overlays.last().cloned();
+        assert_eq!(
+            model.map(|o| o.content),
+            Some(OverlayContent::Output {
+                title: "agent output".into(),
+                lines: lines(0..3),
+            })
+        );
+        run_msg(&mut state, &actions, event("agent", 101, out(0..1)));
+        run_msg(&mut state, &actions, event("other", 102, out(0..1)));
+        assert_eq!(
+            outputs(&state)
+                .iter()
+                .map(|(t, _)| t.as_str())
+                .collect::<Vec<_>>(),
+            ["agent output", "agent output", "other output"]
+        );
+    }
+
+    #[test]
+    fn an_output_popup_keeps_the_last_2000_lines() {
+        let mut state = action_state(&pr_row(102));
+        let actions = fake(FakeAction::new("agent", 'g'));
+        let out = |range| event("agent", 102, ActionEvent::Output(lines(range)));
+        run_msg(&mut state, &actions, out(0..1500));
+        run_msg(&mut state, &actions, out(1500..2600));
+        assert_eq!(
+            outputs(&state),
+            [("agent output".to_owned(), lines(600..2600))]
+        );
+        let mut fresh = action_state(&pr_row(102));
+        run_msg(&mut fresh, &actions, out(0..2001));
+        assert_eq!(outputs(&fresh)[0].1, lines(1..2001));
+    }
+
+    #[test]
+    fn a_closed_output_popup_opens_again_on_new_lines() {
+        let mut state = action_state(&pr_row(102));
+        let actions = fake(FakeAction::new("agent", 'g'));
+        let out = |range| event("agent", 102, ActionEvent::Output(lines(range)));
+        run_msg(&mut state, &actions, out(0..2));
+        assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
+        assert_eq!(outputs(&state), []);
+        run_msg(&mut state, &actions, out(2..3));
+        assert_eq!(outputs(&state), [("agent output".to_owned(), lines(2..3))]);
+    }
+
+    #[test]
+    fn progress_and_the_result_show_in_the_status_line() {
+        let mut state = action_state(&pr_row(102));
+        let actions = fake(FakeAction::new("rerun_checks", 'x'));
+        let status = |state: &AppState| {
+            state
+                .ui
+                .status
+                .as_ref()
+                .map(|msg| (msg.text.clone(), msg.style))
+        };
+        let progress = event("rerun_checks", 102, ActionEvent::Progress("2 runs".into()));
+        assert_eq!(run_msg(&mut state, &actions, progress), vec![]);
+        assert_eq!(status(&state), Some(("2 runs".into(), CellStyle::Info)));
+        let follow = vec![
+            Cmd::ScanJj(testdata::repo_key("chaoshub")),
+            Cmd::RefreshPr(stack_group_refs(
+                &state.data,
+                &testdata::pr_key("chaoshub", 102),
+            )),
+        ];
+        let ok = event(
+            "rerun_checks",
+            102,
+            ActionEvent::Done(Ok("re-running".into())),
+        );
+        assert_eq!(run_msg(&mut state, &actions, ok), follow);
+        assert_eq!(
+            status(&state),
+            Some(("re-running".into(), CellStyle::Success))
+        );
+        let err = event(
+            "rerun_checks",
+            102,
+            ActionEvent::Done(Err("offline".into())),
+        );
+        assert_eq!(run_msg(&mut state, &actions, err), follow);
+        assert_eq!(
+            status(&state),
+            Some(("rerun_checks failed: offline".into(), CellStyle::Danger))
+        );
+        state.ui.status = None;
+        let quiet = event("rerun_checks", 102, ActionEvent::Done(Ok(String::new())));
+        assert_eq!(run_msg(&mut state, &actions, quiet), follow);
+        assert_eq!(status(&state), None, "an empty result says nothing");
+    }
+
+    #[test]
+    fn a_failed_pane_launch_shows_its_error() {
+        let mut state = action_state(&pr_row(99));
+        let actions: Vec<Box<dyn Action>> = Vec::new();
+        let failed = event(
+            "review",
+            99,
+            ActionEvent::Done(Err("cannot open the pane: cannot start rex: gone".into())),
+        );
+        run_msg(&mut state, &actions, failed);
+        assert_eq!(
+            state.ui.status.as_ref().map(|msg| msg.text.as_str()),
+            Some("review failed: cannot open the pane: cannot start rex: gone")
         );
     }
 }

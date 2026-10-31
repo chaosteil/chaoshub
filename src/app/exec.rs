@@ -339,6 +339,12 @@ impl PaneRun {
             Ok(handle) => handle,
             Err(err) => {
                 tracing::warn!(%err, id = self.id, "cannot open the pane");
+                self.send(Msg::ActionEvent {
+                    id: self.id,
+                    key: self.key.clone(),
+                    event: ActionEvent::Done(Err(format!("cannot open the pane: {err}"))),
+                })
+                .await;
                 self.send(Msg::PaneEnded {
                     id: self.id,
                     key: self.key.clone(),
@@ -953,7 +959,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_launch_ends_the_pane_at_once() {
+    fn a_failed_launch_reports_its_error_and_ends_the_pane() {
         let tokio = tokio();
         let launcher = Arc::new(FakeLauncher {
             launch_fails: true,
@@ -961,6 +967,16 @@ mod tests {
         });
         let mut f = pane_fixture(&tokio, &launcher);
         f.runtime.exec(run_terminal(3));
+        assert_eq!(
+            f.msgs.blocking_recv(),
+            Some(Msg::ActionEvent {
+                id: "review",
+                key: pr_key(3),
+                event: ActionEvent::Done(
+                    Err("cannot open the pane: cannot start rex: fake".into())
+                ),
+            })
+        );
         assert_eq!(f.msgs.blocking_recv(), Some(ended(3)));
         assert_eq!(launcher.calls(), ["launch pane-3"]);
     }
