@@ -4,6 +4,7 @@
 mod confirm;
 mod filter;
 mod help;
+mod hints;
 mod list;
 mod markdown;
 mod output;
@@ -80,8 +81,8 @@ pub(crate) fn overlay_area(overlay: &OverlayModel, areas: &Areas) -> Rect {
     }
 }
 
-/// Draws one frame: the tab bar, the list, the status bar and the overlay
-/// stack.
+/// Draws one frame: the tab bar, the list, the key hint bar, the status
+/// bar and the overlay stack.
 pub(crate) fn view(frame: &mut Frame<'_>, model: &FrameModel, areas: &Areas, theme: &Theme) {
     let buf = frame.buffer_mut();
     tabbar::render(&model.tab_bar, rect(areas.tab_bar), buf, theme);
@@ -94,6 +95,9 @@ pub(crate) fn view(frame: &mut Frame<'_>, model: &FrameModel, areas: &Areas, the
         filter::render(line, line_area, buf, theme);
     }
     list::render(&model.list, list_area, buf, theme);
+    if let Some(model) = &model.hints {
+        hints::render(model, rect(areas.hints), buf, theme);
+    }
     status::render(&model.status, rect(areas.status), buf, theme);
     for overlay in &model.overlays {
         render_overlay(overlay, areas, buf, theme);

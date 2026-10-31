@@ -1102,6 +1102,88 @@ mod tests {
         terminal.backend().to_string()
     }
 
+    /// Draws the app once without transitions in the theme of `kind` and
+    /// returns the screen.
+    fn screen_in(app: &mut App, kind: ThemeKind) -> String {
+        let size = app.size();
+        let mut terminal = Terminal::new(TestBackend::new(size.width, size.height)).unwrap();
+        let theme = Theme::new(kind, true, true);
+        let mut transitions = Transitions::new(false, 160).with_theme(theme);
+        draw(&mut terminal, app, &mut transitions, &theme, Duration::ZERO).unwrap();
+        terminal.backend().to_string()
+    }
+
+    /// The seeded mine app with the close confirm open on the first row.
+    fn confirm_app(width: u16, height: u16) -> App {
+        let mut app = seeded_app(width, height, crate::app::testdata::mine_snapshot());
+        press(&mut app, 'X');
+        app
+    }
+
+    fn mine_app(width: u16) -> App {
+        seeded_app(width, 14, crate::app::testdata::mine_snapshot())
+    }
+
+    #[test]
+    fn key_hints_list_100_pierre() {
+        insta::assert_snapshot!(screen_in(&mut mine_app(100), ThemeKind::TrueColor));
+    }
+
+    #[test]
+    fn key_hints_list_160_pierre() {
+        insta::assert_snapshot!(screen_in(&mut mine_app(160), ThemeKind::TrueColor));
+    }
+
+    #[test]
+    fn key_hints_list_100_ansi16() {
+        insta::assert_snapshot!(screen_in(&mut mine_app(100), ThemeKind::Ansi16));
+    }
+
+    #[test]
+    fn key_hints_list_160_ansi16() {
+        insta::assert_snapshot!(screen_in(&mut mine_app(160), ThemeKind::Ansi16));
+    }
+
+    #[test]
+    fn key_hints_popup_100_pierre() {
+        insta::assert_snapshot!(screen_in(&mut popup_app(100, 30), ThemeKind::TrueColor));
+    }
+
+    #[test]
+    fn key_hints_popup_160_pierre() {
+        insta::assert_snapshot!(screen_in(&mut popup_app(160, 40), ThemeKind::TrueColor));
+    }
+
+    #[test]
+    fn key_hints_popup_100_ansi16() {
+        insta::assert_snapshot!(screen_in(&mut popup_app(100, 30), ThemeKind::Ansi16));
+    }
+
+    #[test]
+    fn key_hints_popup_160_ansi16() {
+        insta::assert_snapshot!(screen_in(&mut popup_app(160, 40), ThemeKind::Ansi16));
+    }
+
+    #[test]
+    fn key_hints_confirm_100_pierre() {
+        insta::assert_snapshot!(screen_in(&mut confirm_app(100, 30), ThemeKind::TrueColor));
+    }
+
+    #[test]
+    fn key_hints_confirm_160_pierre() {
+        insta::assert_snapshot!(screen_in(&mut confirm_app(160, 40), ThemeKind::TrueColor));
+    }
+
+    #[test]
+    fn key_hints_confirm_100_ansi16() {
+        insta::assert_snapshot!(screen_in(&mut confirm_app(100, 30), ThemeKind::Ansi16));
+    }
+
+    #[test]
+    fn key_hints_confirm_160_ansi16() {
+        insta::assert_snapshot!(screen_in(&mut confirm_app(160, 40), ThemeKind::Ansi16));
+    }
+
     #[test]
     fn mine_list_100() {
         let mut app = seeded_app(100, 14, crate::app::testdata::mine_snapshot());
