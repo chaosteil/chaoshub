@@ -5,10 +5,6 @@
 //!   `ESC ] 7501 ; state=<state>[:kind=<kind>]:app=chaoshub[:msg=<base64>] ESC \`.
 //! - OSC 9;4 (progress bar): `ESC ] 9 ; 4 ; <s>[;<v>] ESC \`.
 //! - OSC 52 (clipboard): `ESC ] 52 ; c ; <base64> ESC \`.
-#![allow(
-    dead_code,
-    reason = "run writes the status sequences and clipboard writes OSC 52 in later commits"
-)]
 
 use crate::bus::{BlockedKind, Progress, TermState, TermStatus};
 
@@ -74,6 +70,7 @@ pub(crate) fn clear() -> Vec<u8> {
 }
 
 /// The OSC 52 sequence that puts `text` on the system clipboard.
+#[allow(dead_code, reason = "the clipboard fallback of phase E writes it")]
 pub(crate) fn clipboard(text: &str) -> Vec<u8> {
     sequence(&format!("52;c;{}", base64(text.as_bytes())))
 }
