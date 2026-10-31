@@ -1650,7 +1650,22 @@ mod tests {
             repo: repo.clone(),
             change_id: "kxyzkxyz".into(),
         };
-        assert_eq!(run(&mut state, &tabs, done(local)), vec![Cmd::ScanJj(repo)]);
+        assert_eq!(
+            run(&mut state, &tabs, done(local.clone())),
+            vec![Cmd::ScanJj(repo.clone())]
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &tabs,
+                Msg::PaneEnded {
+                    id: "review",
+                    key: local
+                }
+            ),
+            vec![Cmd::ScanJj(repo)],
+            "a local target gets only the scan"
+        );
         let progress = Msg::ActionEvent {
             id: "approve",
             key: key(5),
