@@ -58,10 +58,6 @@ impl Default for ModelCache {
 impl ModelCache {
     /// Sets the key bindings that the key hints show and the
     /// `[theme] key_hints` switch. The next frame is built again.
-    #[allow(
-        dead_code,
-        reason = "App::new calls it when the configuration reaches the app"
-    )]
     pub(crate) fn set_key_hints(&mut self, keymap: Keymap, on: bool) {
         self.keymap = keymap;
         self.key_hints = on;

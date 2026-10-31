@@ -33,7 +33,6 @@ use crate::actions::REGISTRY;
 use crate::app::App;
 use crate::app::exec::{ActionEnv, Runtime, Senders};
 use crate::app::keymap::Keymap;
-use crate::app::layout::layout;
 use crate::bus::{
     Cmd, Interest, JjReq, LaunchRequest, Msg, Progress, Scope, Session, Size, SyncReq, TargetKey,
     TermState, TermStatus,
@@ -130,6 +129,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     let app = App::new(
         size,
         keymap,
+        settings.config.theme.key_hints,
         snapshot,
         settings.repos.clone(),
         chrono::Utc::now(),
@@ -624,7 +624,7 @@ fn draw<B: Backend>(
 ) -> Result<Duration, B::Error> {
     let started = Instant::now();
     transitions.apply(app.take_ui_events());
-    let areas = layout(app.size());
+    let areas = app.areas();
     let model = app.frame();
     transitions.prepare(model, &areas);
     terminal.draw(|frame| {
@@ -1171,6 +1171,7 @@ mod tests {
         App::new(
             Size { width, height },
             Keymap::default(),
+            true,
             snapshot,
             Vec::new(),
             crate::domain::test_time() + chrono::TimeDelta::minutes(5),
@@ -1267,6 +1268,41 @@ mod tests {
     #[test]
     fn key_hints_confirm_160_ansi16() {
         insta::assert_snapshot!(screen_in(&mut confirm_app(160, 40), ThemeKind::Ansi16));
+    }
+
+    /// The seeded mine app at 100 x 14 with the `[theme] key_hints`
+    /// switch `key_hints` and the user keymap `down = "ctrl-n"` and
+    /// `up = "ctrl-p"`.
+    fn main_screen_app(key_hints: bool) -> App {
+        let keys = std::collections::BTreeMap::from([
+            ("down".to_owned(), "ctrl-n".to_owned()),
+            ("up".to_owned(), "ctrl-p".to_owned()),
+        ]);
+        App::new(
+            Size {
+                width: 100,
+                height: 14,
+            },
+            Keymap::new(&keys).unwrap(),
+            key_hints,
+            crate::app::testdata::mine_snapshot(),
+            Vec::new(),
+            crate::domain::test_time() + chrono::TimeDelta::minutes(5),
+        )
+    }
+
+    #[test]
+    fn main_screen_key_hints_on() {
+        let screen = screen(&mut main_screen_app(true));
+        assert!(screen.contains("Ctrl-n/Ctrl-p move"), "{screen}");
+        insta::assert_snapshot!(screen);
+    }
+
+    #[test]
+    fn main_screen_key_hints_off() {
+        let screen = screen(&mut main_screen_app(false));
+        assert!(!screen.contains("move"), "{screen}");
+        insta::assert_snapshot!(screen);
     }
 
     #[test]
@@ -1526,6 +1562,7 @@ mod tests {
         let mut app = App::new(
             size,
             Keymap::default(),
+            true,
             Snapshot::default(),
             Vec::new(),
             chrono::DateTime::UNIX_EPOCH,

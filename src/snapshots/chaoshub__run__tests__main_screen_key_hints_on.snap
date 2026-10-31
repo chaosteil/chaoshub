@@ -1,0 +1,18 @@
+---
+source: src/run.rs
+expression: screen
+---
+"▌ 1 M I N E   2 T E A M     ░         ˙                ˙                            ˙      chaoshub "
+"▌─ fix(store): reopen the connection after an error    #99                               ·   ·      "
+" stack #12 -> main · 3 PRs                                                                          "
+"   │ wip: try the new layout                         local zzmqxkrt 5678ef01 default            +   "
+" ┌ feat(ui): popup frame with pane tabs               #103 wqnvzxop oid103   default     ●   ○  D   "
+" ├ feat(app): checks pane                             #102 xlmkrtpq 9f9f9f9f default     ✓   ✓      "
+" └ feat(app): Pane trait, registry and overlay sta…   #101                               ✗   ✗  C   "
+" ─ docs: describe the export file format in the RE…     #7                               ✓   ·      "
+" local · chaoshub · spike                                                                           "
+" ─ spike: a faster sync                              local ppqqrrss aa55aa55 spike              +   "
+"                          ˙                                 ·              ░  ░                     "
+"    ·     ·        ˙      ░     ˙  ·                    · ░   ·        ·░           ░░░      ░      "
+"▌ Ctrl-n/Ctrl-p move  Enter open  m merge  A approve  / filter  1/2/Tab tabs  r refresh  ? help  …  "
+" [MINE] 0 repos · cache from 5m ago                                                          ? help "

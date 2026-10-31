@@ -25,6 +25,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 
 use crate::app::keymap::Keymap;
+use crate::app::layout::Areas;
 use crate::app::models::FrameModel;
 use crate::app::state::AppState;
 use crate::bus::{Cmd, Interest, Msg, Size, UiEvent};
@@ -42,14 +43,17 @@ impl App {
     /// Creates the app for a terminal size and a key map, with the
     /// startup snapshot of the cache and the repos of the session. `now`
     /// is the start time; the ages of the first frame count from it.
+    /// `key_hints` is the `[theme] key_hints` switch.
     pub(crate) fn new(
         size: Size,
         keymap: Keymap,
+        key_hints: bool,
         snapshot: Snapshot,
         repos: Vec<Repo>,
         now: DateTime<Utc>,
     ) -> Self {
         let mut state = AppState::new(size);
+        state.cache.set_key_hints(keymap.clone(), key_hints);
         state.data.now = now;
         state.load(snapshot, repos);
         update::start(&mut state);
@@ -86,8 +90,15 @@ impl App {
     }
 
     /// The terminal size.
+    #[cfg(test)]
     pub(crate) fn size(&self) -> Size {
         self.state.data.size
+    }
+
+    /// The areas of the screen, with the key hint bar when the key hints
+    /// are on.
+    pub(crate) fn areas(&self) -> Areas {
+        frame::areas(&self.state)
     }
 
     /// True when the frame still holds what a transition shows: the list
