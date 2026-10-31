@@ -334,6 +334,12 @@ pub(crate) enum Msg {
         state: Observed<LocalState>,
     },
     PrefetchDone(PrKey, Result<(), String>),
+    /// The progress of a prefetch batch: `done` of `total` pull requests.
+    /// `done == total` ends the batch.
+    PrefetchBatch {
+        done: usize,
+        total: usize,
+    },
     ActionEvent {
         id: &'static str,
         key: TargetKey,

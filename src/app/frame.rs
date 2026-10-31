@@ -285,20 +285,25 @@ pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusMod
     }
 }
 
-/// The repo count and the age of the data, for example
-/// ` 3 repos · cache from 5m ago`.
+/// The repo count, the age of the data and the pull requests that the
+/// prefetch batch has left, for example
+/// ` 3 repos · synced 12s ago · prefetch 2`.
 fn sync_text(state: &AppState, tabs: &[Box<dyn Tab>]) -> String {
     let data = &state.data;
     let repos = data.session.repos.len();
     let noun = if repos == 1 { "repo" } else { "repos" };
     let scope = tabs.get(state.ui.active).and_then(|tab| tab.scope());
-    match (
+    let text = match (
         scope.and_then(|scope| data.synced.get(&scope)),
         data.cache_at,
     ) {
         (Some(&at), _) => format!(" {repos} {noun} · synced {} ago", age(at, data.now)),
         (None, Some(at)) => format!(" {repos} {noun} · cache from {} ago", age(at, data.now)),
         (None, None) => format!(" {repos} {noun}"),
+    };
+    match data.prefetch {
+        Some(batch) => format!("{text} · prefetch {}", batch.total - batch.done),
+        None => text,
     }
 }
 
@@ -483,6 +488,11 @@ mod tests {
         assert_eq!(
             status_model(&state, &tabs).left[1].text,
             " 1 repo · cache from 5m ago"
+        );
+        state.data.prefetch = Some(crate::app::state::PrefetchBatch { done: 1, total: 3 });
+        assert_eq!(
+            status_model(&state, &tabs).left[1].text,
+            " 1 repo · cache from 5m ago · prefetch 2"
         );
     }
 }
