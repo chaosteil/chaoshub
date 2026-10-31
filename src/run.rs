@@ -6,7 +6,7 @@
 //! signal thread turns SIGTERM and SIGINT into `Msg::Signal`. The tokio
 //! runtime runs the workers and the action tasks.
 
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle, ThreadId};
@@ -30,7 +30,8 @@ use tokio::time::timeout;
 use crate::app::App;
 use crate::app::exec::Runtime;
 use crate::app::layout::layout;
-use crate::bus::{Msg, Size};
+use crate::bus::{Msg, Progress, Size, TermState, TermStatus};
+use crate::osc;
 use crate::theme::{Palette, Theme};
 use crate::ui;
 use crate::ui::transition::Transitions;
@@ -49,6 +50,9 @@ const READER_POLL: Duration = Duration::from_millis(100);
 const PAUSE_TIMEOUT: Duration = Duration::from_secs(1);
 /// The default of `[theme] animation_ms`.
 const ANIMATION_MS: u64 = 160;
+/// The interval of the OSC 9;4 keep-alive while a progress is active.
+/// Ghostty resets a progress bar after about 15 s without an update.
+const PROGRESS_KEEP_ALIVE: Duration = Duration::from_secs(1);
 
 /// The crossterm terminal of the event loop.
 type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
@@ -60,8 +64,11 @@ pub(crate) fn run() -> anyhow::Result<()> {
         .build()?;
     let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
 
+    let status_on = term_status_detected();
+    let term = TermWriter::new(status_on, status_on);
+
     let guard = TerminalGuard::enter()?;
-    install_panic_hook(thread::current().id());
+    install_panic_hook(thread::current().id(), term.clear_sequence());
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let area = terminal.size()?;
     let size = Size {
@@ -77,11 +84,15 @@ pub(crate) fn run() -> anyhow::Result<()> {
         handle: tokio.handle().clone(),
         transitions: Transitions::new(true, ANIMATION_MS),
         theme: default_theme(),
+        term,
         drawn: None,
         was_active: false,
         last_draw: None,
     };
     let result = event_loop.run(&mut terminal, rx);
+    if let Err(err) = event_loop.term.clear(&mut io::stdout()) {
+        tracing::warn!(%err, "cannot clear the terminal status");
+    }
 
     signals.close();
     reader.stop();
@@ -97,6 +108,7 @@ struct EventLoop {
     handle: Handle,
     transitions: Transitions,
     theme: Theme,
+    term: TermWriter,
     /// The generation of the last draw. `None` before the first draw.
     drawn: Option<u64>,
     /// True when a transition ran after the last draw.
@@ -133,6 +145,10 @@ impl EventLoop {
                 self.update(Msg::TransitionsDone);
             }
             self.was_active = active;
+            let status = &self.app.frame().term;
+            if let Err(err) = self.term.write(&mut io::stdout(), status, Instant::now()) {
+                tracing::warn!(%err, "cannot write the terminal status");
+            }
 
             let wait = async { timeout(deadline(active), rx.recv()).await };
             match self.handle.block_on(wait) {
@@ -247,14 +263,108 @@ fn restore_terminal() {
     }
 }
 
-/// Restores the terminal before the panic message when the event loop
-/// thread `main` panics. A panic on another thread is only logged, because
-/// the event loop still owns the screen.
-fn install_panic_hook(main: ThreadId) {
+/// True inside Rex (`REX_BLOCK` set) and Ghostty (`TERM_PROGRAM=ghostty`),
+/// the terminals that show OSC 7501 and OSC 9;4.
+fn term_status_detected() -> bool {
+    std::env::var_os("REX_BLOCK").is_some()
+        || std::env::var("TERM_PROGRAM").is_ok_and(|term| term == "ghostty")
+}
+
+/// Writes the terminal status: OSC 7501 when the state or the message
+/// changed, OSC 9;4 when the progress changed or once per second while a
+/// progress is active.
+#[derive(Debug)]
+struct TermWriter {
+    /// The `[terminal] program_status` switch.
+    program_status: bool,
+    /// The `[terminal] progress` switch.
+    progress: bool,
+    /// The state and the message of the last OSC 7501 write.
+    last_status: Option<(TermState, Option<String>)>,
+    /// The progress and the time of the last OSC 9;4 write.
+    last_progress: Option<(Progress, Instant)>,
+}
+
+impl TermWriter {
+    fn new(program_status: bool, progress: bool) -> Self {
+        Self {
+            program_status,
+            progress,
+            last_status: None,
+            last_progress: None,
+        }
+    }
+
+    /// Writes what changed or what is due. Runs on every loop pass.
+    fn write(&mut self, out: &mut impl Write, status: &TermStatus, now: Instant) -> io::Result<()> {
+        let mut bytes = Vec::new();
+        if self.program_status
+            && self
+                .last_status
+                .as_ref()
+                .is_none_or(|(state, msg)| *state != status.state || *msg != status.msg)
+        {
+            bytes.extend(osc::program_status(status));
+            self.last_status = Some((status.state, status.msg.clone()));
+        }
+        if self.progress
+            && self.last_progress.is_none_or(|(progress, at)| {
+                progress != status.progress
+                    || (status.progress != Progress::Off
+                        && now.saturating_duration_since(at) >= PROGRESS_KEEP_ALIVE)
+            })
+        {
+            bytes.extend(osc::progress(status.progress));
+            self.last_progress = Some((status.progress, now));
+        }
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        out.write_all(&bytes)?;
+        out.flush()
+    }
+
+    /// Writes `state=clear` and `9;4;0`, on quit and before the terminal
+    /// is handed to a foreground process. The next `write` sends the
+    /// status again.
+    fn clear(&mut self, out: &mut impl Write) -> io::Result<()> {
+        self.last_status = None;
+        self.last_progress = None;
+        let bytes = self.clear_sequence();
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        out.write_all(&bytes)?;
+        out.flush()
+    }
+
+    /// The clear sequences of the switches that are on.
+    fn clear_sequence(&self) -> Vec<u8> {
+        match (self.program_status, self.progress) {
+            (true, true) => osc::clear(),
+            (true, false) => osc::program_status(&TermStatus {
+                state: TermState::Clear,
+                msg: None,
+                progress: Progress::Off,
+            }),
+            (false, true) => osc::progress(Progress::Off),
+            (false, false) => Vec::new(),
+        }
+    }
+}
+
+/// Clears the terminal status and restores the terminal before the panic
+/// message when the event loop thread `main` panics. A panic on another
+/// thread is only logged, because the event loop still owns the screen.
+fn install_panic_hook(main: ThreadId, clear: Vec<u8>) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         tracing::error!(%info, "panic");
         if thread::current().id() == main {
+            let mut out = io::stdout();
+            if out.write_all(&clear).and_then(|()| out.flush()).is_err() {
+                tracing::warn!("cannot clear the terminal status");
+            }
             restore_terminal();
             previous(info);
         }
@@ -410,6 +520,126 @@ mod tests {
             Duration::from_millis(10)
         );
         assert_eq!(frame_elapsed(Some(last), much_later, true), MAX_ELAPSED);
+    }
+
+    fn working(progress: Progress) -> TermStatus {
+        TermStatus {
+            state: TermState::Working,
+            msg: Some("syncing 2 repos".into()),
+            progress,
+        }
+    }
+
+    fn idle() -> TermStatus {
+        TermStatus {
+            state: TermState::Idle,
+            msg: None,
+            progress: Progress::Off,
+        }
+    }
+
+    /// The bytes of one `write` call.
+    fn written(writer: &mut TermWriter, status: &TermStatus, now: Instant) -> Vec<u8> {
+        let mut out = Vec::new();
+        writer.write(&mut out, status, now).unwrap();
+        out
+    }
+
+    #[test]
+    fn term_writer_writes_a_status_once() {
+        let mut writer = TermWriter::new(true, true);
+        let t0 = Instant::now();
+        let mut first = osc::program_status(&idle());
+        first.extend(osc::progress(Progress::Off));
+        assert_eq!(written(&mut writer, &idle(), t0), first);
+        assert_eq!(written(&mut writer, &idle(), t0), b"");
+        assert_eq!(
+            written(&mut writer, &idle(), t0 + Duration::from_secs(5)),
+            b"",
+            "no keep-alive without an active progress"
+        );
+    }
+
+    #[test]
+    fn term_writer_writes_only_what_changed() {
+        let mut writer = TermWriter::new(true, true);
+        let t0 = Instant::now();
+        written(&mut writer, &idle(), t0);
+        let busy = working(Progress::Off);
+        assert_eq!(written(&mut writer, &busy, t0), osc::program_status(&busy));
+        let busy = working(Progress::Indeterminate);
+        assert_eq!(
+            written(&mut writer, &busy, t0),
+            osc::progress(Progress::Indeterminate)
+        );
+        let other_msg = TermStatus {
+            msg: Some("syncing 3 repos".into()),
+            ..working(Progress::Indeterminate)
+        };
+        assert_eq!(
+            written(&mut writer, &other_msg, t0),
+            osc::program_status(&other_msg)
+        );
+    }
+
+    #[test]
+    fn term_writer_keeps_an_active_progress_alive() {
+        let mut writer = TermWriter::new(true, true);
+        let t0 = Instant::now();
+        let busy = working(Progress::Percent(40));
+        written(&mut writer, &busy, t0);
+        assert_eq!(
+            written(&mut writer, &busy, t0 + Duration::from_millis(500)),
+            b""
+        );
+        assert_eq!(
+            written(&mut writer, &busy, t0 + Duration::from_secs(1)),
+            osc::progress(Progress::Percent(40))
+        );
+        assert_eq!(
+            written(&mut writer, &busy, t0 + Duration::from_millis(1500)),
+            b""
+        );
+        assert_eq!(
+            written(&mut writer, &busy, t0 + Duration::from_secs(2)),
+            osc::progress(Progress::Percent(40))
+        );
+    }
+
+    #[test]
+    fn term_writer_clear_resets_the_dedupe() {
+        let mut writer = TermWriter::new(true, true);
+        let t0 = Instant::now();
+        let first = written(&mut writer, &idle(), t0);
+        let mut out = Vec::new();
+        writer.clear(&mut out).unwrap();
+        assert_eq!(out, osc::clear());
+        assert_eq!(written(&mut writer, &idle(), t0), first);
+    }
+
+    #[test]
+    fn term_writer_follows_the_switches() {
+        let t0 = Instant::now();
+        let busy = working(Progress::Indeterminate);
+        let mut off = TermWriter::new(false, false);
+        assert_eq!(written(&mut off, &busy, t0), b"");
+        let mut out = Vec::new();
+        off.clear(&mut out).unwrap();
+        assert_eq!(out, b"");
+
+        let mut status_only = TermWriter::new(true, false);
+        assert_eq!(
+            written(&mut status_only, &busy, t0),
+            osc::program_status(&busy)
+        );
+        let mut progress_only = TermWriter::new(false, true);
+        assert_eq!(
+            written(&mut progress_only, &busy, t0),
+            osc::progress(Progress::Indeterminate)
+        );
+        let mut out = Vec::new();
+        progress_only.clear(&mut out).unwrap();
+        assert_eq!(out, osc::progress(Progress::Off));
     }
 
     #[test]
