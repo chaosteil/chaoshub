@@ -5,7 +5,7 @@ mod exec;
 mod frame;
 mod keymap;
 mod layout;
-mod models;
+pub(crate) mod models;
 mod panes;
 mod state;
 mod tabs;
