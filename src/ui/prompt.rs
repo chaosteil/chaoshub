@@ -7,17 +7,27 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Clear, Widget};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 
-use crate::bus::PromptSpec;
+use crate::bus::{Hit, PromptSpec};
 use crate::theme::Theme;
 use crate::theme::ThemeBlock;
+use crate::ui::hits::HitMap;
 
 /// The key hint on the last row.
 const HINT: &str = "Enter send · Esc cancel";
 
-/// Draws the prompt popup into its area.
-pub(crate) fn render(spec: &PromptSpec, text: &str, area: Rect, buf: &mut Buffer, theme: &Theme) {
+/// Draws the prompt popup into its area. The whole area is a
+/// `Hit::Inside`.
+pub(crate) fn render(
+    spec: &PromptSpec,
+    text: &str,
+    area: Rect,
+    buf: &mut Buffer,
+    theme: &Theme,
+    hits: &mut HitMap,
+) {
     let p = &theme.palette;
     let area = area.intersection(buf.area);
+    hits.push(area, Hit::Inside);
     Clear.render(area, buf);
     theme
         .block(&spec.title)
@@ -46,4 +56,34 @@ pub(crate) fn render(spec: &PromptSpec, text: &str, area: Rect, buf: &mut Buffer
         usize::from(input.width),
         Style::new().fg(p.fg_mute),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::testdata;
+
+    #[test]
+    fn the_area_is_inside() {
+        let area = Rect::new(10, 2, 40, 10);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 15));
+        let mut hits = HitMap::default();
+        let spec = PromptSpec {
+            title: "request changes".to_owned(),
+            placeholder: String::new(),
+        };
+        render(
+            &spec,
+            "text",
+            area,
+            &mut buf,
+            &testdata::ansi16(),
+            &mut hits,
+        );
+        assert_eq!(hits.at(9, 5), None);
+        assert_eq!(hits.at(10, 2), Some(Hit::Inside));
+        assert_eq!(hits.at(30, 6), Some(Hit::Inside));
+        assert_eq!(hits.at(49, 11), Some(Hit::Inside));
+        assert_eq!(hits.at(50, 11), None);
+    }
 }

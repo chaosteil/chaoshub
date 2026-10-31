@@ -8,7 +8,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::models::{Cell, CellStyle, Column, PaneModel, Row, TreeNode};
+use crate::bus::Hit;
 use crate::theme::{Palette, Theme};
+use crate::ui::hits::HitMap;
 use crate::ui::list::{self, Window};
 use crate::ui::{markdown, style, text};
 
@@ -16,7 +18,8 @@ use crate::ui::{markdown, style, text};
 const INDENT: usize = 2;
 
 /// Draws a pane model into an area. `cursor` and `scroll` come from the
-/// pane state.
+/// pane state. Each drawn table row and tree node is a `Hit::PaneRow`
+/// with its index in the model.
 pub(crate) fn render(
     model: &PaneModel,
     cursor: usize,
@@ -24,6 +27,7 @@ pub(crate) fn render(
     area: Rect,
     buf: &mut Buffer,
     theme: &Theme,
+    hits: &mut HitMap,
 ) {
     let area = area.intersection(buf.area);
     if area.is_empty() {
@@ -31,7 +35,12 @@ pub(crate) fn render(
     }
     match model {
         PaneModel::Table { columns, rows } => {
-            render_table(columns, rows, cursor, scroll, area, buf, theme);
+            let window = Window {
+                cursor: Some(cursor),
+                scroll,
+                hit: Hit::PaneRow,
+            };
+            render_table(columns, rows, window, area, buf, theme, hits);
         }
         PaneModel::Lines { lines, wrap } => {
             let lines: Vec<Line<'static>> = lines
@@ -40,7 +49,7 @@ pub(crate) fn render(
                 .collect();
             render_lines(lines, *wrap, scroll, area, buf, theme);
         }
-        PaneModel::Tree { nodes } => render_tree(nodes, cursor, scroll, area, buf, theme),
+        PaneModel::Tree { nodes } => render_tree(nodes, cursor, scroll, area, buf, theme, hits),
     }
 }
 
@@ -74,11 +83,11 @@ fn expand(cells: &[Cell], width: u16, palette: &Palette) -> Vec<Line<'static>> {
 fn render_table(
     columns: &[Column],
     rows: &[Row],
-    cursor: usize,
-    scroll: usize,
+    window: Window,
     area: Rect,
     buf: &mut Buffer,
     theme: &Theme,
+    hits: &mut HitMap,
 ) {
     let p = &theme.palette;
     let header_style = Style::new()
@@ -103,17 +112,7 @@ fn render_table(
         area.width,
         area.height.saturating_sub(1),
     );
-    list::render_rows(
-        columns,
-        rows,
-        Window {
-            cursor: Some(cursor),
-            scroll,
-        },
-        body,
-        buf,
-        theme,
-    );
+    list::render_rows(columns, rows, window, body, buf, theme, hits);
 }
 
 /// Lines of text, wrapped at word boundaries when `wrap` is true, from the
@@ -146,6 +145,7 @@ fn render_tree(
     area: Rect,
     buf: &mut Buffer,
     theme: &Theme,
+    hits: &mut HitMap,
 ) {
     let p = &theme.palette;
     buf.set_style(area, Style::new().bg(p.bg).fg(p.fg));
@@ -170,6 +170,7 @@ fn render_tree(
         let prefix = format!("{}{marker}", " ".repeat(INDENT * usize::from(node.depth)));
         let prefix_width = u16::try_from(text::width(&prefix)).unwrap_or(text_width);
         let lines = expand(&node.cells, text_width.saturating_sub(prefix_width), p);
+        let top = y;
         for (row, line) in lines.into_iter().enumerate() {
             if y >= area.bottom() {
                 break;
@@ -195,6 +196,10 @@ fn render_tree(
             Line::from(spans).render(rect, buf);
             y += 1;
         }
+        hits.push(
+            Rect::new(area.x, top, area.width, y - top),
+            Hit::PaneRow(index),
+        );
     }
 }
 
@@ -206,11 +211,78 @@ mod tests {
     fn draw(model: &PaneModel, cursor: usize, width: u16, height: u16) -> String {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
-        render(model, cursor, 0, area, &mut buf, &testdata::ansi16());
+        let mut hits = HitMap::default();
+        render(
+            model,
+            cursor,
+            0,
+            area,
+            &mut buf,
+            &testdata::ansi16(),
+            &mut hits,
+        );
         (0..height)
             .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The hit map of a pane model drawn at `scroll`.
+    fn hits(model: &PaneModel, scroll: usize, width: u16, height: u16) -> HitMap {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        let mut hits = HitMap::default();
+        render(
+            model,
+            0,
+            scroll,
+            area,
+            &mut buf,
+            &testdata::ansi16(),
+            &mut hits,
+        );
+        hits
+    }
+
+    #[test]
+    fn table_rows_are_hits_below_the_header() {
+        let hits = hits(&testdata::checks_pane(), 1, 60, 6);
+        assert_eq!(hits.at(5, 0), None, "the header row");
+        assert_eq!(hits.at(5, 1), Some(Hit::PaneRow(1)));
+        assert_eq!(hits.at(59, 2), Some(Hit::PaneRow(2)));
+        assert_eq!(hits.at(5, 3), None, "no more rows");
+    }
+
+    #[test]
+    fn tree_nodes_are_hits_over_all_their_rows() {
+        let PaneModel::Tree { mut nodes } = testdata::tree_pane() else {
+            unreachable!()
+        };
+        nodes.insert(
+            0,
+            TreeNode {
+                depth: 0,
+                expanded: None,
+                cells: vec![testdata::cell(
+                    "a long body that wraps over more than one row of the pane",
+                    CellStyle::Markdown,
+                )],
+            },
+        );
+        let hits = hits(&PaneModel::Tree { nodes }, 0, 30, 8);
+        assert_eq!(hits.at(0, 0), Some(Hit::PaneRow(0)));
+        let second = (1..8)
+            .find(|&y| hits.at(0, y) != Some(Hit::PaneRow(0)))
+            .unwrap();
+        assert!(second > 1, "the first node takes more than one row");
+        assert_eq!(hits.at(29, second), Some(Hit::PaneRow(1)));
+        assert_eq!(hits.at(0, second + 1), Some(Hit::PaneRow(2)));
+    }
+
+    #[test]
+    fn lines_have_no_row_hits() {
+        let hits = hits(&testdata::lines_pane(), 0, 40, 6);
+        assert_eq!(hits.at(0, 0), None);
     }
 
     #[test]

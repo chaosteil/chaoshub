@@ -3,25 +3,41 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use crate::app::models::TabBarModel;
+use crate::bus::Hit;
 use crate::theme::Theme;
+use crate::ui::hits::HitMap;
 
 /// The name on the right end of the bar.
 const NAME: &str = "chaoshub";
 
 /// Draws the tab bar. The active tab has the `▌` marker and the surface
-/// background. The free cells get the texture.
-pub(crate) fn render(model: &TabBarModel, area: Rect, buf: &mut Buffer, theme: &Theme) {
+/// background. The free cells get the texture. Each tab label is a
+/// `Hit::Tab`.
+pub(crate) fn render(
+    model: &TabBarModel,
+    area: Rect,
+    buf: &mut Buffer,
+    theme: &Theme,
+    hits: &mut HitMap,
+) {
     let p = &theme.palette;
     let base = Style::new().bg(p.bg).fg(p.fg_mute);
     buf.set_style(area, base);
     let mut spans = Vec::new();
+    let mut x = area.x;
     for (i, title) in model.titles.iter().enumerate() {
         let label = format!(" {} {} ", i + 1, theme.tab_title(title));
-        spans.extend(theme.tab(&label, i == model.active));
+        let tab = theme.tab(&label, i == model.active);
+        let width = tab.iter().map(Span::width).sum::<usize>();
+        let width = u16::try_from(width).unwrap_or(u16::MAX);
+        let label_area = Rect::new(x, area.y, width, area.height.min(1)).intersection(area);
+        hits.push(label_area, Hit::Tab(i));
+        x = x.saturating_add(width);
+        spans.extend(tab);
     }
     let line = Line::from(spans);
     let used = u16::try_from(line.width())
@@ -59,8 +75,26 @@ mod tests {
             titles: vec!["mine", "team"],
             active,
         };
-        render(&model, area, &mut buf, theme);
+        render(&model, area, &mut buf, theme, &mut HitMap::default());
         buf
+    }
+
+    #[test]
+    fn each_tab_label_is_a_hit() {
+        let area = Rect::new(0, 0, 100, 1);
+        let mut buf = Buffer::empty(area);
+        let model = TabBarModel {
+            titles: vec!["mine", "team"],
+            active: 0,
+        };
+        let mut hits = HitMap::default();
+        render(&model, area, &mut buf, &testdata::punk(), &mut hits);
+        // `◤ 1 MINE ◢  2 TEAM  `: the first label is 10 cells wide.
+        assert_eq!(hits.at(0, 0), Some(Hit::Tab(0)));
+        assert_eq!(hits.at(9, 0), Some(Hit::Tab(0)));
+        assert_eq!(hits.at(10, 0), Some(Hit::Tab(1)));
+        assert_eq!(hits.at(17, 0), Some(Hit::Tab(1)));
+        assert_eq!(hits.at(30, 0), None, "the free cells hit nothing");
     }
 
     #[test]

@@ -11,7 +11,9 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
 use crate::app::models::{Cell, CellStyle, Column, ColumnWidth, ListModel, Row, RowItem, RowStyle};
+use crate::bus::Hit;
 use crate::theme::Theme;
+use crate::ui::hits::HitMap;
 use crate::ui::{style, text};
 
 /// The space between two columns.
@@ -194,28 +196,40 @@ fn render_row(frame: &Frame<'_>, row: &Row, y: u16, selected: bool, buf: &mut Bu
     }
 }
 
-/// Draws a list model into an area, from the scroll offset down.
-pub(crate) fn render(model: &ListModel, area: Rect, buf: &mut Buffer, theme: &Theme) {
+/// Draws a list model into an area, from the scroll offset down. Each
+/// drawn row is a `Hit::Row` with its index in the model.
+pub(crate) fn render(
+    model: &ListModel,
+    area: Rect,
+    buf: &mut Buffer,
+    theme: &Theme,
+    hits: &mut HitMap,
+) {
     render_rows(
         &model.columns,
         &model.rows,
         Window {
             cursor: Some(model.cursor),
             scroll: model.scroll,
+            hit: Hit::Row,
         },
         area,
         buf,
         theme,
+        hits,
     );
 }
 
-/// The cursor and the scroll offset of a list of rows.
+/// The cursor and the scroll offset of a list of rows, and the hit of a
+/// row.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Window {
     /// The selected row, if rows can be selected.
     pub cursor: Option<usize>,
     /// The index of the first visible row.
     pub scroll: usize,
+    /// The hit of the row at an index in the rows.
+    pub hit: fn(usize) -> Hit,
 }
 
 /// The x offset of the first column, after the gutter.
@@ -224,7 +238,7 @@ pub(crate) fn columns_x(area: Rect) -> u16 {
 }
 
 /// Draws rows with columns into an area. The list and the pane tables
-/// share it.
+/// share it. Each drawn row is the hit of `window` for its index.
 pub(crate) fn render_rows(
     columns: &[Column],
     rows: &[Row],
@@ -232,6 +246,7 @@ pub(crate) fn render_rows(
     area: Rect,
     buf: &mut Buffer,
     theme: &Theme,
+    hits: &mut HitMap,
 ) {
     let area = area.intersection(buf.area);
     buf.set_style(area, Style::new().fg(theme.palette.fg).bg(theme.palette.bg));
@@ -255,6 +270,7 @@ pub(crate) fn render_rows(
     let mut drawn = 0;
     for (y, (index, row)) in (area.y..).zip(visible) {
         render_row(&frame, row, y, window.cursor == Some(index), buf);
+        hits.push(Rect::new(area.x, y, area.width, 1), (window.hit)(index));
         drawn += 1;
     }
     let empty = Rect::new(
@@ -275,8 +291,23 @@ mod tests {
     fn draw(model: &ListModel, width: u16, height: u16, theme: &Theme) -> Buffer {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
-        render(model, area, &mut buf, theme);
+        render(model, area, &mut buf, theme, &mut HitMap::default());
         buf
+    }
+
+    #[test]
+    fn each_drawn_row_is_a_hit_with_its_index() {
+        let mut model = testdata::mine_list();
+        model.scroll = 2;
+        let area = Rect::new(0, 3, 100, 4);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 10));
+        let mut hits = HitMap::default();
+        render(&model, area, &mut buf, &testdata::ansi16(), &mut hits);
+        assert_eq!(hits.at(0, 3), Some(Hit::Row(2)));
+        assert_eq!(hits.at(50, 4), Some(Hit::Row(3)));
+        assert_eq!(hits.at(99, 5), Some(Hit::Row(4)));
+        assert_eq!(hits.at(0, 2), None, "above the list");
+        assert_eq!(hits.at(0, 6), None, "no row is drawn here");
     }
 
     fn lines(buf: &Buffer) -> String {

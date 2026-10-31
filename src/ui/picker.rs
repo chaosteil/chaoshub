@@ -6,11 +6,14 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Clear, Widget};
 
+use crate::bus::Hit;
 use crate::theme::Theme;
 use crate::theme::ThemeBlock;
+use crate::ui::hits::HitMap;
 use crate::ui::text;
 
-/// Draws the picker popup into its area.
+/// Draws the picker popup into its area. The whole area is a
+/// `Hit::Inside`, and each drawn item is a `Hit::Item` with its index.
 pub(crate) fn render(
     title: &str,
     items: &[String],
@@ -18,9 +21,11 @@ pub(crate) fn render(
     area: Rect,
     buf: &mut Buffer,
     theme: &Theme,
+    hits: &mut HitMap,
 ) {
     let p = &theme.palette;
     let area = area.intersection(buf.area);
+    hits.push(area, Hit::Inside);
     Clear.render(area, buf);
     theme
         .block(title)
@@ -38,6 +43,7 @@ pub(crate) fn render(
     let width = usize::from(inner.width.saturating_sub(2 + tail));
     for (y, (index, item)) in (inner.y..).zip(items.iter().enumerate().skip(offset).take(rows)) {
         let line = Rect::new(inner.x, y, inner.width, 1);
+        hits.push(line, Hit::Item(index));
         if index == cursor {
             let style = Style::new().fg(p.fg).patch(selection.patch);
             buf.set_style(line, style);
@@ -59,5 +65,34 @@ pub(crate) fn render(
                 Style::new().fg(p.fg_dim),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::testdata;
+
+    #[test]
+    fn hits_of_the_picker() {
+        let area = Rect::new(10, 2, 30, 7);
+        let items: Vec<String> = (0..10).map(|i| format!("colleague-{i:02}")).collect();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 50, 12));
+        let mut hits = HitMap::default();
+        render(
+            "author",
+            &items,
+            7,
+            area,
+            &mut buf,
+            &testdata::ansi16(),
+            &mut hits,
+        );
+        assert_eq!(hits.at(9, 4), None, "left of the picker");
+        assert_eq!(hits.at(10, 4), Some(Hit::Inside), "the border");
+        // Five rows show items 3 to 7, so the cursor stays visible.
+        assert_eq!(hits.at(12, 3), Some(Hit::Item(3)));
+        assert_eq!(hits.at(38, 7), Some(Hit::Item(7)));
+        assert_eq!(hits.at(12, 8), Some(Hit::Inside), "the bottom border");
     }
 }

@@ -5,6 +5,7 @@ mod confirm;
 mod filter;
 mod help;
 mod hints;
+pub(crate) mod hits;
 mod list;
 mod markdown;
 mod output;
@@ -26,6 +27,7 @@ use ratatui::layout::Rect;
 use crate::app::layout::{self, Areas};
 use crate::app::models::{FrameModel, OverlayContent, OverlayModel};
 use crate::theme::Theme;
+use crate::ui::hits::HitMap;
 
 /// The width of a confirm or prompt popup.
 const DIALOG_WIDTH: u16 = 64;
@@ -82,10 +84,18 @@ pub(crate) fn overlay_area(overlay: &OverlayModel, areas: &Areas) -> Rect {
 }
 
 /// Draws one frame: the tab bar, the list, the key hint bar, the status
-/// bar and the overlay stack.
-pub(crate) fn view(frame: &mut Frame<'_>, model: &FrameModel, areas: &Areas, theme: &Theme) {
+/// bar and the overlay stack. `hits` gets the targets of the frame, in
+/// draw order, so an overlay covers the targets below it.
+pub(crate) fn view(
+    frame: &mut Frame<'_>,
+    model: &FrameModel,
+    areas: &Areas,
+    theme: &Theme,
+    hits: &mut HitMap,
+) {
+    hits.clear();
     let buf = frame.buffer_mut();
-    tabbar::render(&model.tab_bar, rect(areas.tab_bar), buf, theme);
+    tabbar::render(&model.tab_bar, rect(areas.tab_bar), buf, theme, hits);
     let mut list_area = rect(areas.list);
     if let Some(line) = &model.filter
         && list_area.height > 0
@@ -94,13 +104,13 @@ pub(crate) fn view(frame: &mut Frame<'_>, model: &FrameModel, areas: &Areas, the
         let line_area = Rect::new(list_area.x, list_area.bottom(), list_area.width, 1);
         filter::render(line, line_area, buf, theme);
     }
-    list::render(&model.list, list_area, buf, theme);
+    list::render(&model.list, list_area, buf, theme, hits);
     if let Some(model) = &model.hints {
-        hints::render(model, rect(areas.hints), buf, theme);
+        hints::render(model, rect(areas.hints), buf, theme, hits);
     }
     status::render(&model.status, rect(areas.status), buf, theme);
     for overlay in &model.overlays {
-        render_overlay(overlay, areas, buf, theme);
+        render_overlay(overlay, areas, buf, theme, hits);
     }
 }
 
@@ -110,6 +120,7 @@ fn render_overlay(
     areas: &Areas,
     buf: &mut ratatui::buffer::Buffer,
     theme: &Theme,
+    hits: &mut HitMap,
 ) {
     let area = overlay_area(overlay, areas);
     match &overlay.content {
@@ -131,17 +142,21 @@ fn render_overlay(
                 cursor: *cursor,
                 scroll: *scroll,
             };
-            popup::render(&content, area, buf, theme);
+            popup::render(&content, area, buf, theme, hits);
         }
-        OverlayContent::Help(help) => help::render(help, area, buf, theme),
-        OverlayContent::Prompt { spec, text } => prompt::render(spec, text, area, buf, theme),
-        OverlayContent::Output { title, lines } => output::render(title, lines, area, buf, theme),
-        OverlayContent::Confirm(spec) => confirm::render(spec, area, buf, theme),
+        OverlayContent::Help(help) => help::render(help, area, buf, theme, hits),
+        OverlayContent::Prompt { spec, text } => {
+            prompt::render(spec, text, area, buf, theme, hits);
+        }
+        OverlayContent::Output { title, lines } => {
+            output::render(title, lines, area, buf, theme, hits);
+        }
+        OverlayContent::Confirm(spec) => confirm::render(spec, area, buf, theme, hits),
         OverlayContent::Picker {
             title,
             items,
             cursor,
-        } => picker::render(title, items, *cursor, area, buf, theme),
+        } => picker::render(title, items, *cursor, area, buf, theme, hits),
     }
 }
 
@@ -155,9 +170,56 @@ mod tests {
         let mut terminal = testdata::terminal(width, height);
         let areas = testdata::areas(width, height);
         terminal
-            .draw(|frame| view(frame, model, &areas, theme))
+            .draw(|frame| view(frame, model, &areas, theme, &mut HitMap::default()))
             .unwrap();
         terminal.backend().to_string()
+    }
+
+    /// The hit map of a frame model drawn at 100 by 30.
+    fn hits(model: &FrameModel) -> HitMap {
+        let mut terminal = testdata::terminal(100, 30);
+        let areas = testdata::areas(100, 30);
+        let mut hits = HitMap::default();
+        terminal
+            .draw(|frame| view(frame, model, &areas, &testdata::pierre(), &mut hits))
+            .unwrap();
+        hits
+    }
+
+    #[test]
+    fn the_sidebar_covers_the_list_rows_under_it() {
+        let model = FrameModel {
+            hints: Some(testdata::hints()),
+            ..popup()
+        };
+        let hits = hits(&model);
+        let areas = testdata::areas(100, 30);
+        let popup = rect(areas.popup);
+        let y = popup.y + 2;
+        assert_eq!(hits.at(popup.x - 1, y), Some(crate::bus::Hit::Row(2)));
+        assert_eq!(hits.at(popup.x, y), Some(crate::bus::Hit::Inside));
+        assert_eq!(hits.at(2, 0), Some(crate::bus::Hit::Tab(0)));
+        assert!(
+            matches!(hits.at(2, areas.hints.y), Some(crate::bus::Hit::Key(_))),
+            "the hint bar stays"
+        );
+        assert_eq!(hits.at(2, areas.status.y), None, "the status bar");
+    }
+
+    #[test]
+    fn the_last_overlay_covers_the_ones_below() {
+        let mut model = popup();
+        model.overlays.push(testdata::picker_overlay(5, 1));
+        let picker = overlay_area(&model.overlays[1], &testdata::areas(100, 30));
+        let hits = hits(&model);
+        assert_eq!(
+            hits.at(picker.x + 2, picker.y + 1),
+            Some(crate::bus::Hit::Item(0))
+        );
+        assert_eq!(
+            hits.at(picker.x, picker.y + 1),
+            Some(crate::bus::Hit::Inside)
+        );
     }
 
     #[test]
@@ -233,7 +295,7 @@ mod tests {
                 fx.prepare(model, &areas);
                 terminal
                     .draw(|frame| {
-                        view(frame, model, &areas, &theme);
+                        view(frame, model, &areas, &theme, &mut HitMap::default());
                         fx.process(frame, std::time::Duration::from_millis(ms));
                     })
                     .unwrap();
@@ -385,7 +447,7 @@ mod tests {
         let areas = testdata::areas(100, 30);
         let mut terminal = testdata::terminal(100, 30);
         terminal
-            .draw(|frame| view(frame, &model, &areas, &theme))
+            .draw(|frame| view(frame, &model, &areas, &theme, &mut HitMap::default()))
             .unwrap();
         let area = overlay_area(&model.overlays[0], &areas);
         let corner = &terminal.backend().buffer()[(area.x, area.y)];
@@ -501,7 +563,13 @@ mod tests {
             for (width, _) in PUNK_SIZES {
                 let area = Rect::new(0, 0, width, 1);
                 let mut buf = ratatui::buffer::Buffer::empty(area);
-                hints::render(&testdata::hints(), area, &mut buf, &theme);
+                hints::render(
+                    &testdata::hints(),
+                    area,
+                    &mut buf,
+                    &theme,
+                    &mut HitMap::default(),
+                );
                 let row: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
                 insta::assert_snapshot!(format!("punk_hints_{width}_{kind}"), row);
             }
