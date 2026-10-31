@@ -389,18 +389,22 @@ pub(crate) fn popup_overlay() -> OverlayModel {
             tabs: vec![
                 PaneTab {
                     key: '1',
-                    title: "Checks",
+                    title: "Description",
                 },
                 PaneTab {
                     key: '2',
-                    title: "Conversation",
+                    title: "Checks",
                 },
                 PaneTab {
                     key: '3',
+                    title: "Conversation",
+                },
+                PaneTab {
+                    key: '4',
                     title: "Stack",
                 },
             ],
-            active: 0,
+            active: 1,
             pane: checks_pane(),
             cursor: 1,
             scroll: 0,

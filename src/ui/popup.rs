@@ -27,8 +27,8 @@ pub(crate) struct Popup<'a> {
     pub scroll: usize,
 }
 
-/// The pane tabs: `1 Checks  2 Conversation  3 Stack`, with the active
-/// tab marked.
+/// The pane tabs: `1 Description  2 Checks  3 Conversation  4 Stack`, with
+/// the active tab marked.
 fn tabs_line(tabs: &[PaneTab], active: usize, theme: &Theme) -> Line<'static> {
     let mut spans = Vec::new();
     for (i, tab) in tabs.iter().enumerate() {

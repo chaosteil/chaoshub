@@ -1521,12 +1521,16 @@ mod tests {
 
     #[test]
     fn popup_checks_100() {
-        insta::assert_snapshot!(screen(&mut popup_app(100, 30)));
+        let mut app = popup_app(100, 30);
+        press(&mut app, '2');
+        insta::assert_snapshot!(screen(&mut app));
     }
 
     #[test]
     fn popup_checks_160() {
-        insta::assert_snapshot!(screen(&mut popup_app(160, 40)));
+        let mut app = popup_app(160, 40);
+        press(&mut app, '2');
+        insta::assert_snapshot!(screen(&mut app));
     }
 
     /// The popup on #101 with a conversation, on the conversation pane,
@@ -1541,7 +1545,7 @@ mod tests {
             observed_at: crate::domain::test_time(),
         };
         app.update(Msg::DetailLoaded(key, Ok(observed)));
-        press(&mut app, '2');
+        press(&mut app, '3');
         for _ in 0..3 {
             press(&mut app, 'j');
         }
@@ -1566,7 +1570,7 @@ mod tests {
     #[test]
     fn popup_stack_100() {
         let mut app = popup_app(100, 30);
-        press(&mut app, '3');
+        press(&mut app, '4');
         insta::assert_snapshot!(screen(&mut app));
     }
 
@@ -1579,7 +1583,7 @@ mod tests {
             observed_at: crate::domain::test_time(),
         };
         app.update(Msg::DetailLoaded(key, Ok(observed)));
-        press(&mut app, '2');
+        press(&mut app, '3');
         insta::assert_snapshot!(screen(&mut app));
     }
 

@@ -25,7 +25,7 @@ impl Pane for Checks {
     }
 
     fn key(&self) -> char {
-        '1'
+        '2'
     }
 
     fn applies(&self, target: &Target) -> bool {
