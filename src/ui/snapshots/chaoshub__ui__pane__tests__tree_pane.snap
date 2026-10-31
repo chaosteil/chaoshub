@@ -1,0 +1,8 @@
+---
+source: src/ui/pane.rs
+expression: "draw(&testdata::tree_pane(), 2, 60, 6)"
+---
+   alice · commented 2h ago                                 
+ ▸ src/ui/list.rs:42 · 3 comments · resolved                
+▌▾ src/ui/pane.rs:7 · 1 comment                             
+     bob: the gutter eats one column

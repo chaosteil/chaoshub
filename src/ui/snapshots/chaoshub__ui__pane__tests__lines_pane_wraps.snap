@@ -1,0 +1,7 @@
+---
+source: src/ui/pane.rs
+expression: "draw(&testdata::lines_pane(), 0, 40, 6)"
+---
+1 #101 feat(app): Pane trait, registry  
+and overlay stack                       
+2 #102 feat(app): checks pane stale

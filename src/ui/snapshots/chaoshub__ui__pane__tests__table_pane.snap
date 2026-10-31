@@ -1,0 +1,8 @@
+---
+source: src/ui/pane.rs
+expression: "draw(&testdata::checks_pane(), 1, 60, 6)"
+---
+ NAME                                    STATE      DURATION
+ ci / build                              ✓ success    2m 10s
+▌ci / test                               ✗ failure    4m 02s
+ ci / lint                               ● running       48s

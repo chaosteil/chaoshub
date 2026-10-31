@@ -5,10 +5,10 @@ use ratatui::backend::TestBackend;
 
 use crate::app::layout::{Areas, layout};
 use crate::app::models::{
-    Align, Cell, CellStyle, Column, ColumnWidth, Direction, FrameModel, ListModel, Row, RowItem,
-    RowStyle, StatusModel, TabBarModel,
+    Align, Cell, CellStyle, Column, ColumnWidth, Direction, FrameModel, ListModel, OverlayContent,
+    OverlayModel, PaneModel, PaneTab, Row, RowItem, RowStyle, StatusModel, TabBarModel, TreeNode,
 };
-use crate::bus::{PrRef, Progress, Size, TermState, TermStatus};
+use crate::bus::{OverlayKind, PrRef, Progress, Size, TermState, TermStatus};
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::theme::{Theme, ThemeKind};
 
@@ -265,6 +265,139 @@ pub(crate) fn sliding_frame() -> FrameModel {
         },
         list: team_list(),
         prev_list: Some((mine_list(), Direction::Left)),
+        ..frame()
+    }
+}
+
+fn check_row(name: &str, state: (&str, CellStyle), duration: &str) -> Row {
+    Row {
+        item: RowItem::Pr(pr_ref(101)),
+        cells: vec![
+            cell(name, CellStyle::Normal),
+            cell(state.0, state.1),
+            cell(duration, CellStyle::Dim),
+        ],
+        depth: 0,
+        glyph: None,
+        style: RowStyle::Normal,
+    }
+}
+
+/// The checks pane: a table of checks.
+pub(crate) fn checks_pane() -> PaneModel {
+    PaneModel::Table {
+        columns: vec![
+            column("name", ColumnWidth::Fill { min: 20 }, Align::Left),
+            column("state", ColumnWidth::Fixed(10), Align::Left),
+            column("duration", ColumnWidth::Fixed(8), Align::Right),
+        ],
+        rows: vec![
+            check_row("ci / build", ("✓ success", CellStyle::Success), "2m 10s"),
+            check_row("ci / test", ("✗ failure", CellStyle::Danger), "4m 02s"),
+            check_row("ci / lint", ("● running", CellStyle::Warn), "48s"),
+        ],
+    }
+}
+
+/// A lines pane with a long line that wraps.
+pub(crate) fn lines_pane() -> PaneModel {
+    PaneModel::Lines {
+        lines: vec![
+            vec![
+                cell("1 ", CellStyle::Dim),
+                cell("#101 ", CellStyle::Primary),
+                cell(
+                    "feat(app): Pane trait, registry and overlay stack",
+                    CellStyle::Normal,
+                ),
+            ],
+            vec![
+                cell("2 ", CellStyle::Dim),
+                cell("#102 ", CellStyle::Primary),
+                cell("feat(app): checks pane", CellStyle::Normal),
+                cell(" stale", CellStyle::Warn),
+            ],
+        ],
+        wrap: true,
+    }
+}
+
+/// A tree pane: a comment, a collapsed thread and an open thread.
+pub(crate) fn tree_pane() -> PaneModel {
+    let node = |depth: u8, expanded: Option<bool>, cells: Vec<Cell>| TreeNode {
+        depth,
+        expanded,
+        cells,
+    };
+    PaneModel::Tree {
+        nodes: vec![
+            node(
+                0,
+                None,
+                vec![
+                    cell("alice", CellStyle::Info),
+                    cell(" · commented 2h ago", CellStyle::Dim),
+                ],
+            ),
+            node(
+                0,
+                Some(false),
+                vec![cell(
+                    "src/ui/list.rs:42 · 3 comments · resolved",
+                    CellStyle::Normal,
+                )],
+            ),
+            node(
+                0,
+                Some(true),
+                vec![cell("src/ui/pane.rs:7 · 1 comment", CellStyle::Normal)],
+            ),
+            node(
+                1,
+                None,
+                vec![
+                    cell("bob", CellStyle::Info),
+                    cell(": the gutter eats one column", CellStyle::Normal),
+                ],
+            ),
+        ],
+    }
+}
+
+/// The PR popup overlay with the checks pane.
+pub(crate) fn popup_overlay() -> OverlayModel {
+    OverlayModel {
+        kind: OverlayKind::Popup,
+        closing: false,
+        content: OverlayContent::Popup {
+            title: "#101 feat(app): Pane trait, registry and overlay stack".to_owned(),
+            subtitle: "chaosteil · chaosteil/push-trptoqkq -> main · open".to_owned(),
+            tabs: vec![
+                PaneTab {
+                    key: '1',
+                    title: "Checks",
+                },
+                PaneTab {
+                    key: '2',
+                    title: "Conversation",
+                },
+                PaneTab {
+                    key: '3',
+                    title: "Stack",
+                },
+            ],
+            active: 0,
+            pane: checks_pane(),
+            cursor: 1,
+            scroll: 0,
+        },
+    }
+}
+
+/// A frame model with one overlay over the mine list.
+pub(crate) fn with_overlay(overlay: OverlayModel) -> FrameModel {
+    FrameModel {
+        overlays: vec![overlay],
         ..frame()
     }
 }
