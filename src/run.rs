@@ -67,6 +67,9 @@ const PAUSE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Ghostty resets a progress bar after about 15 s without an update.
 const PROGRESS_KEEP_ALIVE: Duration = Duration::from_secs(1);
 
+/// A frame whose render takes longer than this is slow.
+const SLOW_FRAME: Duration = Duration::from_millis(12);
+
 /// The crossterm terminal of the event loop.
 type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
 
@@ -154,6 +157,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         last_draw: None,
         started: Some(started),
         foreground: VecDeque::new(),
+        slow: SlowFrames::default(),
     };
     // The first frame comes before any subprocess: the workers start
     // after it.
@@ -409,6 +413,35 @@ struct EventLoop {
     /// The terminal commands to run in the foreground, without a
     /// launcher.
     foreground: VecDeque<Foreground>,
+    /// The slow frames in a row.
+    slow: SlowFrames,
+}
+
+/// Counts the slow frames in a row. The second slow frame in a row
+/// trips the latch, and the transitions stay off for the session.
+#[derive(Debug, Default)]
+struct SlowFrames {
+    /// The slow frames since the last fast frame.
+    in_row: u8,
+    /// True after the latch tripped.
+    tripped: bool,
+}
+
+impl SlowFrames {
+    /// Records the render time of one frame. True only for the frame
+    /// that trips the latch.
+    fn record(&mut self, render: Duration) -> bool {
+        if self.tripped {
+            return false;
+        }
+        if render <= SLOW_FRAME {
+            self.in_row = 0;
+            return false;
+        }
+        self.in_row += 1;
+        self.tripped = self.in_row >= 2;
+        self.tripped
+    }
 }
 
 /// A terminal command that the event loop runs in the foreground.
@@ -423,13 +456,14 @@ impl EventLoop {
     fn draw_now(&mut self, terminal: &mut CrosstermTerminal) -> anyhow::Result<()> {
         self.drawn = Some(self.app.generation());
         self.last_draw = Some(Instant::now());
-        draw(
+        let render = draw(
             terminal,
             &mut self.app,
             &mut self.transitions,
             &self.theme,
             Duration::ZERO,
         )?;
+        self.frame_done(render);
         if let Some(started) = self.started.take() {
             tracing::info!(ms = started.elapsed().as_millis(), "startup: first frame");
         }
@@ -451,13 +485,14 @@ impl EventLoop {
                 let elapsed = frame_elapsed(self.last_draw, now, self.was_active);
                 self.drawn = Some(self.app.generation());
                 self.last_draw = Some(now);
-                draw(
+                let render_time = draw(
                     terminal,
                     &mut self.app,
                     &mut self.transitions,
                     &self.theme,
                     elapsed,
                 )?;
+                self.frame_done(render_time);
                 if let Some(started) = self.started.take() {
                     tracing::info!(ms = started.elapsed().as_millis(), "startup: first frame");
                 }
@@ -483,6 +518,26 @@ impl EventLoop {
         Ok(())
     }
 
+    /// Records the render time of a frame. Two slow frames in a row turn
+    /// the transitions off for the session.
+    fn frame_done(&mut self, render: Duration) {
+        if self.slow.record(render) {
+            self.transitions.disable();
+            tracing::warn!(
+                render_us = render.as_micros(),
+                limit_ms = SLOW_FRAME.as_millis(),
+                "two slow frames in a row, the transitions are off for this session"
+            );
+        }
+    }
+
+    /// Stops the running transitions and drops the UI events, so no
+    /// transition runs around a foreground command.
+    fn drop_transitions(&mut self) {
+        self.transitions.cancel();
+        drop(self.app.take_ui_events());
+    }
+
     /// Runs `update` and executes the commands. Without a launcher, a
     /// `Cmd::RunTerminal` waits for `run_foreground`.
     fn update(&mut self, msg: Msg) {
@@ -499,7 +554,8 @@ impl EventLoop {
     /// Runs the queued terminal commands in the foreground, one after the
     /// other. The reader pauses, so the command owns stdin, and the
     /// terminal leaves the alternate screen and raw mode until the command
-    /// ends. Nothing draws, so no transition runs meanwhile.
+    /// ends. The running transitions stop and the UI events before and
+    /// after the command are dropped, so no transition runs around it.
     fn run_foreground(
         &mut self,
         terminal: &mut CrosstermTerminal,
@@ -513,6 +569,7 @@ impl EventLoop {
                 id,
                 key: key.clone(),
             });
+            self.drop_transitions();
             if let Err(err) = self.term.clear(&mut io::stdout()) {
                 tracing::warn!(%err, "cannot clear the terminal status");
             }
@@ -527,6 +584,7 @@ impl EventLoop {
             reader.resume();
             self.drawn = None;
             self.update(Msg::PaneEnded { id, key });
+            self.drop_transitions();
         }
         Ok(())
     }
@@ -556,13 +614,14 @@ fn frame_elapsed(last_draw: Option<Instant>, now: Instant, was_active: bool) -> 
 }
 
 /// Draws one frame: the frame model, the transitions and the view.
+/// Returns the render time.
 fn draw<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     transitions: &mut Transitions,
     theme: &Theme,
     elapsed: Duration,
-) -> Result<(), B::Error> {
+) -> Result<Duration, B::Error> {
     let started = Instant::now();
     transitions.apply(app.take_ui_events());
     let areas = layout(app.size());
@@ -572,8 +631,9 @@ fn draw<B: Backend>(
         ui::view(frame, model, &areas, theme);
         transitions.process(frame, elapsed);
     })?;
-    tracing::trace!(render_us = started.elapsed().as_micros(), "frame");
-    Ok(())
+    let render = started.elapsed();
+    tracing::trace!(render_us = render.as_micros(), "frame");
+    Ok(render)
 }
 
 /// Puts the terminal in raw mode on the alternate screen, and restores it
@@ -944,6 +1004,28 @@ mod tests {
         assert!(remove_cache(&path).unwrap());
         assert!(!path.exists());
         assert!(!remove_cache(&path).unwrap());
+    }
+
+    /// A fake clock: the render times of the frames, in milliseconds.
+    fn renders(latch: &mut SlowFrames, ms: &[u64]) -> Vec<bool> {
+        ms.iter()
+            .map(|&ms| latch.record(Duration::from_millis(ms)))
+            .collect()
+    }
+
+    #[test]
+    fn two_slow_frames_in_a_row_trip_the_latch_once() {
+        let mut latch = SlowFrames::default();
+        assert_eq!(
+            renders(&mut latch, &[5, 13, 4, 13, 12, 20, 30]),
+            [false, false, false, false, false, false, true]
+        );
+        assert!(latch.tripped);
+        assert_eq!(
+            renders(&mut latch, &[40, 40, 1]),
+            [false, false, false],
+            "the latch trips only once a session"
+        );
     }
 
     #[test]

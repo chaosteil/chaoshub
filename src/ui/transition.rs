@@ -347,6 +347,21 @@ impl Transitions {
         self.manager.add_unique_effect(FxKey::Status, effect);
     }
 
+    /// Turns the transitions off for the rest of the session and stops
+    /// the running effects.
+    pub(crate) fn disable(&mut self) {
+        self.enabled = false;
+        self.cancel();
+    }
+
+    /// Stops the running effects and the pending status fade. The next
+    /// frame shows the end state.
+    pub(crate) fn cancel(&mut self) {
+        self.manager = EffectManager::default();
+        self.scroll = None;
+        self.status_pending = false;
+    }
+
     /// True while a transition runs.
     pub(crate) fn active(&self) -> bool {
         self.manager.is_running() || self.status_pending
