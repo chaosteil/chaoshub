@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Deserializer};
 
 use crate::domain::keys::RepoKey;
+use crate::domain::merge::MergeMethod;
 
 /// One `[[repo]]` entry: a repo to track and its local checkout.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -115,6 +116,17 @@ pub(crate) enum MergeMethodSetting {
     Merge,
     Squash,
     Rebase,
+}
+
+impl From<MergeMethodSetting> for MergeMethod {
+    /// The domain merge method of a `[merge.repos."owner/name"] method`.
+    fn from(setting: MergeMethodSetting) -> Self {
+        match setting {
+            MergeMethodSetting::Merge => MergeMethod::Merge,
+            MergeMethodSetting::Squash => MergeMethod::Squash,
+            MergeMethodSetting::Rebase => MergeMethod::Rebase,
+        }
+    }
 }
 
 /// The `[theme]` section.
@@ -227,6 +239,18 @@ mod tests {
         );
         for bad in ["chaoshub", "/chaoshub", "chaosteil/", "a/b/c", ""] {
             assert_eq!(parse_repo_name(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn every_merge_method_setting_converts() {
+        let cases = [
+            (MergeMethodSetting::Merge, MergeMethod::Merge),
+            (MergeMethodSetting::Squash, MergeMethod::Squash),
+            (MergeMethodSetting::Rebase, MergeMethod::Rebase),
+        ];
+        for (setting, method) in cases {
+            assert_eq!(MergeMethod::from(setting), method);
         }
     }
 }

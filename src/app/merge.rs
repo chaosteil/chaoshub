@@ -1,4 +1,5 @@
-//! Maps the merge settings of the configuration to the domain.
+//! Maps the merge settings of the configuration to the domain, through
+//! the conversion in `config`.
 
 use crate::config::schema::MergeMethodSetting;
 use crate::domain::merge::MergeMethod;
@@ -9,11 +10,7 @@ use crate::domain::merge::MergeMethod;
     reason = "the merge action of phase E resolves the method of a repo with it"
 )]
 pub(crate) fn merge_method(setting: MergeMethodSetting) -> MergeMethod {
-    match setting {
-        MergeMethodSetting::Merge => MergeMethod::Merge,
-        MergeMethodSetting::Squash => MergeMethod::Squash,
-        MergeMethodSetting::Rebase => MergeMethod::Rebase,
-    }
+    MergeMethod::from(setting)
 }
 
 #[cfg(test)]
