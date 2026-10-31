@@ -1,10 +1,10 @@
 //! Adapter for the GitHub GraphQL and REST APIs.
 #![allow(dead_code, reason = "the workers use the client in a later phase")]
 
-mod budget;
+pub(crate) mod budget;
 pub(crate) mod error;
 mod graphql;
-mod parse;
+pub(crate) mod parse;
 mod queries;
 mod rest;
 pub(crate) mod token;
