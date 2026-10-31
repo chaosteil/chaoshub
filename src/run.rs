@@ -39,6 +39,7 @@ use crate::cli::{CacheAction, CacheCommand, Cli};
 use crate::config::schema::parse_repo_name;
 use crate::config::{self, Config, paths};
 use crate::domain::repo::Repo;
+use crate::github::{GITHUB_API, GithubClient, TokenSource};
 use crate::launch::rex::RexLauncher;
 use crate::osc;
 use crate::store::handle::StoreHandle;
@@ -46,6 +47,9 @@ use crate::store::{Snapshot, Store};
 use crate::theme::{Theme, ThemeKind};
 use crate::ui;
 use crate::ui::transition::Transitions;
+use crate::vcs::lock::RepoLocks;
+use crate::workers::ctx::WorkerCtx;
+use crate::workers::spawn_all;
 
 /// The capacity of the message channel.
 const CHANNEL_CAPACITY: usize = 256;
@@ -115,7 +119,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     };
 
     let reader = Reader::spawn(tx.clone())?;
-    let signals = spawn_signals(tx)?;
+    let signals = spawn_signals(tx.clone())?;
     let app = App::new(
         size,
         keymap,
@@ -127,7 +131,8 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         login: None,
         repos: settings.repos.clone(),
     };
-    let (senders, _channels) = channels(store, first_interest(&app), session);
+    let (senders, channels) = channels(store.clone(), first_interest(&app), session);
+    let ctx = worker_ctx(&settings.config, store, tx, channels)?;
     let mut event_loop = EventLoop {
         app,
         runtime: Runtime::new(tokio.handle().clone(), senders),
@@ -141,7 +146,17 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         last_draw: None,
         started: Some(started),
     };
-    let result = event_loop.run(&mut terminal, rx);
+    // The first frame comes before any subprocess: the workers start
+    // after it.
+    let result = event_loop.draw_now(&mut terminal).and_then(|()| {
+        let workers = {
+            let _runtime = tokio.enter();
+            spawn_all(ctx)
+        };
+        let result = event_loop.run(&mut terminal, rx);
+        drop(workers);
+        result
+    });
     if let Err(err) = event_loop.term.clear(&mut io::stdout()) {
         tracing::warn!(%err, "cannot clear the terminal status");
     }
@@ -153,11 +168,33 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     result
 }
 
+/// The context of the workers: the GitHub client with the token of
+/// `gh auth token`, the store, the configuration, the message channel, the
+/// watches and the request channels, and the repo locks.
+fn worker_ctx(
+    config: &Config,
+    store: StoreHandle,
+    tx: mpsc::Sender<Msg>,
+    channels: WorkerChannels,
+) -> anyhow::Result<WorkerCtx> {
+    let client = GithubClient::new(TokenSource::gh(), GITHUB_API)?;
+    Ok(WorkerCtx {
+        client: Arc::new(client),
+        store,
+        config: Arc::new(config.clone()),
+        tx,
+        interest: channels.interest,
+        session: channels.session,
+        sync_rx: Arc::new(tokio::sync::Mutex::new(channels.sync)),
+        jj_rx: Arc::new(tokio::sync::Mutex::new(channels.jj)),
+        locks: RepoLocks::default(),
+    })
+}
+
 /// The capacity of the request channels of the sync and the jj worker.
 const REQUEST_CAPACITY: usize = 32;
 
 /// The receiving ends of the channels from the runtime to the workers.
-#[allow(dead_code, reason = "the next commit gives them to the workers")]
 struct WorkerChannels {
     interest: watch::Receiver<Interest>,
     session: watch::Receiver<Session>,
@@ -231,10 +268,7 @@ fn open_store() -> (Snapshot, StoreHandle) {
 /// The settings that `run` builds from the configuration and the command
 /// line, for the parts of the app that start after the first frame.
 #[derive(Debug)]
-#[allow(
-    dead_code,
-    reason = "phase D builds the Session and the workers from it, and phase E gives the launcher to the runtime"
-)]
+#[allow(dead_code, reason = "phase E gives the launcher to the runtime")]
 struct Settings {
     /// The configuration, with `--no-prefetch` applied.
     config: Config,
@@ -319,10 +353,7 @@ struct EventLoop {
     transitions: Transitions,
     theme: Theme,
     term: TermWriter,
-    #[allow(
-        dead_code,
-        reason = "phase D builds the Session and the workers from it, and phase E gives the launcher to the runtime"
-    )]
+    #[allow(dead_code, reason = "phase E gives the launcher to the runtime")]
     settings: Settings,
     /// The generation of the last draw. `None` before the first draw.
     drawn: Option<u64>,
@@ -335,6 +366,23 @@ struct EventLoop {
 }
 
 impl EventLoop {
+    /// Draws one frame now, without transitions.
+    fn draw_now(&mut self, terminal: &mut CrosstermTerminal) -> anyhow::Result<()> {
+        self.drawn = Some(self.app.generation());
+        self.last_draw = Some(Instant::now());
+        draw(
+            terminal,
+            &mut self.app,
+            &mut self.transitions,
+            &self.theme,
+            Duration::ZERO,
+        )?;
+        if let Some(started) = self.started.take() {
+            tracing::info!(ms = started.elapsed().as_millis(), "startup: first frame");
+        }
+        Ok(())
+    }
+
     /// Runs until `Cmd::Quit` or until every sender is gone. `rx` drops
     /// on return, so a reader thread that waits on a full channel stops.
     fn run(

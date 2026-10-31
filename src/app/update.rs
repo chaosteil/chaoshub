@@ -64,6 +64,11 @@ pub(crate) fn update_full(
         Msg::Tick => tick(state, tabs, Utc::now()),
         Msg::TransitionsDone => transitions_done(state),
         Msg::Signal => quit(),
+        Msg::StartupDone { login, cwd_repo } => {
+            let mut cmds = startup_done(state, tabs, login, cwd_repo);
+            cmds.extend(after_change(state, tabs));
+            cmds
+        }
         Msg::PrsSynced {
             scope,
             prs,
@@ -576,6 +581,61 @@ fn refresh_interest(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Option<Cmd> 
     Some(Cmd::SetInterest(interest))
 }
 
+/// The startup worker read the login and the repo of the current
+/// directory. The session goes to the workers, both scopes sync, and every
+/// repo with a path gets a jj scan.
+fn startup_done(
+    state: &mut AppState,
+    tabs: &[Box<dyn Tab>],
+    login: String,
+    cwd_repo: Option<Repo>,
+) -> Vec<Cmd> {
+    let data = &mut state.data;
+    data.session.login = Some(login);
+    if let Some(cwd) = cwd_repo {
+        match data
+            .session
+            .repos
+            .iter_mut()
+            .find(|repo| repo.key == cwd.key)
+        {
+            Some(repo) => {
+                if repo.path.is_none() {
+                    repo.path.clone_from(&cwd.path);
+                }
+            }
+            None => data.session.repos.push(cwd.clone()),
+        }
+        let known = data
+            .repos
+            .entry(cwd.key.clone())
+            .or_insert_with(|| cwd.clone());
+        if known.path.is_none() {
+            known.path = cwd.path;
+        }
+    }
+    let mut cmds = vec![Cmd::SetSession(data.session.clone())];
+    let mut scopes: Vec<Scope> = Vec::new();
+    for scope in tabs.iter().filter_map(|tab| tab.scope()) {
+        if !scopes.contains(&scope) {
+            scopes.push(scope);
+        }
+    }
+    for scope in scopes {
+        data.sync.pending.insert(scope);
+        cmds.push(Cmd::SyncNow(scope));
+    }
+    cmds.extend(
+        data.session
+            .repos
+            .iter()
+            .filter(|repo| repo.path.is_some())
+            .map(|repo| Cmd::ScanJj(repo.key.clone())),
+    );
+    state.bump();
+    cmds
+}
+
 /// A sync of one scope: the pull requests go into the data under the
 /// freshness rule, and the gone candidates of a full sync leave it. Each
 /// repo of the result gets a jj scan.
@@ -959,7 +1019,7 @@ mod tests {
     use crate::app::state::Overlay;
     use crate::app::tabs::fake::FakeTab;
     use crate::app::testdata;
-    use crate::bus::{Interest, RateInfo};
+    use crate::bus::{Interest, RateInfo, Session};
     use crate::domain::test_time;
 
     const SIZE: Size = Size {
@@ -2122,6 +2182,81 @@ mod tests {
         assert_eq!(run(&mut state, &tabs, loaded(Ok(older))), vec![]);
         assert_eq!(state.data.details.get(&key), Some(&at_secs(10)));
         assert_eq!(state.generation, generation);
+    }
+
+    #[test]
+    fn startup_done_sets_the_session_syncs_and_scans() {
+        let mut state = AppState::new(SIZE);
+        let repo = |name: &str, path: Option<&str>| Repo {
+            key: testdata::repo_key(name),
+            path: path.map(Into::into),
+            settings: None,
+        };
+        state.load(
+            crate::store::Snapshot::default(),
+            vec![
+                repo("chaoshub", Some("/code/chaoshub")),
+                repo("deploy", None),
+            ],
+        );
+        let msg = Msg::StartupDone {
+            login: "chaosteil".into(),
+            cwd_repo: Some(repo("codeview", Some("/code/codeview"))),
+        };
+        let cmds = update(&mut state, &Keymap::default(), msg);
+        let session = Session {
+            login: Some("chaosteil".into()),
+            repos: vec![
+                repo("chaoshub", Some("/code/chaoshub")),
+                repo("deploy", None),
+                repo("codeview", Some("/code/codeview")),
+            ],
+        };
+        assert_eq!(
+            cmds[..5],
+            [
+                Cmd::SetSession(session),
+                Cmd::SyncNow(Scope::Mine),
+                Cmd::SyncNow(Scope::Team),
+                Cmd::ScanJj(testdata::repo_key("chaoshub")),
+                Cmd::ScanJj(testdata::repo_key("codeview")),
+            ]
+        );
+        assert!(matches!(cmds[5..], [Cmd::SetInterest(_)]));
+        assert_eq!(state.data.sync.pending.len(), 2);
+        assert_eq!(
+            state.data.repos[&testdata::repo_key("codeview")].path,
+            Some("/code/codeview".into())
+        );
+        assert_eq!(
+            crate::app::term::term_status(&state).msg.as_deref(),
+            Some("syncing 3 repos")
+        );
+    }
+
+    #[test]
+    fn a_known_cwd_repo_gets_its_path() {
+        let mut state = AppState::new(SIZE);
+        let deploy = Repo {
+            key: testdata::repo_key("deploy"),
+            path: None,
+            settings: None,
+        };
+        state.load(crate::store::Snapshot::default(), vec![deploy.clone()]);
+        let msg = Msg::StartupDone {
+            login: "chaosteil".into(),
+            cwd_repo: Some(Repo {
+                path: Some("/code/deploy".into()),
+                ..deploy
+            }),
+        };
+        let cmds = update(&mut state, &Keymap::default(), msg);
+        assert!(cmds.contains(&Cmd::ScanJj(testdata::repo_key("deploy"))));
+        assert_eq!(state.data.session.repos.len(), 1);
+        assert_eq!(
+            state.data.session.repos[0].path,
+            Some("/code/deploy".into())
+        );
     }
 
     #[test]
