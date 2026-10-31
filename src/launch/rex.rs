@@ -24,8 +24,9 @@ pub(crate) struct RexLauncher {
     pub bin: PathBuf,
     /// The block of the TUI, the anchor of every split.
     pub block: String,
-    /// The session of the TUI.
-    pub session: String,
+    /// The session of the TUI. `None` leaves out `-s`, so Rex uses its
+    /// current session.
+    pub session: Option<String>,
     /// The direction of a new pane: right, left, above or below.
     pub split: String,
     /// The percent of the split that a new pane gets. `None` keeps the
@@ -35,7 +36,8 @@ pub(crate) struct RexLauncher {
 
 impl RexLauncher {
     /// The launcher of the Rex pane that runs chaoshub, from `REX_BLOCK`,
-    /// `REX_SESSION` and `REX_BIN_DIR`. `None` outside Rex.
+    /// `REX_SESSION` and `REX_BIN_DIR`. `None` outside Rex, that is without
+    /// `REX_BLOCK`. Without `REX_SESSION` the launcher has no session.
     pub(crate) fn from_env() -> Option<Self> {
         Self::from_vars(|name| std::env::var_os(name))
     }
@@ -49,7 +51,7 @@ impl RexLauncher {
                 .filter(|value| !value.is_empty())
         };
         let block = text("REX_BLOCK")?;
-        let session = text("REX_SESSION")?;
+        let session = text("REX_SESSION");
         let bin = var("REX_BIN_DIR")
             .map(|dir| PathBuf::from(dir).join("rex"))
             .filter(|bin| bin.is_file())
@@ -66,14 +68,9 @@ impl RexLauncher {
     /// `rex split` of `req` beside the TUI block, with a JSON result. The
     /// env of the request goes through `env NAME=VALUE`.
     fn split_args(&self, req: &LaunchRequest) -> Vec<OsString> {
-        let mut args: Vec<OsString> = vec![
-            "split".into(),
-            "-b".into(),
-            (&self.block).into(),
-            "-s".into(),
-            (&self.session).into(),
-            format!("--split={}", self.split).into(),
-        ];
+        let mut args: Vec<OsString> = vec!["split".into(), "-b".into(), (&self.block).into()];
+        self.push_session(&mut args);
+        args.push(format!("--split={}", self.split).into());
         if let Some(ratio) = self.ratio {
             args.extend(["--ratio".into(), ratio.to_string().into()]);
         }
@@ -104,12 +101,9 @@ impl RexLauncher {
 
     /// `rex wait` for the command of the pane.
     fn wait_args(&self, handle: &LaunchHandle) -> Vec<OsString> {
-        vec![
-            "wait".into(),
-            (&handle.label).into(),
-            "-s".into(),
-            (&self.session).into(),
-        ]
+        let mut args: Vec<OsString> = vec!["wait".into(), (&handle.label).into()];
+        self.push_session(&mut args);
+        args
     }
 
     fn inspect_args(&self, handle: &LaunchHandle) -> Vec<OsString> {
@@ -124,15 +118,19 @@ impl RexLauncher {
         self.block_args(&["block", "close"], handle)
     }
 
-    /// `rex <command> <block id> -s <session>`.
+    /// `rex <command> <block id> [-s <session>]`.
     fn block_args(&self, command: &[&str], handle: &LaunchHandle) -> Vec<OsString> {
         let mut args: Vec<OsString> = command.iter().map(Into::into).collect();
-        args.extend([
-            (&handle.block_id).into(),
-            "-s".into(),
-            (&self.session).into(),
-        ]);
+        args.push((&handle.block_id).into());
+        self.push_session(&mut args);
         args
+    }
+
+    /// Adds `-s <session>` when the launcher has a session.
+    fn push_session(&self, args: &mut Vec<OsString>) {
+        if let Some(session) = &self.session {
+            args.extend(["-s".into(), session.into()]);
+        }
     }
 
     fn command(&self, args: Vec<OsString>) -> Command {
@@ -164,22 +162,30 @@ impl RexLauncher {
     }
 }
 
-/// The block id from the JSON result of `rex split`. The field names are
-/// not documented, so this tries the likely ones and falls back to
-/// `label`, which Rex also accepts as a target.
+/// The block id from the JSON result of `rex split`. Rex prints
+/// `{ "anchor_id": "block:…", "block_ids": ["block:…"], "split_ids":
+/// ["split:…"], "revision": 48 }`, so the first entry of `block_ids` comes
+/// first. Older field names follow, then `label`, which Rex also accepts
+/// as a target.
 fn parse_block_id(stdout: &str, label: &str) -> String {
     serde_json::from_str::<Value>(stdout.trim())
         .ok()
         .and_then(|value| {
-            ["/block_id", "/block/block_id", "/block/id", "/id"]
-                .iter()
-                .find_map(|pointer| {
-                    value
-                        .pointer(pointer)
-                        .and_then(Value::as_str)
-                        .filter(|id| !id.is_empty())
-                        .map(ToOwned::to_owned)
-                })
+            [
+                "/block_ids/0",
+                "/block_id",
+                "/block/block_id",
+                "/block/id",
+                "/id",
+            ]
+            .iter()
+            .find_map(|pointer| {
+                value
+                    .pointer(pointer)
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map(ToOwned::to_owned)
+            })
         })
         .unwrap_or_else(|| label.to_owned())
 }
@@ -238,7 +244,7 @@ mod tests {
         RexLauncher {
             bin: PathBuf::from("/Applications/Rex Server.app/rex"),
             block: "block:01".into(),
-            session: "session:01".into(),
+            session: Some("session:01".into()),
             split: DEFAULT_SPLIT.into(),
             ratio: None,
         }
@@ -296,6 +302,38 @@ mod tests {
                 "-c",
                 "Codeview pr 7",
             ]
+        );
+    }
+
+    #[test]
+    fn argv_without_a_session_has_no_s_flag() {
+        let rex = RexLauncher {
+            session: None,
+            ..launcher()
+        };
+        assert_eq!(
+            strings(&rex.split_args(&request()))[..6],
+            [
+                "split",
+                "-b",
+                "block:01",
+                "--split=right",
+                "-c",
+                "/home/me/code/my repo"
+            ]
+        );
+        assert_eq!(
+            strings(&rex.wait_args(&handle())),
+            ["wait", "chaoshub-review-chaosteil-chaoshub-7-a1b2"]
+        );
+        assert_eq!(
+            strings(&rex.inspect_args(&handle())),
+            ["block", "inspect", "block:02"]
+        );
+        assert_eq!(strings(&rex.focus_args(&handle())), ["focus", "block:02"]);
+        assert_eq!(
+            strings(&rex.close_args(&handle())),
+            ["block", "close", "block:02"]
         );
     }
 
@@ -380,6 +418,15 @@ mod tests {
     fn block_id_from_json() {
         let label = "the-label";
         for (json, id) in [
+            (
+                r#"{"anchor_id":"block:01","block_ids":["block:02","block:09"],"split_ids":["split:01"],"revision":48}"#,
+                "block:02",
+            ),
+            (
+                r#"{"block_ids":["block:08"],"block_id":"block:03"}"#,
+                "block:08",
+            ),
+            (r#"{"block_ids":[],"block_id":"block:03"}"#, "block:03"),
             (r#"{"block_id":"block:03"}"#, "block:03"),
             (
                 r#"{"session_id":"session:01","block":{"block_id":"block:04","label":"x"}}"#,
@@ -399,6 +446,9 @@ mod tests {
             "",
             "not json",
             "{}",
+            r#"{"anchor_id":"block:01"}"#,
+            r#"{"block_ids":[]}"#,
+            r#"{"block_ids":[""]}"#,
             r#"{"block_id":""}"#,
             r#"{"block_id":7}"#,
         ] {
@@ -429,7 +479,7 @@ mod tests {
             RexLauncher {
                 bin: dir.path().join("rex"),
                 block: "block:01".into(),
-                session: "session:01".into(),
+                session: Some("session:01".into()),
                 split: "right".into(),
                 ratio: None,
             }
@@ -451,10 +501,22 @@ mod tests {
     }
 
     #[test]
+    fn from_vars_without_a_session() {
+        for pairs in [
+            &[("REX_BLOCK", "block:01")][..],
+            &[("REX_BLOCK", "block:01"), ("REX_SESSION", "")][..],
+        ] {
+            let rex = RexLauncher::from_vars(vars(pairs)).unwrap();
+            assert_eq!(rex.block, "block:01");
+            assert_eq!(rex.session, None);
+        }
+    }
+
+    #[test]
     fn from_vars_outside_rex() {
         assert_eq!(RexLauncher::from_vars(vars(&[])), None);
         assert_eq!(
-            RexLauncher::from_vars(vars(&[("REX_BLOCK", "block:01")])),
+            RexLauncher::from_vars(vars(&[("REX_SESSION", "session:01")])),
             None
         );
         assert_eq!(
