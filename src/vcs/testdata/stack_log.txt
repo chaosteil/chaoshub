@@ -1,0 +1,12 @@
+xqykylwxzlknqyuknwmvopyrvqpxlvpn56e995e6cacb05b46b73480567a84ab3922130e81yytlukzkkywoxkvpstplyzzmxsylynmrfeat(vcs): jj workspace list, stack read and git fetch
+yytlukzkkywoxkvpstplyzzmxsylynmr1bf2a4cf1a3ba7bb31d86f4b1b48637f55d020a70osvwmkuoqytuzlxlrkssuosryqokzxyvfeat(log): tracing to ~/.local/state/chaoshub/chaoshub.log
+osvwmkuoqytuzlxlrkssuosryqokzxyv951c319c2a2afa14027a139754fdc0d2d5612db30orqrskmwntposvlzktrlnluxsqzxpuknfeat(workers): WorkerCtx and spawn_all signatures
+orqrskmwntposvlzktrlnluxsqzxpuknb0496054bcd204a7959d450bcf29f5882ee49afd0xzvtuztnvovwwmqltxwqorkumpxxrzrkfeat(ui): view and Transitions signatures as no-ops
+xzvtuztnvovwwmqltxwqorkumpxxrzrk6176f53116755ea7aaaade1b1651b67981694a950rvsvsxpsomyzntsqrqnustxvpnuwlxopfeat(theme): Theme and ThemeKind data
+rvsvsxpsomyzntsqrqnustxvpnuwlxop0ccb8bc19a956362afbab83ad9dceb05f4cc78c40pvqyrnotlsrpttovmxquwqlynzvvmwptfeat(app): layout areas
+pvqyrnotlsrpttovmxquwqlynzvvmwpt558ddf37f6832b33bb82d8acad0a94b00cb34c370onzvqqypksvovkkxzkyryprolrwwkrrlfeat(app): render models
+onzvqqypksvovkkxzkyryprolrwwkrrl4c619065e292fb896b2919878f003372ecaa54e00rttslsynskpmonltlxuwpmouyvwmoqqufeat(bus): contracts
+rttslsynskpmonltlxuwpmouyvwmoqqud04296f3315e031c37b7631a7e9e0ffe91026b2f0toowvmsvoqzqmlllyqvtnyztqulttvnwfeat(domain): Observed and apply_newer
+toowvmsvoqzqmlllyqvtnyztqulttvnwb40eff2ed6d5099c7c3429c90a976d765ab6fa240rpskvunzuoxtmunznskkzmproqsvwpvkfeat(domain): keys, repo, pr, check, stack, detail, local types with serde
+rpskvunzuoxtmunznskkzmproqsvwpvke8b397da7b060c2505e4b4c6e9096f46c693fab40vvysrnqzxzzroomkptvxsswpwswpnqsxtest(lib): layering test over the module allow matrix
+vvysrnqzxzzroomkptvxsswpwswpnqsxb59ee484b98fe947fddb65cc259bc29e7d96fd200zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzchore(repo): init crate, lints and toolchain
