@@ -69,7 +69,7 @@ pub(crate) fn overlay_area(overlay: &OverlayModel, areas: &Areas) -> Rect {
     let list = rect(areas.list);
     match &overlay.content {
         OverlayContent::Popup { .. } | OverlayContent::Output { .. } => rect(areas.popup),
-        OverlayContent::Help(_) => rect(areas.help),
+        OverlayContent::Help { .. } => rect(areas.help),
         OverlayContent::Confirm(spec) => {
             let lines = u16::try_from(spec.lines.len()).unwrap_or(u16::MAX);
             // The frame, the lines, one blank row and the key hint.
@@ -144,12 +144,23 @@ fn render_overlay(
             };
             popup::render(&content, area, buf, theme, hits);
         }
-        OverlayContent::Help(help) => help::render(help, area, buf, theme, hits),
+        OverlayContent::Help { help, scroll } => {
+            help::render(help, *scroll, area, buf, theme, hits);
+        }
         OverlayContent::Prompt { spec, text } => {
             prompt::render(spec, text, area, buf, theme, hits);
         }
-        OverlayContent::Output { title, lines } => {
-            output::render(title, lines, area, buf, theme, hits);
+        OverlayContent::Output {
+            title,
+            lines,
+            scroll,
+        } => {
+            let content = output::Output {
+                title,
+                lines,
+                scroll: *scroll,
+            };
+            output::render(&content, area, buf, theme, hits);
         }
         OverlayContent::Confirm(spec) => confirm::render(spec, area, buf, theme, hits),
         OverlayContent::Picker {
