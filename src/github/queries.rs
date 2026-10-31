@@ -8,6 +8,8 @@ use chrono::Utc;
 use graphql_client::GraphQLQuery;
 
 use crate::bus::RateInfo;
+use crate::domain;
+use crate::domain::keys::PrKey;
 use crate::domain::observed::Observed;
 use crate::domain::pr::PullRequest;
 use crate::domain::stack::Stack;
@@ -70,6 +72,15 @@ pub(crate) struct StackEntries;
     response_derives = "Debug"
 )]
 pub(crate) struct CiPoll;
+
+/// The conversation of one pull request.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/pr_detail.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct PrDetail;
 
 impl GithubClient {
     /// The login of the token owner.
@@ -174,6 +185,23 @@ impl GithubClient {
         };
         let (data, rate) = self.run::<CiPoll>(vars).await?;
         Ok((parse::ci_poll::result(data, started_at), rate))
+    }
+
+    /// The comments, reviews and review threads of the pull request `key`.
+    /// `None` when the repo or the pull request does not exist.
+    pub(crate) async fn pr_detail(
+        &self,
+        key: &PrKey,
+    ) -> Result<(Option<Observed<domain::detail::PrDetail>>, RateInfo), GithubError> {
+        let started_at = Utc::now();
+        let vars = pr_detail::Variables {
+            owner: key.repo.owner.clone(),
+            name: key.repo.name.clone(),
+            number: i64::try_from(key.number)
+                .map_err(|_| GithubError::Parse(format!("number out of range: {}", key.number)))?,
+        };
+        let (data, rate) = self.run::<PrDetail>(vars).await?;
+        Ok((parse::pr_detail::detail(data, started_at)?, rate))
     }
 }
 
@@ -372,6 +400,37 @@ mod tests {
                 json!({ "visible": ["PR_1", "PR_2"], "selected": "PR_2", "withSelected": true }),
                 json!({ "visible": ["PR_1"], "selected": "", "withSelected": false }),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn pr_detail_sends_the_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("query PrDetail"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(fixture(include_str!("testdata/pr_detail.json"))),
+            )
+            .mount(&server)
+            .await;
+        let key = PrKey {
+            repo: crate::domain::keys::RepoKey {
+                owner: "acme".into(),
+                name: "monorepo".into(),
+            },
+            number: 3311,
+        };
+        let before = Utc::now();
+        let (detail, _) = client(&server).pr_detail(&key).await.unwrap();
+        let detail = detail.unwrap();
+        assert!(detail.observed_at >= before);
+        assert_eq!(detail.value.threads.len(), 2);
+        let requests = server.received_requests().await.unwrap();
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(
+            body["variables"],
+            json!({ "owner": "acme", "name": "monorepo", "number": 3311 })
         );
     }
 

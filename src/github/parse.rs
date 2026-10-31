@@ -453,6 +453,100 @@ pub(crate) mod ci_poll {
     }
 }
 
+/// Conversions for the `PrDetail` query.
+pub(crate) mod pr_detail {
+    use super::{DateTime, GithubError, Observed, Utc, observed, uint};
+    use crate::domain::detail::{Comment, PrDetail, Review, ReviewState, Thread};
+    use crate::github::queries::pr_detail as q;
+
+    /// A `Comment` from a generated comment node. The issue comments and
+    /// the thread comments have distinct types with the same fields.
+    macro_rules! comment {
+        ($node:expr) => {{
+            let node = $node;
+            Comment {
+                author: node
+                    .author
+                    .map_or_else(|| "ghost".to_owned(), |author| author.login),
+                body: node.body,
+                created_at: node.created_at,
+                url: node.url,
+            }
+        }};
+    }
+
+    /// The conversation of a pull request. `None` when the repo or the
+    /// pull request does not exist.
+    pub(crate) fn detail(
+        data: q::ResponseData,
+        observed_at: DateTime<Utc>,
+    ) -> Result<Option<Observed<PrDetail>>, GithubError> {
+        let Some(pr) = data.repository.and_then(|repo| repo.pull_request) else {
+            return Ok(None);
+        };
+        let comments = pr
+            .comments
+            .nodes
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .map(|node| comment!(node))
+            .collect();
+        let reviews = pr
+            .reviews
+            .and_then(|reviews| reviews.nodes)
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .map(|node| Review {
+                author: node
+                    .author
+                    .map_or_else(|| "ghost".to_owned(), |author| author.login),
+                state: match node.state {
+                    q::PullRequestReviewState::APPROVED => ReviewState::Approved,
+                    q::PullRequestReviewState::CHANGES_REQUESTED => ReviewState::ChangesRequested,
+                    q::PullRequestReviewState::COMMENTED | q::PullRequestReviewState::Other(_) => {
+                        ReviewState::Commented
+                    }
+                    q::PullRequestReviewState::DISMISSED => ReviewState::Dismissed,
+                    q::PullRequestReviewState::PENDING => ReviewState::Pending,
+                },
+                body: node.body,
+                submitted_at: node.submitted_at,
+            })
+            .collect();
+        let mut threads = Vec::new();
+        for node in pr
+            .review_threads
+            .nodes
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+        {
+            threads.push(Thread {
+                path: node.path,
+                line: node.line.map(|line| uint(line, "line")).transpose()?,
+                is_resolved: node.is_resolved,
+                comments: node
+                    .comments
+                    .nodes
+                    .unwrap_or_default()
+                    .into_iter()
+                    .flatten()
+                    .map(|node| comment!(node))
+                    .collect(),
+            });
+        }
+        let detail = PrDetail {
+            comments,
+            reviews,
+            threads,
+            head_oid: pr.head_ref_oid,
+        };
+        Ok(Some(observed(detail, observed_at)))
+    }
+}
+
 /// Decodes a captured fixture: the `data` of a GraphQL response.
 #[cfg(test)]
 pub(crate) fn fixture<T: serde::de::DeserializeOwned>(json: &str) -> T {
@@ -692,6 +786,41 @@ mod tests {
         assert_eq!(result.visible.len(), 1);
         assert_eq!(result.visible[0].state.value, CiState::None);
         assert_eq!(result.selected, None);
+    }
+
+    #[test]
+    fn pr_detail_maps_comments_reviews_and_threads() {
+        use crate::domain::detail::ReviewState;
+
+        let data = fixture(include_str!("testdata/pr_detail.json"));
+        let detail = pr_detail::detail(data, test_time()).unwrap().unwrap();
+        assert_eq!(detail.observed_at, test_time());
+        let detail = detail.value;
+        assert_eq!(detail.head_oid, "1e2defa1ebcdb1cb5232604e4ba6000c00d2d0e2");
+        assert_eq!(detail.comments.len(), 2);
+        assert_eq!(detail.comments[0].author, "vercel");
+        assert!(detail.comments[0].url.ends_with("#issuecomment-6070378109"));
+        assert_eq!(detail.reviews.len(), 3);
+        assert_eq!(detail.reviews[0].state, ReviewState::Commented);
+        assert!(detail.reviews[0].body.starts_with("Body"));
+        assert!(detail.reviews[1].submitted_at.is_some());
+        let lines: Vec<(bool, Option<u32>, usize)> = detail
+            .threads
+            .iter()
+            .map(|thread| (thread.is_resolved, thread.line, thread.comments.len()))
+            .collect();
+        assert_eq!(lines, [(true, None, 2), (false, Some(550), 2)]);
+        assert_eq!(detail.threads[0].path, "src/file-1.rs");
+    }
+
+    #[test]
+    fn pr_detail_of_a_missing_pull_request_is_none() {
+        let data = serde_json::from_value(serde_json::json!({
+            "repository": { "pullRequest": null },
+            "rateLimit": null
+        }))
+        .unwrap();
+        assert_eq!(pr_detail::detail(data, test_time()).unwrap(), None);
     }
 
     #[test]
