@@ -6,6 +6,7 @@
 //! signal thread turns SIGTERM and SIGINT into `Msg::Signal`. The tokio
 //! runtime runs the workers and the action tasks.
 
+use std::collections::VecDeque;
 use std::io::{self, Stdout, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -34,7 +35,8 @@ use crate::app::exec::{ActionEnv, Runtime, Senders};
 use crate::app::keymap::Keymap;
 use crate::app::layout::layout;
 use crate::bus::{
-    Interest, JjReq, Msg, Progress, Scope, Session, Size, SyncReq, TermState, TermStatus,
+    Cmd, Interest, JjReq, LaunchRequest, Msg, Progress, Scope, Session, Size, SyncReq, TargetKey,
+    TermState, TermStatus,
 };
 use crate::cli::{CacheAction, CacheCommand, Cli};
 use crate::config::schema::parse_repo_name;
@@ -151,6 +153,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         was_active: false,
         last_draw: None,
         started: Some(started),
+        foreground: VecDeque::new(),
     };
     // The first frame comes before any subprocess: the workers start
     // after it.
@@ -159,7 +162,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
             let _runtime = tokio.enter();
             spawn_all(ctx)
         };
-        let result = event_loop.run(&mut terminal, rx);
+        let result = event_loop.run(&mut terminal, rx, &reader);
         drop(workers);
         result
     });
@@ -381,7 +384,6 @@ struct EventLoop {
     transitions: Transitions,
     theme: Theme,
     term: TermWriter,
-    #[allow(dead_code, reason = "phase E gives the launcher to the runtime")]
     settings: Settings,
     /// The generation of the last draw. `None` before the first draw.
     drawn: Option<u64>,
@@ -391,6 +393,16 @@ struct EventLoop {
     last_draw: Option<Instant>,
     /// The start of `run`, until the first frame logs the startup time.
     started: Option<Instant>,
+    /// The terminal commands to run in the foreground, without a
+    /// launcher.
+    foreground: VecDeque<Foreground>,
+}
+
+/// A terminal command that the event loop runs in the foreground.
+struct Foreground {
+    id: &'static str,
+    key: TargetKey,
+    request: LaunchRequest,
 }
 
 impl EventLoop {
@@ -417,6 +429,7 @@ impl EventLoop {
         &mut self,
         terminal: &mut CrosstermTerminal,
         mut rx: mpsc::Receiver<Msg>,
+        reader: &Reader,
     ) -> anyhow::Result<()> {
         while !self.runtime.quitting() {
             let active = self.transitions.active();
@@ -452,16 +465,72 @@ impl EventLoop {
                 Ok(None) => break,
                 Err(_) => self.update(Msg::Tick),
             }
+            self.run_foreground(terminal, reader)?;
         }
         Ok(())
     }
 
-    /// Runs `update` and executes the commands.
+    /// Runs `update` and executes the commands. Without a launcher, a
+    /// `Cmd::RunTerminal` waits for `run_foreground`.
     fn update(&mut self, msg: Msg) {
         for cmd in self.app.update(msg) {
-            self.runtime.exec(cmd);
+            match cmd {
+                Cmd::RunTerminal { id, key, request } if self.settings.launcher.is_none() => {
+                    self.foreground.push_back(Foreground { id, key, request });
+                }
+                cmd => self.runtime.exec(cmd),
+            }
         }
     }
+
+    /// Runs the queued terminal commands in the foreground, one after the
+    /// other. The reader pauses, so the command owns stdin, and the
+    /// terminal leaves the alternate screen and raw mode until the command
+    /// ends. Nothing draws, so no transition runs meanwhile.
+    fn run_foreground(
+        &mut self,
+        terminal: &mut CrosstermTerminal,
+        reader: &Reader,
+    ) -> anyhow::Result<()> {
+        while let Some(Foreground { id, key, request }) = self.foreground.pop_front() {
+            if !reader.pause() {
+                tracing::warn!("the reader thread did not confirm the pause");
+            }
+            self.update(Msg::PaneStarted {
+                id,
+                key: key.clone(),
+            });
+            if let Err(err) = self.term.clear(&mut io::stdout()) {
+                tracing::warn!(%err, "cannot clear the terminal status");
+            }
+            restore_terminal();
+            match run_command(&request) {
+                Ok(status) => tracing::debug!(%status, id, "the foreground command ended"),
+                Err(err) => tracing::warn!(%err, id, "cannot run the foreground command"),
+            }
+            enable_raw_mode()?;
+            execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+            terminal.clear()?;
+            reader.resume();
+            self.drawn = None;
+            self.update(Msg::PaneEnded { id, key });
+        }
+        Ok(())
+    }
+}
+
+/// Runs the argv of `request` in its directory with its environment, and
+/// waits for it to end.
+fn run_command(request: &LaunchRequest) -> io::Result<std::process::ExitStatus> {
+    let (program, args) = request
+        .argv
+        .split_first()
+        .ok_or_else(|| io::Error::other("the command is empty"))?;
+    std::process::Command::new(program)
+        .args(args)
+        .current_dir(&request.cwd)
+        .envs(request.env.iter().map(|(name, value)| (name, value)))
+        .status()
 }
 
 /// The time step of a transition frame: clamped to `MAX_ELAPSED`, and zero
@@ -631,6 +700,27 @@ fn install_panic_hook(main: ThreadId, clear: Vec<u8>) {
     }));
 }
 
+/// The terminal events of the reader thread. The tests give a fake.
+trait EventSource: Send + 'static {
+    /// True when an event is ready within `timeout`.
+    fn poll(&mut self, timeout: Duration) -> io::Result<bool>;
+    /// The next event.
+    fn read(&mut self) -> io::Result<Event>;
+}
+
+/// The events of the terminal, through crossterm.
+struct TerminalEvents;
+
+impl EventSource for TerminalEvents {
+    fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
+        event::poll(timeout)
+    }
+
+    fn read(&mut self) -> io::Result<Event> {
+        event::read()
+    }
+}
+
 /// The reader thread: reads terminal events and sends them as messages.
 /// The foreground terminal path pauses it, so that the child process owns
 /// stdin.
@@ -638,23 +728,25 @@ struct Reader {
     pause: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     /// The reader sends one value when it is paused.
-    #[allow(
-        dead_code,
-        reason = "the foreground RunTerminal path of phase E reads it"
-    )]
     acks: std::sync::mpsc::Receiver<()>,
     thread: JoinHandle<()>,
 }
 
 impl Reader {
+    /// The reader of the terminal events.
     fn spawn(tx: mpsc::Sender<Msg>) -> io::Result<Self> {
+        Self::spawn_with(tx, TerminalEvents)
+    }
+
+    /// The reader of the events of `source`.
+    fn spawn_with(tx: mpsc::Sender<Msg>, mut source: impl EventSource) -> io::Result<Self> {
         let pause = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let (ack_tx, acks) = std::sync::mpsc::channel();
         let thread = thread::Builder::new().name("reader".into()).spawn({
             let pause = Arc::clone(&pause);
             let stop = Arc::clone(&stop);
-            move || read_loop(&tx, &pause, &stop, &ack_tx)
+            move || read_loop(&tx, &pause, &stop, &ack_tx, &mut source)
         })?;
         Ok(Self {
             pause,
@@ -666,10 +758,6 @@ impl Reader {
 
     /// Pauses the reader and waits until it confirms. False when it did
     /// not confirm in time.
-    #[allow(
-        dead_code,
-        reason = "the foreground RunTerminal path of phase E calls it"
-    )]
     fn pause(&self) -> bool {
         self.pause.store(true, Ordering::Release);
         self.thread.thread().unpark();
@@ -677,10 +765,6 @@ impl Reader {
     }
 
     /// Resumes a paused reader.
-    #[allow(
-        dead_code,
-        reason = "the foreground RunTerminal path of phase E calls it"
-    )]
     fn resume(&self) {
         self.pause.store(false, Ordering::Release);
         self.thread.thread().unpark();
@@ -702,6 +786,7 @@ fn read_loop(
     pause: &AtomicBool,
     stop: &AtomicBool,
     ack: &std::sync::mpsc::Sender<()>,
+    source: &mut impl EventSource,
 ) {
     let mut acked = false;
     while !stop.load(Ordering::Acquire) {
@@ -716,7 +801,7 @@ fn read_loop(
             continue;
         }
         acked = false;
-        match event::poll(READER_POLL) {
+        match source.poll(READER_POLL) {
             Ok(true) => {}
             Ok(false) => continue,
             Err(err) => {
@@ -724,7 +809,7 @@ fn read_loop(
                 break;
             }
         }
-        let msg = match event::read() {
+        let msg = match source.read() {
             Ok(Event::Key(key)) => Msg::Key(key),
             Ok(Event::Resize(width, height)) => Msg::Resize(Size { width, height }),
             Ok(_) => continue,
@@ -1154,6 +1239,53 @@ mod tests {
         assert!(app.frame().prev_list.is_some());
         app.update(Msg::TransitionsDone);
         assert_eq!(app.frame().prev_list, None);
+    }
+
+    /// Key events every 2 ms. It counts its polls.
+    struct FakeEvents {
+        polls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl EventSource for FakeEvents {
+        fn poll(&mut self, _timeout: Duration) -> io::Result<bool> {
+            self.polls.fetch_add(1, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(2));
+            Ok(true)
+        }
+
+        fn read(&mut self) -> io::Result<Event> {
+            Ok(Event::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('j'),
+                crossterm::event::KeyModifiers::NONE,
+            )))
+        }
+    }
+
+    #[test]
+    fn the_reader_pauses_on_request_and_resumes() {
+        let (tx, mut rx) = mpsc::channel(1024);
+        let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let source = FakeEvents {
+            polls: Arc::clone(&polls),
+        };
+        let reader = Reader::spawn_with(tx, source).unwrap();
+        assert!(matches!(rx.blocking_recv(), Some(Msg::Key(_))));
+        assert!(reader.pause(), "the reader confirms the pause");
+        while rx.try_recv().is_ok() {}
+        let paused_at = polls.load(Ordering::SeqCst);
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            polls.load(Ordering::SeqCst),
+            paused_at,
+            "a paused reader does not poll"
+        );
+        assert!(rx.try_recv().is_err(), "a paused reader sends nothing");
+        reader.resume();
+        assert!(matches!(rx.blocking_recv(), Some(Msg::Key(_))));
+        assert!(polls.load(Ordering::SeqCst) > paused_at);
+        assert!(reader.pause(), "a second pause is confirmed again");
+        reader.resume();
+        reader.stop();
     }
 
     #[test]
