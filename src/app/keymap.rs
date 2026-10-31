@@ -8,9 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-use crate::bus::KeyChord;
+use crate::bus::{KeyChord, KeyCode, KeyEvent, KeyModifiers};
 
 /// The default bindings of the app keys (section 1.8 of the plan). The
 /// action keys come from the action registry.

@@ -107,6 +107,10 @@ mod tests {
         ("cli", &[]),
     ];
 
+    /// For each top-level module, the external crates that it must not
+    /// name. `app` reads the crossterm key types through `bus`.
+    const FORBIDDEN_CRATES: &[(&str, &[&str])] = &[("app", &["crossterm"])];
+
     /// Adds every `.rs` file under `dir` to `out`.
     fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -178,6 +182,26 @@ mod tests {
         refs
     }
 
+    /// True when `src` has a `<krate>::` path that is not the tail of a
+    /// longer identifier.
+    fn names_crate(src: &str, krate: &str) -> bool {
+        let token = format!("{krate}::");
+        src.match_indices(&token).any(|(i, _)| {
+            !src[..i]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+    }
+
+    #[test]
+    fn names_crate_finds_paths_only() {
+        assert!(names_crate("use crossterm::event::KeyEvent;", "crossterm"));
+        assert!(names_crate("x: ::crossterm::event::KeyCode", "crossterm"));
+        assert!(!names_crate("use my_crossterm::x;", "crossterm"));
+        assert!(!names_crate("// the crossterm key types", "crossterm"));
+    }
+
     #[test]
     fn crate_refs_reads_paths_and_groups() {
         let src = "use crate::domain::keys::PrKey;\n\
@@ -203,6 +227,18 @@ mod tests {
                 continue;
             };
             let text = std::fs::read_to_string(file).unwrap();
+            let forbidden = FORBIDDEN_CRATES
+                .iter()
+                .filter(|(name, _)| *name == owner)
+                .flat_map(|(_, crates)| crates.iter());
+            for krate in forbidden {
+                if names_crate(&text, krate) {
+                    errors.push(format!(
+                        "{}: `{owner}` must not import `{krate}`",
+                        rel.display()
+                    ));
+                }
+            }
             for used in crate_refs(&text) {
                 if used != owner && !allowed.contains(&used.as_str()) {
                     errors.push(format!(
