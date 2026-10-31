@@ -66,12 +66,14 @@ impl RexLauncher {
     }
 
     /// `rex split` of `req` beside the TUI block, with a JSON result. The
-    /// env of the request goes through `env NAME=VALUE`.
+    /// split and the ratio of the request win over the ones of the
+    /// launcher. The env of the request goes through `env NAME=VALUE`.
     fn split_args(&self, req: &LaunchRequest) -> Vec<OsString> {
         let mut args: Vec<OsString> = vec!["split".into(), "-b".into(), (&self.block).into()];
         self.push_session(&mut args);
-        args.push(format!("--split={}", self.split).into());
-        if let Some(ratio) = self.ratio {
+        let split = req.split.as_ref().unwrap_or(&self.split);
+        args.push(format!("--split={split}").into());
+        if let Some(ratio) = req.ratio.or(self.ratio) {
             args.extend(["--ratio".into(), ratio.to_string().into()]);
         }
         args.extend([
@@ -263,6 +265,8 @@ mod tests {
             env: vec![],
             label: "chaoshub-review-chaosteil-chaoshub-7-a1b2".into(),
             zoom: true,
+            split: None,
+            ratio: None,
         }
     }
 
@@ -371,6 +375,37 @@ mod tests {
                 "pr-agent",
                 "review",
             ]
+        );
+    }
+
+    #[test]
+    fn the_split_and_the_ratio_of_the_request_win() {
+        let rex = RexLauncher {
+            split: "below".into(),
+            ratio: Some(70),
+            ..launcher()
+        };
+        let req = LaunchRequest {
+            split: Some("left".into()),
+            ratio: Some(40),
+            ..request()
+        };
+        assert_eq!(
+            strings(&rex.split_args(&req))[5..8],
+            ["--split=left", "--ratio", "40"]
+        );
+    }
+
+    #[test]
+    fn a_request_without_a_split_and_a_ratio_uses_the_launcher() {
+        let rex = RexLauncher {
+            split: "below".into(),
+            ratio: Some(70),
+            ..launcher()
+        };
+        assert_eq!(
+            strings(&rex.split_args(&request()))[5..8],
+            ["--split=below", "--ratio", "70"]
         );
     }
 
