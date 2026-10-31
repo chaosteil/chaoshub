@@ -1,23 +1,34 @@
 //! The sync worker: full and delta syncs of the pull request lists.
 //!
 //! It waits until the session has a login. Then it runs a full sync of
-//! both scopes, and again every `refresh.full_secs` (15 min by default).
+//! both scopes at once, and again every `refresh.full_secs` (15 min by
+//! default) and when the repo set changes. A delta sync of Mine runs every
+//! `refresh.mine_secs` (60 s), of Team every `refresh.team_secs` (90 s).
+//! When the rate budget does not last until the reset, the intervals
+//! double. After a rate limit, no timed sync runs until its end. The
+//! worker also serves `SyncReq::Full(scope)` and `SyncReq::Refresh`, which
+//! reads pull requests by node id.
+//!
 //! A full sync searches the open pull requests of the repo set, at most 5
-//! pages. The page size is the last result count plus 10, between 20 and
+//! pages. A delta searches all states, updated since `last_delta` minus
+//! 2 min, so merges and closes arrive. `last_delta` advances to the start
+//! of the delta only after its last page. The page size is the last result count plus 10, between 20 and
 //! 100. Only a sync that read the last page sends `gone` candidates: the
 //! open pull requests that the worker saw before and that the result does
 //! not hold. The worker sends the `Msg` first and writes the store second.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use futures::FutureExt;
+use tokio::time::Instant;
 
-use crate::bus::{Msg, RateInfo, Scope};
+use crate::bus::{Msg, PrRef, RateInfo, Scope, SyncReq};
 use crate::domain::keys::PrKey;
-use crate::domain::pr::PullRequest;
+use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::repo::Repo;
 use crate::github::GithubError;
 use crate::github::budget::{RateBudget, page_size};
@@ -35,21 +46,80 @@ pub(crate) const WORKER: Worker = Worker {
 /// The most pages of one search.
 const MAX_PAGES: usize = 5;
 
-/// Waits for the login, then runs the full syncs until `app` is gone.
+/// The overlap of a delta with the previous one, because the search index
+/// lags.
+const DELTA_OVERLAP: TimeDelta = TimeDelta::minutes(2);
+
+/// Waits for the login, then serves the schedule and the requests until
+/// `app` is gone.
 async fn run(ctx: WorkerCtx) {
     let mut session = ctx.session.clone();
     if wait_for_login(&mut session).await.is_none() {
         return;
     }
+    let sync_rx = Arc::clone(&ctx.sync_rx);
+    let mut requests = sync_rx.lock().await;
+    let refresh = ctx.config.refresh.clone();
     let mut syncer = Syncer::new(ctx);
-    let period = Duration::from_secs(syncer.ctx.config.refresh.full_secs.max(1));
+    let mut repos = syncer.target().map(|(_, repos)| repos);
+    if !syncer.full_both().await {
+        return;
+    }
+    let now = Instant::now();
+    let mut next_full = now + syncer.interval(refresh.full_secs);
+    let mut next_mine = now + syncer.interval(refresh.mine_secs);
+    let mut next_team = now + syncer.interval(refresh.team_secs);
     loop {
-        for scope in [Scope::Mine, Scope::Team] {
-            if !syncer.full(scope).await {
-                return;
+        let mut due = next_full.min(next_mine).min(next_team);
+        if let Some(paused) = syncer.paused_until {
+            due = due.max(paused);
+        }
+        tokio::select! {
+            request = requests.recv() => {
+                let alive = match request {
+                    Some(SyncReq::Full(scope)) => syncer.full(scope).await,
+                    Some(SyncReq::Refresh(refs)) => syncer.refresh(&refs).await,
+                    None => false,
+                };
+                if !alive {
+                    return;
+                }
+            }
+            changed = session.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                let current = syncer.target().map(|(_, repos)| repos);
+                if current != repos {
+                    repos = current;
+                    if !syncer.full_both().await {
+                        return;
+                    }
+                    next_full = Instant::now() + syncer.interval(refresh.full_secs);
+                }
+            }
+            () = tokio::time::sleep_until(due) => {
+                let now = Instant::now();
+                if next_full <= now {
+                    if !syncer.full_both().await {
+                        return;
+                    }
+                    next_full = Instant::now() + syncer.interval(refresh.full_secs);
+                }
+                if next_mine <= now {
+                    if !syncer.delta(Scope::Mine).await {
+                        return;
+                    }
+                    next_mine = Instant::now() + syncer.interval(refresh.mine_secs);
+                }
+                if next_team <= now {
+                    if !syncer.delta(Scope::Team).await {
+                        return;
+                    }
+                    next_team = Instant::now() + syncer.interval(refresh.team_secs);
+                }
             }
         }
-        tokio::time::sleep(period).await;
     }
 }
 
@@ -60,6 +130,22 @@ struct ScopeState {
     known: HashSet<PrKey>,
     /// The result count of the last full sync.
     full_count: usize,
+    /// The result count of the last delta sync.
+    delta_count: usize,
+}
+
+impl ScopeState {
+    /// Records the pull requests of a delta or a refresh: open ones are
+    /// known, others are not.
+    fn note(&mut self, prs: &[PullRequest]) {
+        for pr in prs {
+            if pr.head.value.state == PrState::Open {
+                self.known.insert(pr.key.clone());
+            } else {
+                self.known.remove(&pr.key);
+            }
+        }
+    }
 }
 
 /// The state of the sync worker.
@@ -68,6 +154,8 @@ struct Syncer {
     mine: ScopeState,
     team: ScopeState,
     budget: RateBudget,
+    /// The end of a rate limit. No timed sync runs before it.
+    paused_until: Option<Instant>,
 }
 
 impl Syncer {
@@ -77,7 +165,24 @@ impl Syncer {
             mine: ScopeState::default(),
             team: ScopeState::default(),
             budget: RateBudget::default(),
+            paused_until: None,
         }
+    }
+
+    /// The interval for a base of `secs` seconds, doubled while the rate
+    /// budget does not last until the reset.
+    fn interval(&self, secs: u64) -> Duration {
+        let base = Duration::from_secs(secs.max(1));
+        let interval = self.budget.interval(base);
+        if interval > base {
+            tracing::info!(?base, ?interval, "slowing: rate budget");
+        }
+        interval
+    }
+
+    /// Runs a full sync of both scopes. False when `app` is gone.
+    async fn full_both(&mut self) -> bool {
+        self.full(Scope::Mine).await && self.full(Scope::Team).await
     }
 
     fn state(&mut self, scope: Scope) -> &mut ScopeState {
@@ -155,6 +260,140 @@ impl Syncer {
         true
     }
 
+    /// Runs a delta sync of `scope` from `last_delta` of the sync state.
+    /// Without a `last_delta` it waits for a full sync. False when `app` is
+    /// gone.
+    async fn delta(&mut self, scope: Scope) -> bool {
+        let Some((login, repos)) = self.target() else {
+            return true;
+        };
+        let repo_set = repo_set_hash(&repos);
+        let mut state = match self.ctx.store.sync_state(scope, repo_set.clone()).await {
+            Ok(state) => state.unwrap_or_default(),
+            Err(err) => {
+                tracing::warn!(?scope, %err, "cannot read the sync state");
+                return true;
+            }
+        };
+        let Some(last_delta) = state.last_delta else {
+            tracing::debug!(?scope, "delta skipped: no full sync yet");
+            return true;
+        };
+        let query = search(scope, &login, &repos, Some(last_delta - DELTA_OVERLAP));
+        let first = page_size(self.state(scope).delta_count);
+        let teams = self.ctx.config.teams.clone();
+        let me = Me {
+            login: &login,
+            teams: &teams,
+        };
+        let result = self
+            .ctx
+            .client
+            .list_prs_pages(&query, first, MAX_PAGES, &me)
+            .await;
+        let pages = match result {
+            Ok(pages) => pages,
+            Err(err) => return self.failed(scope, &repos, &err).await,
+        };
+        tracing::debug!(
+            ?scope,
+            count = pages.prs.len(),
+            complete = pages.complete,
+            "delta sync"
+        );
+        if !self.rate(pages.rate.clone()).await {
+            return false;
+        }
+        let scope_state = self.state(scope);
+        scope_state.delta_count = pages.prs.len();
+        scope_state.note(&pages.prs);
+        let msg = Msg::PrsSynced {
+            scope,
+            prs: pages.prs.clone(),
+            gone: None,
+            started_at: pages.started_at,
+        };
+        if self.ctx.tx.send(msg).await.is_err() {
+            return false;
+        }
+        if let Err(err) = self.ctx.store.put_prs(scope, pages.prs).await {
+            tracing::warn!(?scope, %err, "cannot cache the pull requests");
+        }
+        if pages.complete {
+            state.last_delta = Some(pages.started_at);
+            state.last_error = None;
+            if let Err(err) = self.ctx.store.put_sync_state(scope, repo_set, state).await {
+                tracing::warn!(?scope, %err, "cannot write the sync state");
+            }
+        }
+        true
+    }
+
+    /// Reads the pull requests of `refs` by node id and sends one
+    /// `PrRefreshed` per pull request. False when `app` is gone.
+    async fn refresh(&mut self, refs: &[PrRef]) -> bool {
+        let Some(login) = self.ctx.session.borrow().login.clone() else {
+            return true;
+        };
+        let ids: Vec<String> = refs.iter().map(|pr| pr.node_id.clone()).collect();
+        if ids.is_empty() {
+            return true;
+        }
+        let teams = self.ctx.config.teams.clone();
+        let me = Me {
+            login: &login,
+            teams: &teams,
+        };
+        let (prs, rate) = match self.ctx.client.pr_by_ids(&ids, &me).await {
+            Ok(ok) => ok,
+            Err(err) => {
+                tracing::warn!(%err, "refresh failed");
+                let msg = Msg::SyncFailed {
+                    source: "sync",
+                    scope: None,
+                    err: sync_error(&err),
+                };
+                self.pause_on_limit(&err);
+                return self.ctx.tx.send(msg).await.is_ok();
+            }
+        };
+        if !self.rate(rate).await {
+            return false;
+        }
+        let (mine, team): (Vec<PullRequest>, Vec<PullRequest>) = prs
+            .into_iter()
+            .partition(|pr| pr.head.value.author == login);
+        for (scope, prs) in [(Scope::Mine, mine), (Scope::Team, team)] {
+            if prs.is_empty() {
+                continue;
+            }
+            self.state(scope).note(&prs);
+            for pr in &prs {
+                if self
+                    .ctx
+                    .tx
+                    .send(Msg::PrRefreshed(Box::new(pr.clone())))
+                    .await
+                    .is_err()
+                {
+                    return false;
+                }
+            }
+            if let Err(err) = self.ctx.store.put_prs(scope, prs).await {
+                tracing::warn!(?scope, %err, "cannot cache the pull requests");
+            }
+        }
+        true
+    }
+
+    /// Stops the timed syncs until the end of a rate limit.
+    fn pause_on_limit(&mut self, err: &GithubError) {
+        if let GithubError::RateLimited { until } = err {
+            let wait = (*until - Utc::now()).to_std().unwrap_or_default();
+            self.paused_until = Some(Instant::now() + wait);
+        }
+    }
+
     /// Writes the result of a full sync: the pull requests, the deleted
     /// gone candidates and the sync state.
     async fn persist_full(
@@ -202,6 +441,7 @@ impl Syncer {
     /// state. False when `app` is gone.
     async fn failed(&mut self, scope: Scope, repos: &[String], err: &GithubError) -> bool {
         tracing::warn!(?scope, %err, "sync failed");
+        self.pause_on_limit(err);
         let msg = Msg::SyncFailed {
             source: "sync",
             scope: Some(scope),
@@ -340,20 +580,17 @@ mod tests {
         }
     }
 
-    /// The search variables of the requests to `server`.
+    /// The search variables of the search requests to `server`.
     async fn searches(server: &MockServer) -> Vec<(String, u64)> {
         server
             .received_requests()
             .await
             .unwrap()
             .iter()
-            .map(|request| {
+            .filter_map(|request| {
                 let body: Value = serde_json::from_slice(&request.body).unwrap();
                 let vars = &body["variables"];
-                (
-                    vars["search"].as_str().unwrap().to_owned(),
-                    vars["first"].as_u64().unwrap(),
-                )
+                Some((vars["search"].as_str()?.to_owned(), vars["first"].as_u64()?))
             })
             .collect()
     }
@@ -477,6 +714,202 @@ mod tests {
                 scope: Some(Scope::Mine),
                 err: SyncError::Offline,
             }
+        );
+    }
+
+    const BY_IDS: &str = include_str!("../github/testdata/pr_by_ids.json");
+
+    #[tokio::test]
+    async fn a_delta_searches_since_last_delta_and_advances_it() {
+        let server = MockServer::start().await;
+        serve_pages(&server, true).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let store = ctx.store.clone();
+        let repo_set = repo_set_hash(&["acme/deploy".to_owned()]);
+        let last = "2026-10-30T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        store
+            .put_sync_state(
+                Scope::Mine,
+                repo_set.clone(),
+                crate::store::SyncState {
+                    last_full: Some(last),
+                    last_delta: Some(last),
+                    last_error: None,
+                },
+            )
+            .await
+            .unwrap();
+        let mut syncer = Syncer::new(ctx);
+        syncer.mine.known.insert(key(1589));
+
+        assert!(syncer.delta(Scope::Mine).await);
+        assert_eq!(
+            synced(&mut harness).await,
+            (Scope::Mine, vec![1589, 1587, 1586, 1574, 1573, 1572], None)
+        );
+        assert_eq!(
+            searches(&server).await[0],
+            (
+                "is:pr author:chaosteil repo:acme/deploy updated:>=2026-10-30T11:58:00Z".to_owned(),
+                20
+            )
+        );
+        assert!(
+            syncer.mine.known.is_empty(),
+            "merged pull requests are not known"
+        );
+        assert_eq!(syncer.mine.delta_count, 6);
+        let state = store
+            .sync_state(Scope::Mine, repo_set)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(state.last_delta.unwrap() > last);
+        assert_eq!(state.last_full, Some(last));
+    }
+
+    #[tokio::test]
+    async fn a_delta_cut_at_five_pages_keeps_last_delta() {
+        let server = MockServer::start().await;
+        serve_pages(&server, false).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let store = ctx.store.clone();
+        let repo_set = repo_set_hash(&["acme/deploy".to_owned()]);
+        let last = "2026-10-30T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let state = crate::store::SyncState {
+            last_full: Some(last),
+            last_delta: Some(last),
+            last_error: None,
+        };
+        store
+            .put_sync_state(Scope::Team, repo_set.clone(), state.clone())
+            .await
+            .unwrap();
+        let mut syncer = Syncer::new(ctx);
+        assert!(syncer.delta(Scope::Team).await);
+        assert_eq!(synced(&mut harness).await.2, None);
+        assert_eq!(
+            store.sync_state(Scope::Team, repo_set).await.unwrap(),
+            Some(state)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delta_without_last_delta_sends_no_request() {
+        let server = MockServer::start().await;
+        let (ctx, mut harness) = logged_in(&server);
+        let mut syncer = Syncer::new(ctx);
+        assert!(syncer.delta(Scope::Mine).await);
+        assert!(harness.quiet_for(Duration::from_millis(50)).await);
+        assert_eq!(server.received_requests().await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_worker_serves_refresh_requests_and_runs_deltas() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("query PrByIds"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(BY_IDS.as_bytes(), "application/json"),
+            )
+            .mount(&server)
+            .await;
+        serve_pages(&server, true).await;
+        let mut config = crate::config::Config::default();
+        config.refresh.mine_secs = 1;
+        let (ctx, mut harness) = testkit::ctx_with(&server.uri(), config, testkit::memory_store());
+        harness
+            .session
+            .send(Session {
+                login: Some("chaosteil".into()),
+                repos: vec![Repo {
+                    key: key(0).repo,
+                    path: None,
+                    settings: None,
+                }],
+            })
+            .unwrap();
+        let worker = tokio::spawn(run(ctx));
+        assert_eq!(synced(&mut harness).await.0, Scope::Mine);
+        assert_eq!(synced(&mut harness).await.0, Scope::Team);
+
+        let refs = vec![
+            testkit::pr_ref(1550, "PR_1", "a"),
+            testkit::pr_ref(1549, "PR_2", "b"),
+        ];
+        harness.sync.send(SyncReq::Refresh(refs)).await.unwrap();
+        assert!(matches!(harness.recv().await, Msg::Rate(_)));
+        let mut refreshed = Vec::new();
+        for _ in 0..2 {
+            match harness.recv().await {
+                Msg::PrRefreshed(pr) => refreshed.push(pr.key.number),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(refreshed, [1550, 1549]);
+
+        let (scope, _, gone) = synced(&mut harness).await;
+        assert_eq!((scope, gone), (Scope::Mine, None));
+        let delta = searches(&server)
+            .await
+            .into_iter()
+            .any(|(search, _)| search.contains(" updated:>="));
+        assert!(delta, "a delta search ran");
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn a_full_request_runs_a_full_sync() {
+        let server = MockServer::start().await;
+        serve_pages(&server, true).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let worker = tokio::spawn(run(ctx));
+        synced(&mut harness).await;
+        synced(&mut harness).await;
+        harness.sync.send(SyncReq::Full(Scope::Team)).await.unwrap();
+        let (scope, _, gone) = synced(&mut harness).await;
+        assert_eq!(scope, Scope::Team);
+        assert_eq!(gone, Some(Vec::new()));
+        worker.abort();
+    }
+
+    #[test]
+    fn intervals_double_while_the_budget_is_tight() {
+        let (ctx, _harness) = testkit::ctx("http://127.0.0.1:1");
+        let mut syncer = Syncer::new(ctx);
+        assert_eq!(syncer.interval(60), Duration::from_secs(60));
+        syncer.budget.observe(RateInfo {
+            remaining: 30,
+            reset_at: Utc::now() + TimeDelta::seconds(3600),
+            last_cost: 1,
+        });
+        assert_eq!(syncer.interval(60), Duration::from_secs(120));
+    }
+
+    #[test]
+    fn a_rate_limit_pauses_the_timed_syncs() {
+        let (ctx, _harness) = testkit::ctx("http://127.0.0.1:1");
+        let mut syncer = Syncer::new(ctx);
+        syncer.pause_on_limit(&GithubError::Auth);
+        assert_eq!(syncer.paused_until, None);
+        syncer.pause_on_limit(&GithubError::RateLimited {
+            until: Utc::now() + TimeDelta::seconds(60),
+        });
+        let wait = syncer.paused_until.unwrap() - Instant::now();
+        assert!(wait > Duration::from_secs(55), "{wait:?}");
+    }
+
+    #[test]
+    fn delta_search_strings() {
+        let repos = ["a/b".to_owned()];
+        let since = "2026-10-30T11:58:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert_eq!(
+            search(Scope::Mine, "me", &repos, Some(since)),
+            "is:pr author:me repo:a/b updated:>=2026-10-30T11:58:00Z"
+        );
+        assert_eq!(
+            search(Scope::Team, "me", &repos, Some(since)),
+            "is:pr -author:me repo:a/b updated:>=2026-10-30T11:58:00Z"
         );
     }
 
