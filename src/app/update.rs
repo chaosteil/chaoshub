@@ -19,8 +19,8 @@ use crate::app::panes::{PANES, Pane, applicable, items};
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
-    AUTHOR_KEY, ActionDialog, AppData, AppState, AuthorPicker, FILTER_KEY, Failure, OUTPUT_LINES,
-    Overlay, OverlayState, PaneHandleState, PopupState, error_text, ui_key,
+    AUTHOR_KEY, ActionDialog, AppData, AppState, AuthorPicker, Condition, FILTER_KEY, Failure,
+    OUTPUT_LINES, Overlay, OverlayState, PaneHandleState, PopupState, error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, pr_ref};
 use crate::app::target::{pr_target, row_target};
@@ -81,11 +81,13 @@ pub(crate) fn update_full(
             gone,
             started_at,
         } => {
+            back_online(state);
             let mut cmds = prs_synced(state, scope, prs, gone, started_at);
             cmds.extend(after_change(state, tabs));
             cmds
         }
         Msg::PrRefreshed(pr) => {
+            back_online(state);
             if pr_refreshed(state, *pr) {
                 after_change(state, tabs)
             } else {
@@ -103,6 +105,7 @@ pub(crate) fn update_full(
             states,
             selected_checks,
         } => {
+            back_online(state);
             if ci_updated(state, states, selected_checks) {
                 after_change(state, tabs)
             } else {
@@ -110,6 +113,9 @@ pub(crate) fn update_full(
             }
         }
         Msg::DetailLoaded(key, result) => {
+            if result.is_ok() {
+                back_online(state);
+            }
             if detail_loaded(state, key, result) {
                 after_change(state, tabs)
             } else {
@@ -1242,8 +1248,10 @@ fn resize(state: &mut AppState, size: Size) -> Vec<Cmd> {
     Vec::new()
 }
 
-/// The deadline of the event loop at `now`. An expired status message
-/// leaves the status bar and starts its fade. Else the generation moves
+/// The deadline of the event loop at `now`. A lasting state of the
+/// status bar that ended goes away. An expired status message leaves the
+/// status bar on this tick and starts its fade; the message of a lasting
+/// state that still holds takes its place. Else the generation moves
 /// only when a rendered string changed since the last frame: at a new
 /// minute (ages have minute granularity), or when the status bar or the
 /// terminal status changed.
@@ -1251,13 +1259,17 @@ fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<
     let minute = |time: DateTime<Utc>| time.timestamp().div_euclid(60);
     let new_minute = minute(now) != minute(state.data.now);
     state.data.now = now;
+    let sync = &mut state.data.sync;
+    if sync.condition.as_ref().is_some_and(|c| !c.holds(now)) {
+        sync.condition = None;
+    }
     if state
         .ui
         .status
         .as_ref()
         .is_some_and(|msg| msg.expires <= now)
     {
-        state.ui.status = None;
+        state.ui.status = state.data.sync.condition.as_ref().map(Condition::message);
         state.ui.ui_events.push(UiEvent::StatusExpired);
         state.bump();
         return Vec::new();
@@ -1289,7 +1301,8 @@ fn refresh(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
 }
 
 /// A worker failed. A sync failure and a rate limit become the failure
-/// of the terminal status; the other workers only show a message.
+/// of the terminal status. A rate limit and no network become a lasting
+/// state of the status bar; the other failures only show a message.
 fn sync_failed(
     state: &mut AppState,
     source: &'static str,
@@ -1309,29 +1322,39 @@ fn sync_failed(
         SyncError::RateLimited { until } => Some(*until),
         _ => None,
     };
-    if source != "sync" && rate_limited_until.is_none() {
-        state.message(
+    if source == "sync" || rate_limited_until.is_some() {
+        let reason = match rate_limited_until {
+            Some(_) => reason.clone(),
+            None => format!("sync failed: {reason}"),
+        };
+        state.data.sync.failure = Some(Failure {
+            source,
+            reason,
+            rate_limited_until,
+            at: state.data.now,
+        });
+    }
+    match err {
+        SyncError::RateLimited { until } => {
+            show_condition(state, Condition::RateLimited { until: *until });
+        }
+        SyncError::Offline => show_condition(state, Condition::Offline),
+        _ if source == "sync" => state.message(
+            format!("sync failed: {reason}"),
+            CellStyle::Danger,
+            ERROR_TTL,
+        ),
+        _ => state.message(
             format!("{source} failed: {reason}"),
             CellStyle::Warn,
             INFO_TTL,
-        );
-        return Vec::new();
+        ),
     }
-    let (reason, style) = match rate_limited_until {
-        Some(_) => (reason, CellStyle::Warn),
-        None => (format!("sync failed: {reason}"), CellStyle::Danger),
-    };
-    state.data.sync.failure = Some(Failure {
-        source,
-        reason: reason.clone(),
-        rate_limited_until,
-        at: state.data.now,
-    });
-    state.message(reason, style, ERROR_TTL);
     Vec::new()
 }
 
-/// The supervisor restarts a worker that panicked.
+/// The supervisor restarts a worker that panicked. The status bar shows
+/// the restart until it happens.
 fn worker_died(state: &mut AppState, name: &'static str, restart_in: Duration) -> Vec<Cmd> {
     state.data.sync.failure = Some(Failure {
         source: name,
@@ -1339,9 +1362,41 @@ fn worker_died(state: &mut AppState, name: &'static str, restart_in: Duration) -
         rate_limited_until: None,
         at: state.data.now,
     });
-    let text = format!("{name} worker restarting in {}s", restart_in.as_secs());
-    state.message(text, CellStyle::Warn, ERROR_TTL);
+    let delay = TimeDelta::from_std(restart_in).unwrap_or(TimeDelta::MAX);
+    let at = state
+        .data
+        .now
+        .checked_add_signed(delay)
+        .unwrap_or(DateTime::<Utc>::MAX_UTC);
+    let condition = Condition::Restarting {
+        name,
+        secs: restart_in.as_secs(),
+        at,
+    };
+    show_condition(state, condition);
     Vec::new()
+}
+
+/// Sets the lasting state of the status bar and shows its message.
+fn show_condition(state: &mut AppState, condition: Condition) {
+    state.ui.status = Some(condition.message());
+    state.data.sync.condition = Some(condition);
+    state.bump();
+}
+
+/// A request succeeded, so the network is back: the `offline` state
+/// ends. Its message expires now, so it leaves the status bar on the
+/// next tick, with the fade.
+fn back_online(state: &mut AppState) {
+    let sync = &mut state.data.sync;
+    if sync.condition != Some(Condition::Offline) {
+        return;
+    }
+    sync.condition = None;
+    let offline = Condition::Offline.message();
+    if let Some(msg) = state.ui.status.as_mut().filter(|msg| **msg == offline) {
+        msg.expires = state.data.now;
+    }
 }
 
 /// The transitions are done: the previous list of a tab slide and the
@@ -1536,7 +1591,7 @@ mod tests {
         let msg = state.ui.status.clone().unwrap();
         assert_eq!(
             (msg.text.as_str(), msg.style),
-            ("sync failed: offline", CellStyle::Danger)
+            ("offline", CellStyle::Danger)
         );
         run(
             &mut state,
@@ -1589,6 +1644,134 @@ mod tests {
         assert_eq!(
             state.ui.status.clone().unwrap().text,
             "sync worker restarting in 2s"
+        );
+    }
+
+    /// The text and the style of the status bar message.
+    fn status_of(state: &AppState) -> Option<(String, CellStyle)> {
+        state
+            .ui
+            .status
+            .as_ref()
+            .map(|msg| (msg.text.clone(), msg.style))
+    }
+
+    #[test]
+    fn rate_limited_stays_until_the_reset_time_and_then_fades() {
+        let (tabs, mut state) = setup(None);
+        state.data.now = at(0);
+        let until = at(600);
+        let limited = Msg::SyncFailed {
+            source: "sync",
+            scope: None,
+            err: SyncError::RateLimited { until },
+        };
+        run(&mut state, &tabs, limited);
+        let text = error_text(&SyncError::RateLimited { until });
+        assert_eq!(status_of(&state), Some((text.clone(), CellStyle::Warn)));
+        run(
+            &mut state,
+            &tabs,
+            press(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        tick(&mut state, &tabs, at(599));
+        assert_eq!(
+            status_of(&state),
+            Some((text, CellStyle::Warn)),
+            "a key press and the error time do not clear it"
+        );
+        assert_eq!(state.ui.ui_events, vec![]);
+        tick(&mut state, &tabs, at(600));
+        assert_eq!(state.ui.status, None);
+        assert_eq!(state.data.sync.condition, None);
+        assert_eq!(state.ui.ui_events, vec![UiEvent::StatusExpired]);
+    }
+
+    #[test]
+    fn offline_stays_until_the_next_success_and_then_fades() {
+        let (tabs, mut state) = setup(None);
+        state.data.now = at(0);
+        let offline = Msg::SyncFailed {
+            source: "ci",
+            scope: None,
+            err: SyncError::Offline,
+        };
+        run(&mut state, &tabs, offline);
+        let shown = Some(("offline".to_owned(), CellStyle::Danger));
+        assert_eq!(status_of(&state), shown);
+        tick(&mut state, &tabs, at(3600));
+        assert_eq!(status_of(&state), shown, "no time limit");
+        run(&mut state, &tabs, synced(Vec::new(), None, 3600));
+        assert_eq!(state.data.sync.condition, None);
+        assert_eq!(status_of(&state), shown, "the message leaves on a tick");
+        assert_eq!(state.ui.ui_events, vec![]);
+        tick(&mut state, &tabs, at(3601));
+        assert_eq!(state.ui.status, None);
+        assert_eq!(state.ui.ui_events, vec![UiEvent::StatusExpired]);
+    }
+
+    #[test]
+    fn a_worker_restart_stays_until_the_restart() {
+        let (tabs, mut state) = setup(None);
+        state.data.now = at(0);
+        let died = Msg::WorkerDied {
+            name: "ci",
+            restart_in: Duration::from_secs(30),
+        };
+        run(&mut state, &tabs, died);
+        let shown = Some(("ci worker restarting in 30s".to_owned(), CellStyle::Warn));
+        assert_eq!(status_of(&state), shown);
+        tick(&mut state, &tabs, at(29));
+        assert_eq!(status_of(&state), shown);
+        tick(&mut state, &tabs, at(30));
+        assert_eq!(state.ui.status, None);
+        assert_eq!(state.ui.ui_events, vec![UiEvent::StatusExpired]);
+    }
+
+    #[test]
+    fn a_lasting_state_comes_back_after_a_message_on_top() {
+        let (tabs, mut state) = setup(None);
+        state.data.now = at(0);
+        let offline = Msg::SyncFailed {
+            source: "sync",
+            scope: None,
+            err: SyncError::Offline,
+        };
+        run(&mut state, &tabs, offline);
+        state.message("copied", CellStyle::Info, TimeDelta::seconds(5));
+        tick(&mut state, &tabs, at(5));
+        assert_eq!(
+            status_of(&state),
+            Some(("offline".to_owned(), CellStyle::Danger))
+        );
+        assert_eq!(state.ui.ui_events, vec![UiEvent::StatusExpired]);
+    }
+
+    #[test]
+    fn three_lasting_states_are_distinct() {
+        let until = at(600);
+        let rate = Condition::RateLimited { until }.message();
+        let offline = Condition::Offline.message();
+        let restart = Condition::Restarting {
+            name: "sync",
+            secs: 4,
+            at: at(4),
+        }
+        .message();
+        assert_eq!(
+            (rate.style, rate.expires),
+            (CellStyle::Warn, until),
+            "{}",
+            rate.text
+        );
+        assert!(rate.text.starts_with("rate limited until "));
+        assert_eq!(
+            (offline.text.as_str(), offline.style),
+            ("offline", CellStyle::Danger)
+        );
+        assert_eq!(
+            (restart.text.as_str(), restart.style, restart.expires),
+            ("sync worker restarting in 4s", CellStyle::Warn, at(4))
         );
     }
 
