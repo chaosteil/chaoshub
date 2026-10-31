@@ -14,15 +14,14 @@ mod update;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::app::models::{FrameModel, ListModel, StatusModel, TabBarModel};
+use crate::app::models::FrameModel;
 use crate::app::state::AppState;
-use crate::bus::{Cmd, Msg, Progress, Size, TermState, TermStatus, UiEvent};
+use crate::bus::{Cmd, Msg, Size, UiEvent};
 
 /// The app: the state and the message handler. `run` drives it.
 #[derive(Debug)]
 pub(crate) struct App {
     state: AppState,
-    frame: FrameModel,
 }
 
 impl App {
@@ -30,7 +29,6 @@ impl App {
     pub(crate) fn new(size: Size) -> Self {
         Self {
             state: AppState::new(size),
-            frame: empty_frame(),
         }
     }
 
@@ -52,9 +50,10 @@ impl App {
         }
     }
 
-    /// The model of the next frame.
+    /// The model of the next frame, rebuilt only when the generation
+    /// moved.
     pub(crate) fn frame(&mut self) -> &FrameModel {
-        &self.frame
+        frame::frame_model(&mut self.state)
     }
 
     /// The redraw signal.
@@ -80,32 +79,4 @@ fn is_quit(event: &KeyEvent) -> bool {
             (event.code, event.modifiers),
             (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Char('c'), KeyModifiers::CONTROL)
         )
-}
-
-/// A frame with no content.
-fn empty_frame() -> FrameModel {
-    FrameModel {
-        tab_bar: TabBarModel {
-            titles: Vec::new(),
-            active: 0,
-        },
-        list: ListModel {
-            columns: Vec::new(),
-            rows: Vec::new(),
-            cursor: 0,
-            scroll: 0,
-        },
-        prev_list: None,
-        status: StatusModel {
-            left: Vec::new(),
-            center: None,
-            right: Vec::new(),
-        },
-        overlays: Vec::new(),
-        term: TermStatus {
-            state: TermState::Idle,
-            msg: None,
-            progress: Progress::Off,
-        },
-    }
 }

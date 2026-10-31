@@ -100,6 +100,7 @@ pub(crate) fn duplicates<T: Ord + Clone>(values: impl IntoIterator<Item = T>) ->
 /// A tab for the tests of the frame builder and of `update`.
 #[cfg(test)]
 pub(crate) mod fake {
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
@@ -107,7 +108,8 @@ pub(crate) mod fake {
     /// Counts its model builds and returns `handled` for every key.
     pub(crate) struct FakeTab {
         pub id: &'static str,
-        pub models: AtomicUsize,
+        /// The number of model builds, shared with the test.
+        pub models: Arc<AtomicUsize>,
         pub handled: Option<Handled>,
     }
 
@@ -115,14 +117,15 @@ pub(crate) mod fake {
         pub(crate) fn new(id: &'static str) -> Self {
             Self {
                 id,
-                models: AtomicUsize::new(0),
+                models: Arc::new(AtomicUsize::new(0)),
                 handled: None,
             }
         }
 
-        /// The number of model builds.
-        pub(crate) fn builds(&self) -> usize {
-            self.models.load(Ordering::SeqCst)
+        /// A counter of the model builds that stays readable after the
+        /// tab moves into a registry.
+        pub(crate) fn counter(&self) -> Arc<AtomicUsize> {
+            Arc::clone(&self.models)
         }
     }
 
