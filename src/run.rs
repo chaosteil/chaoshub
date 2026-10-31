@@ -1508,7 +1508,7 @@ mod tests {
     /// The seeded mine app with the popup open on #101 (the fifth row).
     fn popup_app(width: u16, height: u16) -> App {
         let mut app = seeded_app(width, height, crate::app::testdata::mine_snapshot());
-        for _ in 0..4 {
+        for _ in 0..3 {
             press(&mut app, 'j');
         }
         let enter = crossterm::event::KeyEvent::new(

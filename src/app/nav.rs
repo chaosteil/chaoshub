@@ -17,10 +17,10 @@ pub(crate) enum Motion {
     PageUp,
 }
 
-/// True for the rows that the cursor can stand on: pull requests and
-/// local changes, not headers or separators.
+/// True for the rows that the cursor can stand on: pull requests, not
+/// headers or separators.
 pub(crate) fn selectable(row: &Row) -> bool {
-    matches!(row.item, RowItem::Pr(_) | RowItem::Local { .. })
+    matches!(row.item, RowItem::Pr(_))
 }
 
 /// True when two items name the same thing. A pull request stays the same

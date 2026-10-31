@@ -123,8 +123,8 @@ fn pr_row(
     }
 }
 
-/// The list of the mine tab: a stack of three pull requests, one single
-/// pull request and one local-only change.
+/// The list of the mine tab: a stack of three pull requests and one
+/// single pull request.
 pub(crate) fn mine_list() -> ListModel {
     let header = Row {
         item: RowItem::StackHeader {
@@ -134,25 +134,6 @@ pub(crate) fn mine_list() -> ListModel {
         depth: 0,
         glyph: None,
         style: RowStyle::Header,
-    };
-    let local = Row {
-        item: RowItem::Local {
-            repo: pr_ref(0).key.repo,
-            change_id: "zzmqxkrt".to_owned(),
-        },
-        cells: vec![
-            cell("wip: try the new layout", CellStyle::Dim),
-            cell("local", CellStyle::Dim),
-            cell("zzmqxkrt", CellStyle::Local),
-            cell("9a8b7c6d", CellStyle::Dim),
-            cell("layout", CellStyle::Dim),
-            cell("", CellStyle::Dim),
-            cell("", CellStyle::Dim),
-            cell("+", CellStyle::Local),
-        ],
-        depth: 1,
-        glyph: Some('│'),
-        style: RowStyle::LocalOnly,
     };
     ListModel {
         columns: mine_columns(),
@@ -168,7 +149,6 @@ pub(crate) fn mine_list() -> ListModel {
                 ("○", CellStyle::Dim),
                 "D",
             ),
-            local,
             pr_row(
                 102,
                 '├',
