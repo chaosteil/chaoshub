@@ -31,7 +31,7 @@ use crate::domain::detail::PrDetail;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::{Observed, apply_newer};
-use crate::domain::pr::{CiState, PullRequest};
+use crate::domain::pr::{CiState, PrState, PullRequest};
 use crate::domain::repo::Repo;
 
 /// Applies one message to the state, with the tabs of `TABS`.
@@ -784,7 +784,9 @@ fn startup_done(
 }
 
 /// A sync of one scope: the pull requests go into the data under the
-/// freshness rule, and the gone candidates of a full sync leave it. Each
+/// freshness rule. After a complete full sync (`gone` is `Some`), the
+/// open pull requests of the scope that the sync did not return leave
+/// the data, under the gone rule. The worker's list is only a hint. Each
 /// repo of the result gets a jj scan.
 fn prs_synced(
     state: &mut AppState,
@@ -794,13 +796,23 @@ fn prs_synced(
     started_at: DateTime<Utc>,
 ) -> Vec<Cmd> {
     let repos: BTreeSet<_> = prs.iter().map(|pr| pr.key.repo.clone()).collect();
+    let seen: BTreeSet<PrKey> = prs.iter().map(|pr| pr.key.clone()).collect();
     let mut changed = false;
     for pr in prs {
         state.data.scopes.insert(pr.key.clone(), scope);
         changed |= merge_pr(&mut state.data, pr);
     }
-    for key in gone.into_iter().flatten() {
-        changed |= drop_gone(&mut state.data, &key, started_at);
+    if let Some(hint) = gone {
+        let candidates = gone_candidates(&state.data, scope, &seen, started_at);
+        tracing::debug!(
+            hint = hint.len(),
+            candidates = candidates.len(),
+            ?scope,
+            "gone after a full sync"
+        );
+        for key in candidates {
+            changed |= drop_gone(&mut state.data, &key, started_at);
+        }
     }
     state.data.synced.insert(scope, started_at);
     state.data.sync.pending.remove(&scope);
@@ -973,6 +985,24 @@ fn fold_repo_settings(data: &mut AppData, pr: &PullRequest) {
             .and_then(|old| old.default_branch.clone());
     }
     repo.settings = Some(settings);
+}
+
+/// The open pull requests of `scope` that a complete full sync did not
+/// return (`seen`) and whose head was observed before the sync started.
+fn gone_candidates(
+    data: &AppData,
+    scope: Scope,
+    seen: &BTreeSet<PrKey>,
+    started_at: DateTime<Utc>,
+) -> Vec<PrKey> {
+    data.prs
+        .values()
+        .filter(|pr| data.scopes.get(&pr.key) == Some(&scope))
+        .filter(|pr| pr.head.value.state == PrState::Open)
+        .filter(|pr| pr.head.observed_at <= started_at)
+        .filter(|pr| !seen.contains(&pr.key))
+        .map(|pr| pr.key.clone())
+        .collect()
 }
 
 /// The gone rule: a candidate leaves only when its head was observed
@@ -1577,6 +1607,42 @@ mod tests {
             state.data.prs.len(),
             0,
             "observed_at == started_at counts as not seen"
+        );
+    }
+
+    #[test]
+    fn a_complete_full_sync_drops_the_cached_prs_that_it_did_not_return() {
+        let (tabs, mut state) = setup(None);
+        let mut merged = pr_at(5, "Merged before", 0);
+        merged.head.value.state = PrState::Merged;
+        let mut theirs = pr_at(3, "Team scope", 0);
+        theirs.head.value.author = "alice".into();
+        let snapshot = crate::store::Snapshot {
+            prs: vec![
+                (Scope::Mine, pr_at(1, "Closed while the app was off", 0)),
+                (Scope::Mine, pr_at(2, "Refreshed after the start", 30)),
+                (Scope::Team, theirs),
+                (Scope::Mine, merged),
+            ],
+            ..crate::store::Snapshot::default()
+        };
+        state.load(snapshot, Vec::new());
+        let partial = run(&mut state, &tabs, synced(Vec::new(), None, 20));
+        assert_eq!(partial, vec![fake_interest()]);
+        assert_eq!(state.data.prs.len(), 4, "a partial sync drops nothing");
+        let open = pr_at(4, "Still open", 20);
+        run(&mut state, &tabs, synced(vec![open], Some(Vec::new()), 20));
+        let keys: Vec<_> = state.data.prs.keys().map(|key| key.number).collect();
+        assert_eq!(
+            keys,
+            [2, 3, 4, 5],
+            "#1 is gone without a hint; #2 is newer, #3 is in another scope, #5 is not open"
+        );
+        assert!(
+            !state
+                .data
+                .scopes
+                .contains_key(&testdata::pr_key("chaoshub", 1))
         );
     }
 
