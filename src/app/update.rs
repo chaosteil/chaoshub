@@ -1112,6 +1112,13 @@ fn action_event(
                 state.data.merge = None;
                 state.bump();
             }
+            // A pane whose launch failed never started: its `Done` is the
+            // last message of the pane.
+            let pane = (id, key.clone());
+            if state.data.panes.get(&pane) == Some(&PaneHandleState::Starting) {
+                state.data.panes.remove(&pane);
+                state.bump();
+            }
             follow_up(&state.data, &key)
         }
         ActionEvent::Popup(_) | ActionEvent::MergeStatus(_) => {
@@ -3258,15 +3265,25 @@ mod tests {
     fn a_failed_pane_launch_shows_its_error() {
         let mut state = action_state(&pr_row(99));
         let actions: Vec<Box<dyn Action>> = Vec::new();
+        let key = TargetKey::Pr(testdata::pr_key("chaoshub", 99));
+        state
+            .data
+            .panes
+            .insert(("review", key.clone()), PaneHandleState::Starting);
         let failed = event(
             "review",
             99,
             ActionEvent::Done(Err("cannot open the pane: cannot start rex: gone".into())),
         );
-        run_msg(&mut state, &actions, failed);
+        let cmds = run_msg(&mut state, &actions, failed);
         assert_eq!(
             state.ui.status.as_ref().map(|msg| msg.text.as_str()),
             Some("review failed: cannot open the pane: cannot start rex: gone")
+        );
+        assert_eq!(cmds, follow_up(&state.data, &key), "one follow-up");
+        assert!(
+            state.data.panes.is_empty(),
+            "the pane that never started is gone"
         );
     }
 }
