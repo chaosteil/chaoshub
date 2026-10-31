@@ -86,7 +86,7 @@ fn render_table(
         .fg(p.fg_mute)
         .add_modifier(Modifier::BOLD);
     buf.set_style(Rect::new(area.x, area.y, area.width, 1), header_style);
-    let widths = list::column_widths(columns, area.width.saturating_sub(list::GUTTER));
+    let widths = list::column_widths(columns, list::content_width(area.width, theme));
     let mut x = list::columns_x(area);
     for (column, &w) in columns.iter().zip(&widths) {
         if x >= area.right() {
@@ -150,6 +150,7 @@ fn render_tree(
     let p = &theme.palette;
     buf.set_style(area, Style::new().bg(p.bg).fg(p.fg));
     let text_width = area.width.saturating_sub(list::GUTTER);
+    let selection = theme.selected_row();
     let mut y = area.y;
     for (index, node) in nodes.iter().enumerate().skip(scroll) {
         if y >= area.bottom() {
@@ -157,7 +158,7 @@ fn render_tree(
         }
         let selected = index == cursor;
         let base = if selected {
-            Style::new().bg(p.surface).fg(p.fg)
+            Style::new().bg(p.bg).fg(p.fg).patch(selection.patch)
         } else {
             Style::new().bg(p.bg).fg(p.fg)
         };
@@ -175,16 +176,19 @@ fn render_tree(
             }
             buf.set_style(Rect::new(area.x, y, area.width, 1), base);
             if selected {
-                buf.set_string(area.x, y, "▌", base.fg(p.primary));
+                buf.set_string(area.x, y, selection.marker, base.fg(selection.marker_fg));
             }
             let lead = if row == 0 {
                 prefix.clone()
             } else {
                 " ".repeat(usize::from(prefix_width))
             };
-            let mut spans = vec![Span::styled(lead, base.fg(p.fg_mute))];
+            // A band can force one text color on the selected node.
+            let fg = if selected { selection.cell_fg } else { None };
+            let over = |style: Style| fg.map_or(style, |fg| style.fg(fg));
+            let mut spans = vec![Span::styled(lead, over(base.fg(p.fg_mute)))];
             spans.extend(line.spans.into_iter().map(|s| {
-                let style = base.patch(s.style);
+                let style = over(base.patch(s.style));
                 s.style(style)
             }));
             let rect = Rect::new(list::columns_x(area), y, text_width, 1);

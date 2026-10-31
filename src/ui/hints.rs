@@ -21,7 +21,7 @@ pub(crate) fn render(model: &KeyHintsModel, area: Rect, buf: &mut Buffer, theme:
         return;
     }
     let key = base.fg(p.primary).add_modifier(Modifier::BOLD);
-    let mut spans = vec![Span::styled(HINT_PREFIX, base.fg(p.primary))];
+    let mut spans = vec![theme.hint_prefix(HINT_PREFIX)];
     for (i, hint) in model.hints.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(HINT_GAP, base));

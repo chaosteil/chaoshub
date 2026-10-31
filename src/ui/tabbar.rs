@@ -90,4 +90,15 @@ mod tests {
             theme.palette.primary
         );
     }
+
+    #[test]
+    fn punk_active_tab_is_angled_and_red() {
+        let theme = testdata::punk();
+        let buf = draw(100, 0, &theme);
+        let text = row(&buf);
+        assert!(text.starts_with("◤ 1 MINE ◢  2 TEAM  "), "{text}");
+        assert_eq!(buf[(2, 0)].bg, theme.palette.primary);
+        assert_eq!(buf[(2, 0)].fg, theme.palette.bg);
+        assert_eq!(buf[(12, 0)].bg, theme.palette.bg);
+    }
 }

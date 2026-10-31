@@ -67,6 +67,22 @@ pub(crate) struct Theme {
     pub skin: Skin,
 }
 
+/// How the theme draws the status bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StatusBand {
+    /// The style of the whole bar.
+    pub bar: Style,
+    /// The style of the left part, over the cell styles. The band starts
+    /// at the left edge of the bar. `None` keeps the cell styles.
+    pub left: Option<Style>,
+    /// The glyph after the left part, one band cell after its text, and
+    /// its style.
+    pub end: Option<(&'static str, Style)>,
+    /// The text color of a message without a state. `None` keeps the
+    /// cell color.
+    pub message_fg: Option<Color>,
+}
+
 /// How the theme draws the selected row of a list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Selection {
@@ -147,35 +163,77 @@ impl Theme {
         Texture::new(self).seed(seed).render(area, buf);
     }
 
-    /// How the selected row of a list looks.
+    /// How the selected row of a list looks. Grunge and plain rows get
+    /// the surface background and a `▌` marker. A punk row is a slanted
+    /// band: `▶`, the cells in white on the band red, and a `╱` tail.
     pub(crate) fn selected_row(&self) -> Selection {
         let p = &self.palette;
-        Selection {
-            patch: Style::new().bg(p.surface),
-            marker: "▌",
-            marker_fg: p.primary,
-            tail: None,
-            cell_fg: None,
+        match self.skin {
+            Skin::Punk => Selection {
+                patch: Style::new().bg(p.band).fg(p.fg),
+                marker: "▶",
+                marker_fg: p.fg,
+                tail: Some((
+                    "╱",
+                    Style::new()
+                        .bg(p.bg)
+                        .fg(p.band)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                cell_fg: Some(p.fg),
+            },
+            Skin::Grunge { .. } | Skin::Plain => Selection {
+                patch: Style::new().bg(p.surface),
+                marker: "▌",
+                marker_fg: p.primary,
+                tail: None,
+                cell_fg: None,
+            },
         }
     }
 
-    /// The title of a tab in the tab bar.
-    #[allow(
-        clippy::unused_self,
-        reason = "the punk skin reads the skin in a later commit"
-    )]
+    /// The title of a tab in the tab bar: uppercase, and letter-spaced
+    /// for grunge and plain.
     pub(crate) fn tab_title(&self, title: &str) -> String {
-        title
-            .to_uppercase()
-            .chars()
-            .map(String::from)
-            .collect::<Vec<_>>()
-            .join(" ")
+        let upper = title.to_uppercase();
+        match self.skin {
+            Skin::Punk => upper,
+            Skin::Grunge { .. } | Skin::Plain => upper
+                .chars()
+                .map(String::from)
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
     }
 
     /// The spans of one tab with its label. The active tab stands out.
+    /// A punk tab is angled, `◤ label ◢`, and the active one is filled
+    /// with the accent red. The other punk tabs are plain.
     pub(crate) fn tab(&self, label: &str, active: bool) -> Vec<Span<'static>> {
         let p = &self.palette;
+        if self.skin == Skin::Punk {
+            let edge = Style::new().bg(p.bg).fg(p.primary);
+            return if active {
+                vec![
+                    Span::styled("◤", edge),
+                    Span::styled(
+                        label.to_owned(),
+                        Style::new()
+                            .bg(p.primary)
+                            .fg(p.bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("◢", edge),
+                ]
+            } else {
+                let style = Style::new().bg(p.bg).fg(p.fg_dim);
+                vec![
+                    Span::styled(" ", style),
+                    Span::styled(label.to_owned(), style),
+                    Span::styled(" ", style),
+                ]
+            };
+        }
         if active {
             let style = Style::new().bg(p.surface).fg(p.fg);
             vec![
@@ -188,6 +246,50 @@ impl Theme {
                 Span::styled(" ", style),
                 Span::styled(label.to_owned(), style),
             ]
+        }
+    }
+
+    /// How the status bar looks. Grunge and plain bars have the surface
+    /// background. The punk bar has a red band with black text on the
+    /// left, a diagonal end, and the message in white.
+    pub(crate) fn status_band(&self) -> StatusBand {
+        let p = &self.palette;
+        match self.skin {
+            Skin::Punk => StatusBand {
+                bar: Style::new().bg(p.bg).fg(p.fg),
+                left: Some(
+                    Style::new()
+                        .bg(p.primary)
+                        .fg(p.bg)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                end: Some(("◤", Style::new().bg(p.bg).fg(p.primary))),
+                message_fg: Some(p.fg),
+            },
+            Skin::Grunge { .. } | Skin::Plain => StatusBand {
+                bar: Style::new().bg(p.surface).fg(p.fg),
+                left: None,
+                end: None,
+                message_fg: None,
+            },
+        }
+    }
+
+    /// The marker before the first key hint, in place of `prefix`, with
+    /// the same width.
+    pub(crate) fn hint_prefix(&self, prefix: &'static str) -> Span<'static> {
+        let p = &self.palette;
+        let style = Style::new().bg(p.bg).fg(p.primary);
+        match self.skin {
+            Skin::Punk => {
+                let width = prefix.chars().count();
+                let mut text = "╱".repeat(width.saturating_sub(1));
+                if width > 0 {
+                    text.push(' ');
+                }
+                Span::styled(text, style.add_modifier(Modifier::BOLD))
+            }
+            Skin::Grunge { .. } | Skin::Plain => Span::styled(prefix, style),
         }
     }
 
@@ -238,6 +340,44 @@ mod tests {
         let theme = Theme::punk(ThemeKind::Ansi16);
         assert_eq!(theme.palette, Palette::punk_ansi16());
         assert!(!theme.textures());
+    }
+
+    #[test]
+    fn punk_selection_is_a_band_with_a_tail() {
+        let theme = Theme::punk(ThemeKind::TrueColor);
+        let p = theme.palette;
+        let selection = theme.selected_row();
+        assert_eq!(selection.patch.bg, Some(p.band));
+        assert_eq!(selection.patch.fg, Some(p.fg));
+        assert_eq!(selection.marker, "▶");
+        assert_eq!(selection.tail.map(|(glyph, _)| glyph), Some("╱"));
+        assert_eq!(selection.cell_fg, Some(p.fg));
+    }
+
+    #[test]
+    fn punk_tabs_are_angled() {
+        let theme = Theme::punk(ThemeKind::TrueColor);
+        let text = |spans: Vec<Span<'_>>| {
+            spans
+                .iter()
+                .map(|s| s.content.to_string())
+                .collect::<String>()
+        };
+        assert_eq!(text(theme.tab(" MINE ", true)), "◤ MINE ◢");
+        assert_eq!(text(theme.tab(" TEAM ", false)), "  TEAM  ");
+        assert_eq!(
+            theme.tab(" MINE ", true)[1].style.bg,
+            Some(theme.palette.primary)
+        );
+        assert_eq!(theme.tab_title("mine"), "MINE");
+    }
+
+    #[test]
+    fn hint_prefix_keeps_the_width() {
+        let punk = Theme::punk(ThemeKind::TrueColor);
+        assert_eq!(punk.hint_prefix("▌ ").content, "╱ ");
+        let grunge = Theme::new(ThemeKind::TrueColor, true, true);
+        assert_eq!(grunge.hint_prefix("▌ ").content, "▌ ");
     }
 
     #[test]
