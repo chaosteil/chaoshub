@@ -1,9 +1,13 @@
 //! The handle that sends operations to the store thread.
 
+use chrono::{DateTime, Utc};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::bus::Persist;
+use crate::bus::{Persist, Scope};
+use crate::domain::keys::PrKey;
+use crate::domain::pr::PullRequest;
+use crate::store::SyncState;
 use crate::store::error::StoreError;
 
 /// The capacity of the operation channel.
@@ -18,6 +22,27 @@ pub(crate) type Reply<T> = oneshot::Sender<Result<T, StoreError>>;
 pub(crate) enum StoreOp {
     /// A fire-and-forget write. It has no reply.
     Persist(Persist),
+    PutPrs {
+        scope: Scope,
+        prs: Vec<PullRequest>,
+        reply: Reply<()>,
+    },
+    DropGone {
+        keys: Vec<PrKey>,
+        started_at: DateTime<Utc>,
+        reply: Reply<usize>,
+    },
+    SyncState {
+        scope: Scope,
+        repo_set: String,
+        reply: Reply<Option<SyncState>>,
+    },
+    PutSyncState {
+        scope: Scope,
+        repo_set: String,
+        state: SyncState,
+        reply: Reply<()>,
+    },
     /// Runs SQL on the connection. Tests use it to inject errors.
     #[cfg(test)]
     Exec { sql: String, reply: Reply<()> },
@@ -47,6 +72,63 @@ impl StoreHandle {
                 tracing::warn!(?op, "store thread stopped, write dropped");
             }
         }
+    }
+
+    /// Writes the pull requests of one sync scope and the merge settings
+    /// of their repos.
+    pub(crate) async fn put_prs(
+        &self,
+        scope: Scope,
+        prs: Vec<PullRequest>,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreOp::PutPrs { scope, prs, reply })
+            .await
+    }
+
+    /// Deletes the gone candidates of a full sync, except the ones synced
+    /// after `started_at`. Returns the number of deleted pull requests.
+    pub(crate) async fn drop_gone(
+        &self,
+        keys: Vec<PrKey>,
+        started_at: DateTime<Utc>,
+    ) -> Result<usize, StoreError> {
+        self.request(|reply| StoreOp::DropGone {
+            keys,
+            started_at,
+            reply,
+        })
+        .await
+    }
+
+    /// The sync state of a scope and a repo set. `None` before the first
+    /// sync.
+    pub(crate) async fn sync_state(
+        &self,
+        scope: Scope,
+        repo_set: String,
+    ) -> Result<Option<SyncState>, StoreError> {
+        self.request(|reply| StoreOp::SyncState {
+            scope,
+            repo_set,
+            reply,
+        })
+        .await
+    }
+
+    /// Writes the sync state of a scope and a repo set.
+    pub(crate) async fn put_sync_state(
+        &self,
+        scope: Scope,
+        repo_set: String,
+        state: SyncState,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreOp::PutSyncState {
+            scope,
+            repo_set,
+            state,
+            reply,
+        })
+        .await
     }
 
     /// Sends the operation that `make` builds and waits for its reply.

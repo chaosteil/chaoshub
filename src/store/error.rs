@@ -7,6 +7,8 @@ pub(crate) enum StoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
     /// The store thread stopped.
     #[error("the store thread stopped")]
     Closed,
