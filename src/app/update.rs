@@ -16,6 +16,7 @@ use crate::app::layout::layout;
 use crate::app::models::{CellStyle, Direction, PaneModel, RowItem};
 use crate::app::nav::{self, Motion};
 use crate::app::panes::{PANES, Pane, applicable, items};
+use crate::app::state::MergeState;
 use crate::app::state::{
     AUTHOR_KEY, ActionDialog, AppData, AppState, AuthorPicker, FILTER_KEY, Failure, OUTPUT_LINES,
     Overlay, OverlayState, PaneHandleState, PopupState, error_text, ui_key,
@@ -23,6 +24,7 @@ use crate::app::state::{
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, pr_ref};
 use crate::app::target::{pr_target, row_target};
 use crate::app::term::term_status;
+use crate::bus::MergeProgress;
 use crate::bus::{
     ActionEvent, ActionInput, Cmd, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Msg,
     OverlayKind, Persist, PrRef, Scope, Selection, Size, SyncError, TargetKey, UiEvent,
@@ -119,6 +121,11 @@ pub(crate) fn update_full(
             state.data.sync.rate = Some(info);
             Vec::new()
         }
+        Msg::ActionEvent {
+            key: TargetKey::Pr(key),
+            event: ActionEvent::MergeStatus(progress),
+            ..
+        } => merge_status(state, key, progress),
         Msg::ActionEvent { id, key, event } => action_event(state, actions, id, key, event),
         Msg::PaneStarted { id, key } => {
             state.data.panes.insert((id, key), PaneHandleState::Running);
@@ -154,6 +161,15 @@ fn key(
         return Vec::new();
     }
     if state.data.sync.failure.take().is_some() {
+        state.bump();
+    }
+    if state
+        .data
+        .merge
+        .as_ref()
+        .is_some_and(|merge| merge.progress != MergeProgress::Pending)
+    {
+        state.data.merge = None;
         state.bump();
     }
     let chord = keymap::chord(event);
@@ -1073,6 +1089,10 @@ fn action_event(
                     );
                 }
             }
+            if merge_pending(&state.data, &key) {
+                state.data.merge = None;
+                state.bump();
+            }
             follow_up(&state.data, &key)
         }
         ActionEvent::Popup(_) | ActionEvent::MergeStatus(_) => {
@@ -1142,6 +1162,25 @@ fn follow_up(data: &AppData, key: &TargetKey) -> Vec<Cmd> {
             cmds
         }
     }
+}
+
+/// A new state of an async merge.
+fn merge_status(state: &mut AppState, key: PrKey, progress: MergeProgress) -> Vec<Cmd> {
+    state.data.merge = Some(MergeState {
+        key,
+        progress,
+        at: state.data.now,
+    });
+    state.bump();
+    Vec::new()
+}
+
+/// True while the merge of `key` is pending. A `Done` then means that the
+/// poll stopped before a final state, for example on a cancel.
+fn merge_pending(data: &AppData, key: &TargetKey) -> bool {
+    data.merge.as_ref().is_some_and(|merge| {
+        merge.progress == MergeProgress::Pending && *key == TargetKey::Pr(merge.key.clone())
+    })
 }
 
 /// The refs of the loaded pull requests in the stack of `key`, position 1
