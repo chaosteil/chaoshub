@@ -24,7 +24,7 @@ use chrono::{DateTime, Utc};
 use crate::app::keymap::Keymap;
 use crate::app::models::FrameModel;
 use crate::app::state::AppState;
-use crate::bus::{Cmd, Msg, Size, UiEvent};
+use crate::bus::{Cmd, Interest, Msg, Size, UiEvent};
 use crate::domain::repo::Repo;
 use crate::store::Snapshot;
 
@@ -62,6 +62,12 @@ impl App {
     /// moved.
     pub(crate) fn frame(&mut self) -> &FrameModel {
         frame::frame_model(&mut self.state)
+    }
+
+    /// The interest that `update` computed last, for the first value of
+    /// the interest watch.
+    pub(crate) fn interest(&self) -> Option<&Interest> {
+        self.state.ui.interest.as_ref()
     }
 
     /// The redraw signal.

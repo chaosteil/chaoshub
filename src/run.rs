@@ -25,14 +25,16 @@ use ratatui::backend::{Backend, CrosstermBackend};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use tokio::runtime::Handle;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
 
 use crate::app::App;
-use crate::app::exec::Runtime;
+use crate::app::exec::{Runtime, Senders};
 use crate::app::keymap::Keymap;
 use crate::app::layout::layout;
-use crate::bus::{Msg, Progress, Size, TermState, TermStatus};
+use crate::bus::{
+    Interest, JjReq, Msg, Progress, Scope, Session, Size, SyncReq, TermState, TermStatus,
+};
 use crate::cli::{CacheAction, CacheCommand, Cli};
 use crate::config::schema::parse_repo_name;
 use crate::config::{self, Config, paths};
@@ -96,7 +98,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         config,
     };
     tracing::debug!(?theme_kind, ?settings, "settings");
-    let (snapshot, _store) = open_store();
+    let (snapshot, store) = open_store();
 
     let tokio = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -114,15 +116,21 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
 
     let reader = Reader::spawn(tx.clone())?;
     let signals = spawn_signals(tx)?;
+    let app = App::new(
+        size,
+        keymap,
+        snapshot,
+        settings.repos.clone(),
+        chrono::Utc::now(),
+    );
+    let session = Session {
+        login: None,
+        repos: settings.repos.clone(),
+    };
+    let (senders, _channels) = channels(store, first_interest(&app), session);
     let mut event_loop = EventLoop {
-        app: App::new(
-            size,
-            keymap,
-            snapshot,
-            settings.repos.clone(),
-            chrono::Utc::now(),
-        ),
-        runtime: Runtime::new(tokio.handle().clone()),
+        app,
+        runtime: Runtime::new(tokio.handle().clone(), senders),
         handle: tokio.handle().clone(),
         transitions,
         theme,
@@ -143,6 +151,52 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     drop(guard);
     tokio.shutdown_timeout(Duration::from_millis(500));
     result
+}
+
+/// The capacity of the request channels of the sync and the jj worker.
+const REQUEST_CAPACITY: usize = 32;
+
+/// The receiving ends of the channels from the runtime to the workers.
+#[allow(dead_code, reason = "the next commit gives them to the workers")]
+struct WorkerChannels {
+    interest: watch::Receiver<Interest>,
+    session: watch::Receiver<Session>,
+    sync: mpsc::Receiver<SyncReq>,
+    jj: mpsc::Receiver<JjReq>,
+}
+
+/// The channels from the runtime to the workers: the interest and the
+/// session watches, and the sync and jj request channels.
+fn channels(store: StoreHandle, interest: Interest, session: Session) -> (Senders, WorkerChannels) {
+    let (interest_tx, interest_rx) = watch::channel(interest);
+    let (session_tx, session_rx) = watch::channel(session);
+    let (sync_tx, sync_rx) = mpsc::channel(REQUEST_CAPACITY);
+    let (jj_tx, jj_rx) = mpsc::channel(REQUEST_CAPACITY);
+    let senders = Senders {
+        interest: interest_tx,
+        session: session_tx,
+        sync: sync_tx,
+        jj: jj_tx,
+        store,
+    };
+    let channels = WorkerChannels {
+        interest: interest_rx,
+        session: session_rx,
+        sync: sync_rx,
+        jj: jj_rx,
+    };
+    (senders, channels)
+}
+
+/// The first value of the interest watch: what the first frame shows.
+fn first_interest(app: &App) -> Interest {
+    app.interest().cloned().unwrap_or(Interest {
+        tab: "mine",
+        scope: Some(Scope::Mine),
+        wants_local: true,
+        selected: None,
+        visible: Vec::new(),
+    })
 }
 
 /// Opens the cache and reads the startup snapshot. When the cache does
