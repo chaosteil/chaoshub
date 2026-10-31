@@ -54,7 +54,7 @@ use crate::ui;
 use crate::ui::hits::HitMap;
 use crate::ui::transition::Transitions;
 use crate::vcs::lock::RepoLocks;
-use crate::workers::ctx::WorkerCtx;
+use crate::workers::ctx::{WorkerCtx, WorkerMode};
 use crate::workers::spawn_all;
 
 /// The capacity of the message channel.
@@ -263,6 +263,7 @@ fn worker_ctx(
         sync_rx: Arc::new(tokio::sync::Mutex::new(channels.sync)),
         jj_rx: Arc::new(tokio::sync::Mutex::new(channels.jj)),
         locks,
+        mode: WorkerMode::Lists,
     }
 }
 

@@ -209,6 +209,9 @@ pub(crate) struct TermStatus {
 pub(crate) enum SyncReq {
     Full(Scope),
     Refresh(Vec<PrRef>),
+    /// Reads one pull request by number. It needs no node id, so it also
+    /// reads a pull request that is not in the cache.
+    Load(PrKey),
 }
 
 /// A request to the jj worker.
@@ -403,6 +406,8 @@ pub(crate) enum Cmd {
     SetSession(Session),
     SyncNow(Scope),
     RefreshPr(Vec<PrRef>),
+    /// Reads one pull request by number.
+    LoadPr(PrKey),
     ScanJj(RepoKey),
     RunAction {
         id: &'static str,
