@@ -99,6 +99,8 @@ pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(|| {
         Box::new(review::Review),
         Box::new(merge::MergeAction),
         // merge: registered here after the e-merge slice landed
+        Box::new(approve::Approve),
+        Box::new(request_changes::RequestChanges),
         Box::new(rerun_checks::RerunChecks),
         Box::new(draft::Draft),
         Box::new(close::Close),

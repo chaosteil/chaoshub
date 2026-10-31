@@ -1181,6 +1181,16 @@ mod tests {
         insta::assert_snapshot!(screen(&mut app));
     }
 
+    #[test]
+    fn request_changes_prompt_100() {
+        let mut app = seeded_app(100, 30, crate::app::testdata::mine_snapshot());
+        press(&mut app, 'R');
+        for c in "split it".chars() {
+            press(&mut app, c);
+        }
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
     /// The seeded mine app with the popup open on #101 (the fifth row).
     fn popup_app(width: u16, height: u16) -> App {
         let mut app = seeded_app(width, height, crate::app::testdata::mine_snapshot());
