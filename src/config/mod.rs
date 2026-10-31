@@ -8,7 +8,7 @@
     reason = "the workers use the configuration in a later phase"
 )]
 
-mod discover;
+pub(crate) mod discover;
 pub(crate) mod paths;
 pub(crate) mod schema;
 
