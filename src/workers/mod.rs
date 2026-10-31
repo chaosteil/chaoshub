@@ -25,6 +25,7 @@ use crate::workers::supervisor::{FIRST_BACKOFF, Worker, supervise};
 /// The workers that `spawn_all` starts.
 const WORKERS: &[Worker] = &[
     startup::WORKER,
+    sync::WORKER,
     ci::WORKER,
     jj::WORKER,
     detail::WORKER,
