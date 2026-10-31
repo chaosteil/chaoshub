@@ -11,7 +11,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use crate::app::frame;
 use crate::app::keymap::{self, Keymap};
 use crate::app::layout::layout;
-use crate::app::models::CellStyle;
+use crate::app::models::{CellStyle, Direction};
 use crate::app::nav::{self, Motion};
 use crate::app::state::{AppData, AppState, Failure, error_text};
 use crate::app::tabs::{KeyCx, TABS, Tab, pr_ref};
@@ -102,6 +102,10 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
         cmds.extend(refresh_interest(state, tabs));
         return cmds;
     }
+    if let Some(to) = tab_target(keymap, chord, state.ui.active, tabs.len()) {
+        switch_tab(state, tabs, to);
+        return refresh_interest(state, tabs).into_iter().collect();
+    }
     if let Some(motion) = motion(keymap, chord) {
         navigate(state, tabs, motion);
         return refresh_interest(state, tabs).into_iter().collect();
@@ -126,6 +130,38 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
     let mut cmds = handled.cmds;
     cmds.extend(refresh_interest(state, tabs));
     cmds
+}
+
+/// The tab that a chord selects: `tab_1` to `tab_9` by registry order,
+/// and `next_tab` cycles.
+fn tab_target(keymap: &Keymap, chord: KeyChord, active: usize, count: usize) -> Option<usize> {
+    if count > 0 && keymap.matches("next_tab", chord) {
+        return Some((active + 1) % count);
+    }
+    (1..=9)
+        .find(|n| keymap.matches(&format!("tab_{n}"), chord))
+        .map(|n| n - 1)
+        .filter(|&index| index < count)
+}
+
+/// Makes the tab at `to` active. The list of the old tab stays in
+/// `prev_list` until the slide is done, and `UiEvent::TabChanged` starts
+/// the slide.
+fn switch_tab(state: &mut AppState, tabs: &[Box<dyn Tab>], to: usize) {
+    let from = state.ui.active;
+    if to == from {
+        return;
+    }
+    let prev = frame::active_list(state, tabs);
+    let direction = if to > from {
+        Direction::Left
+    } else {
+        Direction::Right
+    };
+    state.ui.prev_list = Some((prev, direction));
+    state.ui.active = to;
+    state.ui.ui_events.push(UiEvent::TabChanged { from, to });
+    state.bump();
 }
 
 /// The navigation binding of a chord, if any.
@@ -487,7 +523,7 @@ fn quit() -> Vec<Cmd> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::models::{Direction, ListModel};
+    use crate::app::models::ListModel;
     use crate::app::state::Overlay;
     use crate::app::tabs::Handled;
     use crate::app::tabs::fake::FakeTab;
@@ -1101,6 +1137,60 @@ mod tests {
             Some(pr_ref(&moved)),
             "the interest carries the new head"
         );
+    }
+
+    #[test]
+    fn tab_keys_switch_and_keep_the_previous_list() {
+        let tabs: Vec<Box<dyn Tab>> =
+            vec![Box::new(FakeTab::new("one")), Box::new(FakeTab::new("two"))];
+        let mut state = AppState::with_tabs(SIZE, &tabs);
+        let interest = |tab| {
+            Cmd::SetInterest(Interest {
+                tab,
+                scope: None,
+                wants_local: false,
+                selected: None,
+                visible: Vec::new(),
+            })
+        };
+        let two = press(KeyCode::Char('2'), KeyModifiers::NONE);
+        assert_eq!(run(&mut state, &tabs, two.clone()), vec![interest("two")]);
+        assert_eq!(state.ui.active, 1);
+        assert_eq!(
+            state.ui.ui_events,
+            vec![UiEvent::TabChanged { from: 0, to: 1 }]
+        );
+        assert_eq!(state.ui.prev_list, Some((empty_list(), Direction::Left)));
+        assert_eq!(state.generation, 1);
+        assert_eq!(run(&mut state, &tabs, two), vec![], "already active");
+        assert_eq!(state.generation, 1);
+        let tab = press(KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(run(&mut state, &tabs, tab), vec![interest("one")]);
+        assert_eq!(state.ui.active, 0);
+        assert_eq!(state.ui.prev_list, Some((empty_list(), Direction::Right)));
+        assert_eq!(
+            state.ui.ui_events.last(),
+            Some(&UiEvent::TabChanged { from: 1, to: 0 })
+        );
+        let nine = press(KeyCode::Char('9'), KeyModifiers::NONE);
+        assert_eq!(run(&mut state, &tabs, nine), vec![], "no ninth tab");
+        run(&mut state, &tabs, Msg::TransitionsDone);
+        assert_eq!(state.ui.prev_list, None);
+    }
+
+    #[test]
+    fn the_frame_carries_prev_list_during_the_slide() {
+        let tabs: Vec<Box<dyn Tab>> =
+            vec![Box::new(FakeTab::new("one")), Box::new(FakeTab::new("two"))];
+        let mut state = AppState::with_tabs(SIZE, &tabs);
+        run(
+            &mut state,
+            &tabs,
+            press(KeyCode::Char('2'), KeyModifiers::NONE),
+        );
+        let frame = frame::frame_model_with(&mut state, &tabs).clone();
+        assert_eq!(frame.tab_bar.active, 1);
+        assert_eq!(frame.prev_list, Some((empty_list(), Direction::Left)));
     }
 
     #[test]
