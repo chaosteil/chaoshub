@@ -2,7 +2,7 @@
 #![allow(dead_code, reason = "the workers use the adapter in a later phase")]
 
 pub(crate) mod error;
-mod git;
+pub(crate) mod git;
 pub(crate) mod jj;
 pub(crate) mod lock;
 mod parse;
