@@ -24,6 +24,9 @@ pub(crate) struct Areas {
     pub status: Rect,
     /// The PR popup: centered, 85% of the width and of the height.
     pub popup: Rect,
+    /// The pane inside the PR popup: the popup without its border, its
+    /// side padding and its header rows. `Pane::model` gets this size.
+    pub popup_body: Rect,
     /// The help overlay: at the right edge, over the list rows.
     pub help: Rect,
 }
@@ -34,6 +37,12 @@ const POPUP_PERCENT: u16 = 85;
 const HELP_PERCENT: u16 = 40;
 /// The minimum width of the help overlay.
 const HELP_MIN_WIDTH: u16 = 40;
+/// The width of the popup border on each side, as `ui/popup.rs` draws it.
+const POPUP_BORDER: u16 = 1;
+/// The blank column inside the popup border on the left and the right.
+const POPUP_PADDING: u16 = 1;
+/// The popup rows above the pane: title, subtitle, pane tabs and a rule.
+const POPUP_HEADER_ROWS: u16 = 4;
 
 /// `pct` percent of `value`, rounded down.
 fn percent(value: u16, pct: u16) -> u16 {
@@ -69,6 +78,16 @@ pub(crate) fn layout(size: Size) -> Areas {
         width: popup_width,
         height: popup_height,
     };
+    let popup_body = Rect {
+        x: popup.x.saturating_add(POPUP_BORDER + POPUP_PADDING),
+        y: popup.y.saturating_add(POPUP_BORDER + POPUP_HEADER_ROWS),
+        width: popup
+            .width
+            .saturating_sub(2 * (POPUP_BORDER + POPUP_PADDING)),
+        height: popup
+            .height
+            .saturating_sub(2 * POPUP_BORDER + POPUP_HEADER_ROWS),
+    };
     let help_width = percent(width, HELP_PERCENT).max(HELP_MIN_WIDTH).min(width);
     let help = Rect {
         x: width - help_width,
@@ -81,6 +100,7 @@ pub(crate) fn layout(size: Size) -> Areas {
         list,
         status,
         popup,
+        popup_body,
         help,
     }
 }
@@ -111,6 +131,7 @@ mod tests {
                 list: rect(0, 1, 100, 28),
                 status: rect(0, 29, 100, 1),
                 popup: rect(7, 2, 85, 25),
+                popup_body: rect(9, 7, 81, 19),
                 help: rect(60, 1, 40, 28),
             }
         );
@@ -129,6 +150,7 @@ mod tests {
                 list: rect(0, 1, 160, 48),
                 status: rect(0, 49, 160, 1),
                 popup: rect(12, 4, 136, 42),
+                popup_body: rect(14, 9, 132, 36),
                 help: rect(96, 1, 64, 48),
             }
         );
