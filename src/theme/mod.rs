@@ -4,6 +4,7 @@
 mod block;
 pub(crate) mod grunge;
 mod palette;
+pub(crate) mod punk;
 pub(crate) mod texture;
 
 use ratatui::buffer::Buffer;
@@ -122,22 +123,22 @@ impl Theme {
         ThemeBlock::new(self, title)
     }
 
-    /// A header line in the color `color`.
-    #[allow(
-        clippy::unused_self,
-        reason = "the punk skin reads the skin in a later commit"
-    )]
+    /// A header line in the color `color`. Grunge and plain headers are
+    /// stencils in the color. Punk headers are inverted: black text on a
+    /// block of the color.
     pub(crate) fn header(&self, text: &str, color: Color) -> Line<'static> {
-        stencil(text, Style::new().fg(color))
+        match self.skin {
+            Skin::Punk => punk::inverted(text, color, self.palette.bg),
+            Skin::Grunge { .. } | Skin::Plain => stencil(text, Style::new().fg(color)),
+        }
     }
 
     /// A horizontal rule of `width` cells.
-    #[allow(
-        clippy::unused_self,
-        reason = "the punk skin reads the skin in a later commit"
-    )]
     pub(crate) fn separator(&self, width: usize, style: Style) -> Span<'static> {
-        Span::styled("─".repeat(width), style)
+        match self.skin {
+            Skin::Punk => Span::styled(punk::separator(width), style),
+            Skin::Grunge { .. } | Skin::Plain => Span::styled("─".repeat(width), style),
+        }
     }
 
     /// Fills the empty cells of an area. `seed` picks the pattern. Only

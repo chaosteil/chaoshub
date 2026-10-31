@@ -1,0 +1,9 @@
+---
+source: src/theme/punk.rs
+expression: "text(&draw(28, 5))"
+---
+◢━ CHECKS ╱━━━━━━━━━━━━╱╱╱━◥
+▌                          ┃
+▌                          ┃
+▌                          ┃
+◤━━━━━━━━━━━━━━━━━━━━━━━━━━◣

@@ -6,8 +6,9 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::Widget;
 
-use super::Theme;
 use super::grunge::GrungeBlock;
+use super::punk::PunkBlock;
+use super::{Skin, Theme};
 
 /// A block with the frame and the header of the theme skin. The header
 /// and the frame take the accent color; `border` sets another frame
@@ -65,6 +66,16 @@ impl Widget for ThemeBlock<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let p = &self.theme.palette;
         let border = self.border.unwrap_or(self.accent);
+        if self.theme.skin == Skin::Punk {
+            let mut block = PunkBlock::default()
+                .border_style(Style::new().fg(border).bg(p.bg))
+                .style(Style::new().bg(p.bg).fg(p.fg));
+            if !self.title.is_empty() {
+                block = block.title(self.theme.header(self.title, self.accent));
+            }
+            block.render(area, buf);
+            return;
+        }
         let mut block = GrungeBlock::new(&self.theme)
             .border_style(Style::new().fg(border).bg(p.bg))
             .style(Style::new().bg(p.bg).fg(p.fg))
@@ -73,5 +84,41 @@ impl Widget for ThemeBlock<'_> {
             block = block.title(self.theme.header(self.title, self.accent));
         }
         block.render(area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::ThemeKind;
+
+    fn draw(theme: &Theme) -> Buffer {
+        let area = Rect::new(0, 0, 30, 4);
+        let mut buf = Buffer::empty(area);
+        theme
+            .block("help")
+            .accent(theme.palette.primary)
+            .render(area, &mut buf);
+        buf
+    }
+
+    #[test]
+    fn punk_block_has_the_punk_frame_and_header() {
+        let theme = Theme::punk(ThemeKind::TrueColor);
+        let p = theme.palette;
+        let buf = draw(&theme);
+        assert_eq!(buf[(0, 0)].symbol(), "◢");
+        assert_eq!(buf[(0, 0)].fg, p.primary);
+        assert_eq!(buf[(3, 0)].symbol(), "H");
+        assert_eq!(buf[(3, 0)].bg, p.primary);
+        assert_eq!(buf[(3, 0)].fg, p.bg);
+    }
+
+    #[test]
+    fn grunge_block_has_the_grunge_frame() {
+        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let buf = draw(&theme);
+        assert_eq!(buf[(0, 0)].symbol(), "▛");
+        assert_eq!(buf[(2, 0)].symbol(), "▌");
     }
 }
