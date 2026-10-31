@@ -4,7 +4,7 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::bus::MergeProgress;
-use crate::domain::keys::PrKey;
+use crate::domain::keys::{PrKey, RepoKey};
 use crate::github::{GithubClient, GithubError, error_message, status_error};
 
 /// The REST API version of the merge-async endpoints.
@@ -136,6 +136,39 @@ impl GithubClient {
             })
             .await?;
         progress(response.json().await?)
+    }
+
+    /// Re-runs the failed jobs of the workflow run `run_id`.
+    pub(crate) async fn rerun_failed_jobs(
+        &self,
+        repo: &RepoKey,
+        run_id: u64,
+    ) -> Result<(), GithubError> {
+        let url = self.url(&format!(
+            "/repos/{}/{}/actions/runs/{run_id}/rerun-failed-jobs",
+            repo.owner, repo.name
+        ));
+        self.send(|http| http.post(&url).header("accept", ACCEPT))
+            .await?;
+        tracing::info!(run_id, "re-run of failed jobs requested");
+        Ok(())
+    }
+
+    /// Re-requests the check suite `suite_id`, for checks without a
+    /// workflow run.
+    pub(crate) async fn rerequest_suite(
+        &self,
+        repo: &RepoKey,
+        suite_id: u64,
+    ) -> Result<(), GithubError> {
+        let url = self.url(&format!(
+            "/repos/{}/{}/check-suites/{suite_id}/rerequest",
+            repo.owner, repo.name
+        ));
+        self.send(|http| http.post(&url).header("accept", ACCEPT))
+            .await?;
+        tracing::info!(suite_id, "check suite re-requested");
+        Ok(())
     }
 }
 
@@ -362,6 +395,47 @@ mod tests {
                     ..
                 }
             ),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rerun_calls_post_to_the_run_and_the_suite() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/repos/acme/deploy/actions/runs/7/rerun-failed-jobs"))
+            .and(header("authorization", "Bearer tok"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/repos/acme/deploy/check-suites/9/rerequest"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = client(&server);
+        client.rerun_failed_jobs(&key().repo, 7).await.unwrap();
+        client.rerequest_suite(&key().repo, 9).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_refused_rerun_is_an_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .set_body_json(json!({ "message": "This workflow run is not completed" })),
+            )
+            .mount(&server)
+            .await;
+        let err = client(&server)
+            .rerun_failed_jobs(&key().repo, 7)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GithubError::Http { status: Some(403), message } if message == "This workflow run is not completed"),
             "{err:?}"
         );
     }

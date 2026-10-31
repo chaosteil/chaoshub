@@ -1,0 +1,8 @@
+mutation MarkReady($id: ID!) {
+  markPullRequestReadyForReview(input: { pullRequestId: $id }) {
+    pullRequest {
+      id
+      isDraft
+    }
+  }
+}

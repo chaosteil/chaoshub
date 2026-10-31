@@ -1,0 +1,8 @@
+mutation AddReview($id: ID!, $event: PullRequestReviewEvent!, $body: String) {
+  addPullRequestReview(input: { pullRequestId: $id, event: $event, body: $body }) {
+    pullRequestReview {
+      id
+      state
+    }
+  }
+}

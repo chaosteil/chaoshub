@@ -1,0 +1,8 @@
+mutation ClosePr($id: ID!) {
+  closePullRequest(input: { pullRequestId: $id }) {
+    pullRequest {
+      id
+      state
+    }
+  }
+}
