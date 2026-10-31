@@ -125,6 +125,16 @@ pub(crate) struct StatusMsg {
     pub expires: DateTime<Utc>,
 }
 
+/// The `ui_state` key kind of the filter text of a tab.
+pub(crate) const FILTER_KEY: &str = "filter";
+/// The `ui_state` key kind of the author filter of a tab.
+pub(crate) const AUTHOR_KEY: &str = "author";
+
+/// The `ui_state` key of a setting of a tab, for example `filter.team`.
+pub(crate) fn ui_key(kind: &str, tab: &str) -> String {
+    format!("{kind}.{tab}")
+}
+
 /// The text of a sync error for the user.
 pub(crate) fn error_text(err: &SyncError) -> String {
     match err {
@@ -275,6 +285,17 @@ impl AppState {
         }
         data.local.extend(snapshot.local);
         data.cache_at = snapshot.synced_at;
+        for (tab, ts) in TABS.iter().zip(self.ui.tabs.iter_mut()) {
+            let saved = |kind: &str| {
+                snapshot
+                    .ui_state
+                    .get(&ui_key(kind, tab.id()))
+                    .filter(|value| !value.is_empty())
+                    .cloned()
+            };
+            ts.filter = saved(FILTER_KEY).unwrap_or_default();
+            ts.author = saved(AUTHOR_KEY);
+        }
         self.bump();
     }
 }
@@ -347,6 +368,32 @@ mod tests {
             None
         );
         assert_eq!(state.generation, 1);
+    }
+
+    #[test]
+    fn load_restores_the_filters_of_the_tabs() {
+        let ui_state = [
+            ("filter.mine", "pane"),
+            ("author.team", "bob"),
+            ("filter.team", ""),
+            ("filter.gone", "old tab"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        let snapshot = Snapshot {
+            ui_state,
+            ..Snapshot::default()
+        };
+        let mut state = AppState::new(Size {
+            width: 100,
+            height: 30,
+        });
+        state.load(snapshot, Vec::new());
+        assert_eq!(state.ui.tabs[0].filter, "pane");
+        assert_eq!(state.ui.tabs[0].author, None);
+        assert_eq!(state.ui.tabs[1].filter, "");
+        assert_eq!(state.ui.tabs[1].author.as_deref(), Some("bob"));
     }
 
     #[test]
