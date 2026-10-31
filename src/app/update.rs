@@ -4,15 +4,21 @@
 //! the tests compare them with `assert_eq!`.
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::app::frame;
 use crate::app::keymap::{self, Keymap};
 use crate::app::layout::layout;
-use crate::app::state::{AppData, AppState};
+use crate::app::models::CellStyle;
+use crate::app::state::{AppData, AppState, Failure, error_text};
 use crate::app::tabs::{KeyCx, TABS, Tab};
-use crate::bus::{ActionEvent, Cmd, KeyEvent, KeyEventKind, Msg, PrRef, Scope, Size, TargetKey};
+use crate::app::term::term_status;
+use crate::bus::{
+    ActionEvent, Cmd, KeyEvent, KeyEventKind, Msg, PrRef, Scope, Size, SyncError, TargetKey,
+    UiEvent,
+};
 use crate::domain::keys::PrKey;
 use crate::domain::observed::{Observed, apply_newer};
 use crate::domain::pr::PullRequest;
@@ -37,7 +43,7 @@ pub(crate) fn update_with(
     match msg {
         Msg::Key(event) => key(state, keymap, tabs, &event),
         Msg::Resize(size) => resize(state, size),
-        Msg::Tick => tick(state, tabs),
+        Msg::Tick => tick(state, tabs, Utc::now()),
         Msg::TransitionsDone => transitions_done(state),
         Msg::Signal => quit(),
         Msg::PrsSynced {
@@ -56,6 +62,12 @@ pub(crate) fn update_with(
             } else {
                 Vec::new()
             }
+        }
+        Msg::SyncFailed { source, scope, err } => sync_failed(state, source, scope, &err),
+        Msg::WorkerDied { name, restart_in } => worker_died(state, name, restart_in),
+        Msg::Rate(info) => {
+            state.data.sync.rate = Some(info);
+            Vec::new()
         }
         Msg::ActionEvent {
             key,
@@ -77,9 +89,17 @@ fn key(state: &mut AppState, keymap: &Keymap, tabs: &[Box<dyn Tab>], event: &Key
     if event.kind == KeyEventKind::Release {
         return Vec::new();
     }
+    if state.data.sync.failure.take().is_some() {
+        state.bump();
+    }
     let chord = keymap::chord(event);
     if keymap.matches("quit", chord) {
         return quit();
+    }
+    if keymap.matches("refresh", chord) {
+        let mut cmds = refresh(state, tabs);
+        cmds.extend(refresh_interest(state, tabs));
+        return cmds;
     }
     let index = state.ui.active;
     let (Some(tab), Some(ts)) = (tabs.get(index), state.ui.tabs.get_mut(index)) else {
@@ -142,6 +162,8 @@ fn prs_synced(
         changed |= drop_gone(&mut state.data, &key, started_at);
     }
     state.data.synced.insert(scope, started_at);
+    state.data.sync.pending.remove(&scope);
+    state.data.sync.failure = None;
     if changed {
         state.data.revision += 1;
     }
@@ -302,13 +324,105 @@ fn resize(state: &mut AppState, size: Size) -> Vec<Cmd> {
     Vec::new()
 }
 
-/// The deadline of the event loop. The generation moves only when a
-/// rendered string changed since the last frame.
-fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
-    let status = frame::status_model(state, tabs);
-    if frame::built_status(state).is_some_and(|built| *built != status) {
+/// The deadline of the event loop at `now`. An expired status message
+/// leaves the status bar and starts its fade. Else the generation moves
+/// only when a rendered string changed since the last frame: at a new
+/// minute (ages have minute granularity), or when the status bar or the
+/// terminal status changed.
+fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<Cmd> {
+    let minute = |time: DateTime<Utc>| time.timestamp().div_euclid(60);
+    let new_minute = minute(now) != minute(state.data.now);
+    state.data.now = now;
+    if state
+        .ui
+        .status
+        .as_ref()
+        .is_some_and(|msg| msg.expires <= now)
+    {
+        state.ui.status = None;
+        state.ui.ui_events.push(UiEvent::StatusExpired);
+        state.bump();
+        return Vec::new();
+    }
+    let Some((status, term)) = frame::built_status(state) else {
+        return Vec::new();
+    };
+    if new_minute || *status != frame::status_model(state, tabs) || *term != term_status(state) {
         state.bump();
     }
+    Vec::new()
+}
+
+/// How long an info message stays in the status bar.
+const INFO_TTL: TimeDelta = TimeDelta::seconds(5);
+/// How long an error message stays in the status bar.
+const ERROR_TTL: TimeDelta = TimeDelta::seconds(10);
+
+/// The `refresh` key: a full sync of every scope that feeds a tab.
+fn refresh(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
+    let mut cmds = Vec::new();
+    for scope in tabs.iter().filter_map(|tab| tab.scope()) {
+        if state.data.sync.pending.insert(scope) {
+            cmds.push(Cmd::SyncNow(scope));
+        }
+    }
+    state.bump();
+    cmds
+}
+
+/// A worker failed. A sync failure and a rate limit become the failure
+/// of the terminal status; the other workers only show a message.
+fn sync_failed(
+    state: &mut AppState,
+    source: &'static str,
+    scope: Option<Scope>,
+    err: &SyncError,
+) -> Vec<Cmd> {
+    let pending = &mut state.data.sync.pending;
+    match scope {
+        Some(scope) => {
+            pending.remove(&scope);
+        }
+        None if source == "sync" => pending.clear(),
+        None => {}
+    }
+    let reason = error_text(err);
+    let rate_limited_until = match err {
+        SyncError::RateLimited { until } => Some(*until),
+        _ => None,
+    };
+    if source != "sync" && rate_limited_until.is_none() {
+        state.message(
+            format!("{source} failed: {reason}"),
+            CellStyle::Warn,
+            INFO_TTL,
+        );
+        return Vec::new();
+    }
+    let (reason, style) = match rate_limited_until {
+        Some(_) => (reason, CellStyle::Warn),
+        None => (format!("sync failed: {reason}"), CellStyle::Danger),
+    };
+    state.data.sync.failure = Some(Failure {
+        source,
+        reason: reason.clone(),
+        rate_limited_until,
+        at: state.data.now,
+    });
+    state.message(reason, style, ERROR_TTL);
+    Vec::new()
+}
+
+/// The supervisor restarts a worker that panicked.
+fn worker_died(state: &mut AppState, name: &'static str, restart_in: Duration) -> Vec<Cmd> {
+    state.data.sync.failure = Some(Failure {
+        source: name,
+        reason: format!("{name} worker died"),
+        rate_limited_until: None,
+        at: state.data.now,
+    });
+    let text = format!("{name} worker restarting in {}s", restart_in.as_secs());
+    state.message(text, CellStyle::Warn, ERROR_TTL);
     Vec::new()
 }
 
@@ -337,7 +451,7 @@ mod tests {
     use crate::app::tabs::Handled;
     use crate::app::tabs::fake::FakeTab;
     use crate::app::testdata;
-    use crate::bus::{Interest, KeyCode, KeyModifiers, OverlayKind, RateInfo, UiEvent};
+    use crate::bus::{Interest, KeyCode, KeyModifiers, OverlayKind, RateInfo};
     use crate::domain::test_time;
 
     const SIZE: Size = Size {
@@ -451,14 +565,144 @@ mod tests {
     #[test]
     fn tick_moves_the_generation_only_when_a_string_changed() {
         let (tabs, mut state) = setup(None);
-        assert_eq!(run(&mut state, &tabs, Msg::Tick), vec![]);
+        state.data.now = at(0);
+        assert_eq!(tick(&mut state, &tabs, at(1)), vec![]);
         assert_eq!(state.generation, 0, "no frame was built yet");
         frame::frame_model_with(&mut state, &tabs);
-        assert_eq!(run(&mut state, &tabs, Msg::Tick), vec![]);
-        assert_eq!(state.generation, 0);
-        state.ui.status = Some("synced 1m ago".into());
-        assert_eq!(run(&mut state, &tabs, Msg::Tick), vec![]);
+        assert_eq!(tick(&mut state, &tabs, at(2)), vec![]);
+        assert_eq!(state.generation, 0, "the same minute");
+        state.ui.status = Some(crate::app::state::StatusMsg {
+            text: "synced".into(),
+            style: CellStyle::Normal,
+            expires: at(600),
+        });
+        assert_eq!(tick(&mut state, &tabs, at(3)), vec![]);
+        assert_eq!(state.generation, 1, "the status bar changed");
+        frame::frame_model_with(&mut state, &tabs);
+        tick(&mut state, &tabs, at(4));
         assert_eq!(state.generation, 1);
+        tick(&mut state, &tabs, at(60));
+        assert_eq!(state.generation, 2, "a new minute");
+    }
+
+    #[test]
+    fn an_expired_message_leaves_on_its_tick_with_the_fade_event() {
+        let (tabs, mut state) = setup(None);
+        state.data.now = at(0);
+        state.message("merged #101", CellStyle::Success, TimeDelta::seconds(5));
+        let generation = state.generation;
+        tick(&mut state, &tabs, at(4));
+        assert!(state.ui.status.is_some());
+        assert_eq!(state.ui.ui_events, vec![]);
+        tick(&mut state, &tabs, at(5));
+        assert_eq!(state.ui.status, None);
+        assert_eq!(state.ui.ui_events, vec![UiEvent::StatusExpired]);
+        assert_eq!(state.generation, generation + 1);
+    }
+
+    #[test]
+    fn sync_failed_sets_the_failure_until_a_key_or_a_success() {
+        let (tabs, mut state) = setup(None);
+        state.data.now = at(0);
+        state.data.sync.pending.insert(Scope::Mine);
+        let failed = Msg::SyncFailed {
+            source: "sync",
+            scope: Some(Scope::Mine),
+            err: SyncError::Offline,
+        };
+        assert_eq!(run(&mut state, &tabs, failed.clone()), vec![]);
+        assert_eq!(state.data.sync.pending.len(), 0);
+        let failure = state.data.sync.failure.clone().unwrap();
+        assert_eq!(failure.reason, "sync failed: offline");
+        assert_eq!(failure.at, at(0));
+        let msg = state.ui.status.clone().unwrap();
+        assert_eq!(
+            (msg.text.as_str(), msg.style),
+            ("sync failed: offline", CellStyle::Danger)
+        );
+        run(
+            &mut state,
+            &tabs,
+            press(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        assert_eq!(state.data.sync.failure, None, "a key press clears it");
+        run(&mut state, &tabs, failed);
+        run(&mut state, &tabs, synced(Vec::new(), None, 0));
+        assert_eq!(state.data.sync.failure, None, "a success clears it");
+    }
+
+    #[test]
+    fn other_workers_and_rate_limits() {
+        let (tabs, mut state) = setup(None);
+        let ci = Msg::SyncFailed {
+            source: "ci",
+            scope: None,
+            err: SyncError::Other("502".into()),
+        };
+        run(&mut state, &tabs, ci);
+        assert_eq!(
+            state.data.sync.failure, None,
+            "a ci failure is a message only"
+        );
+        assert_eq!(state.ui.status.clone().unwrap().text, "ci failed: 502");
+        let until = at(600);
+        let limited = Msg::SyncFailed {
+            source: "ci",
+            scope: None,
+            err: SyncError::RateLimited { until },
+        };
+        run(&mut state, &tabs, limited);
+        let failure = state.data.sync.failure.clone().unwrap();
+        assert_eq!(failure.rate_limited_until, Some(until));
+        assert_eq!(
+            failure.reason,
+            error_text(&SyncError::RateLimited { until })
+        );
+        assert!(failure.reason.starts_with("rate limited until "));
+        let died = Msg::WorkerDied {
+            name: "sync",
+            restart_in: Duration::from_secs(2),
+        };
+        run(&mut state, &tabs, died);
+        assert_eq!(
+            state.data.sync.failure.clone().unwrap().reason,
+            "sync worker died"
+        );
+        assert_eq!(
+            state.ui.status.clone().unwrap().text,
+            "sync worker restarting in 2s"
+        );
+    }
+
+    #[test]
+    fn refresh_syncs_every_tab_scope_once() {
+        let mine = FakeTab::new("one");
+        let tabs: Vec<Box<dyn Tab>> = vec![Box::new(mine)];
+        let mut state = AppState::with_tabs(SIZE, &tabs);
+        let r = press(KeyCode::Char('r'), KeyModifiers::NONE);
+        assert_eq!(
+            run(&mut state, &tabs, r.clone()),
+            vec![fake_interest()],
+            "no scope"
+        );
+        let real = &TABS;
+        let mut state = AppState::new(SIZE);
+        let cmds = update(&mut state, &Keymap::default(), r.clone());
+        let scopes: Vec<_> = real.iter().filter_map(|tab| tab.scope()).collect();
+        let syncs: Vec<_> = cmds
+            .iter()
+            .filter(|cmd| matches!(cmd, Cmd::SyncNow(_)))
+            .cloned()
+            .collect();
+        assert_eq!(
+            syncs,
+            scopes.into_iter().map(Cmd::SyncNow).collect::<Vec<_>>()
+        );
+        let again = update(&mut state, &Keymap::default(), r);
+        assert!(
+            !again.iter().any(|cmd| matches!(cmd, Cmd::SyncNow(_))),
+            "a pending sync is not asked again"
+        );
     }
 
     #[test]
@@ -713,14 +957,15 @@ mod tests {
     }
 
     #[test]
-    fn other_messages_do_nothing_yet() {
+    fn rate_info_is_stored_without_a_redraw() {
         let (tabs, mut state) = setup(None);
-        let rate = Msg::Rate(RateInfo {
+        let info = RateInfo {
             remaining: 4000,
             reset_at: test_time(),
             last_cost: 1,
-        });
-        assert_eq!(run(&mut state, &tabs, rate), vec![]);
+        };
+        assert_eq!(run(&mut state, &tabs, Msg::Rate(info.clone())), vec![]);
+        assert_eq!(state.data.sync.rate, Some(info));
         assert_eq!(state.generation, 0);
     }
 }
