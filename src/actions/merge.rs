@@ -1,13 +1,19 @@
 //! The merge action.
 //!
 //! It merges a pull request through the async merge endpoint of GitHub.
-//! For a pull request at position k of a stack, GitHub merges the
-//! positions 1 to k atomically, so the blockers and the confirm lines
-//! cover every entry up to k. The settings come from the
-//! `[actions.merge]` table, which also gets the keys of `[merge]`:
-//! `method` and `bypass_rules` (off by default) directly under the table
-//! are the defaults, and a `repos."owner/name"` table overrides each key
-//! that it sets for one repo.
+//! A merge of the pull request at position k of a stack includes the
+//! positions 1 to k, so the blockers and the confirm lines cover every
+//! entry up to k. The stack strategy picks how: `Atomic` sends one
+//! request for position k, and GitHub merges the entries below it with
+//! the default squash message of the repo. `Sequential` merges position 1
+//! with its own title and body, waits until GitHub moves the next entry
+//! to the stack base, merges that entry, and so on up to k.
+//!
+//! The settings come from the `[actions.merge]` table, which also gets
+//! the keys of `[merge]`: `method`, `bypass_rules` (off by default) and
+//! `stack` directly under the table are the defaults, and a
+//! `repos."owner/name"` table overrides each key that it sets for one
+//! repo.
 
 use std::time::Duration;
 
@@ -19,9 +25,12 @@ use crate::bus::{
     Selection, Target, TargetKey,
 };
 use crate::config::schema::{MergeConfig, RepoMerge, parse_repo_name};
-use crate::domain::merge::{MergeMethod, merge_blockers, resolve_method, squash_message};
+use crate::domain::merge::{
+    MergeMethod, StackStrategy, merge_blockers, resolve_method, squash_message, stack_strategy,
+};
 use crate::domain::pr::{CiState, PullRequest, ReviewDecision};
 use crate::domain::repo::Repo;
+use crate::github::parse::Me;
 use crate::github::rest::MergeArgs;
 use crate::vcs::jj;
 
@@ -68,7 +77,7 @@ impl MergeAction {
         let settings = repo_merge(sel).unwrap_or_default();
         Prepare::Confirm(ConfirmSpec {
             title: format!("merge #{}?", pr.key.number),
-            lines: confirm_lines(&entries, repo, &settings),
+            lines: confirm_lines(&entries, repo, &settings, strategy(pr, &settings)),
             danger: true,
         })
     }
@@ -108,7 +117,7 @@ impl Action for MergeAction {
         _input: ActionInput,
         svc: Services,
     ) -> BoxFuture<'static, Result<String, String>> {
-        Box::pin(merge(sel, svc, SCHEDULE))
+        Box::pin(merge(sel, svc, SCHEDULE, RETARGET))
     }
 }
 
@@ -147,98 +156,275 @@ impl Schedule {
     }
 }
 
-/// Requests the async merge, polls its state, and runs `jj git fetch`
-/// after a merge. Every state goes to `app` as
+/// When the action polls an entry of a stack for its new base, after the
+/// merge of the entry below it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Retarget {
+    /// The poll interval.
+    every: Duration,
+    /// The time after which the action stops the poll.
+    limit: Duration,
+}
+
+/// Every 3 s, up to 2 min.
+const RETARGET: Retarget = Retarget {
+    every: Duration::from_secs(3),
+    limit: Duration::from_mins(2),
+};
+
+/// The final state of one merge request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Final {
+    Merged,
+    Enqueued,
+}
+
+/// One run of the merge action: the services, the key of its events and
+/// the settings that every merge request of the run shares.
+struct Run<'a> {
+    svc: &'a Services,
+    key: TargetKey,
+    method: MergeMethod,
+    bypass_rules: bool,
+    schedule: Schedule,
+    retarget: Retarget,
+}
+
+/// Merges the target, and runs `jj git fetch` after a merge. A stack with
+/// more than one merged entry and the `Sequential` strategy merges one
+/// entry after the other. Every state goes to `app` as
 /// `ActionEvent::MergeStatus`. A cancel stops the poll, not the merge on
 /// GitHub.
-async fn merge(sel: Selection, svc: Services, schedule: Schedule) -> Result<String, String> {
-    let Target::Pr { pr, repo, .. } = &sel.target else {
+async fn merge(
+    sel: Selection,
+    svc: Services,
+    schedule: Schedule,
+    retarget: Retarget,
+) -> Result<String, String> {
+    let Target::Pr {
+        pr, stack, repo, ..
+    } = &sel.target
+    else {
         return Err("merge needs a pull request".to_owned());
     };
-    let key = sel.target.key();
-    let number = pr.key.number;
     let settings = repo_merge(&sel)?;
-    let method = method(repo, &settings);
-    let (title, body) = squash_message(pr);
-    let args = MergeArgs {
-        method: method.as_str(),
-        commit_title: &title,
-        commit_message: &body,
-        sha: &pr.head.value.head_oid,
+    let run = Run {
+        svc: &svc,
+        key: sel.target.key(),
+        method: method(repo, &settings),
         bypass_rules: settings.bypass_rules,
+        schedule,
+        retarget,
     };
-    let started = match svc.client.merge_async(&pr.key, &args).await {
-        Ok(started) => started,
-        Err(err) => return fail(&svc, &key, err.to_string()).await,
-    };
-    let mut progress = started.progress;
-    send(&svc, &key, ActionEvent::MergeStatus(progress.clone())).await;
-    let start = Instant::now();
-    while progress == MergeProgress::Pending {
-        let Some(uuid) = &started.uuid else {
-            return fail(&svc, &key, "GitHub gave no merge id".to_owned()).await;
+    let entries = merged_entries(pr, stack).unwrap_or_else(|| vec![pr.clone()]);
+    if let Some(stack_ref) = &pr.head.value.stack
+        && entries.len() > 1
+        && strategy(pr, &settings) == StackStrategy::Sequential
+    {
+        return run
+            .sequence(&entries, &stack_ref.base_ref, repo, &sel.me)
+            .await;
+    }
+    let number = pr.key.number;
+    match run.merge_one(pr).await? {
+        Final::Merged => Ok(run.fetch(repo, format!("merged #{number}")).await),
+        Final::Enqueued => Ok(format!("#{number} in merge queue")),
+    }
+}
+
+impl Run<'_> {
+    /// Requests the async merge of `pr` with its own squash message and
+    /// polls its state up to a final state. A failure sends
+    /// `MergeStatus(Failed)` and gives the message.
+    async fn merge_one(&self, pr: &PullRequest) -> Result<Final, String> {
+        let number = pr.key.number;
+        let (title, body) = squash_message(pr);
+        let args = MergeArgs {
+            method: self.method.as_str(),
+            commit_title: &title,
+            commit_message: &body,
+            sha: &pr.head.value.head_oid,
+            bypass_rules: self.bypass_rules,
         };
-        let Some(delay) = schedule.delay(start.elapsed()) else {
-            let text = format!("merge of #{number} still pending, see GitHub");
-            return fail(&svc, &key, text).await;
+        let started = match self.svc.client.merge_async(&pr.key, &args).await {
+            Ok(started) => started,
+            Err(err) => return self.fail(err.to_string()).await,
         };
-        tokio::select! {
-            () = svc.cancel.cancelled() => {
-                return Err(format!("stopped the poll, the merge of #{number} goes on"));
+        let mut progress = started.progress;
+        self.send(ActionEvent::MergeStatus(progress.clone())).await;
+        let start = Instant::now();
+        while progress == MergeProgress::Pending {
+            let Some(uuid) = &started.uuid else {
+                return self.fail("GitHub gave no merge id".to_owned()).await;
+            };
+            let Some(delay) = self.schedule.delay(start.elapsed()) else {
+                let text = format!("merge of #{number} still pending, see GitHub");
+                return self.fail(text).await;
+            };
+            tokio::select! {
+                () = self.svc.cancel.cancelled() => {
+                    return Err(format!("stopped the poll, the merge of #{number} goes on"));
+                }
+                () = tokio::time::sleep(delay) => {}
             }
-            () = tokio::time::sleep(delay) => {}
+            progress = match self.svc.client.merge_async_status(&pr.key, uuid).await {
+                Ok(progress) => progress,
+                Err(err) => return self.fail(format!("merge state unknown: {err}")).await,
+            };
+            self.send(ActionEvent::MergeStatus(progress.clone())).await;
         }
-        progress = match svc.client.merge_async_status(&pr.key, uuid).await {
-            Ok(progress) => progress,
-            Err(err) => return fail(&svc, &key, format!("merge state unknown: {err}")).await,
+        match progress {
+            MergeProgress::Merged { .. } => Ok(Final::Merged),
+            MergeProgress::Enqueued => Ok(Final::Enqueued),
+            MergeProgress::Failed(message) => Err(message),
+            MergeProgress::Pending => Err(format!("merge of #{number} still pending")),
+        }
+    }
+
+    /// Merges `entries` one by one, position 1 first, each with its own
+    /// squash message. Before each entry above position 1 it waits until
+    /// GitHub moves the entry to `base`, the base of the stack. Sends
+    /// `Progress("merged #N (k of n)")` per merged entry. A failure stops
+    /// the sequence, and the error names the entries that merged.
+    async fn sequence(
+        &self,
+        entries: &[PullRequest],
+        base: &str,
+        repo: &Repo,
+        me: &str,
+    ) -> Result<String, String> {
+        let total = entries.len();
+        let mut merged = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            let number = entry.key.number;
+            let current = if index == 0 {
+                entry.clone()
+            } else {
+                self.retargeted(entry, base, me)
+                    .await
+                    .map_err(|err| stopped(number, &err, &merged))?
+            };
+            match self.merge_one(&current).await {
+                Ok(Final::Merged) => {
+                    merged.push(number);
+                    let text = format!("merged #{number} ({} of {total})", index + 1);
+                    self.send(ActionEvent::Progress(text)).await;
+                }
+                Ok(Final::Enqueued) if index + 1 == total => {
+                    let text = format!("merged {}, #{number} in merge queue", numbers(&merged));
+                    return Ok(self.fetch(repo, text).await);
+                }
+                Ok(Final::Enqueued) => {
+                    return Err(stopped(number, "in merge queue", &merged));
+                }
+                Err(err) => return Err(stopped(number, &err, &merged)),
+            }
+        }
+        Ok(self
+            .fetch(repo, format!("merged {}", numbers(&merged)))
+            .await)
+    }
+
+    /// Reads `entry` by id until its base is `base`, every
+    /// `retarget.every`, up to `retarget.limit`. Gives the fresh pull
+    /// request, so the merge uses its current head and message.
+    async fn retargeted(
+        &self,
+        entry: &PullRequest,
+        base: &str,
+        me: &str,
+    ) -> Result<PullRequest, String> {
+        let number = entry.key.number;
+        let ids = [entry.node_id.clone()];
+        let me = Me {
+            login: me,
+            teams: &[],
         };
-        send(&svc, &key, ActionEvent::MergeStatus(progress.clone())).await;
-    }
-    match progress {
-        MergeProgress::Merged { .. } => Ok(fetch(&svc, &key, repo, number).await),
-        MergeProgress::Enqueued => Ok(format!("#{number} in merge queue")),
-        MergeProgress::Failed(message) => Err(message),
-        MergeProgress::Pending => Err(format!("merge of #{number} still pending")),
-    }
-}
-
-/// Runs `jj git fetch` in the repo after a merge, under the repo lock,
-/// and sends `Progress("fetched")`. A repo without a path has nothing to
-/// fetch. A failed fetch does not fail the merge.
-async fn fetch(svc: &Services, key: &TargetKey, repo: &Repo, number: u64) -> String {
-    let Some(path) = &repo.path else {
-        return format!("merged #{number}");
-    };
-    match jj::git_fetch(&svc.locks, path).await {
-        Ok(()) => {
-            send(svc, key, ActionEvent::Progress("fetched".to_owned())).await;
-            format!("merged #{number}")
+        let start = Instant::now();
+        loop {
+            match self.svc.client.pr_by_ids(&ids, &me).await {
+                Ok((prs, _)) => {
+                    let fresh = prs.into_iter().find(|pr| pr.key == entry.key);
+                    if let Some(pr) = fresh.filter(|pr| pr.head.value.base_ref == base) {
+                        return Ok(pr);
+                    }
+                }
+                Err(err) => {
+                    return self
+                        .fail(format!("refresh of #{number} failed: {err}"))
+                        .await;
+                }
+            }
+            if start.elapsed() >= self.retarget.limit {
+                return self.fail(format!("#{number} did not move to {base}")).await;
+            }
+            tokio::select! {
+                () = self.svc.cancel.cancelled() => {
+                    return Err(format!("stopped the wait for #{number}"));
+                }
+                () = tokio::time::sleep(self.retarget.every) => {}
+            }
         }
-        Err(err) => {
-            tracing::warn!(pr = number, %err, "jj git fetch after the merge failed");
-            format!("merged #{number}, jj git fetch failed: {err}")
+    }
+
+    /// Runs `jj git fetch` in the repo after a merge, under the repo lock,
+    /// and sends `Progress("fetched")`. Gives `text`. A repo without a
+    /// path has nothing to fetch. A failed fetch does not fail the merge.
+    async fn fetch(&self, repo: &Repo, text: String) -> String {
+        let Some(path) = &repo.path else {
+            return text;
+        };
+        match jj::git_fetch(&self.svc.locks, path).await {
+            Ok(()) => {
+                self.send(ActionEvent::Progress("fetched".to_owned())).await;
+                text
+            }
+            Err(err) => {
+                tracing::warn!(%text, %err, "jj git fetch after the merge failed");
+                format!("{text}, jj git fetch failed: {err}")
+            }
+        }
+    }
+
+    /// Sends `MergeStatus(Failed)` and returns the failure.
+    async fn fail<T>(&self, text: String) -> Result<T, String> {
+        let event = ActionEvent::MergeStatus(MergeProgress::Failed(text.clone()));
+        self.send(event).await;
+        Err(text)
+    }
+
+    /// Sends an event of the merge action to `app`. A closed channel means
+    /// that `app` is gone, so the event has no reader.
+    async fn send(&self, event: ActionEvent) {
+        let msg = Msg::ActionEvent {
+            id: ID,
+            key: self.key.clone(),
+            event,
+        };
+        if self.svc.tx.send(msg).await.is_err() {
+            tracing::debug!("app is gone, merge event dropped");
         }
     }
 }
 
-/// Sends `MergeStatus(Failed)` and returns the failure.
-async fn fail(svc: &Services, key: &TargetKey, text: String) -> Result<String, String> {
-    let event = ActionEvent::MergeStatus(MergeProgress::Failed(text.clone()));
-    send(svc, key, event).await;
-    Err(text)
+/// The error of a stopped sequence: the entry, the reason and the entries
+/// that merged before the stop.
+fn stopped(number: u64, reason: &str, merged: &[u64]) -> String {
+    let merged = if merged.is_empty() {
+        "none".to_owned()
+    } else {
+        numbers(merged)
+    };
+    format!("#{number}: {reason}; merged before the stop: {merged}")
 }
 
-/// Sends an event of the merge action to `app`. A closed channel means
-/// that `app` is gone, so the event has no reader.
-async fn send(svc: &Services, key: &TargetKey, event: ActionEvent) {
-    let msg = Msg::ActionEvent {
-        id: ID,
-        key: key.clone(),
-        event,
-    };
-    if svc.tx.send(msg).await.is_err() {
-        tracing::debug!("app is gone, merge event dropped");
-    }
+/// The pull request numbers as `#1, #2`.
+fn numbers(numbers: &[u64]) -> String {
+    numbers
+        .iter()
+        .map(|number| format!("#{number}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The merge settings of the repo of the target, from the
@@ -271,6 +457,15 @@ pub(crate) fn repo_merge(sel: &Selection) -> Result<RepoMerge, String> {
 /// what the repo permits.
 pub(crate) fn method(repo: &Repo, settings: &RepoMerge) -> MergeMethod {
     resolve_method(repo, settings.method.map(MergeMethod::from))
+}
+
+/// The stack strategy for a merge of `pr`, from the squash defaults of
+/// its repo and the `stack` setting.
+fn strategy(pr: &PullRequest, settings: &RepoMerge) -> StackStrategy {
+    stack_strategy(
+        &pr.head.value.repo_settings,
+        settings.stack.stack_override(),
+    )
 }
 
 /// The pull requests that a merge of `pr` includes: the stack entries
@@ -311,13 +506,23 @@ fn hard_reason(entries: &[PullRequest]) -> &'static str {
 }
 
 /// The lines of the confirm popup.
-fn confirm_lines(entries: &[PullRequest], repo: &Repo, settings: &RepoMerge) -> Vec<String> {
+fn confirm_lines(
+    entries: &[PullRequest],
+    repo: &Repo,
+    settings: &RepoMerge,
+    strategy: StackStrategy,
+) -> Vec<String> {
     let mut lines = Vec::new();
     if entries.len() > 1 {
-        lines.push(format!(
-            "merges {} pull requests atomically, bottom first:",
-            entries.len()
-        ));
+        let count = entries.len();
+        lines.push(match strategy {
+            StackStrategy::Atomic => {
+                format!("merges {count} pull requests atomically, bottom first:")
+            }
+            StackStrategy::Sequential => format!(
+                "merges {count} pull requests one by one, bottom first, each with its own message:"
+            ),
+        });
     }
     for pr in entries {
         let head = &pr.head.value;
@@ -369,7 +574,7 @@ mod tests {
     use crate::domain::local::{LocalChange, LocalMatch};
     use crate::domain::matching::tests::pr;
     use crate::domain::pr::{MergeStateStatus, Mergeable};
-    use crate::domain::repo::RepoSettings;
+    use crate::domain::repo::{RepoSettings, SquashMessageDefault, SquashTitleDefault};
 
     fn repo() -> Repo {
         Repo {
@@ -504,7 +709,7 @@ mod tests {
                 confirm(
                     "merge #3?",
                     &[
-                        "merges 3 pull requests atomically, bottom first:",
+                        "merges 3 pull requests one by one, bottom first, each with its own message:",
                         "  1 #1 Change 1  CI passed, approved",
                         "  2 #2 Change 2  CI passed, approved",
                         "  3 #3 Change 3  CI passed, approved",
@@ -518,7 +723,7 @@ mod tests {
                 confirm(
                     "merge #2?",
                     &[
-                        "merges 2 pull requests atomically, bottom first:",
+                        "merges 2 pull requests one by one, bottom first, each with its own message:",
                         "  1 #1 Change 1  CI passed, approved",
                         "  2 #2 Change 2  CI passed, approved",
                         "method: squash",
@@ -539,7 +744,7 @@ mod tests {
                 confirm(
                     "merge #2?",
                     &[
-                        "merges 2 pull requests atomically, bottom first:",
+                        "merges 2 pull requests one by one, bottom first, each with its own message:",
                         "  1 #1 Change 1  CI passed, approved",
                         "  2 #2 Change 2  CI running, review required",
                         "method: squash",
@@ -568,6 +773,47 @@ mod tests {
         ];
         for (name, sel, prepare) in cases {
             assert_eq!(MergeAction::applies(&sel), Applicability::Enabled, "{name}");
+            assert_eq!(MergeAction::prepare(&sel), prepare, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_stack_strategy_picks_the_first_confirm_line() {
+        let mut body_defaults = vec![entry(1, 1), entry(2, 2)];
+        for pr in &mut body_defaults {
+            let settings = &mut pr.head.value.repo_settings;
+            settings.squash_title_default = Some(SquashTitleDefault::PrTitle);
+            settings.squash_message_default = Some(SquashMessageDefault::PrBody);
+        }
+        let cases = [
+            (
+                "squash defaults of title and body merge atomically",
+                select(body_defaults[1].clone(), body_defaults, None),
+                confirm(
+                    "merge #2?",
+                    &[
+                        "merges 2 pull requests atomically, bottom first:",
+                        "  1 #1 Change 1  CI passed, approved",
+                        "  2 #2 Change 2  CI passed, approved",
+                        "method: squash",
+                    ],
+                ),
+            ),
+            (
+                "the atomic setting merges atomically",
+                select(entry(2, 2), stack3(), Some("stack = \"atomic\"\n")),
+                confirm(
+                    "merge #2?",
+                    &[
+                        "merges 2 pull requests atomically, bottom first:",
+                        "  1 #1 Change 1  CI passed, approved",
+                        "  2 #2 Change 2  CI passed, approved",
+                        "method: squash",
+                    ],
+                ),
+            ),
+        ];
+        for (name, sel, prepare) in cases {
             assert_eq!(MergeAction::prepare(&sel), prepare, "{name}");
         }
     }
@@ -659,6 +905,25 @@ mod tests {
         server: &wiremock::MockServer,
         path: Option<std::path::PathBuf>,
     ) -> (Result<String, String>, Vec<ActionEvent>) {
+        let mut sel = select(entry(7, 0), Vec::new(), None);
+        if let Target::Pr { repo, .. } = &mut sel.target {
+            repo.path = path;
+        }
+        run_selection(server, sel).await
+    }
+
+    /// A retarget poll in milliseconds.
+    const FAST_RETARGET: Retarget = Retarget {
+        every: Duration::from_millis(5),
+        limit: Duration::from_secs(5),
+    };
+
+    /// Runs the merge of `sel` against `server` and returns the result and
+    /// the events. Every event has the key of the target.
+    async fn run_selection(
+        server: &wiremock::MockServer,
+        sel: Selection,
+    ) -> (Result<String, String>, Vec<ActionEvent>) {
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
         let client = crate::github::GithubClient::new(
             crate::github::TokenSource::command("echo", &["tok"]),
@@ -671,18 +936,15 @@ mod tests {
             cancel: tokio_util::sync::CancellationToken::new(),
             tx,
         };
-        let mut sel = select(entry(7, 0), Vec::new(), None);
-        if let Target::Pr { repo, .. } = &mut sel.target {
-            repo.path = path;
-        }
-        let result = merge(sel, svc, FAST).await;
+        let target = sel.target.key();
+        let result = merge(sel, svc, FAST, FAST_RETARGET).await;
         let mut events = Vec::new();
         while let Ok(msg) = rx.try_recv() {
             let Msg::ActionEvent { id, key, event } = msg else {
                 panic!("unexpected message {msg:?}");
             };
             assert_eq!(id, ID);
-            assert_eq!(key, TargetKey::Pr(entry(7, 0).key));
+            assert_eq!(key, target);
             events.push(event);
         }
         (result, events)
@@ -815,6 +1077,223 @@ mod tests {
             [ActionEvent::MergeStatus(MergeProgress::Merged {
                 sha: "def456".into()
             })]
+        );
+    }
+
+    /// A pull request node of the `PrByIds` query: #`number` of `o/r` at
+    /// position `number` of the stack `s`, with the base `base`.
+    fn node_json(number: u64, base: &str) -> serde_json::Value {
+        serde_json::json!({
+            "__typename": "PullRequest",
+            "id": format!("PR_{number}"),
+            "number": number,
+            "title": format!("Fresh {number}"),
+            "body": format!("Fresh body {number}\r\n"),
+            "url": format!("https://github.com/o/r/pull/{number}"),
+            "isDraft": false,
+            "state": "OPEN",
+            "updatedAt": "2026-10-30T05:09:51Z",
+            "headRefName": format!("me/{number}"),
+            "headRefOid": format!("fresh{number}"),
+            "baseRefName": base,
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "CLEAN",
+            "reviewDecision": "APPROVED",
+            "author": { "__typename": "User", "login": "me" },
+            "autoMergeRequest": null,
+            "mergeQueueEntry": null,
+            "viewerLatestReviewRequest": null,
+            "reviewRequests": { "nodes": [] },
+            "latestOpinionatedReviews": { "nodes": [] },
+            "statusCheckRollup": null,
+            "stack": { "id": "s", "number": 1, "size": 3, "baseRefName": "main" },
+            "stackEntry": { "position": number },
+            "repository": {
+                "nameWithOwner": "o/r",
+                "squashMergeAllowed": true,
+                "mergeCommitAllowed": true,
+                "rebaseMergeAllowed": true,
+                "squashMergeCommitTitle": "COMMIT_OR_PR_TITLE",
+                "squashMergeCommitMessage": "COMMIT_MESSAGES"
+            }
+        })
+    }
+
+    /// Answers the `PrByIds` query for #`number` with the base `base`,
+    /// `times` times, or always when `times` is `None`.
+    async fn mount_by_id(
+        server: &wiremock::MockServer,
+        number: u64,
+        base: &str,
+        times: Option<u64>,
+    ) {
+        use wiremock::matchers::{body_string_contains, method, path};
+        let body = serde_json::json!({
+            "data": {
+                "nodes": [node_json(number, base)],
+                "rateLimit": { "cost": 1, "remaining": 4999, "resetAt": "2026-10-30T12:00:00Z" }
+            }
+        });
+        let mock = wiremock::Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains(format!("\"PR_{number}\"")))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body));
+        match times {
+            Some(times) => mock.up_to_n_times(times).mount(server).await,
+            None => mock.mount(server).await,
+        }
+    }
+
+    /// Answers the merge request of #`number`.
+    async fn mount_merge(
+        server: &wiremock::MockServer,
+        number: u64,
+        status: u16,
+        body: serde_json::Value,
+        times: u64,
+    ) {
+        use wiremock::matchers::{method, path};
+        wiremock::Mock::given(method("PUT"))
+            .and(path(format!("/repos/o/r/pulls/{number}/merge-async")))
+            .respond_with(wiremock::ResponseTemplate::new(status).set_body_json(body))
+            .expect(times)
+            .mount(server)
+            .await;
+    }
+
+    /// The bodies of the merge requests, in the order of the requests.
+    async fn merge_bodies(server: &wiremock::MockServer) -> Vec<serde_json::Value> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.method == wiremock::http::Method::PUT)
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect()
+    }
+
+    /// The stack entries 1 to `count` with a body each, and a selection of
+    /// the top entry.
+    fn sequential_stack(count: u32) -> Selection {
+        let entries: Vec<PullRequest> = (1..=count)
+            .map(|position| {
+                let mut pr = entry(u64::from(position), position);
+                pr.head.value.body = format!("Body {position}");
+                pr.head.value.base_ref = if position == 1 {
+                    "main".into()
+                } else {
+                    format!("me/{}", position - 1)
+                };
+                pr
+            })
+            .collect();
+        let top = entries[entries.len() - 1].clone();
+        select(top, entries, None)
+    }
+
+    #[tokio::test]
+    async fn sequential_stack_merges_bottom_first_with_each_message() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, ResponseTemplate};
+        let server = wiremock::MockServer::start().await;
+        mount_merge(&server, 1, 202, pending("u-1"), 1).await;
+        Mock::given(method("GET"))
+            .and(path("/repos/o/r/pulls/1/merge-async/u-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "merged",
+                "details": { "sha": "sha1" }
+            })))
+            .mount(&server)
+            .await;
+        mount_by_id(&server, 2, "me/1", Some(1)).await;
+        mount_by_id(&server, 2, "main", None).await;
+        mount_merge(
+            &server,
+            2,
+            200,
+            serde_json::json!({ "status": "merged", "details": { "sha": "sha2" } }),
+            1,
+        )
+        .await;
+
+        let (result, events) = run_selection(&server, sequential_stack(2)).await;
+
+        assert_eq!(result, Ok("merged #1, #2".to_owned()));
+        let merged = |sha: &str| {
+            ActionEvent::MergeStatus(MergeProgress::Merged {
+                sha: sha.to_owned(),
+            })
+        };
+        assert_eq!(
+            events,
+            [
+                ActionEvent::MergeStatus(MergeProgress::Pending),
+                merged("sha1"),
+                ActionEvent::Progress("merged #1 (1 of 2)".into()),
+                merged("sha2"),
+                ActionEvent::Progress("merged #2 (2 of 2)".into()),
+            ]
+        );
+        let by_ids = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path() == "/graphql")
+            .count();
+        assert_eq!(by_ids, 2, "one poll before the retarget, one after");
+        assert_eq!(
+            merge_bodies(&server).await,
+            [
+                serde_json::json!({
+                    "merge_method": "squash",
+                    "commit_title": "Change 1 (#1)",
+                    "commit_message": "Body 1",
+                    "sha": "oid1",
+                    "merge_action": "default"
+                }),
+                serde_json::json!({
+                    "merge_method": "squash",
+                    "commit_title": "Fresh 2 (#2)",
+                    "commit_message": "Fresh body 2",
+                    "sha": "fresh2",
+                    "merge_action": "default"
+                }),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failure_in_the_middle_names_the_merged_entries() {
+        let server = wiremock::MockServer::start().await;
+        let merged = serde_json::json!({ "status": "merged", "details": { "sha": "sha1" } });
+        mount_merge(&server, 1, 200, merged, 1).await;
+        mount_by_id(&server, 2, "main", None).await;
+        let message = "Required status check \"ci\" is failing";
+        mount_merge(
+            &server,
+            2,
+            409,
+            serde_json::json!({ "status": "failed", "details": { "message": message } }),
+            1,
+        )
+        .await;
+        mount_merge(&server, 3, 200, serde_json::json!({}), 0).await;
+
+        let (result, events) = run_selection(&server, sequential_stack(3)).await;
+
+        assert_eq!(
+            result,
+            Err(format!("#2: {message}; merged before the stop: #1"))
+        );
+        assert_eq!(
+            events,
+            [
+                ActionEvent::MergeStatus(MergeProgress::Merged { sha: "sha1".into() }),
+                ActionEvent::Progress("merged #1 (1 of 3)".into()),
+                ActionEvent::MergeStatus(MergeProgress::Failed(message.to_owned())),
+            ]
         );
     }
 
