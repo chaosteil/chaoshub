@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::config::schema::{
-    CodeviewConfig, MergeConfig, PrefetchConfig, RefreshConfig, RepoEntry, RepoMerge,
+    CodeviewConfig, DetailConfig, MergeConfig, PrefetchConfig, RefreshConfig, RepoEntry, RepoMerge,
     TerminalConfig, ThemeConfig, WorkspacesConfig,
 };
 use crate::domain::keys::RepoKey;
@@ -37,6 +37,8 @@ pub(crate) struct Config {
     pub refresh: RefreshConfig,
     pub prefetch: PrefetchConfig,
     pub codeview: CodeviewConfig,
+    /// Where `enter` opens the detail of a pull request.
+    pub detail: DetailConfig,
     pub merge: MergeConfig,
     pub theme: ThemeConfig,
     pub terminal: TerminalConfig,
