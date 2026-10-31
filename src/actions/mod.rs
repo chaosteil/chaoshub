@@ -94,7 +94,18 @@ pub(crate) trait Action: Send + Sync {
 }
 
 /// The action registry, in help order.
-pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(Vec::new);
+pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(|| {
+    vec![
+        Box::new(review::Review),
+        // merge is registered by the e-merge slice
+        Box::new(rerun_checks::RerunChecks),
+        Box::new(draft::Draft),
+        Box::new(close::Close),
+        Box::new(browser::Browser),
+        Box::new(copy::CopyUrl),
+        Box::new(copy::CopyChangeId),
+    ]
+});
 
 /// The ids and the default keys that occur more than once in `actions`.
 fn duplicates(actions: &[Box<dyn Action>]) -> (Vec<&'static str>, Vec<KeyChord>) {
