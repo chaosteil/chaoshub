@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use crate::app::frame::ModelCache;
 use crate::app::models::{Direction, ListModel};
 use crate::app::tabs::{TABS, Tab, TabState};
-use crate::bus::{OverlayKind, Session, Size, UiEvent};
+use crate::bus::{Interest, OverlayKind, Session, Size, UiEvent};
 use crate::domain::detail::PrDetail;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
@@ -63,6 +63,8 @@ pub(crate) struct UiState {
     /// The list of the previous tab and the slide direction, until the tab
     /// slide is done.
     pub prev_list: Option<(ListModel, Direction)>,
+    /// The interest that was last sent to the workers.
+    pub interest: Option<Interest>,
 }
 
 /// One overlay of the overlay stack.
@@ -104,6 +106,7 @@ impl AppState {
                 status: None,
                 ui_events: Vec::new(),
                 prev_list: None,
+                interest: None,
             },
             generation: 0,
             cache: ModelCache::default(),
