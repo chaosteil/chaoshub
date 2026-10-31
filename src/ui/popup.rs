@@ -1,6 +1,6 @@
 //! The popup frame with pane tabs: the header with the title and the
 //! subtitle, the pane tabs, and the active pane below. The transitions
-//! slide it in from the bottom and out again.
+//! slide it in from the right and out again.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

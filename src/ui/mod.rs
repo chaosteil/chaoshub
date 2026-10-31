@@ -64,19 +64,19 @@ fn centered(outer: Rect, width: u16, height: u16) -> Rect {
 /// The area of an overlay. `ui` draws the overlay there, and the
 /// transitions slide it there.
 pub(crate) fn overlay_area(overlay: &OverlayModel, areas: &Areas) -> Rect {
-    let popup = rect(areas.popup);
+    let list = rect(areas.list);
     match &overlay.content {
-        OverlayContent::Popup { .. } | OverlayContent::Output { .. } => popup,
+        OverlayContent::Popup { .. } | OverlayContent::Output { .. } => rect(areas.popup),
         OverlayContent::Help(_) => rect(areas.help),
         OverlayContent::Confirm(spec) => {
             let lines = u16::try_from(spec.lines.len()).unwrap_or(u16::MAX);
             // The frame, the lines, one blank row and the key hint.
-            centered(popup, DIALOG_WIDTH, lines.saturating_add(4))
+            centered(list, DIALOG_WIDTH, lines.saturating_add(4))
         }
-        OverlayContent::Prompt { .. } => centered(popup, DIALOG_WIDTH, PROMPT_HEIGHT),
+        OverlayContent::Prompt { .. } => centered(list, DIALOG_WIDTH, PROMPT_HEIGHT),
         OverlayContent::Picker { items, .. } => {
             let items = u16::try_from(items.len()).unwrap_or(u16::MAX);
-            centered(popup, PICKER_WIDTH, items.saturating_add(2))
+            centered(list, PICKER_WIDTH, items.saturating_add(2))
         }
     }
 }

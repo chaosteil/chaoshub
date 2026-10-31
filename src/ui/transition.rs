@@ -4,9 +4,10 @@
 //!
 //! - Tab switch: the previous list slides out and the new list slides in,
 //!   as two `translate_buf` effects in `parallel`.
-//! - Popup, confirm, prompt, output and picker: `slide_in` from the bottom
-//!   edge on open, `slide_out` on close.
-//! - Help: `slide_in` from the right edge, `slide_out` to the right.
+//! - Confirm, prompt and picker: `slide_in` from the bottom edge on open,
+//!   `slide_out` on close.
+//! - Popup, output and help: `slide_in` from the right edge, `slide_out`
+//!   to the right.
 //! - Scroll: the list rows move from the old offset to the new one.
 //! - Expired status message: `fade_to_fg` toward the status bar grey.
 
@@ -211,10 +212,10 @@ impl Transitions {
         let in_timer = EffectTimer::new(duration.into(), Interpolation::CubicIn);
         let behind = self.theme.palette.bg;
         let effect = match (kind, open) {
-            (OverlayKind::Help, true) => {
+            (OverlayKind::Popup | OverlayKind::Output | OverlayKind::Help, true) => {
                 fx::slide_in(Motion::RightToLeft, SLIDE_GRADIENT, 0, behind, in_timer)
             }
-            (OverlayKind::Help, false) => {
+            (OverlayKind::Popup | OverlayKind::Output | OverlayKind::Help, false) => {
                 fx::slide_out(Motion::LeftToRight, SLIDE_GRADIENT, 0, behind, timer)
             }
             (_, true) => fx::slide_in(Motion::DownToUp, SLIDE_GRADIENT, 0, behind, in_timer),
