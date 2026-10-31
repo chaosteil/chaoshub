@@ -77,7 +77,7 @@ impl MergeAction {
         let settings = repo_merge(sel).unwrap_or_default();
         Prepare::Confirm(ConfirmSpec {
             title: format!("merge #{}?", pr.key.number),
-            lines: confirm_lines(&entries, repo, &settings, strategy(pr, &settings)),
+            lines: confirm_lines(&entries, repo, &settings, strategy(pr, repo, &settings)),
             danger: true,
         })
     }
@@ -219,7 +219,7 @@ async fn merge(
     let entries = merged_entries(pr, stack).unwrap_or_else(|| vec![pr.clone()]);
     if let Some(stack_ref) = &pr.head.value.stack
         && entries.len() > 1
-        && strategy(pr, &settings) == StackStrategy::Sequential
+        && strategy(pr, repo, &settings) == StackStrategy::Sequential
     {
         return run
             .sequence(&entries, &stack_ref.base_ref, repo, &sel.me)
@@ -460,10 +460,11 @@ pub(crate) fn method(repo: &Repo, settings: &RepoMerge) -> MergeMethod {
 }
 
 /// The stack strategy for a merge of `pr`, from the squash defaults of
-/// its repo and the `stack` setting.
-fn strategy(pr: &PullRequest, settings: &RepoMerge) -> StackStrategy {
+/// its repo, the merge method and the `stack` setting.
+fn strategy(pr: &PullRequest, repo: &Repo, settings: &RepoMerge) -> StackStrategy {
     stack_strategy(
         &pr.head.value.repo_settings,
+        method(repo, settings),
         settings.stack.stack_override(),
     )
 }

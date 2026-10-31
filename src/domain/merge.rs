@@ -70,17 +70,21 @@ pub(crate) enum StackOverride {
 }
 
 /// The stack strategy for a repo. An override wins. Without one, the
-/// strategy is `Atomic` when the squash defaults of the repo are the pull
+/// strategy is `Atomic` when the method is merge or rebase, because the
+/// commit messages then come from the commits of the pull requests. It is
+/// also `Atomic` when the squash defaults of the repo are the pull
 /// request title and body, because the lower entries then get the right
 /// message anyway. Else it is `Sequential`, also when the defaults are
 /// not known.
 pub(crate) fn stack_strategy(
     settings: &RepoSettings,
+    method: MergeMethod,
     stack_override: Option<StackOverride>,
 ) -> StackStrategy {
     match stack_override {
         Some(StackOverride::Atomic) => StackStrategy::Atomic,
         Some(StackOverride::Sequential) => StackStrategy::Sequential,
+        None if method != MergeMethod::Squash => StackStrategy::Atomic,
         None => match (
             settings.squash_title_default,
             settings.squash_message_default,
@@ -238,55 +242,84 @@ mod tests {
             (
                 "title and body",
                 settings(Some(PrTitle), Some(PrBody)),
+                MergeMethod::Squash,
                 None,
                 StackStrategy::Atomic,
             ),
             (
                 "commit title",
                 settings(Some(CommitOrPrTitle), Some(PrBody)),
+                MergeMethod::Squash,
                 None,
                 StackStrategy::Sequential,
             ),
             (
                 "commit messages",
                 settings(Some(PrTitle), Some(CommitMessages)),
+                MergeMethod::Squash,
                 None,
                 StackStrategy::Sequential,
             ),
             (
                 "blank body",
                 settings(Some(PrTitle), Some(Blank)),
+                MergeMethod::Squash,
                 None,
                 StackStrategy::Sequential,
             ),
             (
                 "GitHub defaults",
                 settings(Some(CommitOrPrTitle), Some(CommitMessages)),
+                MergeMethod::Squash,
                 None,
                 StackStrategy::Sequential,
             ),
             (
                 "unknown defaults",
                 settings(None, None),
+                MergeMethod::Squash,
                 None,
                 StackStrategy::Sequential,
             ),
             (
                 "atomic override",
                 settings(Some(CommitOrPrTitle), Some(CommitMessages)),
+                MergeMethod::Squash,
                 Some(StackOverride::Atomic),
                 StackStrategy::Atomic,
             ),
             (
                 "sequential override",
                 settings(Some(PrTitle), Some(PrBody)),
+                MergeMethod::Squash,
+                Some(StackOverride::Sequential),
+                StackStrategy::Sequential,
+            ),
+            (
+                "merge method",
+                settings(Some(CommitOrPrTitle), Some(CommitMessages)),
+                MergeMethod::Merge,
+                None,
+                StackStrategy::Atomic,
+            ),
+            (
+                "rebase method",
+                settings(None, None),
+                MergeMethod::Rebase,
+                None,
+                StackStrategy::Atomic,
+            ),
+            (
+                "sequential override with the merge method",
+                settings(Some(CommitOrPrTitle), Some(CommitMessages)),
+                MergeMethod::Merge,
                 Some(StackOverride::Sequential),
                 StackStrategy::Sequential,
             ),
         ];
-        for (name, settings, stack_override, expected) in cases {
+        for (name, settings, method, stack_override, expected) in cases {
             assert_eq!(
-                stack_strategy(&settings, stack_override),
+                stack_strategy(&settings, method, stack_override),
                 expected,
                 "{name}"
             );
