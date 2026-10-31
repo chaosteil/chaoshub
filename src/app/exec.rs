@@ -417,11 +417,11 @@ fn lock(panes: &PaneHandles) -> std::sync::MutexGuard<'_, HashMap<TaskKey, Launc
     panes.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Puts `text` on the system clipboard.
+/// Puts `text` on the clipboard: the system clipboard, else OSC 52.
 fn copy(text: &str) {
-    let result = arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text));
-    if let Err(err) = result {
-        tracing::warn!(%err, "cannot copy to the clipboard");
+    match crate::clipboard::copy(text) {
+        Ok(copied) => tracing::debug!(?copied, "copied to the clipboard"),
+        Err(err) => tracing::warn!(%err, "cannot copy to the clipboard"),
     }
 }
 
