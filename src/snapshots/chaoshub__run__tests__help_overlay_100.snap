@@ -18,7 +18,7 @@ expression: screen(&mut app)
 "˙   ░    ░ ░            ˙            ˙  ░  ░  ·   ·         ▌ a             pick an author         ▐"
 "                          ˙      ░  ˙      ˙   ·      ˙     ▌ t             show all open          ▐"
 "              ˙      ·     ░              ░·   ░˙      ·    ▌ r             refresh                ▐"
-"                  ░          ·     ˙   ·                 ·· ░ q ctrl-c      quit                   ▐"
+"                  ░          ·     ˙   ·                 ·· ░ q esc ctrl-c  quit                   ▐"
 "            ░           ·          ·        ˙    ·          ▒                                      ▓"
 "               ░·        ˙ ░  ░ ░  ˙             ˙  ░  ░    ▌ ▌ A C T I O N S                      ░"
 "    ·       ·     ·            ˙                            ▌ v      review in codeview            ▐"
