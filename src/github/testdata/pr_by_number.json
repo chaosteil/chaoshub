@@ -1,0 +1,112 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "id": "PR_kwDORX-Rqc8AAAABLqQE1Q",
+        "number": 1550,
+        "title": "Title 1",
+        "body": "Body 1.\r\nSecond line.  ",
+        "url": "https://github.com/acme/deploy/pull/1550",
+        "isDraft": false,
+        "state": "OPEN",
+        "updatedAt": "2026-10-30T05:09:51Z",
+        "headRefName": "feature/branch-1",
+        "headRefOid": "166b3e9ba7c2038bea072a6fb0aff4b132302a0e",
+        "baseRefName": "main",
+        "mergeable": "MERGEABLE",
+        "mergeStateStatus": "CLEAN",
+        "reviewDecision": "APPROVED",
+        "author": {
+          "__typename": "User",
+          "login": "chaosteil"
+        },
+        "autoMergeRequest": null,
+        "mergeQueueEntry": null,
+        "viewerLatestReviewRequest": null,
+        "reviewRequests": {
+          "nodes": []
+        },
+        "latestOpinionatedReviews": {
+          "nodes": [
+            {
+              "author": {
+                "__typename": "User",
+                "login": "colleague-1"
+              }
+            }
+          ]
+        },
+        "statusCheckRollup": {
+          "state": "SUCCESS",
+          "contexts": {
+            "nodes": [
+              {
+                "__typename": "CheckRun",
+                "name": "check-1",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "startedAt": "2026-10-30T00:17:40Z",
+                "completedAt": "2026-10-30T00:17:51Z",
+                "detailsUrl": "https://github.com/acme/deploy/actions/runs/40978768579/job/123813248725",
+                "checkSuite": {
+                  "databaseId": 111084315424,
+                  "workflowRun": {
+                    "databaseId": 40978768579
+                  }
+                }
+              },
+              {
+                "__typename": "CheckRun",
+                "name": "check-2",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "startedAt": "2026-10-30T00:17:40Z",
+                "completedAt": "2026-10-30T00:19:05Z",
+                "detailsUrl": "https://github.com/acme/deploy/actions/runs/40978768570/job/123813248899",
+                "checkSuite": {
+                  "databaseId": 111084315412,
+                  "workflowRun": {
+                    "databaseId": 40978768570
+                  }
+                }
+              },
+              {
+                "__typename": "StatusContext",
+                "context": "check-3",
+                "state": "SUCCESS",
+                "targetUrl": ""
+              },
+              {
+                "__typename": "StatusContext",
+                "context": "check-4",
+                "state": "SUCCESS",
+                "targetUrl": ""
+              },
+              {
+                "__typename": "StatusContext",
+                "context": "check-5",
+                "state": "SUCCESS",
+                "targetUrl": ""
+              }
+            ]
+          }
+        },
+        "stack": null,
+        "stackEntry": null,
+        "repository": {
+          "nameWithOwner": "acme/deploy",
+          "squashMergeAllowed": true,
+          "mergeCommitAllowed": false,
+          "rebaseMergeAllowed": true,
+          "squashMergeCommitTitle": "COMMIT_OR_PR_TITLE",
+          "squashMergeCommitMessage": "COMMIT_MESSAGES"
+        }
+      }
+    },
+    "rateLimit": {
+      "cost": 1,
+      "remaining": 4994,
+      "resetAt": "2026-10-31T05:50:43Z"
+    }
+  }
+}

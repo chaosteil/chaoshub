@@ -54,6 +54,15 @@ pub(crate) struct ListPrs;
 )]
 pub(crate) struct PrByIds;
 
+/// One pull request by repo and number.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/pr_by_number.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct PrByNumber;
+
 /// The entries of a stack.
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -203,6 +212,24 @@ impl GithubClient {
         let vars = pr_by_ids::Variables { ids: ids.to_vec() };
         let (data, rate) = self.run::<PrByIds>(vars).await?;
         Ok((parse::pr_by_ids::prs(data, me, started_at)?, rate))
+    }
+
+    /// The pull request `key`. `None` when the repo or the pull request
+    /// does not exist.
+    pub(crate) async fn pr_by_number(
+        &self,
+        key: &PrKey,
+        me: &Me<'_>,
+    ) -> Result<(Option<PullRequest>, RateInfo), GithubError> {
+        let started_at = Utc::now();
+        let vars = pr_by_number::Variables {
+            owner: key.repo.owner.clone(),
+            name: key.repo.name.clone(),
+            number: i64::try_from(key.number)
+                .map_err(|_| GithubError::Parse(format!("number out of range: {}", key.number)))?,
+        };
+        let (data, rate) = self.run::<PrByNumber>(vars).await?;
+        Ok((parse::pr_by_number::pr(data, me, started_at)?, rate))
     }
 
     /// The stack with the GraphQL node id `id` and its entries, position 1
@@ -648,5 +675,37 @@ mod tests {
         let requests = server.received_requests().await.unwrap();
         let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
         assert_eq!(body["variables"], json!({ "ids": ["PR_1", "PR_2"] }));
+    }
+
+    #[tokio::test]
+    async fn pr_by_number_sends_the_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("query PrByNumber"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(fixture(include_str!("testdata/pr_by_number.json"))),
+            )
+            .mount(&server)
+            .await;
+        let key = PrKey {
+            repo: crate::domain::keys::RepoKey {
+                owner: "acme".into(),
+                name: "deploy".into(),
+            },
+            number: 1550,
+        };
+        let before = Utc::now();
+        let (pr, _) = client(&server).pr_by_number(&key, &ME).await.unwrap();
+        let pr = pr.unwrap();
+        assert_eq!(pr.key, key);
+        assert!(pr.head.observed_at >= before);
+        let requests = server.received_requests().await.unwrap();
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["operationName"], "PrByNumber");
+        assert_eq!(
+            body["variables"],
+            json!({ "owner": "acme", "name": "deploy", "number": 1550 })
+        );
     }
 }
