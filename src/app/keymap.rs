@@ -72,10 +72,6 @@ impl Default for Keymap {
 impl Keymap {
     /// The default bindings with `overrides` (binding name to chords)
     /// applied. A name that has no default adds a binding.
-    #[allow(
-        dead_code,
-        reason = "phase C passes the [keys] table of the configuration"
-    )]
     pub(crate) fn new(overrides: &BTreeMap<String, String>) -> Result<Self, KeymapError> {
         let mut keymap = Self::default();
         for (name, keys) in overrides {
