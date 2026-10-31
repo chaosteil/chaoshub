@@ -900,6 +900,42 @@ mod tests {
     }
 
     #[test]
+    fn tab_slide_with_two_tabs() {
+        let mut app = seeded_app(100, 12, crate::app::testdata::team_snapshot());
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let mut transitions = Transitions::new(true, 160).with_theme(theme);
+        let mut frame = |app: &mut App, transitions: &mut Transitions, ms: u64| {
+            draw(
+                &mut terminal,
+                app,
+                transitions,
+                &theme,
+                Duration::from_millis(ms),
+            )
+            .unwrap();
+            terminal.backend().to_string()
+        };
+        frame(&mut app, &mut transitions, 0);
+        let two = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('2'),
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(two));
+        let start = frame(&mut app, &mut transitions, 0);
+        assert!(transitions.active());
+        let middle = frame(&mut app, &mut transitions, 80);
+        let end = frame(&mut app, &mut transitions, 80);
+        assert!(!transitions.active());
+        insta::assert_snapshot!("app_tab_slide_0ms", start);
+        insta::assert_snapshot!("app_tab_slide_80ms", middle);
+        insta::assert_snapshot!("app_tab_slide_160ms", end);
+        assert!(app.frame().prev_list.is_some());
+        app.update(Msg::TransitionsDone);
+        assert_eq!(app.frame().prev_list, None);
+    }
+
+    #[test]
     fn empty_frame() {
         let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
         let size = Size {
