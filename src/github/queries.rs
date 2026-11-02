@@ -171,36 +171,6 @@ impl GithubClient {
         })
     }
 
-    /// Up to `max_pages` pages of the search `search`, `first` results per
-    /// page. Each pull request carries the start time of its own page.
-    pub(crate) async fn list_prs_pages(
-        &self,
-        search: &str,
-        first: u32,
-        max_pages: usize,
-        me: &Me<'_>,
-    ) -> Result<PrPages, GithubError> {
-        let mut page = self.list_prs(search, first, None, me).await?;
-        let started_at = page.started_at;
-        let mut prs = std::mem::take(&mut page.prs);
-        let mut pages = 1;
-        while let Some(after) = page.next.take() {
-            if pages >= max_pages {
-                page.next = Some(after);
-                break;
-            }
-            page = self.list_prs(search, first, Some(&after), me).await?;
-            prs.append(&mut page.prs);
-            pages += 1;
-        }
-        Ok(PrPages {
-            prs,
-            complete: page.next.is_none(),
-            rate: page.rate,
-            started_at,
-        })
-    }
-
     /// The pull requests with the GraphQL node ids `ids`. Ids that do not
     /// resolve to a pull request are skipped.
     pub(crate) async fn pr_by_ids(
@@ -345,18 +315,6 @@ pub(crate) struct PrPage {
     pub started_at: chrono::DateTime<Utc>,
 }
 
-/// The pages of a pull request search.
-#[derive(Debug)]
-pub(crate) struct PrPages {
-    pub prs: Vec<PullRequest>,
-    /// True when the last page was read, false when `max_pages` stopped it.
-    pub complete: bool,
-    /// The rate limit info of the last page.
-    pub rate: RateInfo,
-    /// The start time of the first page.
-    pub started_at: chrono::DateTime<Utc>,
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
@@ -417,46 +375,6 @@ mod tests {
         let (login, rate) = client(&server).viewer().await.unwrap();
         assert_eq!(login, "chaosteil");
         assert_eq!(rate.last_cost, 1);
-    }
-
-    #[tokio::test]
-    async fn pages_follow_the_cursor_to_the_last_page() {
-        let server = MockServer::start().await;
-        pages(&server, true).await;
-        let before = Utc::now();
-        let result = client(&server)
-            .list_prs_pages("is:pr", 3, 5, &ME)
-            .await
-            .unwrap();
-        assert_eq!(numbers(&result.prs), [1589, 1587, 1586, 1574, 1573, 1572]);
-        assert!(result.complete);
-        assert!(result.started_at >= before);
-        assert!(
-            result
-                .prs
-                .iter()
-                .all(|pr| pr.head.observed_at >= result.started_at)
-        );
-        assert_eq!(server.received_requests().await.unwrap().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn pages_stop_at_the_page_limit() {
-        let server = MockServer::start().await;
-        pages(&server, false).await;
-        let result = client(&server)
-            .list_prs_pages("is:pr", 3, 2, &ME)
-            .await
-            .unwrap();
-        assert_eq!(result.prs.len(), 6);
-        assert!(!result.complete, "page 2 has a next page");
-
-        let result = client(&server)
-            .list_prs_pages("is:pr", 3, 1, &ME)
-            .await
-            .unwrap();
-        assert_eq!(numbers(&result.prs), [1589, 1587, 1586]);
-        assert!(!result.complete);
     }
 
     #[tokio::test]

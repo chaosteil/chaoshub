@@ -349,11 +349,20 @@ pub(crate) enum Msg {
         login: String,
         cwd_repo: Option<Repo>,
     },
+    /// One page of a sync, or the end of a sync. The pages of a sync
+    /// arrive one by one, so the list fills while the sync runs.
     PrsSynced {
         scope: Scope,
+        /// The pull requests of one page. The message that ends the sync
+        /// has none.
         prs: Vec<PullRequest>,
-        gone: Option<Vec<PrKey>>,
+        /// Every pull request of the sync. Only the end of a full sync
+        /// that read every page has it.
+        seen: Option<Vec<PrKey>>,
+        /// The start time of the first page of the sync.
         started_at: DateTime<Utc>,
+        /// True on the message that ends the sync.
+        last: bool,
     },
     PrRefreshed(Box<PullRequest>),
     SyncFailed {

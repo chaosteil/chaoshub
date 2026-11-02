@@ -80,11 +80,12 @@ pub(crate) fn update_full(
         Msg::PrsSynced {
             scope,
             prs,
-            gone,
+            seen,
             started_at,
+            last,
         } => {
             back_online(state);
-            let mut cmds = prs_synced(state, scope, prs, gone, started_at);
+            let mut cmds = prs_synced(state, scope, prs, seen, started_at, last);
             cmds.extend(after_change(state, tabs));
             cmds
         }
@@ -1318,29 +1319,31 @@ fn pinned_startup(data: &AppData, key: &PrKey) -> Vec<Cmd> {
     cmds
 }
 
-/// A sync of one scope: the pull requests go into the data under the
-/// freshness rule. After a complete full sync (`gone` is `Some`), the
-/// open pull requests of the scope that the sync did not return leave
-/// the data, under the gone rule. The worker's list is only a hint. Each
-/// repo of the result with a local path gets a jj scan.
+/// A page of a sync of one scope, or its end: the pull requests go into
+/// the data under the freshness rule. After a complete full sync (`seen`
+/// is `Some`), the open pull requests of the scope that the sync did not
+/// return leave the data, under the gone rule. Only the end (`last`) sets
+/// the sync time and ends a requested sync. Each repo of the result with
+/// a local path gets a jj scan.
 fn prs_synced(
     state: &mut AppState,
     scope: Scope,
     prs: Vec<PullRequest>,
-    gone: Option<Vec<PrKey>>,
+    seen: Option<Vec<PrKey>>,
     started_at: DateTime<Utc>,
+    last: bool,
 ) -> Vec<Cmd> {
     let repos: BTreeSet<_> = prs.iter().map(|pr| pr.key.repo.clone()).collect();
-    let seen: BTreeSet<PrKey> = prs.iter().map(|pr| pr.key.clone()).collect();
+    let page: BTreeSet<PrKey> = prs.iter().map(|pr| pr.key.clone()).collect();
     let mut changed = false;
     for pr in prs {
         state.data.scopes.insert(pr.key.clone(), scope);
         changed |= merge_pr(&mut state.data, pr);
     }
-    if let Some(hint) = gone {
+    if let Some(seen) = seen {
+        let seen: BTreeSet<PrKey> = seen.into_iter().chain(page).collect();
         let candidates = gone_candidates(&state.data, scope, &seen, started_at);
         tracing::debug!(
-            hint = hint.len(),
             candidates = candidates.len(),
             ?scope,
             "gone after a full sync"
@@ -1349,8 +1352,10 @@ fn prs_synced(
             changed |= drop_gone(&mut state.data, &key, started_at);
         }
     }
-    state.data.synced.insert(scope, started_at);
-    state.data.sync.pending.remove(&scope);
+    if last {
+        state.data.synced.insert(scope, started_at);
+        state.data.sync.pending.remove(&scope);
+    }
     state.data.sync.failure = None;
     if changed {
         state.data.revision += 1;
@@ -2445,12 +2450,13 @@ mod tests {
         })
     }
 
-    fn synced(prs: Vec<PullRequest>, gone: Option<Vec<PrKey>>, started: i64) -> Msg {
+    fn synced(prs: Vec<PullRequest>, seen: Option<Vec<PrKey>>, started: i64) -> Msg {
         Msg::PrsSynced {
             scope: Scope::Mine,
             prs,
-            gone,
+            seen,
             started_at: at(started),
+            last: true,
         }
     }
 
@@ -2492,6 +2498,41 @@ mod tests {
             .settings
             .clone();
         assert_eq!(settings, Some(pr_at(1, "One", 0).head.value.repo_settings));
+    }
+
+    #[test]
+    fn a_page_shows_its_rows_and_only_the_end_finishes_the_sync() {
+        let (tabs, mut state) = setup(None);
+        state.data.sync.pending.insert(Scope::Mine);
+        let page = Msg::PrsSynced {
+            scope: Scope::Mine,
+            prs: vec![pr_at(1, "One", 0)],
+            seen: None,
+            started_at: at(0),
+            last: false,
+        };
+        run(&mut state, &tabs, page);
+        assert_eq!(state.data.prs.len(), 1, "the page shows at once");
+        assert!(state.data.sync.pending.contains(&Scope::Mine));
+        assert_eq!(state.data.synced.get(&Scope::Mine), None);
+
+        let page = Msg::PrsSynced {
+            scope: Scope::Mine,
+            prs: vec![pr_at(2, "Two", 1)],
+            seen: None,
+            started_at: at(0),
+            last: false,
+        };
+        run(&mut state, &tabs, page);
+        let seen = vec![
+            testdata::pr_key("chaoshub", 1),
+            testdata::pr_key("chaoshub", 2),
+        ];
+        run(&mut state, &tabs, synced(Vec::new(), Some(seen), 0));
+        let keys: Vec<_> = state.data.prs.keys().map(|key| key.number).collect();
+        assert_eq!(keys, [1, 2], "the rows of the earlier pages stay");
+        assert!(state.data.sync.pending.is_empty());
+        assert_eq!(state.data.synced.get(&Scope::Mine), Some(&at(0)));
     }
 
     #[test]
@@ -2538,12 +2579,8 @@ mod tests {
         let (tabs, mut state) = setup(None);
         let prs = vec![pr_at(1, "Old", 0), pr_at(2, "Refreshed", 30)];
         run(&mut state, &tabs, synced(prs, None, 0));
-        let gone = vec![
-            testdata::pr_key("chaoshub", 1),
-            testdata::pr_key("chaoshub", 2),
-            testdata::pr_key("chaoshub", 9),
-        ];
-        let cmds = run(&mut state, &tabs, synced(Vec::new(), Some(gone), 20));
+        let seen = vec![testdata::pr_key("chaoshub", 9)];
+        let cmds = run(&mut state, &tabs, synced(Vec::new(), Some(seen), 20));
         assert_eq!(cmds, vec![]);
         let keys: Vec<_> = state.data.prs.keys().map(|key| key.number).collect();
         assert_eq!(keys, [2], "#2 was refreshed after the sync started");
@@ -2558,8 +2595,7 @@ mod tests {
             &tabs,
             synced(vec![pr_at(1, "One", 20)], None, 0),
         );
-        let gone = Some(vec![testdata::pr_key("chaoshub", 1)]);
-        run(&mut state, &tabs, synced(Vec::new(), gone, 20));
+        run(&mut state, &tabs, synced(Vec::new(), Some(Vec::new()), 20));
         assert_eq!(
             state.data.prs.len(),
             0,
@@ -2593,7 +2629,7 @@ mod tests {
         assert_eq!(
             keys,
             [2, 3, 4, 5],
-            "#1 is gone without a hint; #2 is newer, #3 is in another scope, #5 is not open"
+            "#1 is gone; #2 is newer, #3 is in another scope, #5 is not open"
         );
         assert!(
             !state
@@ -2787,8 +2823,9 @@ mod tests {
         let msg = Msg::PrsSynced {
             scope: Scope::Mine,
             prs: vec![newer, moved.clone()],
-            gone: None,
+            seen: None,
             started_at: at(1),
+            last: true,
         };
         let cmds = update(&mut state, &Keymap::default(), msg);
         assert_eq!(selected_number(&mut state), Some(102));
@@ -2941,8 +2978,9 @@ mod tests {
         let msg = Msg::PrsSynced {
             scope: Scope::Mine,
             prs: vec![newer],
-            gone: None,
+            seen: None,
             started_at: at(1),
+            last: true,
         };
         update(&mut state, &Keymap::default(), msg);
         assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 1);
