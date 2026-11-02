@@ -20,9 +20,12 @@
 //! pages. A delta searches all states, updated since `last_delta` minus
 //! 2 min, so merges and closes arrive. `last_delta` advances to the start
 //! of the delta only after its last page. The page size is the last result count plus 10, between 20 and
-//! 100. Only a sync that read the last page sends `gone` candidates: the
-//! open pull requests that the worker saw before and that the result does
-//! not hold. The worker sends the `Msg` first and writes the store second.
+//! 100. The worker sends each page in a `PrsSynced` when the page arrives,
+//! and one more `PrsSynced` with `last` at the end of the sync. Only a
+//! full sync that read the last page sends `seen`, and deletes the `gone`
+//! rows from the cache: the open pull requests that the worker saw before
+//! and that the result does not hold. The worker sends the `Msg` first
+//! and writes the store second.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -267,18 +270,9 @@ impl Syncer {
         };
         let query = search(scope, &login, &repos, None);
         let first = page_size(self.state(scope).full_count);
-        let teams = self.ctx.config.teams.clone();
-        let me = Me {
-            login: &login,
-            teams: &teams,
-        };
-        let result = self
-            .ctx
-            .client
-            .list_prs_pages(&query, first, MAX_PAGES, &me)
-            .await;
-        let pages = match result {
-            Ok(pages) => pages,
+        let pages = match self.pages(scope, &query, first, &login).await {
+            Ok(Some(pages)) => pages,
+            Ok(None) => return false,
             Err(err) => return self.failed(scope, &repos, &err).await,
         };
         tracing::info!(
@@ -287,9 +281,6 @@ impl Syncer {
             complete = pages.complete,
             "full sync"
         );
-        if !self.rate(pages.rate.clone()).await {
-            return false;
-        }
         let keys: HashSet<PrKey> = pages.prs.iter().map(|pr| pr.key.clone()).collect();
         let state = self.state(scope);
         state.full_count = pages.prs.len();
@@ -298,23 +289,21 @@ impl Syncer {
             gone.sort();
             gone
         });
+        let seen = pages.complete.then(|| {
+            let mut seen: Vec<PrKey> = keys.iter().cloned().collect();
+            seen.sort();
+            seen
+        });
         if pages.complete {
             state.known = keys;
         } else {
             state.known.extend(keys);
         }
         let started_at = pages.started_at;
-        let msg = Msg::PrsSynced {
-            scope,
-            prs: pages.prs.clone(),
-            gone: gone.clone(),
-            started_at,
-        };
-        if self.ctx.tx.send(msg).await.is_err() {
+        if !self.end(scope, seen, started_at).await {
             return false;
         }
-        self.persist_full(scope, &repos, pages.prs, gone, started_at)
-            .await;
+        self.persist_full(scope, &repos, gone, started_at).await;
         true
     }
 
@@ -339,18 +328,9 @@ impl Syncer {
         };
         let query = search(scope, &login, &repos, Some(last_delta - DELTA_OVERLAP));
         let first = page_size(self.state(scope).delta_count);
-        let teams = self.ctx.config.teams.clone();
-        let me = Me {
-            login: &login,
-            teams: &teams,
-        };
-        let result = self
-            .ctx
-            .client
-            .list_prs_pages(&query, first, MAX_PAGES, &me)
-            .await;
-        let pages = match result {
-            Ok(pages) => pages,
+        let pages = match self.pages(scope, &query, first, &login).await {
+            Ok(Some(pages)) => pages,
+            Ok(None) => return false,
             Err(err) => return self.failed(scope, &repos, &err).await,
         };
         tracing::debug!(
@@ -359,23 +339,11 @@ impl Syncer {
             complete = pages.complete,
             "delta sync"
         );
-        if !self.rate(pages.rate.clone()).await {
-            return false;
-        }
         let scope_state = self.state(scope);
         scope_state.delta_count = pages.prs.len();
         scope_state.note(&pages.prs);
-        let msg = Msg::PrsSynced {
-            scope,
-            prs: pages.prs.clone(),
-            gone: None,
-            started_at: pages.started_at,
-        };
-        if self.ctx.tx.send(msg).await.is_err() {
+        if !self.end(scope, None, pages.started_at).await {
             return false;
-        }
-        if let Err(err) = self.ctx.store.put_prs(scope, pages.prs).await {
-            tracing::warn!(?scope, %err, "cannot cache the pull requests");
         }
         if pages.complete {
             state.last_delta = Some(pages.started_at);
@@ -385,6 +353,81 @@ impl Syncer {
             }
         }
         true
+    }
+
+    /// Reads at most `MAX_PAGES` pages of the search `query`, `first`
+    /// results per page. It sends each page in a `PrsSynced` when the page
+    /// arrives, and then writes the page into the cache. `Ok(None)` when
+    /// `app` is gone.
+    async fn pages(
+        &mut self,
+        scope: Scope,
+        query: &str,
+        first: u32,
+        login: &str,
+    ) -> Result<Option<Pages>, GithubError> {
+        let teams = self.ctx.config.teams.clone();
+        let me = Me {
+            login,
+            teams: &teams,
+        };
+        let mut page = self.ctx.client.list_prs(query, first, None, &me).await?;
+        let started_at = page.started_at;
+        let mut prs = Vec::new();
+        let mut count = 1;
+        loop {
+            if !self.rate(page.rate.clone()).await {
+                return Ok(None);
+            }
+            let msg = Msg::PrsSynced {
+                scope,
+                prs: page.prs.clone(),
+                seen: None,
+                started_at,
+                last: false,
+            };
+            if self.ctx.tx.send(msg).await.is_err() {
+                return Ok(None);
+            }
+            if let Err(err) = self.ctx.store.put_prs(scope, page.prs.clone()).await {
+                tracing::warn!(?scope, %err, "cannot cache the pull requests");
+            }
+            prs.append(&mut page.prs);
+            let Some(after) = page.next.take() else {
+                break;
+            };
+            if count >= MAX_PAGES {
+                return Ok(Some(Pages {
+                    prs,
+                    complete: false,
+                    started_at,
+                }));
+            }
+            page = self
+                .ctx
+                .client
+                .list_prs(query, first, Some(&after), &me)
+                .await?;
+            count += 1;
+        }
+        Ok(Some(Pages {
+            prs,
+            complete: true,
+            started_at,
+        }))
+    }
+
+    /// Sends the `PrsSynced` that ends the sync of `scope`. False when
+    /// `app` is gone.
+    async fn end(&self, scope: Scope, seen: Option<Vec<PrKey>>, started_at: DateTime<Utc>) -> bool {
+        let msg = Msg::PrsSynced {
+            scope,
+            prs: Vec::new(),
+            seen,
+            started_at,
+            last: true,
+        };
+        self.ctx.tx.send(msg).await.is_ok()
     }
 
     /// Reads the pull requests of `refs` by node id and sends one
@@ -498,20 +541,16 @@ impl Syncer {
         }
     }
 
-    /// Writes the result of a full sync: the pull requests, the deleted
-    /// gone candidates and the sync state.
+    /// Writes the result of a full sync: the deleted gone candidates and
+    /// the sync state. The pull requests are in the cache already.
     async fn persist_full(
         &self,
         scope: Scope,
         repos: &[String],
-        prs: Vec<PullRequest>,
         gone: Option<Vec<PrKey>>,
         started_at: DateTime<Utc>,
     ) {
         let store = &self.ctx.store;
-        if let Err(err) = store.put_prs(scope, prs).await {
-            tracing::warn!(?scope, %err, "cannot cache the pull requests");
-        }
         let Some(gone) = gone else {
             return;
         };
@@ -565,6 +604,18 @@ impl Syncer {
         }
         true
     }
+}
+
+/// The pages of one search.
+#[derive(Debug)]
+struct Pages {
+    /// The pull requests of every page.
+    prs: Vec<PullRequest>,
+    /// True when the worker read the last page, false when `MAX_PAGES`
+    /// stopped it.
+    complete: bool,
+    /// The start time of the first page.
+    started_at: DateTime<Utc>,
 }
 
 /// The `owner/name` of every repo, sorted and without duplicates.
@@ -668,20 +719,40 @@ mod tests {
         (ctx, harness)
     }
 
-    /// The scope, the numbers and the gone numbers of the next
-    /// `PrsSynced`, after the `Rate` before it.
-    async fn synced(harness: &mut Harness) -> (Scope, Vec<u64>, Option<Vec<u64>>) {
-        assert!(matches!(harness.recv().await, Msg::Rate(_)));
-        match harness.recv().await {
-            Msg::PrsSynced {
-                scope, prs, gone, ..
-            } => (
-                scope,
-                prs.iter().map(|pr| pr.key.number).collect(),
-                gone.map(|keys| keys.iter().map(|key| key.number).collect()),
-            ),
-            other => panic!("{other:?}"),
+    /// The messages of the next sync until its end: the numbers of each
+    /// page after its `Rate`, then the scope and the `seen` numbers of the
+    /// end.
+    async fn sync_pages(harness: &mut Harness) -> (Scope, Vec<Vec<u64>>, Option<Vec<u64>>) {
+        let mut pages = Vec::new();
+        loop {
+            match harness.recv().await {
+                Msg::Rate(_) => match harness.recv().await {
+                    Msg::PrsSynced {
+                        prs, last: false, ..
+                    } => pages.push(prs.iter().map(|pr| pr.key.number).collect()),
+                    other => panic!("{other:?}"),
+                },
+                Msg::PrsSynced {
+                    scope,
+                    prs,
+                    seen,
+                    last: true,
+                    ..
+                } => {
+                    assert_eq!(prs, Vec::new(), "the end has no pull requests");
+                    let seen = seen.map(|keys| keys.iter().map(|key| key.number).collect());
+                    return (scope, pages, seen);
+                }
+                other => panic!("{other:?}"),
+            }
         }
+    }
+
+    /// The scope, the numbers of every page and the `seen` numbers of the
+    /// next sync.
+    async fn synced(harness: &mut Harness) -> (Scope, Vec<u64>, Option<Vec<u64>>) {
+        let (scope, pages, seen) = sync_pages(harness).await;
+        (scope, pages.concat(), seen)
     }
 
     /// The search variables of the search requests to `server`.
@@ -710,7 +781,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_full_sync_reads_two_pages_and_sends_gone_candidates() {
+    async fn a_full_sync_sends_each_page_and_then_the_seen_keys() {
         let server = MockServer::start().await;
         serve_pages(&server, true).await;
         let (ctx, mut harness) = logged_in(&server);
@@ -721,13 +792,14 @@ mod tests {
 
         assert!(syncer.full(Scope::Mine).await);
         assert_eq!(
-            synced(&mut harness).await,
+            sync_pages(&mut harness).await,
             (
                 Scope::Mine,
-                vec![1589, 1587, 1586, 1574, 1573, 1572],
-                Some(vec![1])
+                vec![vec![1589, 1587, 1586], vec![1574, 1573, 1572]],
+                Some(vec![1572, 1573, 1574, 1586, 1587, 1589])
             )
         );
+        assert!(!syncer.mine.known.contains(&key(1)), "#1 is gone");
         assert_eq!(
             searches(&server).await,
             [
@@ -755,7 +827,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_full_sync_cut_at_five_pages_sends_no_gone() {
+    async fn a_full_sync_cut_at_five_pages_sends_no_seen_keys() {
         let server = MockServer::start().await;
         serve_pages(&server, false).await;
         let (ctx, mut harness) = logged_in(&server);
@@ -763,10 +835,11 @@ mod tests {
         syncer.team.known.insert(key(1));
 
         assert!(syncer.full(Scope::Team).await);
-        let (scope, numbers, gone) = synced(&mut harness).await;
+        let (scope, pages, seen) = sync_pages(&mut harness).await;
         assert_eq!(scope, Scope::Team);
-        assert_eq!(numbers.len(), 15);
-        assert_eq!(gone, None);
+        assert_eq!(pages.len(), MAX_PAGES);
+        assert_eq!(pages.concat().len(), 15);
+        assert_eq!(seen, None);
         assert_eq!(server.received_requests().await.unwrap().len(), MAX_PAGES);
         assert!(syncer.team.known.contains(&key(1)));
         assert!(searches(&server).await[0].0.contains(" -author:chaosteil "));
@@ -952,8 +1025,8 @@ mod tests {
         }
         assert_eq!(refreshed, [1550, 1549]);
 
-        let (scope, _, gone) = synced(&mut harness).await;
-        assert_eq!((scope, gone), (Scope::Mine, None));
+        let (scope, _, seen) = synced(&mut harness).await;
+        assert_eq!((scope, seen), (Scope::Mine, None));
         let delta = searches(&server)
             .await
             .into_iter()
@@ -971,9 +1044,10 @@ mod tests {
         synced(&mut harness).await;
         synced(&mut harness).await;
         harness.sync.send(SyncReq::Full(Scope::Team)).await.unwrap();
-        let (scope, _, gone) = synced(&mut harness).await;
+        let (scope, mut numbers, seen) = synced(&mut harness).await;
         assert_eq!(scope, Scope::Team);
-        assert_eq!(gone, Some(Vec::new()));
+        numbers.sort_unstable();
+        assert_eq!(seen, Some(numbers));
         worker.abort();
     }
 
