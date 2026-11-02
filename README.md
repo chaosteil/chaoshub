@@ -482,6 +482,8 @@ left. The right part shows these items:
 - `syncing mine`, `syncing team`: a sync of the pull requests, also a
   timed sync in the background.
 - `prefetch N`: the prefetch of pull request refs.
+- `loading N conversations`: the comments, reviews and threads of N
+  pull requests load from GitHub.
 
 When no work runs, the spinner and the items go away. A sync reads the
 pull requests in pages, and the rows of each page show in the list when

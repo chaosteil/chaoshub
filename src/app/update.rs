@@ -77,12 +77,7 @@ pub(crate) fn update_full(
             cmds.extend(after_change(state, tabs));
             cmds
         }
-        Msg::SyncStarted { scope } => {
-            if state.data.sync.running.insert(scope) {
-                state.bump();
-            }
-            Vec::new()
-        }
+        Msg::SyncStarted { scope } => sync_started(state, scope),
         Msg::PrsSynced {
             scope,
             prs,
@@ -121,6 +116,7 @@ pub(crate) fn update_full(
                 Vec::new()
             }
         }
+        Msg::DetailLoading(key) => detail_loading(state, key),
         Msg::DetailLoaded(key, result) => {
             if result.is_ok() {
                 back_online(state);
@@ -1325,6 +1321,24 @@ fn pinned_startup(data: &AppData, key: &PrKey) -> Vec<Cmd> {
     cmds
 }
 
+/// The sync worker started a sync of `scope`. It runs until its end or
+/// a failure.
+fn sync_started(state: &mut AppState, scope: Scope) -> Vec<Cmd> {
+    if state.data.sync.running.insert(scope) {
+        state.bump();
+    }
+    Vec::new()
+}
+
+/// The detail worker started to read the conversation of `key`. It runs
+/// until `DetailLoaded`.
+fn detail_loading(state: &mut AppState, key: PrKey) -> Vec<Cmd> {
+    if state.data.details_loading.insert(key) {
+        state.bump();
+    }
+    Vec::new()
+}
+
 /// A page of a sync of one scope, or its end: the pull requests go into
 /// the data under the freshness rule. After a complete full sync (`seen`
 /// is `Some`), the open pull requests of the scope that the sync did not
@@ -1429,12 +1443,16 @@ fn ci_updated(
 }
 
 /// The conversation of a pull request, under the freshness rule, or the
-/// reason why it did not load. True when it changed the data.
+/// reason why it did not load. Its load ends. True when it changed the
+/// data.
 fn detail_loaded(
     state: &mut AppState,
     key: PrKey,
     result: Result<Observed<PrDetail>, SyncError>,
 ) -> bool {
+    if state.data.details_loading.remove(&key) {
+        state.bump();
+    }
     let data = &mut state.data;
     let changed = match result {
         Ok(detail) => {
@@ -1863,10 +1881,13 @@ fn sync_failed(
 }
 
 /// The supervisor restarts a worker that panicked. The status bar shows
-/// the restart until it happens. The syncs of a dead sync worker end.
+/// the restart until it happens. The syncs of a dead sync worker and the
+/// loads of a dead detail worker end.
 fn worker_died(state: &mut AppState, name: &'static str, restart_in: Duration) -> Vec<Cmd> {
-    if name == "sync" {
-        state.data.sync.running.clear();
+    match name {
+        "sync" => state.data.sync.running.clear(),
+        "detail" => state.data.details_loading.clear(),
+        _ => {}
     }
     state.data.sync.failure = Some(Failure {
         source: name,
@@ -3405,6 +3426,28 @@ mod tests {
         };
         assert_eq!(run(&mut state, &tabs, older), vec![]);
         assert_eq!(pr(&state, 1).ci_state, ci(5));
+    }
+
+    #[test]
+    fn a_conversation_load_runs_until_its_result_or_a_dead_worker() {
+        let (tabs, mut state) = setup(None);
+        let one = testdata::pr_key("chaoshub", 1);
+        let two = testdata::pr_key("chaoshub", 2);
+        run(&mut state, &tabs, Msg::DetailLoading(one.clone()));
+        run(&mut state, &tabs, Msg::DetailLoading(two.clone()));
+        assert!(state.data.busy());
+        run(
+            &mut state,
+            &tabs,
+            Msg::DetailLoaded(one, Err(SyncError::Offline)),
+        );
+        assert_eq!(state.data.details_loading, BTreeSet::from([two]));
+        let died = Msg::WorkerDied {
+            name: "detail",
+            restart_in: Duration::from_secs(1),
+        };
+        run(&mut state, &tabs, died);
+        assert!(!state.data.busy(), "a dead detail worker loads nothing");
     }
 
     #[test]
