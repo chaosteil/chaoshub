@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 
+pub(crate) use crate::app::frame::SPINNER_FRAME;
 use crate::app::keymap::Keymap;
 use crate::app::layout::Areas;
 use crate::app::models::FrameModel;
@@ -99,6 +100,12 @@ impl App {
     /// the interest watch.
     pub(crate) fn interest(&self) -> Option<&Interest> {
         self.state.ui.interest.as_ref()
+    }
+
+    /// True while a requested sync or a prefetch batch runs: the status
+    /// bar shows a spinner, and `run` ticks every `SPINNER_FRAME`.
+    pub(crate) fn busy(&self) -> bool {
+        self.state.data.busy()
     }
 
     /// The redraw signal.

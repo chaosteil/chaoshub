@@ -474,6 +474,16 @@ press:
 
 Other messages show for 5 or 10 seconds and then fade out.
 
+A spinner turns at the end of the left part while one of these runs:
+
+- The first sync after the start.
+- A sync that the `refresh` key started.
+- A prefetch of pull request refs.
+
+While the sync of the active tab runs, the left part shows `syncing` in
+place of the age of the data. A sync reads the pull requests in pages,
+and the rows of each page show in the list when the page arrives.
+
 ## How to extend
 
 The code has three registries. A new action, tab or pane is one new

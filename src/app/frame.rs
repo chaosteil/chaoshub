@@ -4,6 +4,9 @@
 //! model of each tab is cached with the generation and the size it was
 //! built for, so animation frames and idle ticks never rebuild it.
 
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
 use textwrap::core::display_width;
 
 use crate::actions::{Action, Applicability, Hint, REGISTRY};
@@ -26,6 +29,13 @@ use crate::bus::{
 };
 use crate::domain::keys::PrKey;
 use crate::domain::pr::PrState;
+
+/// The frames of the spinner in the status bar.
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// How long one frame of the spinner shows. `run` ticks at this rate
+/// while the app is busy.
+pub(crate) const SPINNER_FRAME: Duration = Duration::from_millis(100);
 
 /// The models of the last frame.
 #[derive(Debug)]
@@ -640,6 +650,12 @@ pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusMod
             text: sync_text(state, tabs),
             style: CellStyle::Dim,
         });
+        if state.data.busy() {
+            left.push(Cell {
+                text: format!(" {}", spinner(state.data.now)),
+                style: CellStyle::Primary,
+            });
+        }
         left
     };
     StatusModel {
@@ -679,18 +695,27 @@ fn pinned_status(data: &AppData, key: &PrKey) -> Vec<Cell> {
     ]
 }
 
+/// The frame of the spinner at the time `now`.
+fn spinner(now: DateTime<Utc>) -> &'static str {
+    let step = now.timestamp_millis() / i64::try_from(SPINNER_FRAME.as_millis()).unwrap_or(1);
+    SPINNER[usize::try_from(step).unwrap_or(0) % SPINNER.len()]
+}
+
 /// The repo count, the age of the data and the pull requests that the
 /// prefetch batch has left, for example
-/// ` 3 repos · synced 12s ago · prefetch 2`.
+/// ` 3 repos · synced 12s ago · prefetch 2`. While a requested sync of
+/// the scope of the active tab runs, `syncing` replaces the age.
 fn sync_text(state: &AppState, tabs: &[Box<dyn Tab>]) -> String {
     let data = &state.data;
     let repos = data.session.repos.len();
     let noun = if repos == 1 { "repo" } else { "repos" };
     let scope = tabs.get(state.ui.active).and_then(|tab| tab.scope());
+    let syncing = scope.is_some_and(|scope| data.sync.pending.contains(&scope));
     let text = match (
         scope.and_then(|scope| data.synced.get(&scope)),
         data.cache_at,
     ) {
+        _ if syncing => format!(" {repos} {noun} · syncing"),
         (Some(&at), _) => format!(" {repos} {noun} · synced {} ago", age(at, data.now)),
         (None, Some(at)) => format!(" {repos} {noun} · cache from {} ago", age(at, data.now)),
         (None, None) => format!(" {repos} {noun}"),
@@ -753,6 +778,7 @@ mod tests {
     use super::*;
     use crate::app::models::Direction;
     use crate::app::tabs::fake::FakeTab;
+    use crate::bus::Scope;
 
     const SIZE: Size = Size {
         width: 100,
@@ -864,6 +890,51 @@ mod tests {
         let frame = frame_model_with(&mut state, &tabs);
         assert_eq!(frame.list, empty_list());
         assert_eq!(frame.tab_bar.titles, [""; 0]);
+    }
+
+    #[test]
+    fn a_requested_sync_shows_syncing_and_a_spinner() {
+        let mut state = AppState::with_tabs(SIZE, &TABS);
+        state.data.now = crate::domain::test_time();
+        state
+            .data
+            .synced
+            .insert(Scope::Mine, crate::domain::test_time());
+        let texts = |state: &AppState| -> Vec<String> {
+            status_model(state, &TABS)
+                .left
+                .into_iter()
+                .map(|cell| cell.text)
+                .collect()
+        };
+        assert_eq!(texts(&state), ["[MINE]", " 0 repos · synced <1m ago"]);
+
+        state.data.sync.pending.insert(Scope::Mine);
+        let first = texts(&state);
+        assert_eq!(first[..2], ["[MINE]", " 0 repos · syncing"]);
+        assert_eq!(first.len(), 3, "the spinner shows");
+        state.data.now += SPINNER_FRAME;
+        assert_ne!(texts(&state)[2], first[2], "the spinner moves");
+
+        state.data.sync.pending.clear();
+        state.data.prefetch = Some(crate::app::state::PrefetchBatch { done: 0, total: 2 });
+        assert_eq!(
+            texts(&state)[1],
+            " 0 repos · synced <1m ago · prefetch 2",
+            "a prefetch keeps the age"
+        );
+        assert_eq!(texts(&state).len(), 3, "a prefetch shows the spinner");
+    }
+
+    #[test]
+    fn the_spinner_cycles_through_its_frames() {
+        let start = crate::domain::test_time();
+        let frames: Vec<&str> = (0..=SPINNER.len())
+            .map(|step| spinner(start + SPINNER_FRAME * u32::try_from(step).unwrap()))
+            .collect();
+        assert_eq!(frames[0], frames[SPINNER.len()]);
+        let unique: std::collections::HashSet<_> = frames.iter().collect();
+        assert_eq!(unique.len(), SPINNER.len());
     }
 
     #[test]

@@ -120,6 +120,12 @@ pub(crate) struct PrefetchBatch {
 }
 
 impl AppData {
+    /// True while a requested sync or a prefetch batch runs. The status
+    /// bar then shows a spinner.
+    pub(crate) fn busy(&self) -> bool {
+        !self.sync.pending.is_empty() || self.prefetch.is_some()
+    }
+
     /// True while a pane of any action is open for `key`.
     pub(crate) fn pane_open(&self, key: &TargetKey) -> bool {
         self.panes.keys().any(|(_, open)| open == key)
