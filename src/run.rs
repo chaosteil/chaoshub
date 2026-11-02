@@ -35,7 +35,7 @@ use tokio::time::timeout;
 use crate::actions::REGISTRY;
 use crate::app::exec::{ActionEnv, Runtime, Senders};
 use crate::app::keymap::Keymap;
-use crate::app::{App, DetailPane};
+use crate::app::{App, DetailPane, SPINNER_FRAME};
 use crate::bus::{
     Cmd, Hit, Interest, JjReq, LaunchRequest, MouseKind, Msg, Progress, Scope, Session, Size,
     SyncReq, TargetKey, TermState, TermStatus,
@@ -700,7 +700,11 @@ impl EventLoop {
                 tracing::warn!(%err, "cannot write the terminal status");
             }
 
-            let wait = async { timeout(self.transitions.deadline(), rx.recv()).await };
+            let mut deadline = self.transitions.deadline();
+            if self.app.busy() {
+                deadline = deadline.min(SPINNER_FRAME);
+            }
+            let wait = async { timeout(deadline, rx.recv()).await };
             match self.handle.block_on(wait) {
                 Ok(Some(msg)) => {
                     let msg = with_hit(msg, &self.hits, self.overlay_drawn);
