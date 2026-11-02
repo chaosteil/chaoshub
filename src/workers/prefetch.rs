@@ -1,7 +1,8 @@
 //! The prefetch worker: fetches the git refs of pull requests into the
 //! local repo, so the fetch of codeview transfers nothing.
 //!
-//! It acts on an `Interest` change after 250 ms without a further change.
+//! It acts on the first `Interest` and on each change, after 250 ms
+//! without a further change.
 //! It fetches the head of the selected pull request first, then the
 //! heads of the visible ones. Before the first head of a base ref, it
 //! fetches that base ref once per sync period (`refresh.full_secs`). Each
@@ -72,6 +73,9 @@ async fn run(ctx: WorkerCtx) {
         return;
     }
     let mut interest = ctx.interest.clone();
+    // The first interest is the value of the watch, not a change. The
+    // pinned mode can keep it for its whole life, so it is fetched too.
+    interest.mark_changed();
     let period = Duration::from_secs(ctx.config.refresh.full_secs.max(1));
     let mut period_start = Instant::now();
     let mut fetched = Fetched::default();
@@ -315,6 +319,42 @@ mod tests {
         assert_eq!(
             harness.recv().await,
             Msg::PrefetchBatch { done: 1, total: 1 }
+        );
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn the_first_interest_is_fetched_without_a_change() {
+        if git_missing() {
+            eprintln!("skipped: git is missing");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let (path, commit) = origin_repo(tmp.path());
+        let (mut ctx, mut harness) = testkit::ctx("http://127.0.0.1:1");
+        harness
+            .session
+            .send(Session {
+                login: None,
+                repos: vec![Repo {
+                    key: testkit::repo(),
+                    path: Some(path),
+                    settings: None,
+                }],
+            })
+            .unwrap();
+        let seven = testkit::pr_ref(7, "PR_7", &commit);
+        harness
+            .interest
+            .send(testkit::interest(Some(seven), Vec::new()))
+            .unwrap();
+        // `run` makes the watch with the first interest: it is not a
+        // change.
+        ctx.interest.borrow_and_update();
+        let worker = tokio::spawn(run(ctx));
+        assert_eq!(
+            harness.recv().await,
+            Msg::PrefetchBatch { done: 0, total: 1 }
         );
         worker.abort();
     }
