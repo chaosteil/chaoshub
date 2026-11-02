@@ -25,7 +25,8 @@ use crate::app::tabs::{KeyCx, TABS, Tab};
 use crate::app::target::{pr_target, row_target};
 use crate::app::term::term_status;
 use crate::bus::{
-    KeyChord, KeyCode, KeyModifiers, Progress, Selection, Size, Target, TermState, TermStatus,
+    KeyChord, KeyCode, KeyModifiers, Progress, Scope, Selection, Size, Target, TermState,
+    TermStatus,
 };
 use crate::domain::keys::PrKey;
 use crate::domain::pr::PrState;
@@ -631,9 +632,9 @@ fn list_model(state: &mut AppState, tabs: &[Box<dyn Tab>], index: usize, size: S
 }
 
 /// The status bar: the active tab, the repo count and the data age on
-/// the left, the last message in the center, the help hint on the right.
-/// In the pinned mode the left shows the pull request, its repo and the
-/// age of its data.
+/// the left, the last message in the center, the work that runs and the
+/// help hint on the right. In the pinned mode the left shows the pull
+/// request, its repo and the age of its data.
 pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusModel {
     let left = if let Some(key) = &state.ui.pinned {
         pinned_status(&state.data, key)
@@ -650,24 +651,30 @@ pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusMod
             text: sync_text(state, tabs),
             style: CellStyle::Dim,
         });
-        if state.data.busy() {
-            left.push(Cell {
-                text: format!(" {}", spinner(state.data.now)),
-                style: CellStyle::Primary,
-            });
-        }
         left
     };
+    let mut right = Vec::new();
+    if let Some(label) = activity(&state.data) {
+        right.push(Cell {
+            text: spinner(state.data.now).to_owned(),
+            style: CellStyle::Primary,
+        });
+        right.push(Cell {
+            text: format!(" {label}   "),
+            style: CellStyle::Normal,
+        });
+    }
+    right.push(Cell {
+        text: "? help".into(),
+        style: CellStyle::Dim,
+    });
     StatusModel {
         left,
         center: state.ui.status.as_ref().map(|msg| Cell {
             text: msg.text.clone(),
             style: msg.style,
         }),
-        right: vec![Cell {
-            text: "? help".into(),
-            style: CellStyle::Dim,
-        }],
+        right,
     }
 }
 
@@ -701,28 +708,39 @@ fn spinner(now: DateTime<Utc>) -> &'static str {
     SPINNER[usize::try_from(step).unwrap_or(0) % SPINNER.len()]
 }
 
-/// The repo count, the age of the data and the pull requests that the
-/// prefetch batch has left, for example
-/// ` 3 repos · synced 12s ago · prefetch 2`. While a requested sync of
-/// the scope of the active tab runs, `syncing` replaces the age.
+/// The work that runs, for example `syncing team · prefetch 2`: the
+/// syncs, and the pull requests that the prefetch batch has left. `None`
+/// when no work runs.
+fn activity(data: &AppData) -> Option<String> {
+    let mut parts = Vec::new();
+    let scopes: Vec<&str> = [(Scope::Mine, "mine"), (Scope::Team, "team")]
+        .into_iter()
+        .filter(|(scope, _)| data.sync.pending.contains(scope) || data.sync.running.contains(scope))
+        .map(|(_, name)| name)
+        .collect();
+    if !scopes.is_empty() {
+        parts.push(format!("syncing {}", scopes.join(" and ")));
+    }
+    if let Some(batch) = data.prefetch {
+        parts.push(format!("prefetch {}", batch.total - batch.done));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// The repo count and the age of the data, for example
+/// ` 3 repos · synced 12s ago`.
 fn sync_text(state: &AppState, tabs: &[Box<dyn Tab>]) -> String {
     let data = &state.data;
     let repos = data.session.repos.len();
     let noun = if repos == 1 { "repo" } else { "repos" };
     let scope = tabs.get(state.ui.active).and_then(|tab| tab.scope());
-    let syncing = scope.is_some_and(|scope| data.sync.pending.contains(&scope));
-    let text = match (
+    match (
         scope.and_then(|scope| data.synced.get(&scope)),
         data.cache_at,
     ) {
-        _ if syncing => format!(" {repos} {noun} · syncing"),
         (Some(&at), _) => format!(" {repos} {noun} · synced {} ago", age(at, data.now)),
         (None, Some(at)) => format!(" {repos} {noun} · cache from {} ago", age(at, data.now)),
         (None, None) => format!(" {repos} {noun}"),
-    };
-    match data.prefetch {
-        Some(batch) => format!("{text} · prefetch {}", batch.total - batch.done),
-        None => text,
     }
 }
 
@@ -778,7 +796,6 @@ mod tests {
     use super::*;
     use crate::app::models::Direction;
     use crate::app::tabs::fake::FakeTab;
-    use crate::bus::Scope;
 
     const SIZE: Size = Size {
         width: 100,
@@ -892,38 +909,34 @@ mod tests {
         assert_eq!(frame.tab_bar.titles, [""; 0]);
     }
 
+    /// The texts of the right part of the status bar.
+    fn right(state: &AppState) -> Vec<String> {
+        status_model(state, &TABS)
+            .right
+            .into_iter()
+            .map(|cell| cell.text)
+            .collect()
+    }
+
     #[test]
-    fn a_requested_sync_shows_syncing_and_a_spinner() {
+    fn the_right_shows_the_work_that_runs_with_a_spinner() {
         let mut state = AppState::with_tabs(SIZE, &TABS);
         state.data.now = crate::domain::test_time();
-        state
-            .data
-            .synced
-            .insert(Scope::Mine, crate::domain::test_time());
-        let texts = |state: &AppState| -> Vec<String> {
-            status_model(state, &TABS)
-                .left
-                .into_iter()
-                .map(|cell| cell.text)
-                .collect()
-        };
-        assert_eq!(texts(&state), ["[MINE]", " 0 repos · synced <1m ago"]);
+        assert_eq!(right(&state), ["? help"]);
 
         state.data.sync.pending.insert(Scope::Mine);
-        let first = texts(&state);
-        assert_eq!(first[..2], ["[MINE]", " 0 repos · syncing"]);
-        assert_eq!(first.len(), 3, "the spinner shows");
+        let first = right(&state);
+        assert_eq!(first[1..], [" syncing mine   ", "? help"]);
         state.data.now += SPINNER_FRAME;
-        assert_ne!(texts(&state)[2], first[2], "the spinner moves");
+        assert_ne!(right(&state)[0], first[0], "the spinner moves");
 
         state.data.sync.pending.clear();
-        state.data.prefetch = Some(crate::app::state::PrefetchBatch { done: 0, total: 2 });
-        assert_eq!(
-            texts(&state)[1],
-            " 0 repos · synced <1m ago · prefetch 2",
-            "a prefetch keeps the age"
-        );
-        assert_eq!(texts(&state).len(), 3, "a prefetch shows the spinner");
+        state.data.sync.running.insert(Scope::Team);
+        assert_eq!(right(&state)[1], " syncing team   ", "a timed sync shows");
+        state.data.sync.running.insert(Scope::Mine);
+        state.data.prefetch = Some(crate::app::state::PrefetchBatch { done: 1, total: 3 });
+        assert_eq!(right(&state)[1], " syncing mine and team · prefetch 2   ");
+        assert!(state.data.busy());
     }
 
     #[test]
@@ -954,11 +967,6 @@ mod tests {
         assert_eq!(
             status_model(&state, &tabs).left[1].text,
             " 1 repo · cache from 5m ago"
-        );
-        state.data.prefetch = Some(crate::app::state::PrefetchBatch { done: 1, total: 3 });
-        assert_eq!(
-            status_model(&state, &tabs).left[1].text,
-            " 1 repo · cache from 5m ago · prefetch 2"
         );
     }
 }

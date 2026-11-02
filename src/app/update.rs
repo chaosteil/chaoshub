@@ -77,6 +77,12 @@ pub(crate) fn update_full(
             cmds.extend(after_change(state, tabs));
             cmds
         }
+        Msg::SyncStarted { scope } => {
+            if state.data.sync.running.insert(scope) {
+                state.bump();
+            }
+            Vec::new()
+        }
         Msg::PrsSynced {
             scope,
             prs,
@@ -1355,6 +1361,7 @@ fn prs_synced(
     if last {
         state.data.synced.insert(scope, started_at);
         state.data.sync.pending.remove(&scope);
+        state.data.sync.running.remove(&scope);
     }
     state.data.sync.failure = None;
     if changed {
@@ -1807,12 +1814,16 @@ fn sync_failed(
     scope: Option<Scope>,
     err: &SyncError,
 ) -> Vec<Cmd> {
-    let pending = &mut state.data.sync.pending;
+    let sync = &mut state.data.sync;
     match scope {
         Some(scope) => {
-            pending.remove(&scope);
+            sync.pending.remove(&scope);
+            sync.running.remove(&scope);
         }
-        None if source == "sync" => pending.clear(),
+        None if source == "sync" => {
+            sync.pending.clear();
+            sync.running.clear();
+        }
         None => {}
     }
     let reason = error_text(err);
@@ -1852,8 +1863,11 @@ fn sync_failed(
 }
 
 /// The supervisor restarts a worker that panicked. The status bar shows
-/// the restart until it happens.
+/// the restart until it happens. The syncs of a dead sync worker end.
 fn worker_died(state: &mut AppState, name: &'static str, restart_in: Duration) -> Vec<Cmd> {
+    if name == "sync" {
+        state.data.sync.running.clear();
+    }
     state.data.sync.failure = Some(Failure {
         source: name,
         reason: format!("{name} worker died"),
@@ -2533,6 +2547,35 @@ mod tests {
         assert_eq!(keys, [1, 2], "the rows of the earlier pages stay");
         assert!(state.data.sync.pending.is_empty());
         assert_eq!(state.data.synced.get(&Scope::Mine), Some(&at(0)));
+    }
+
+    #[test]
+    fn a_started_sync_runs_until_its_end_or_a_failure() {
+        let (tabs, mut state) = setup(None);
+        let started = |scope| Msg::SyncStarted { scope };
+        run(&mut state, &tabs, started(Scope::Mine));
+        run(&mut state, &tabs, started(Scope::Team));
+        assert!(state.data.busy());
+        run(&mut state, &tabs, synced(Vec::new(), None, 0));
+        assert_eq!(
+            state.data.sync.running,
+            std::collections::HashSet::from([Scope::Team])
+        );
+        let failed = Msg::SyncFailed {
+            source: "sync",
+            scope: Some(Scope::Team),
+            err: SyncError::Offline,
+        };
+        run(&mut state, &tabs, failed);
+        assert!(state.data.sync.running.is_empty());
+
+        run(&mut state, &tabs, started(Scope::Mine));
+        let died = Msg::WorkerDied {
+            name: "sync",
+            restart_in: Duration::from_secs(1),
+        };
+        run(&mut state, &tabs, died);
+        assert!(!state.data.busy(), "a dead sync worker runs no sync");
     }
 
     #[test]

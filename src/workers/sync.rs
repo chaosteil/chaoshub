@@ -20,7 +20,8 @@
 //! pages. A delta searches all states, updated since `last_delta` minus
 //! 2 min, so merges and closes arrive. `last_delta` advances to the start
 //! of the delta only after its last page. The page size is the last result count plus 10, between 20 and
-//! 100. The worker sends each page in a `PrsSynced` when the page arrives,
+//! 100. The worker sends `SyncStarted` before the first page of a sync.
+//! It sends each page in a `PrsSynced` when the page arrives,
 //! and one more `PrsSynced` with `last` at the end of the sync. Only a
 //! full sync that read the last page sends `seen`, and deletes the `gone`
 //! rows from the cache: the open pull requests that the worker saw before
@@ -356,7 +357,7 @@ impl Syncer {
     }
 
     /// Reads at most `MAX_PAGES` pages of the search `query`, `first`
-    /// results per page. It sends each page in a `PrsSynced` when the page
+    /// results per page. It sends `SyncStarted` first. It sends each page in a `PrsSynced` when the page
     /// arrives, and then writes the page into the cache. `Ok(None)` when
     /// `app` is gone.
     async fn pages(
@@ -371,6 +372,9 @@ impl Syncer {
             login,
             teams: &teams,
         };
+        if self.ctx.tx.send(Msg::SyncStarted { scope }).await.is_err() {
+            return Ok(None);
+        }
         let mut page = self.ctx.client.list_prs(query, first, None, &me).await?;
         let started_at = page.started_at;
         let mut prs = Vec::new();
@@ -719,10 +723,14 @@ mod tests {
         (ctx, harness)
     }
 
-    /// The messages of the next sync until its end: the numbers of each
-    /// page after its `Rate`, then the scope and the `seen` numbers of the
-    /// end.
+    /// The messages of the next sync until its end: `SyncStarted`, the
+    /// numbers of each page after its `Rate`, then the scope and the
+    /// `seen` numbers of the end.
     async fn sync_pages(harness: &mut Harness) -> (Scope, Vec<Vec<u64>>, Option<Vec<u64>>) {
+        let started = match harness.recv().await {
+            Msg::SyncStarted { scope } => scope,
+            other => panic!("{other:?}"),
+        };
         let mut pages = Vec::new();
         loop {
             match harness.recv().await {
@@ -740,6 +748,7 @@ mod tests {
                     ..
                 } => {
                     assert_eq!(prs, Vec::new(), "the end has no pull requests");
+                    assert_eq!(scope, started);
                     let seen = seen.map(|keys| keys.iter().map(|key| key.number).collect());
                     return (scope, pages, seen);
                 }
@@ -884,6 +893,10 @@ mod tests {
             .unwrap();
         let mut syncer = Syncer::new(ctx);
         assert!(syncer.full(Scope::Mine).await);
+        assert_eq!(
+            harness.recv().await,
+            Msg::SyncStarted { scope: Scope::Mine }
+        );
         assert_eq!(
             harness.recv().await,
             Msg::SyncFailed {

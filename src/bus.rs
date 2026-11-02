@@ -349,6 +349,11 @@ pub(crate) enum Msg {
         login: String,
         cwd_repo: Option<Repo>,
     },
+    /// A sync of `scope` starts: a requested one or a timed one. Its pages
+    /// and its end follow in `PrsSynced`, or a `SyncFailed` ends it.
+    SyncStarted {
+        scope: Scope,
+    },
     /// One page of a sync, or the end of a sync. The pages of a sync
     /// arrive one by one, so the list fills while the sync runs.
     PrsSynced {
