@@ -120,10 +120,10 @@ pub(crate) struct PrefetchBatch {
 }
 
 impl AppData {
-    /// True while a requested sync or a prefetch batch runs. The status
-    /// bar then shows a spinner.
+    /// True while a sync or a prefetch batch runs. The status bar then
+    /// shows a spinner.
     pub(crate) fn busy(&self) -> bool {
-        !self.sync.pending.is_empty() || self.prefetch.is_some()
+        !self.sync.pending.is_empty() || !self.sync.running.is_empty() || self.prefetch.is_some()
     }
 
     /// True while a pane of any action is open for `key`.
@@ -172,6 +172,9 @@ pub(crate) struct SyncInfo {
     /// The scopes of the syncs that `update` requested and that have no
     /// result yet.
     pub pending: HashSet<Scope>,
+    /// The scopes of the syncs that the sync worker started and did not
+    /// end: requested ones and timed ones.
+    pub running: HashSet<Scope>,
     /// The last failure. A key press or the next successful sync clears
     /// it.
     pub failure: Option<Failure>,

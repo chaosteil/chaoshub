@@ -474,15 +474,18 @@ press:
 
 Other messages show for 5 or 10 seconds and then fade out.
 
-A spinner turns at the end of the left part while one of these runs:
+The right part of the status bar shows the work that runs, after a
+spinner. For example, `⠹ syncing team · prefetch 2` tells you that the
+sync of the Team tab runs, and that the prefetch has 2 pull requests
+left. The right part shows these items:
 
-- The first sync after the start.
-- A sync that the `refresh` key started.
-- A prefetch of pull request refs.
+- `syncing mine`, `syncing team`: a sync of the pull requests, also a
+  timed sync in the background.
+- `prefetch N`: the prefetch of pull request refs.
 
-While the sync of the active tab runs, the left part shows `syncing` in
-place of the age of the data. A sync reads the pull requests in pages,
-and the rows of each page show in the list when the page arrives.
+When no work runs, the spinner and the items go away. A sync reads the
+pull requests in pages, and the rows of each page show in the list when
+the page arrives.
 
 ## How to extend
 
