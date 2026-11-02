@@ -1,13 +1,13 @@
 //! The detail worker: loads the conversation of the selected and the
 //! visible pull requests.
 //!
-//! It reacts to `Interest` changes after 250 ms without a change. A new
-//! `selected` loads at once. The `visible` pull requests load in the
-//! background, at most 2 at a time. A load reads the `pr_details` cache
-//! first: a row with the same head oid as the `PrRef` and an age under
-//! 5 min is sent as it is. Else the worker sends `DetailLoading`, runs
-//! `pr_detail`, sends `DetailLoaded` and then writes the row. A failure sends
-//! `DetailLoaded(key, Err(..))`.
+//! It reacts to the first `Interest` and to its changes, after 250 ms
+//! without a change. A new `selected` loads at once. The `visible` pull
+//! requests load in the background, at most 2 at a time. A load reads the
+//! `pr_details` cache first: a row with the same head oid as the `PrRef`
+//! and an age under 5 min is sent as it is. Else the worker sends
+//! `DetailLoading`, runs `pr_detail`, sends `DetailLoaded` and then writes
+//! the row. A failure sends `DetailLoaded(key, Err(..))`.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
@@ -45,6 +45,9 @@ type Loaded = Option<(PrKey, String)>;
 /// Serves `Interest` changes until `app` is gone.
 async fn run(ctx: WorkerCtx) {
     let mut interest = ctx.interest.clone();
+    // The first interest is the value of the watch, not a change. The
+    // pinned mode can keep it for its whole life, so it loads too.
+    interest.mark_changed();
     // The head oid of the last successful load of each pull request.
     let mut loaded: HashMap<PrKey, String> = HashMap::new();
     let mut queue: VecDeque<PrRef> = VecDeque::new();
@@ -303,6 +306,27 @@ mod tests {
         loaded.sort_unstable();
         assert_eq!(loaded, [(1, true), (2, true), (3, true), (4, true)]);
         assert!(start.elapsed() >= DEBOUNCE + Duration::from_millis(800));
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn the_first_interest_loads_without_a_change() {
+        let server = MockServer::start().await;
+        serve(&server, Duration::ZERO).await;
+        let (mut ctx, mut harness) = testkit::ctx(&server.uri());
+        let selected = testkit::pr_ref(7, "PR_7", "h");
+        harness
+            .interest
+            .send(testkit::interest(Some(selected), Vec::new()))
+            .unwrap();
+        // `run` makes the watch with the first interest: it is not a
+        // change.
+        ctx.interest.borrow_and_update();
+        let worker = tokio::spawn(run(ctx));
+        assert_eq!(
+            details(&mut harness, Duration::from_millis(1000)).await,
+            [(7, true)]
+        );
         worker.abort();
     }
 

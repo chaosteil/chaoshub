@@ -155,7 +155,8 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<usi
     let now = cx.data.now;
     let mut out: Vec<(TreeNode, Option<usize>)> = Vec::new();
     let mut push = |node: TreeNode| out.push((node, None));
-    if let Some(reason) = cx.data.detail_errors.get(&pr.key) {
+    let error = cx.data.detail_errors.get(&pr.key);
+    if let Some(reason) = error {
         push(node(
             0,
             None,
@@ -166,11 +167,14 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<usi
         ));
     }
     let Some(detail) = cx.data.details.get(&pr.key) else {
-        push(node(
-            0,
-            None,
-            vec![cell("loading the conversation…", CellStyle::Dim)],
-        ));
+        // After a failed load, the error is the whole content.
+        if error.is_none() {
+            push(node(
+                0,
+                None,
+                vec![cell("loading the conversation…", CellStyle::Dim)],
+            ));
+        }
         return out;
     };
     if is_stale(&detail.value, pr) {
@@ -443,6 +447,12 @@ mod tests {
         assert_eq!(
             outline(&model_and_keys(&loading, &mut ps, &[])),
             ["loading the conversation…"]
+        );
+        let failed = state_with(None, Some("offline"));
+        assert_eq!(
+            outline(&model_and_keys(&failed, &mut ps, &[])),
+            ["cannot load the conversation: offline"],
+            "no loading line under the error"
         );
         let empty = PrDetail {
             comments: Vec::new(),
