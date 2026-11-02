@@ -5,8 +5,8 @@
 //! `selected` loads at once. The `visible` pull requests load in the
 //! background, at most 2 at a time. A load reads the `pr_details` cache
 //! first: a row with the same head oid as the `PrRef` and an age under
-//! 5 min is sent as it is. Else the worker runs `pr_detail`, sends
-//! `DetailLoaded` and then writes the row. A failure sends
+//! 5 min is sent as it is. Else the worker sends `DetailLoading`, runs
+//! `pr_detail`, sends `DetailLoaded` and then writes the row. A failure sends
 //! `DetailLoaded(key, Err(..))`.
 
 use std::collections::{HashMap, VecDeque};
@@ -107,6 +107,14 @@ async fn load(ctx: WorkerCtx, pr: PrRef) -> Loaded {
             .send(Msg::DetailLoaded(pr.key.clone(), Ok(detail)))
             .await;
         return Some((pr.key, pr.head_oid));
+    }
+    if ctx
+        .tx
+        .send(Msg::DetailLoading(pr.key.clone()))
+        .await
+        .is_err()
+    {
+        return None;
     }
     let (result, rate) = match ctx.client.pr_detail(&pr.key).await {
         Ok((Some(detail), rate)) => (Ok(detail), Some(rate)),
@@ -303,6 +311,7 @@ mod tests {
         let (ctx, mut harness) = testkit::ctx("http://127.0.0.1:1");
         let pr = testkit::pr_ref(1, "PR_1", "h");
         assert_eq!(load(ctx, pr.clone()).await, None);
+        assert_eq!(harness.recv().await, Msg::DetailLoading(pr.key.clone()));
         assert_eq!(
             harness.recv().await,
             Msg::DetailLoaded(pr.key, Err(SyncError::Offline))

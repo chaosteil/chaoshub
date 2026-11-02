@@ -709,8 +709,8 @@ fn spinner(now: DateTime<Utc>) -> &'static str {
 }
 
 /// The work that runs, for example `syncing team · prefetch 2`: the
-/// syncs, and the pull requests that the prefetch batch has left. `None`
-/// when no work runs.
+/// syncs, the pull requests that the prefetch batch has left, and the
+/// conversation loads. `None` when no work runs.
 fn activity(data: &AppData) -> Option<String> {
     let mut parts = Vec::new();
     let scopes: Vec<&str> = [(Scope::Mine, "mine"), (Scope::Team, "team")]
@@ -723,6 +723,11 @@ fn activity(data: &AppData) -> Option<String> {
     }
     if let Some(batch) = data.prefetch {
         parts.push(format!("prefetch {}", batch.total - batch.done));
+    }
+    match data.details_loading.len() {
+        0 => {}
+        1 => parts.push("loading 1 conversation".to_owned()),
+        n => parts.push(format!("loading {n} conversations")),
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
@@ -937,6 +942,14 @@ mod tests {
         state.data.prefetch = Some(crate::app::state::PrefetchBatch { done: 1, total: 3 });
         assert_eq!(right(&state)[1], " syncing mine and team · prefetch 2   ");
         assert!(state.data.busy());
+
+        state.data.sync.running.clear();
+        state.data.prefetch = None;
+        let key = |number| crate::app::testdata::pr_key("chaoshub", number);
+        state.data.details_loading.insert(key(1));
+        assert_eq!(right(&state)[1], " loading 1 conversation   ");
+        state.data.details_loading.insert(key(2));
+        assert_eq!(right(&state)[1], " loading 2 conversations   ");
     }
 
     #[test]

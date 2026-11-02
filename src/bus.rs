@@ -382,6 +382,9 @@ pub(crate) enum Msg {
         states: Vec<(PrKey, String, Observed<CiState>)>,
         selected_checks: Option<(PrKey, Observed<Vec<Check>>)>,
     },
+    /// The detail worker starts to read the conversation of a pull
+    /// request from GitHub. A `DetailLoaded` of the same key follows.
+    DetailLoading(PrKey),
     DetailLoaded(PrKey, Result<Observed<PrDetail>, SyncError>),
     JjScanned {
         repo: RepoKey,
