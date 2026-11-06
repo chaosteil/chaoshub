@@ -37,6 +37,16 @@ CREATE TABLE IF NOT EXISTS pr_details(
   PRIMARY KEY(owner, name, number)
 );
 
+CREATE TABLE IF NOT EXISTS pr_files(
+  owner TEXT NOT NULL,
+  name TEXT NOT NULL,
+  number INT NOT NULL,
+  fetched_at TEXT,
+  head_oid TEXT,
+  json BLOB,
+  PRIMARY KEY(owner, name, number)
+);
+
 CREATE TABLE IF NOT EXISTS local_state(
   owner TEXT NOT NULL,
   name TEXT NOT NULL,

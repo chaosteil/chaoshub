@@ -88,6 +88,12 @@ impl StoreThread {
             StoreOp::Detail { key, reply } => {
                 let _ = reply.send(self.transact(|tx| rows::detail(tx, &key)));
             }
+            StoreOp::PutFiles { key, files, reply } => {
+                let _ = reply.send(self.transact(|tx| rows::put_files(tx, &key, &files)));
+            }
+            StoreOp::Files { key, reply } => {
+                let _ = reply.send(self.transact(|tx| rows::files(tx, &key)));
+            }
             StoreOp::PutLocal { repo, state, reply } => {
                 let _ = reply.send(self.transact(|tx| rows::put_local(tx, &repo, &state)));
             }
