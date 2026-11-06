@@ -29,9 +29,17 @@ pub(crate) fn render(
     buf.set_style(area, base);
     let mut spans = Vec::new();
     let mut x = area.x;
-    for (i, title) in model.titles.iter().enumerate() {
-        let label = format!(" {} {} ", i + 1, theme.tab_title(title));
-        let tab = theme.tab(&label, i == model.active);
+    let labels: Vec<String> = model
+        .titles
+        .iter()
+        .enumerate()
+        .map(|(i, title)| format!(" {} {} ", i + 1, theme.tab_title(title)))
+        .collect();
+    for (i, tab) in theme
+        .tab_strip(&labels, model.active)
+        .into_iter()
+        .enumerate()
+    {
         let width = tab.iter().map(Span::width).sum::<usize>();
         let width = u16::try_from(width).unwrap_or(u16::MAX);
         let label_area = Rect::new(x, area.y, width, area.height.min(1)).intersection(area);
@@ -89,11 +97,13 @@ mod tests {
         };
         let mut hits = HitMap::default();
         render(&model, area, &mut buf, &testdata::punk(), &mut hits);
-        // `◢ 1 MINE ◤◢ 2 TEAM ◤`: the first label is 10 cells wide.
+        // `◢ 1 MINE ◤ 2 TEAM ◤`: the first tab is 10 cells wide, the
+        // second 9.
         assert_eq!(hits.at(0, 0), Some(Hit::Tab(0)));
         assert_eq!(hits.at(9, 0), Some(Hit::Tab(0)));
         assert_eq!(hits.at(10, 0), Some(Hit::Tab(1)));
-        assert_eq!(hits.at(17, 0), Some(Hit::Tab(1)));
+        assert_eq!(hits.at(18, 0), Some(Hit::Tab(1)));
+        assert_eq!(hits.at(19, 0), None);
         assert_eq!(hits.at(30, 0), None, "the free cells hit nothing");
     }
 
@@ -131,16 +141,23 @@ mod tests {
         let p = theme.palette;
         let buf = draw(100, 0, &theme);
         let text = row(&buf);
-        assert!(text.starts_with("◢ 1 MINE ◤◢ 2 TEAM ◤"), "{text}");
+        assert!(text.starts_with("◢ 1 MINE ◤ 2 TEAM ◤ "), "{text}");
         assert_eq!(buf[(0, 0)].fg, p.primary);
+        assert_eq!(buf[(0, 0)].bg, p.bg);
         assert_eq!(buf[(2, 0)].bg, p.primary);
         assert_eq!(buf[(2, 0)].fg, p.bg);
+        // The blue card cuts into the grey card in one shared cell.
         assert_eq!(buf[(9, 0)].fg, p.primary);
+        assert_eq!(buf[(9, 0)].bg, p.fg_mute);
         // The other tab is a grey card with black text.
-        assert_eq!(buf[(10, 0)].fg, p.fg_mute);
-        assert_eq!(buf[(10, 0)].bg, p.bg);
-        assert_eq!(buf[(12, 0)].bg, p.fg_mute);
-        assert_eq!(buf[(12, 0)].fg, p.bg);
-        assert_eq!(buf[(19, 0)].fg, p.fg_mute);
+        assert_eq!(buf[(11, 0)].bg, p.fg_mute);
+        assert_eq!(buf[(11, 0)].fg, p.bg);
+        assert_eq!(buf[(18, 0)].fg, p.fg_mute);
+        assert_eq!(buf[(18, 0)].bg, p.bg);
+        // An inactive tab before the active one ends grey on blue.
+        let buf = draw(100, 1, &theme);
+        assert_eq!(buf[(9, 0)].fg, p.fg_mute);
+        assert_eq!(buf[(9, 0)].bg, p.primary);
+        assert_eq!(buf[(11, 0)].bg, p.primary);
     }
 }

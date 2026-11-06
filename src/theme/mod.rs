@@ -273,6 +273,46 @@ impl Theme {
         }
     }
 
+    /// The spans of each tab of a tab bar, in order. Grunge and plain tabs
+    /// are the same as `tab`. Punk tabs are joined cards: the first tab
+    /// starts with `◢`, and each tab ends with one `◤` in its own card
+    /// color on the card color of the next tab, so two tabs share one
+    /// edge cell.
+    pub(crate) fn tab_strip(&self, labels: &[String], active: usize) -> Vec<Vec<Span<'static>>> {
+        let p = &self.palette;
+        if self.skin != Skin::Punk {
+            return labels
+                .iter()
+                .enumerate()
+                .map(|(i, label)| self.tab(label, i == active))
+                .collect();
+        }
+        let card = |i: usize| if i == active { p.primary } else { p.fg_mute };
+        labels
+            .iter()
+            .enumerate()
+            .map(|(i, label)| {
+                let text = if i == active {
+                    Style::new().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new()
+                };
+                let next = if i + 1 < labels.len() {
+                    card(i + 1)
+                } else {
+                    p.bg
+                };
+                let mut spans = Vec::new();
+                if i == 0 {
+                    spans.push(Span::styled("◢", Style::new().bg(p.bg).fg(card(i))));
+                }
+                spans.push(Span::styled(label.clone(), text.bg(card(i)).fg(p.bg)));
+                spans.push(Span::styled("◤", Style::new().bg(next).fg(card(i))));
+                spans
+            })
+            .collect()
+    }
+
     /// How the status bar looks. Grunge and plain bars have the surface
     /// background. The punk bar has a band in the primary color with
     /// black text on the left, a diagonal end, and the message in white.
@@ -449,6 +489,52 @@ mod tests {
         assert_eq!(other[2].style.fg, Some(p.fg_mute));
         assert_eq!(other[2].style.bg, Some(p.bg));
         assert_eq!(theme.tab_title("mine"), "MINE");
+    }
+
+    #[test]
+    fn punk_tab_strip_shares_the_edges() {
+        let theme = Theme::punk(ThemeKind::TrueColor);
+        let p = theme.palette;
+        let labels = vec![" 1 MINE ".to_owned(), " 2 TEAM ".to_owned()];
+        let strip = theme.tab_strip(&labels, 0);
+        let text: String = strip.iter().flatten().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "◢ 1 MINE ◤ 2 TEAM ◤");
+        let (start, mine, join) = (&strip[0][0], &strip[0][1], &strip[0][2]);
+        assert_eq!(
+            (start.style.fg, start.style.bg),
+            (Some(p.primary), Some(p.bg))
+        );
+        assert_eq!(
+            (mine.style.fg, mine.style.bg),
+            (Some(p.bg), Some(p.primary))
+        );
+        assert_eq!(
+            (join.style.fg, join.style.bg),
+            (Some(p.primary), Some(p.fg_mute))
+        );
+        let (team, end) = (&strip[1][0], &strip[1][1]);
+        assert_eq!(
+            (team.style.fg, team.style.bg),
+            (Some(p.bg), Some(p.fg_mute))
+        );
+        assert_eq!((end.style.fg, end.style.bg), (Some(p.fg_mute), Some(p.bg)));
+        // An inactive tab before the active one ends grey on blue.
+        let strip = theme.tab_strip(&labels, 1);
+        let join = &strip[0][2];
+        assert_eq!(
+            (join.style.fg, join.style.bg),
+            (Some(p.fg_mute), Some(p.primary))
+        );
+    }
+
+    #[test]
+    fn grunge_tab_strip_is_the_tabs() {
+        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let labels = vec![" 1 MINE ".to_owned(), " 2 TEAM ".to_owned()];
+        assert_eq!(
+            theme.tab_strip(&labels, 1),
+            vec![theme.tab(" 1 MINE ", false), theme.tab(" 2 TEAM ", true)]
+        );
     }
 
     #[test]
