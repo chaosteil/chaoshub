@@ -4,6 +4,7 @@
     reason = "the outer layers use the domain types in later phases"
 )]
 
+pub(crate) mod agent;
 pub(crate) mod check;
 pub(crate) mod detail;
 pub(crate) mod files;
