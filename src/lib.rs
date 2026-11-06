@@ -206,6 +206,7 @@ mod tests {
         ("store", &["domain", "bus"]),
         ("launch", &["domain", "bus"]),
         ("agent", &["domain", "bus", "github", "config"]),
+        ("codeview", &["domain", "config"]),
         (
             "workers",
             &[
@@ -216,6 +217,7 @@ mod tests {
             "actions",
             &[
                 "domain", "bus", "github", "vcs", "store", "launch", "config", "agent",
+                "codeview",
             ],
         ),
         (
@@ -230,6 +232,7 @@ mod tests {
                 "workers",
                 "actions",
                 "agent",
+                "codeview",
                 "config",
                 "clipboard",
             ],
@@ -247,6 +250,7 @@ mod tests {
                 "workers",
                 "actions",
                 "agent",
+                "codeview",
                 "app",
                 "ui",
                 "config",

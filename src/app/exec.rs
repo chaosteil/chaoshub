@@ -10,6 +10,7 @@
 //! panes and keeps their handles.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -71,6 +72,9 @@ pub(crate) struct ActionEnv {
     pub launcher: Option<Arc<dyn Launcher>>,
     /// What the pr-agent runs need. `None` without a state directory.
     pub agent: Option<Arc<AgentEnv>>,
+    /// The directory of the codeview comment files. `None` when the home
+    /// directory is unknown.
+    pub codeview_dir: Option<PathBuf>,
 }
 
 /// What the pr-agent runs need: the `[agent]` section, the result files
@@ -188,6 +192,7 @@ impl Runtime {
             Cmd::FocusPane { id, key } => self.focus(id, key),
             Cmd::RunAgent(job) => self.run_agent(job),
             Cmd::LoadAgent(key) => self.load_agent(key),
+            Cmd::LoadCodeview(key) => self.load_codeview(key),
         }
     }
 
@@ -246,6 +251,36 @@ impl Runtime {
         self.handle.spawn(async move {
             let results = agent.store.load(&key);
             send(&tx, Msg::AgentLoaded { key, results }).await;
+        });
+    }
+
+    /// Reads the codeview comment files of `key` on a blocking thread and
+    /// sends `CodeviewLoaded`. It reads nothing without the comment
+    /// directory or without a local path of the repo in the session.
+    fn load_codeview(&self, key: PrKey) {
+        let Some(dir) = self.env.codeview_dir.clone() else {
+            return;
+        };
+        let repo = self
+            .senders
+            .session
+            .borrow()
+            .repos
+            .iter()
+            .find(|repo| repo.key == key.repo)
+            .and_then(|repo| repo.path.clone());
+        let Some(repo) = repo else {
+            return;
+        };
+        let tx = self.env.tx.clone();
+        let handle = self.handle.clone();
+        self.handle.spawn(async move {
+            let number = key.number;
+            let comments = handle
+                .spawn_blocking(move || crate::codeview::store::load(&dir, &repo, number))
+                .await
+                .unwrap_or_else(|err| Err(err.to_string()));
+            send(&tx, Msg::CodeviewLoaded { key, comments }).await;
         });
     }
 
@@ -603,6 +638,7 @@ mod tests {
             tx,
             launcher,
             agent: None,
+            codeview_dir: None,
         };
         Fixture {
             runtime: Runtime::new(handle, senders, env, true),

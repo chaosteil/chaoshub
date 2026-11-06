@@ -22,6 +22,7 @@ use crate::bus::{
     SyncError, TargetKey, UiEvent,
 };
 use crate::domain::agent::{AgentResults, ToolKind};
+use crate::domain::codeview::Comments;
 use crate::domain::detail::PrDetail;
 use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
@@ -100,6 +101,9 @@ pub(crate) struct AppData {
     pub agent: BTreeMap<PrKey, AgentResults>,
     /// The pr-agent runs that run now. One run per tool per pull request.
     pub agent_jobs: BTreeSet<(PrKey, ToolKind)>,
+    /// The unsent codeview comments of each pull request, from the
+    /// comment files, or the error of a file.
+    pub codeview: BTreeMap<PrKey, Result<Comments, String>>,
 }
 
 /// The command of the detail pane, as plain data from `run`: `app`
@@ -445,6 +449,7 @@ impl AppState {
                 detail: None,
                 agent: BTreeMap::new(),
                 agent_jobs: BTreeSet::new(),
+                codeview: BTreeMap::new(),
             },
             ui: UiState {
                 active: 0,
