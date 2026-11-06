@@ -394,18 +394,22 @@ pub(crate) fn popup_overlay() -> OverlayModel {
                 PaneTab {
                     key: '1',
                     title: "Description",
+                    pane: 0,
                 },
                 PaneTab {
                     key: '2',
                     title: "Checks",
+                    pane: 1,
                 },
                 PaneTab {
                     key: '3',
                     title: "Conversation",
+                    pane: 2,
                 },
                 PaneTab {
                     key: '4',
                     title: "Stack",
+                    pane: 3,
                 },
             ],
             active: 1,

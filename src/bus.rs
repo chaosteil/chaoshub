@@ -329,6 +329,12 @@ pub(crate) enum UiEvent {
         to: usize,
     },
     StatusExpired,
+    /// The active pane tab of the popup changed. `from` and `to` are pane
+    /// registry indexes.
+    PaneTabChanged {
+        from: usize,
+        to: usize,
+    },
 }
 
 /// An event from a running action.

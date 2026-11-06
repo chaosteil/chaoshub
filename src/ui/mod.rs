@@ -150,7 +150,7 @@ pub(crate) fn view(
 }
 
 /// Draws one overlay into its area.
-fn render_overlay(
+pub(crate) fn render_overlay(
     overlay: &OverlayModel,
     areas: &Areas,
     buf: &mut ratatui::buffer::Buffer,

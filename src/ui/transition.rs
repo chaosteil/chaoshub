@@ -2,9 +2,12 @@
 //! `Transitions` turns them into effects that run over the frame buffer
 //! after `view`.
 //!
-//! - Tab switch: the highlight of the active tab glides from the old tab
-//!   to the new tab in the tab bar row. The list shows the new tab at
-//!   once.
+//! - Tab switch (`FxKey::Tab`): the highlight of the active tab glides
+//!   from the old tab to the new tab in the tab bar row. The list shows
+//!   the new tab at once.
+//! - Pane tab switch (`FxKey::PaneTab`): the same glide on the pane tab
+//!   row of the popup. When the two tabs are on different rows, the new
+//!   tab shows at once. The pane content switches at once.
 //! - Confirm, prompt and picker: `slide_in` from the bottom edge on open,
 //!   `slide_out` on close.
 //! - Popup, output and help: `slide_in` from the right edge, `slide_out`
@@ -23,17 +26,18 @@ use tachyonfx::{
 };
 
 use crate::app::layout::Areas;
-use crate::app::models::{FrameModel, TabBarModel};
+use crate::app::models::{FrameModel, OverlayContent, TabBarModel};
 use crate::bus::{Hit, OverlayKind, UiEvent};
 use crate::theme::{Theme, ThemeKind};
 use crate::ui::hits::HitMap;
-use crate::ui::{list, list_areas, overlay_area, rect, tabbar};
+use crate::ui::{list, list_areas, overlay_area, rect, render_overlay, screen, tabbar};
 
 /// The duration of the confirm and prompt slides, in milliseconds.
 const DIALOG_MS: u64 = 100;
 /// The duration of the status fade, in milliseconds.
 const STATUS_FADE_MS: u64 = 300;
-/// The duration of the tab glide, in milliseconds.
+/// The duration of the tab glide and the pane tab glide, in
+/// milliseconds.
 const TAB_GLIDE_MS: u64 = 120;
 /// The length of the gradient at the edge of a sliding overlay.
 const SLIDE_GRADIENT: u16 = 3;
@@ -48,6 +52,7 @@ const IDLE_DEADLINE: Duration = Duration::from_secs(1);
 enum FxKey {
     #[default]
     Tab,
+    PaneTab,
     Scroll,
     Status,
     Overlay(usize),
@@ -72,6 +77,7 @@ fn slot(kind: OverlayKind) -> usize {
 fn key(event: &UiEvent) -> FxKey {
     match event {
         UiEvent::TabChanged { .. } => FxKey::Tab,
+        UiEvent::PaneTabChanged { .. } => FxKey::PaneTab,
         UiEvent::OverlayOpened(kind) | UiEvent::OverlayClosed(kind) => FxKey::Overlay(slot(*kind)),
         UiEvent::ScrollTo { .. } => FxKey::Scroll,
         UiEvent::StatusExpired => FxKey::Status,
@@ -90,10 +96,10 @@ struct ScrollState {
     down: bool,
 }
 
-/// The state of a tab glide.
+/// The state of a tab glide: in the tab bar or on a pane tab row.
 #[derive(Debug, Clone, Default)]
 struct TabGlide {
-    /// The tab bar row with no active tab.
+    /// The row of tabs with no active tab.
     bar: Buffer,
     /// The x and the width of the old active tab.
     from: (u16, u16),
@@ -140,11 +146,12 @@ pub(crate) struct Transitions {
     list: RefRect,
     /// The area of each overlay kind, shared with its slide effect.
     overlays: [RefRect; OVERLAY_KINDS],
-    /// The state of the running tab glide.
-    tab_glide: RefCount<TabGlide>,
-    /// The old and the new active tab of a tab glide that `prepare` must
-    /// fill in.
+    /// The old and the new active tab of a tab glide that `prepare`
+    /// starts.
     pending_tab: Option<(usize, usize)>,
+    /// The old and the new pane (registry indexes) of a pane tab glide
+    /// that `prepare` starts.
+    pending_pane: Option<(usize, usize)>,
     /// The list rows during a scroll.
     rows: RefCount<Buffer>,
     /// The offsets of the running scroll.
@@ -168,8 +175,8 @@ impl Transitions {
             areas: None,
             list: RefRect::new(Rect::default()),
             overlays: std::array::from_fn(|_| RefRect::new(Rect::default())),
-            tab_glide: ref_count(TabGlide::default()),
             pending_tab: None,
+            pending_pane: None,
             rows: empty(),
             scroll: None,
             status_pending: false,
@@ -199,7 +206,8 @@ impl Transitions {
         for event in events {
             let key = key(&event);
             match event {
-                UiEvent::TabChanged { from, to } => self.tab_slide(key, from, to),
+                UiEvent::TabChanged { from, to } => self.pending_tab = Some((from, to)),
+                UiEvent::PaneTabChanged { from, to } => self.pending_pane = Some((from, to)),
                 UiEvent::OverlayOpened(kind) => self.overlay_slide(key, kind, true),
                 UiEvent::OverlayClosed(kind) => self.overlay_slide(key, kind, false),
                 UiEvent::ScrollTo { from, to, .. } => self.scroll(key, from, to),
@@ -208,20 +216,15 @@ impl Transitions {
         }
     }
 
-    /// The highlight of the active tab glides from the old tab to the new
-    /// tab over the tab bar row. `prepare` draws the bar with no active tab
-    /// and finds the spans of the two tabs. Each frame, the effect copies
-    /// that bar over the tab bar and gives the cells of the highlight the
-    /// active tab colors. The list does not move.
-    fn tab_slide(&mut self, key: FxKey, from: usize, to: usize) {
-        self.pending_tab = Some((from, to));
-        // A new state for each glide: a replaced glide keeps its own state
-        // for its last frame.
-        self.tab_glide = ref_count(TabGlide::default());
+    /// Starts a glide: the highlight of the active tab moves from the old
+    /// tab to the new tab over the row of `glide`. Each frame, the effect
+    /// copies the row with no active tab over the frame and gives the
+    /// cells of the highlight the active tab colors. The tab bar and the
+    /// pane tabs share it.
+    fn glide(&mut self, key: FxKey, glide: TabGlide) {
         let (bg, fg) = self.theme.active_tab_colors();
         let timer = Self::timer(Duration::from_millis(TAB_GLIDE_MS));
-        let effect = fx::effect_fn_buf(Rc::clone(&self.tab_glide), timer, move |glide, cx, buf| {
-            let glide = glide.borrow();
+        let effect = fx::effect_fn_buf(glide, timer, move |glide, cx, buf| {
             let (l, r) = glide.span(cx.alpha());
             for (x, y) in positions(glide.bar.area) {
                 let Some(dst) = buf.cell_mut((x, y)) else {
@@ -234,6 +237,83 @@ impl Transitions {
             }
         });
         self.manager.add_unique_effect(key, effect);
+    }
+
+    /// The glide of the tab bar: the bar with no active tab, and the
+    /// spans of the old and the new tab from the hit regions.
+    fn tab_glide(
+        &self,
+        model: &FrameModel,
+        areas: &Areas,
+        from: usize,
+        to: usize,
+    ) -> Option<TabGlide> {
+        let bar_area = rect(areas.tab_bar);
+        let mut bar = Buffer::empty(bar_area);
+        let mut hits = HitMap::default();
+        let idle = TabBarModel {
+            titles: model.tab_bar.titles.clone(),
+            active: model.tab_bar.titles.len(),
+        };
+        tabbar::render(&idle, bar_area, &mut bar, &self.theme, &mut hits);
+        let span = |i| hits.region(Hit::Tab(i)).map(|r| (r.x, r.width));
+        Some(TabGlide {
+            bar,
+            from: span(from)?,
+            to: span(to)?,
+        })
+    }
+
+    /// The glide of the pane tabs of the open popup: the popup drawn with
+    /// no active tab, and the spans of the old and the new pane tab from
+    /// the hit regions. The row holds the two tabs. `None` when the two
+    /// tabs are on different rows.
+    fn pane_glide(
+        &self,
+        model: &FrameModel,
+        areas: &Areas,
+        from: usize,
+        to: usize,
+    ) -> Option<TabGlide> {
+        let mut overlay = model
+            .overlays
+            .iter()
+            .rev()
+            .find(|o| !o.closing && matches!(o.content, OverlayContent::Popup { .. }))?
+            .clone();
+        let OverlayContent::Popup { tabs, active, .. } = &mut overlay.content else {
+            return None;
+        };
+        let position = |pane: usize| tabs.iter().position(|tab| tab.pane == pane);
+        let (from, to) = (position(from)?, position(to)?);
+        // The skins draw the active tab narrower than its hit region:
+        // spaces fill the rest of the region.
+        let drawn = |i: usize| {
+            let width: usize = self
+                .theme
+                .tab(&tabs[i].label(), true)
+                .iter()
+                .map(ratatui::text::Span::width)
+                .sum();
+            u16::try_from(width).unwrap_or(u16::MAX)
+        };
+        let (from_width, to_width) = (drawn(from), drawn(to));
+        *active = usize::MAX;
+        let mut buf = Buffer::empty(screen(areas));
+        let mut hits = HitMap::default();
+        render_overlay(&overlay, areas, &mut buf, &self.theme, &mut hits);
+        let old = hits.region(Hit::PaneTab(from))?;
+        let new = hits.region(Hit::PaneTab(to))?;
+        if old.y != new.y {
+            return None;
+        }
+        let left = old.x.min(new.x);
+        let right = old.right().max(new.right());
+        Some(TabGlide {
+            bar: copy(&buf, Rect::new(left, old.y, right - left, 1)),
+            from: (old.x, old.width.min(from_width)),
+            to: (new.x, new.width.min(to_width)),
+        })
     }
 
     /// An overlay slides in or out of its area.
@@ -303,8 +383,8 @@ impl Transitions {
         self.manager.add_unique_effect(key, effect);
     }
 
-    /// Draws the tab bar of a new tab glide and the scroll rows into the
-    /// scratch buffers, and updates the areas of the running effects.
+    /// Starts the pending tab glides, draws the scroll rows into the
+    /// scratch buffer, and updates the areas of the running effects.
     pub(crate) fn prepare(&mut self, model: &FrameModel, areas: &Areas) {
         self.areas = Some(*areas);
         if !self.enabled {
@@ -315,18 +395,19 @@ impl Transitions {
         for overlay in &model.overlays {
             self.overlays[slot(overlay.kind)].set(overlay_area(overlay, areas));
         }
-        if let Some((from, to)) = self.pending_tab.take() {
-            let bar_area = rect(areas.tab_bar);
-            let mut bar = Buffer::empty(bar_area);
-            let mut hits = HitMap::default();
-            let idle = TabBarModel {
-                titles: model.tab_bar.titles.clone(),
-                active: model.tab_bar.titles.len(),
-            };
-            tabbar::render(&idle, bar_area, &mut bar, &self.theme, &mut hits);
-            let span = |i| hits.region(Hit::Tab(i)).map(|r| (r.x, r.width));
-            if let (Some(from), Some(to)) = (span(from), span(to)) {
-                *self.tab_glide.borrow_mut() = TabGlide { bar, from, to };
+        if let Some((from, to)) = self.pending_tab.take()
+            && let Some(glide) = self.tab_glide(model, areas, from, to)
+        {
+            self.glide(FxKey::Tab, glide);
+        }
+        if let Some((from, to)) = self.pending_pane.take() {
+            match self.pane_glide(model, areas, from, to) {
+                Some(glide) => self.glide(FxKey::PaneTab, glide),
+                // Tabs on two rows: no glide, and a running one stops, so
+                // the new tab shows at once.
+                None => {
+                    self.manager.cancel_unique_effect(FxKey::PaneTab);
+                }
             }
         }
         if Rc::strong_count(&self.rows) > 1
@@ -392,6 +473,8 @@ impl Transitions {
     /// frame shows the end state.
     pub(crate) fn cancel(&mut self) {
         self.manager = EffectManager::default();
+        self.pending_tab = None;
+        self.pending_pane = None;
         self.scroll = None;
         self.status_pending = false;
     }
@@ -785,6 +868,170 @@ mod tests {
         assert_eq!(highlight(&end, &tabs), tabs[2], "on the third tab");
         draw_tabs(&mut terminal, &mut fx, &model, 16);
         assert!(!fx.active());
+    }
+
+    /// Draws one full frame with `view`, then the effects.
+    fn draw_view(
+        terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+        transitions: &mut Transitions,
+        model: &FrameModel,
+        elapsed_ms: u64,
+    ) -> Buffer {
+        let areas = testdata::areas(WIDTH, HEIGHT);
+        let theme = testdata::pierre();
+        transitions.prepare(model, &areas);
+        terminal
+            .draw(|frame| {
+                crate::ui::view(frame, model, &areas, &theme, &mut HitMap::default());
+                transitions.process(frame, Duration::from_millis(elapsed_ms));
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// The popup frame with the pane tabs of the popup fixture and of the
+    /// panes `extra`, and the tab at `active` (a position) active.
+    fn popup_frame(active: usize, extra: &[(char, &'static str)]) -> FrameModel {
+        let mut overlay = testdata::popup_overlay();
+        if let OverlayContent::Popup {
+            tabs, active: a, ..
+        } = &mut overlay.content
+        {
+            for &(key, title) in extra {
+                let pane = tabs.len();
+                tabs.push(crate::app::models::PaneTab { key, title, pane });
+            }
+            *a = active;
+        }
+        testdata::with_overlay(overlay)
+    }
+
+    /// The cells `[l, r)` and the row of each pane tab of the popup.
+    fn pane_spans(model: &FrameModel) -> Vec<(u16, u16, u16)> {
+        let areas = testdata::areas(WIDTH, HEIGHT);
+        let mut buf = Buffer::empty(screen(&areas));
+        let mut hits = HitMap::default();
+        render_overlay(
+            &model.overlays[0],
+            &areas,
+            &mut buf,
+            &testdata::pierre(),
+            &mut hits,
+        );
+        let OverlayContent::Popup { tabs, .. } = &model.overlays[0].content else {
+            unreachable!()
+        };
+        // The highlight of an active tab: its drawn cells, without the
+        // spaces that fill the hit region.
+        (0..tabs.len())
+            .map(|i| {
+                let r = hits.region(Hit::PaneTab(i)).unwrap();
+                let drawn: usize = testdata::pierre()
+                    .tab(&tabs[i].label(), true)
+                    .iter()
+                    .map(ratatui::text::Span::width)
+                    .sum();
+                (r.x, r.x + u16::try_from(drawn).unwrap(), r.y)
+            })
+            .collect()
+    }
+
+    /// The cells `[l, r)` of the pane tab row `y` that have the active tab
+    /// background.
+    fn pane_highlight(buf: &Buffer, tabs: &[(u16, u16, u16)], y: u16) -> (u16, u16) {
+        let (bg, _) = testdata::pierre().active_tab_colors();
+        let row: Vec<_> = tabs.iter().filter(|t| t.2 == y).collect();
+        let (start, end) = (row[0].0, row[row.len() - 1].1);
+        let lit: Vec<u16> = (start..end).filter(|&x| buf[(x, y)].bg == bg).collect();
+        (lit[0], lit[lit.len() - 1] + 1)
+    }
+
+    #[test]
+    fn pane_tab_slide() {
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let model = popup_frame(2, &[]);
+        let tabs = pane_spans(&model);
+        let y = tabs[0].2;
+        let span = |i: usize| (tabs[i].0, tabs[i].1);
+        let plain = draw_view(&mut terminal, &mut Transitions::new(false, 160), &model, 0);
+        let mut fx = new();
+        draw_view(&mut terminal, &mut fx, &popup_frame(1, &[]), 0);
+        fx.apply(vec![UiEvent::PaneTabChanged { from: 1, to: 2 }]);
+        let start = draw_view(&mut terminal, &mut fx, &model, 0);
+        assert!(fx.active());
+        assert_eq!(pane_highlight(&start, &tabs, y), span(1), "on the old tab");
+        let body = |buf: &Buffer| -> Vec<String> {
+            (y + 2..HEIGHT - 2)
+                .map(|row| (0..WIDTH).map(|x| buf[(x, row)].symbol()).collect())
+                .collect()
+        };
+        assert_eq!(body(&start), body(&plain), "the pane switches at once");
+        let middle = draw_view(&mut terminal, &mut fx, &model, 60);
+        let (l, r) = pane_highlight(&middle, &tabs, y);
+        assert!(span(1).0 < l && l < span(2).0, "{l} between the tabs");
+        assert!(span(1).1 < r && r < span(2).1, "{r} between the tabs");
+        let end = draw_view(&mut terminal, &mut fx, &model, 60);
+        assert_eq!(pane_highlight(&end, &tabs, y), span(2), "on the new tab");
+        draw_view(&mut terminal, &mut fx, &model, 16);
+        assert!(!fx.active());
+    }
+
+    #[test]
+    fn a_second_pane_tab_switch_retargets_the_glide() {
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let tabs = pane_spans(&popup_frame(0, &[]));
+        let y = tabs[0].2;
+        let span = |i: usize| (tabs[i].0, tabs[i].1);
+        let mut fx = new();
+        draw_view(&mut terminal, &mut fx, &popup_frame(0, &[]), 0);
+        fx.apply(vec![UiEvent::PaneTabChanged { from: 0, to: 1 }]);
+        draw_view(&mut terminal, &mut fx, &popup_frame(1, &[]), 0);
+        draw_view(&mut terminal, &mut fx, &popup_frame(1, &[]), 60);
+        fx.apply(vec![UiEvent::PaneTabChanged { from: 1, to: 3 }]);
+        let model = popup_frame(3, &[]);
+        draw_view(&mut terminal, &mut fx, &model, 0);
+        let start = draw_view(&mut terminal, &mut fx, &model, 0);
+        assert_eq!(
+            pane_highlight(&start, &tabs, y),
+            span(1),
+            "from the second tab"
+        );
+        let middle = draw_view(&mut terminal, &mut fx, &model, 60);
+        let (l, r) = pane_highlight(&middle, &tabs, y);
+        assert!(span(1).0 < l && l < span(3).0, "{l} between the tabs");
+        assert!(span(1).1 < r && r < span(3).1, "{r} between the tabs");
+        let end = draw_view(&mut terminal, &mut fx, &model, 60);
+        assert_eq!(pane_highlight(&end, &tabs, y), span(3), "on the fourth tab");
+        draw_view(&mut terminal, &mut fx, &model, 16);
+        assert!(!fx.active());
+    }
+
+    #[test]
+    fn pane_tabs_on_two_rows_and_animations_off_switch_at_once() {
+        let extra = [('5', "Files"), ('6', "Agent")];
+        let model = popup_frame(5, &extra);
+        let tabs = pane_spans(&model);
+        assert_ne!(tabs[4].2, tabs[5].2, "Files and Agent are on two rows");
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut fx = new();
+        draw_view(&mut terminal, &mut fx, &popup_frame(4, &extra), 0);
+        fx.apply(vec![UiEvent::PaneTabChanged { from: 4, to: 5 }]);
+        let buf = draw_view(&mut terminal, &mut fx, &model, 0);
+        assert!(!fx.active(), "no glide across rows");
+        assert_eq!(
+            pane_highlight(&buf, &tabs, tabs[5].2),
+            (tabs[5].0, tabs[5].1)
+        );
+        let model = popup_frame(2, &[]);
+        let tabs = pane_spans(&model);
+        let mut fx = Transitions::new(false, 160).with_theme(testdata::pierre());
+        fx.apply(vec![UiEvent::PaneTabChanged { from: 1, to: 2 }]);
+        let buf = draw_view(&mut terminal, &mut fx, &model, 0);
+        assert!(!fx.active());
+        assert_eq!(
+            pane_highlight(&buf, &tabs, tabs[0].2),
+            (tabs[2].0, tabs[2].1)
+        );
     }
 
     #[test]

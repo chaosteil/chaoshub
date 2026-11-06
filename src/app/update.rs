@@ -571,7 +571,14 @@ fn open_popup(
             state: OverlayState::Popup(popup),
             ..
         }) if popup.key == pr.key => {
+            let from = popup.active;
             popup.active = active;
+            if from != active {
+                state
+                    .ui
+                    .ui_events
+                    .push(UiEvent::PaneTabChanged { from, to: active });
+            }
             state.bump();
         }
         _ => open_overlay(
@@ -775,20 +782,30 @@ fn popup_key(
         changed: true,
         ..Handled::default()
     };
+    let select = |popup: &mut PopupState, to: usize| {
+        let from = popup.active;
+        popup.active = to;
+        Handled {
+            events: if from == to {
+                Vec::new()
+            } else {
+                vec![UiEvent::PaneTabChanged { from, to }]
+            },
+            ..changed.clone()
+        }
+    };
     if let KeyCode::Char(c) = chord.code
         && chord.mods.is_empty()
         && let Some(&index) = order.iter().find(|&&i| panes[i].key() == c)
     {
-        popup.active = index;
-        return Some(changed);
+        return Some(select(popup, index));
     }
     if keymap.matches("next_tab", chord) && !order.is_empty() {
         let at = order
             .iter()
             .position(|&i| i == popup.active)
             .map_or(0, |p| p + 1);
-        popup.active = order[at % order.len()];
-        return Some(changed);
+        return Some(select(popup, order[at % order.len()]));
     }
     in_pane(data, areas, keymap, panes, popup, |pane, cx, ps, size| {
         if let Some(motion) = motion(keymap, chord) {
@@ -1169,7 +1186,14 @@ fn click_pane_tab(state: &mut AppState, panes: &[Box<dyn Pane>], index: usize) {
         return;
     };
     if let Some(&active) = applicable(panes, &target).get(index) {
+        let from = popup.active;
         popup.active = active;
+        if from != active {
+            state
+                .ui
+                .ui_events
+                .push(UiEvent::PaneTabChanged { from, to: active });
+        }
         state.bump();
     }
 }
@@ -4258,8 +4282,25 @@ mod tests {
         let actions = fake(FakeAction::new("approve", '2'));
         let mut state = sidebar_state(102, &actions);
         assert_eq!(sidebar(&state).map(|popup| popup.active), Some(0));
+        state.ui.ui_events.clear();
         assert_eq!(act(&mut state, &actions, KeyCode::Char('2')), vec![]);
         assert_eq!(sidebar(&state).map(|popup| popup.active), Some(1));
+        assert_eq!(
+            state.ui.ui_events,
+            vec![UiEvent::PaneTabChanged { from: 0, to: 1 }]
+        );
+        state.ui.ui_events.clear();
+        act(&mut state, &actions, KeyCode::Char('2'));
+        assert_eq!(state.ui.ui_events, vec![], "the same pane: no event");
+        act(&mut state, &actions, KeyCode::Tab);
+        assert!(
+            matches!(
+                state.ui.ui_events.as_slice(),
+                [UiEvent::PaneTabChanged { from: 1, .. }]
+            ),
+            "next_tab: {:?}",
+            state.ui.ui_events
+        );
     }
 
     #[test]
@@ -4847,8 +4888,13 @@ mod tests {
             &panes,
             press(KeyCode::Enter, KeyModifiers::NONE),
         );
+        state.ui.ui_events.clear();
         send_with(&mut state, &panes, click_on(Hit::PaneTab(1)));
         assert_eq!(sidebar(&state).map(|p| p.active), Some(1));
+        assert_eq!(
+            state.ui.ui_events,
+            vec![UiEvent::PaneTabChanged { from: 0, to: 1 }]
+        );
         let generation = state.generation;
         send_with(&mut state, &panes, click_on(Hit::PaneTab(2)));
         assert_eq!(
