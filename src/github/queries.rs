@@ -127,6 +127,15 @@ pub(crate) struct ConvertToDraft;
 )]
 pub(crate) struct ClosePr;
 
+/// `updatePullRequest`: a new title and body.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/update_pr.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct UpdatePr;
+
 /// The event of a review that chaoshub submits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReviewEvent {
@@ -290,6 +299,26 @@ impl GithubClient {
         data.convert_pull_request_to_draft
             .and_then(|payload| payload.pull_request)
             .ok_or_else(|| no_payload("convertPullRequestToDraft"))?;
+        Ok(rate)
+    }
+
+    /// Sets the title and the body of the pull request with the node id
+    /// `id`.
+    pub(crate) async fn update_pr(
+        &self,
+        id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<RateInfo, GithubError> {
+        let vars = update_pr::Variables {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            body: body.to_owned(),
+        };
+        let (data, rate) = self.run::<UpdatePr>(vars).await?;
+        data.update_pull_request
+            .and_then(|payload| payload.pull_request)
+            .ok_or_else(|| no_payload("updatePullRequest"))?;
         Ok(rate)
     }
 
@@ -540,6 +569,23 @@ mod tests {
                     json!({ "id": "PR_1", "event": "REQUEST_CHANGES", "body": "Please fix." })
                 ),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn update_pr_sends_the_title_and_the_body() {
+        let server = mutation_server(json!({
+            "updatePullRequest": { "pullRequest": { "id": "PR_1", "title": "New" } }
+        }))
+        .await;
+        let client = client(&server);
+        client.update_pr("PR_1", "New", "The body.").await.unwrap();
+        assert_eq!(
+            sent(&server).await,
+            [(
+                json!("UpdatePr"),
+                json!({ "id": "PR_1", "title": "New", "body": "The body." })
+            )]
         );
     }
 

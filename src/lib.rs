@@ -8,7 +8,7 @@
 //! ```text
 //! domain <- bus <- github | vcs | store | launch <- workers | actions <- app <- ui <- run
 //! config: read by app, workers, actions, agent, run.   theme: read by ui and run.   cli: read by main and run.
-//! agent: reads domain, bus, github and config; read by app and run.
+//! agent: reads domain, bus, github and config; read by actions, app and run.
 //! osc: reads bus only; read by run and clipboard.   clipboard: read by app (exec).
 //! ```
 #![forbid(unsafe_code)]
@@ -213,7 +213,7 @@ mod tests {
         (
             "actions",
             &[
-                "domain", "bus", "github", "vcs", "store", "launch", "config",
+                "domain", "bus", "github", "vcs", "store", "launch", "config", "agent",
             ],
         ),
         (

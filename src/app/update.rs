@@ -26,12 +26,12 @@ use crate::app::tabs::{Handled, KeyCx, TABS, Tab, pr_ref};
 use crate::app::target::{pr_target, row_target};
 use crate::app::term::term_status;
 use crate::bus::MergeProgress;
-use crate::bus::PromptSpec;
 use crate::bus::{
     ActionEvent, ActionInput, AgentJob, Cmd, Hit, KeyChord, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, LaunchRequest, MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection,
     Size, SyncError, Target, TargetKey, UiEvent,
 };
+use crate::bus::{ConfirmSpec, PromptSpec};
 use crate::domain::agent::{AgentResults, Record, Tool, ToolKind, short_tokens};
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;
@@ -609,6 +609,26 @@ fn has_authors(state: &AppState, tabs: &[Box<dyn Tab>]) -> bool {
     !tab.authors(&cx).is_empty()
 }
 
+/// Opens the confirm popup of the action `id` on the pull request `key`.
+fn open_confirm(state: &mut AppState, key: &PrKey, id: &'static str, spec: ConfirmSpec) {
+    let Some(target) = pr_target(&state.data, key) else {
+        return;
+    };
+    let action = ActionDialog {
+        id,
+        selection: Box::new(Selection {
+            target,
+            me: state.data.session.login.clone().unwrap_or_default(),
+            action_config: state.data.action_config.get(id).cloned(),
+        }),
+    };
+    open_overlay(
+        state,
+        OverlayKind::Confirm,
+        OverlayState::Confirm { action, spec },
+    );
+}
+
 /// The action id of the agent action. Its prompt asks pr-agent.
 const AGENT_ID: &str = crate::agent::ID;
 
@@ -928,10 +948,14 @@ fn overlay_key(
                 return run_action_key(state, keymap, panes, actions, target, chord)
                     .unwrap_or_default();
             };
+            let key = popup.key.clone();
             if handled.changed {
                 state.bump();
             }
             state.ui.ui_events.extend(handled.events);
+            if let Some((id, spec)) = handled.confirm {
+                open_confirm(state, &key, id, spec);
+            }
             pane_cmds(state, handled.cmds)
         }
         OverlayState::Authors(picker) => {
@@ -2336,6 +2360,7 @@ mod tests {
             cmds: vec![Cmd::SyncNow(Scope::Mine)],
             events: vec![UiEvent::StatusExpired],
             changed: true,
+            confirm: None,
         };
         let (tabs, mut state) = setup(Some(handled));
         let j = press(KeyCode::Char('z'), KeyModifiers::NONE);
@@ -5510,6 +5535,37 @@ mod tests {
             vec![Cmd::RunAgent(ask)]
         );
         assert!(state.data.agent_jobs.contains(&(pr, ToolKind::Ask)));
+    }
+
+    #[test]
+    fn p_then_y_runs_the_agent_action_with_the_confirm() {
+        let (mut state, pr) = agent_state();
+        key(&mut state, 'a');
+        let describe = Record {
+            tool: "describe".into(),
+            data: serde_json::json!({"title": "New title", "description": "- New"}),
+            ..review_record()
+        };
+        state.data.agent.insert(
+            pr.clone(),
+            AgentResults {
+                records: [(ToolKind::Describe, describe)].into(),
+                errors: std::collections::BTreeMap::new(),
+            },
+        );
+        assert_eq!(key(&mut state, 'p'), Vec::new());
+        let Some(OverlayState::Confirm { action, spec }) =
+            state.ui.overlays.last().map(|o| &o.state)
+        else {
+            panic!("no confirm");
+        };
+        assert_eq!(action.id, "agent");
+        assert_eq!(spec.lines[2], "+ New title");
+        let cmds = key(&mut state, 'y');
+        let [Cmd::RunAction { id, input, .. }] = cmds.as_slice() else {
+            panic!("{cmds:?}");
+        };
+        assert_eq!((*id, input), ("agent", &ActionInput::Confirmed));
     }
 
     #[test]
