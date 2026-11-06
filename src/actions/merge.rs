@@ -1081,6 +1081,7 @@ mod tests {
             "number": number,
             "title": format!("Fresh {number}"),
             "body": format!("Fresh body {number}\r\n"),
+            "bodyHTML": format!("<p dir=\"auto\">Fresh body {number}</p>"),
             "url": format!("https://github.com/o/r/pull/{number}"),
             "isDraft": false,
             "state": "OPEN",

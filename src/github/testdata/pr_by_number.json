@@ -6,6 +6,7 @@
         "number": 1550,
         "title": "Title 1",
         "body": "Body 1.\r\nSecond line.  ",
+        "bodyHTML": "<p dir=\"auto\">Body 1.<br>\nSecond line.</p>",
         "url": "https://github.com/acme/deploy/pull/1550",
         "isDraft": false,
         "state": "OPEN",

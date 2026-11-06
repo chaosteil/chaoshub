@@ -163,6 +163,7 @@ mod tests {
                 value: PrHead {
                     title: format!("Change {number}"),
                     body: "Body".into(),
+                    body_html: String::new(),
                     author: "chaosteil".into(),
                     state,
                     is_draft: false,
@@ -496,6 +497,7 @@ mod tests {
                 comments: vec![Comment {
                     author: "colleague".into(),
                     body: "Looks good.".into(),
+                    body_html: String::new(),
                     created_at: test_time(),
                     url: "https://github.com/o/r/pull/1#issuecomment-1".into(),
                 }],

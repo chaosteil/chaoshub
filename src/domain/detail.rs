@@ -19,6 +19,8 @@ pub(crate) struct PrDetail {
 pub(crate) struct Comment {
     pub author: String,
     pub body: String,
+    #[serde(default)]
+    pub body_html: String,
     pub created_at: DateTime<Utc>,
     pub url: String,
 }
@@ -29,6 +31,8 @@ pub(crate) struct Review {
     pub author: String,
     pub state: ReviewState,
     pub body: String,
+    #[serde(default)]
+    pub body_html: String,
     pub submitted_at: Option<DateTime<Utc>>,
 }
 
@@ -60,6 +64,7 @@ mod tests {
         Comment {
             author: "chaosteil".into(),
             body: "Looks good.".into(),
+            body_html: String::new(),
             created_at: test_time(),
             url: "https://github.com/o/r/pull/1#issuecomment-1".into(),
         }
@@ -73,6 +78,7 @@ mod tests {
                 author: "colleague".into(),
                 state: ReviewState::ChangesRequested,
                 body: "Please fix.".into(),
+                body_html: String::new(),
                 submitted_at: Some(test_time()),
             }],
             threads: vec![Thread {
