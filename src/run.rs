@@ -324,6 +324,9 @@ fn action_env(
                 token: TokenSource::gh(),
             })
         }),
+        codeview_dir: crate::codeview::store::comments_dir(
+            settings.config.codeview.comments_dir.as_deref(),
+        ),
     }
 }
 

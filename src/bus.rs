@@ -17,6 +17,7 @@ pub(crate) use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers}
 
 use crate::domain::agent::{AgentResults, Record, Tool, ToolKind};
 use crate::domain::check::Check;
+use crate::domain::codeview::Comments;
 use crate::domain::detail::PrDetail;
 use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
@@ -457,6 +458,12 @@ pub(crate) enum Msg {
         key: PrKey,
         results: AgentResults,
     },
+    /// The unsent codeview comments of `key`, read from the comment
+    /// files, or the error of a file.
+    CodeviewLoaded {
+        key: PrKey,
+        comments: Result<Comments, String>,
+    },
     PaneEnded {
         id: &'static str,
         key: TargetKey,
@@ -500,6 +507,8 @@ pub(crate) enum Cmd {
     RunAgent(AgentJob),
     /// Reads the result files of a pull request.
     LoadAgent(PrKey),
+    /// Reads the codeview comment files of a pull request.
+    LoadCodeview(PrKey),
     Persist(Persist),
     Copy(String),
     OpenUrl(String),

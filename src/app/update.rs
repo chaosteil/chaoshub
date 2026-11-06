@@ -165,6 +165,7 @@ pub(crate) fn update_full(
         msg @ (Msg::AgentStarted { .. } | Msg::AgentFinished { .. } | Msg::AgentLoaded { .. }) => {
             agent_msg(state, msg)
         }
+        Msg::CodeviewLoaded { key, comments } => codeview_loaded(state, key, comments),
         Msg::PaneStarted { id, key } => {
             state.data.panes.insert((id, key), PaneHandleState::Running);
             state.bump();
@@ -174,7 +175,13 @@ pub(crate) fn update_full(
             if state.data.panes.remove(&(id, key.clone())).is_some() {
                 state.bump();
             }
-            follow_up(&state.data, &key)
+            let mut cmds = follow_up(&state.data, &key);
+            // A review in codeview can add comments or send them.
+            if id == REVIEW_ID {
+                let TargetKey::Pr(pr) = &key;
+                cmds.push(Cmd::LoadCodeview(pr.clone()));
+            }
+            cmds
         }
         Msg::PrefetchDone(..) => {
             tracing::trace!("message not handled yet");
@@ -556,7 +563,8 @@ fn open_pane(state: &mut AppState, target: &Target) -> Vec<Cmd> {
 /// Opens the pull request popup for `target`, on the pane with the id
 /// `pane` when it applies, else on the first pane that applies. When the
 /// popup of `target` is on top already, only the pane changes. For a
-/// repo with a path, it loads the pr-agent results.
+/// repo with a path, it loads the pr-agent results and the codeview
+/// comments.
 fn open_popup(
     state: &mut AppState,
     panes: &[Box<dyn Pane>],
@@ -596,10 +604,30 @@ fn open_popup(
         ),
     }
     if repo.path.is_some() {
-        vec![Cmd::LoadAgent(pr.key.clone())]
+        vec![
+            Cmd::LoadAgent(pr.key.clone()),
+            Cmd::LoadCodeview(pr.key.clone()),
+        ]
     } else {
         Vec::new()
     }
+}
+
+/// The action id of the review in codeview.
+const REVIEW_ID: &str = "review";
+
+/// The codeview comments of `key` from the comment files. A change
+/// redraws.
+fn codeview_loaded(
+    state: &mut AppState,
+    key: PrKey,
+    comments: Result<crate::domain::codeview::Comments, String>,
+) -> Vec<Cmd> {
+    if state.data.codeview.get(&key) != Some(&comments) {
+        state.data.codeview.insert(key, comments);
+        state.bump();
+    }
+    Vec::new()
 }
 
 /// Opens the confirm popup of the action `id` on the pull request `key`.
@@ -999,14 +1027,15 @@ fn overlay_key(
 }
 
 /// The `refresh` key in the popup of `key`: a load by number when the
-/// pull request is not loaded, else a refresh of its stack group and a
-/// scan of its repo.
+/// pull request is not loaded, else a refresh of its stack group, a load
+/// of its codeview comments and a scan of its repo.
 fn refresh_popup(data: &AppData, key: &PrKey) -> Vec<Cmd> {
     if !data.prs.contains_key(key) {
         return vec![Cmd::LoadPr(key.clone())];
     }
     vec![
         Cmd::RefreshPr(stack_group_refs(data, key)),
+        Cmd::LoadCodeview(key.clone()),
         Cmd::ScanJj(key.repo.clone()),
     ]
 }
@@ -1592,6 +1621,7 @@ fn pinned_startup(data: &AppData, key: &PrKey) -> Vec<Cmd> {
         .any(|repo| repo.key == key.repo && repo.path.is_some())
     {
         cmds.push(Cmd::LoadAgent(key.clone()));
+        cmds.push(Cmd::LoadCodeview(key.clone()));
     }
     cmds
 }
@@ -3155,7 +3185,11 @@ mod tests {
                     key: key(5)
                 }
             ),
-            vec![Cmd::ScanJj(repo.clone()), Cmd::RefreshPr(single_refs)]
+            vec![
+                Cmd::ScanJj(repo.clone()),
+                Cmd::RefreshPr(single_refs),
+                Cmd::LoadCodeview(testdata::pr_key("chaoshub", 5)),
+            ]
         );
         assert_eq!(
             run(&mut state, &tabs, done(key(99))),
@@ -4593,7 +4627,8 @@ mod tests {
             run_msg(&mut state, &actions, ended),
             vec![
                 Cmd::ScanJj(testdata::repo_key("chaoshub")),
-                Cmd::RefreshPr(refs)
+                Cmd::RefreshPr(refs),
+                Cmd::LoadCodeview(testdata::pr_key("chaoshub", 99)),
             ]
         );
         assert!(state.data.panes.is_empty());
@@ -5326,6 +5361,7 @@ mod tests {
                 Cmd::ScanJj(testdata::repo_key("chaoshub")),
                 Cmd::LoadPr(not_cached()),
                 Cmd::LoadAgent(not_cached()),
+                Cmd::LoadCodeview(not_cached()),
             ]
         );
     }
@@ -5342,7 +5378,8 @@ mod tests {
                 Cmd::SetSession(state.data.session.clone()),
                 Cmd::ScanJj(testdata::repo_key("chaoshub")),
                 Cmd::RefreshPr(vec![pr]),
-                Cmd::LoadAgent(key),
+                Cmd::LoadAgent(key.clone()),
+                Cmd::LoadCodeview(key),
             ]
         );
     }
@@ -5399,6 +5436,7 @@ mod tests {
             key(&mut state, 'r'),
             vec![
                 Cmd::RefreshPr(vec![pr_ref(&pr)]),
+                Cmd::LoadCodeview(pr.key.clone()),
                 Cmd::ScanJj(testdata::repo_key("chaoshub")),
             ]
         );
@@ -5419,6 +5457,7 @@ mod tests {
             key(&mut state, 'r'),
             vec![
                 Cmd::RefreshPr(refs),
+                Cmd::LoadCodeview(testdata::pr_key("chaoshub", 103)),
                 Cmd::ScanJj(testdata::repo_key("chaoshub")),
             ]
         );
@@ -5668,7 +5707,10 @@ mod tests {
     #[test]
     fn shift_p_opens_the_popup_on_the_agent_pane_and_loads_the_results() {
         let (mut state, pr) = agent_state();
-        assert_eq!(key(&mut state, 'P'), vec![Cmd::LoadAgent(pr.clone())]);
+        assert_eq!(
+            key(&mut state, 'P'),
+            vec![Cmd::LoadAgent(pr.clone()), Cmd::LoadCodeview(pr.clone())]
+        );
         let Some(Overlay {
             state: OverlayState::Popup(popup),
             ..
@@ -5680,7 +5722,10 @@ mod tests {
         assert_eq!(PANES[popup.active].id(), "agent");
         // In another pane, `P` moves the open popup to the Agent pane.
         key(&mut state, '1');
-        assert_eq!(key(&mut state, 'P'), vec![Cmd::LoadAgent(pr)]);
+        assert_eq!(
+            key(&mut state, 'P'),
+            vec![Cmd::LoadAgent(pr.clone()), Cmd::LoadCodeview(pr)]
+        );
         assert_eq!(state.ui.overlays.len(), 1);
     }
 
