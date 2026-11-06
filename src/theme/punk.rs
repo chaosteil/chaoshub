@@ -1,11 +1,13 @@
 //! The punk skin: a frame with angular cut corners and diagonal slashes,
-//! inverted headers and slashed separators. No noise fill.
+//! ransom-note headers and slashed separators. No noise fill.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
+
+use super::grunge::noise;
 
 /// The top left corner: a cut.
 const TOP_LEFT: &str = "◢";
@@ -28,17 +30,50 @@ const SLASHES: u16 = 3;
 /// The cells between the accent and the top right corner.
 const SLASH_GAP: u16 = 1;
 
-/// An inverted header: the text in bold uppercase on a block of `color`,
-/// in `text` color, with a trailing `╱` tail in `color`.
-pub(crate) fn inverted(title: &str, color: Color, text: Color) -> Line<'static> {
-    let upper = title.split_whitespace().collect::<Vec<_>>().join(" ");
-    Line::from(vec![
-        Span::styled(
-            format!(" {} ", upper.to_uppercase()),
-            Style::new().bg(color).fg(text).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(SLASH, Style::new().fg(color)),
-    ])
+/// A ransom-note header: the text in bold uppercase, each letter cut out
+/// in one of three styles, with a trailing `╱` tail in `accent`. The
+/// styles are black on `accent`, black on `white`, and `accent` on black
+/// in italic. The spaces are black on `accent`. The same title always
+/// gets the same styles, and two letters next to each other never share
+/// a style.
+pub(crate) fn ransom(title: &str, accent: Color, white: Color, black: Color) -> Line<'static> {
+    let upper = title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_uppercase();
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let styles = [
+        bold.bg(accent).fg(black),
+        bold.bg(white).fg(black),
+        bold.bg(black).fg(accent).add_modifier(Modifier::ITALIC),
+    ];
+    let seed = fnv1a(upper.as_bytes());
+    let mut spans = vec![Span::styled(" ", styles[0])];
+    let mut last = None;
+    for (i, ch) in upper.chars().enumerate() {
+        if ch == ' ' {
+            spans.push(Span::styled(" ", styles[0]));
+            continue;
+        }
+        let x = u16::try_from(i).unwrap_or(u16::MAX);
+        let mut pick = usize::try_from(noise(x, 0, seed) % 3).unwrap_or(0);
+        if last == Some(pick) {
+            pick = (pick + 1) % 3;
+        }
+        last = Some(pick);
+        spans.push(Span::styled(ch.to_string(), styles[pick]));
+    }
+    spans.push(Span::styled(" ", styles[0]));
+    spans.push(Span::styled(SLASH, Style::new().fg(accent)));
+    Line::from(spans)
+}
+
+/// The FNV-1a hash of `bytes`.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 /// A separator of `width` cells: a heavy line that ends in a slash.
@@ -146,7 +181,7 @@ mod tests {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         PunkBlock::default()
-            .title(inverted("checks", Color::Red, Color::Black))
+            .title(ransom("checks", Color::Red, Color::White, Color::Black))
             .border_style(Style::new().fg(Color::Red))
             .render(area, &mut buf);
         buf
@@ -163,14 +198,73 @@ mod tests {
         assert!(!text(&buf).contains(SLASH.repeat(3).as_str()));
     }
 
+    /// The three styles of a ransom header in red, white and black.
+    fn ransom_styles() -> [Style; 3] {
+        let bold = Style::new().add_modifier(Modifier::BOLD);
+        [
+            bold.bg(Color::Red).fg(Color::Black),
+            bold.bg(Color::White).fg(Color::Black),
+            bold.bg(Color::Black)
+                .fg(Color::Red)
+                .add_modifier(Modifier::ITALIC),
+        ]
+    }
+
+    fn header(title: &str) -> Line<'static> {
+        ransom(title, Color::Red, Color::White, Color::Black)
+    }
+
     #[test]
-    fn inverted_header_is_uppercase_on_the_color() {
-        let line = inverted("merge  #102", Color::Red, Color::Black);
+    fn ransom_header_is_uppercase_with_a_tail() {
+        let line = header("merge  #102");
         assert_eq!(line.to_string(), " MERGE #102 ╱");
-        assert_eq!(line.spans[0].style.bg, Some(Color::Red));
-        assert_eq!(line.spans[0].style.fg, Some(Color::Black));
-        assert!(line.spans[0].style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(line.spans[1].style.fg, Some(Color::Red));
+        let [a, _, _] = ransom_styles();
+        assert_eq!(line.spans[0].style, a, "the padding");
+        let tail = line.spans.last().unwrap();
+        assert_eq!(tail.content, "╱");
+        assert_eq!(tail.style.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn ransom_header_keeps_the_text() {
+        for title in ["checks", "merge  #102", " help  keys ", "a b"] {
+            let upper = title
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_uppercase();
+            assert_eq!(header(title).to_string(), format!(" {upper} ╱"));
+        }
+    }
+
+    #[test]
+    fn ransom_header_is_the_same_twice() {
+        assert_eq!(header("merge #102"), header("merge #102"));
+    }
+
+    #[test]
+    fn ransom_letters_next_to_each_other_differ() {
+        for title in ["checks", "merge #102", "conversation", "aaaaaaaa"] {
+            let line = header(title);
+            let inside = &line.spans[1..line.spans.len() - 2];
+            for pair in inside.windows(2) {
+                if pair[0].content != " " && pair[1].content != " " {
+                    assert_ne!(pair[0].style, pair[1].style, "{title}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ransom_styles_are_a_b_or_c() {
+        let styles = ransom_styles();
+        let line = header("merge #102 conversation");
+        for span in &line.spans[..line.spans.len() - 1] {
+            assert!(styles.contains(&span.style), "{span:?}");
+            if span.content == " " {
+                assert_eq!(span.style, styles[0]);
+            }
+        }
     }
 
     #[test]

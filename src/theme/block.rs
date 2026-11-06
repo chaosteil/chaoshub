@@ -111,8 +111,11 @@ mod tests {
         assert_eq!(buf[(0, 0)].symbol(), "◢");
         assert_eq!(buf[(0, 0)].fg, p.primary);
         assert_eq!(buf[(3, 0)].symbol(), "H");
-        assert_eq!(buf[(3, 0)].bg, p.primary);
-        assert_eq!(buf[(3, 0)].fg, p.bg);
+        let colors = (buf[(3, 0)].bg, buf[(3, 0)].fg);
+        assert!(
+            [(p.primary, p.bg), (p.fg, p.bg), (p.bg, p.primary)].contains(&colors),
+            "{colors:?}"
+        );
     }
 
     #[test]
