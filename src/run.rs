@@ -1755,12 +1755,28 @@ mod tests {
     /// The seeded app with the team fixtures, on the team tab.
     fn team_app(width: u16, height: u16) -> App {
         let mut app = seeded_app(width, height, crate::app::testdata::team_snapshot());
+        let three = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('3'),
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(three));
+        app
+    }
+
+    /// The seeded app with the team fixtures, on the review tab.
+    fn review_app(width: u16, height: u16) -> App {
+        let mut app = seeded_app(width, height, crate::app::testdata::team_snapshot());
         let two = crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Char('2'),
             crossterm::event::KeyModifiers::NONE,
         );
         app.update(Msg::Key(two));
         app
+    }
+
+    #[test]
+    fn review_list_100() {
+        insta::assert_snapshot!(screen(&mut review_app(100, 12)));
     }
 
     #[test]

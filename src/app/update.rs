@@ -2447,7 +2447,8 @@ mod tests {
         let real = &TABS;
         let mut state = AppState::new(SIZE);
         let cmds = update(&mut state, &Keymap::default(), r.clone());
-        let scopes: Vec<_> = real.iter().filter_map(|tab| tab.scope()).collect();
+        let mut scopes: Vec<_> = real.iter().filter_map(|tab| tab.scope()).collect();
+        scopes.dedup();
         let syncs: Vec<_> = cmds
             .iter()
             .filter(|cmd| matches!(cmd, Cmd::SyncNow(_)))
@@ -3138,14 +3139,14 @@ mod tests {
     fn t_on_the_team_tab_shows_all_open_and_keeps_the_selection() {
         let mut state = AppState::new(SIZE);
         state.load(testdata::team_snapshot(), Vec::new());
-        key(&mut state, '2');
+        key(&mut state, '3');
         key(&mut state, 'j');
-        assert_eq!(selected_number(&mut state), Some(87));
+        assert_eq!(selected_number(&mut state), Some(86));
         let generation = state.generation;
         key(&mut state, 't');
         assert_eq!(state.generation, generation + 1);
-        assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 6);
-        assert_eq!(selected_number(&mut state), Some(87));
+        assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 4);
+        assert_eq!(selected_number(&mut state), Some(86));
         key(&mut state, '1');
         let generation = state.generation;
         key(&mut state, 't');
@@ -3155,7 +3156,7 @@ mod tests {
     fn team_state() -> AppState {
         let mut state = AppState::new(SIZE);
         state.load(testdata::team_snapshot(), Vec::new());
-        key(&mut state, '2');
+        key(&mut state, '3');
         state
     }
 
@@ -3179,15 +3180,14 @@ mod tests {
     #[test]
     fn the_author_picker_filters_the_team_tab() {
         let mut state = team_state();
+        key(&mut state, 't');
         state.ui.ui_events.clear();
         key(&mut state, 'a');
         assert_eq!(
             picker(&state).map(AuthorPicker::items),
             Some(vec![
                 "all authors".to_owned(),
-                "alice".to_owned(),
                 "bob".to_owned(),
-                "carol".to_owned(),
                 "dave".to_owned(),
             ])
         );
@@ -3196,9 +3196,8 @@ mod tests {
             vec![UiEvent::OverlayOpened(OverlayKind::Picker)]
         );
         key(&mut state, 'j');
-        key(&mut state, 'j');
-        assert_eq!(picker(&state).map(|p| p.cursor), Some(2));
-        assert_eq!(state.ui.active, 1, "j moves the picker, not the list");
+        assert_eq!(picker(&state).map(|p| p.cursor), Some(1));
+        assert_eq!(state.ui.active, 2, "j moves the picker, not the list");
         let enter = press(KeyCode::Enter, KeyModifiers::NONE);
         let cmds = update(&mut state, &Keymap::default(), enter);
         assert_eq!(cmds[0], persist("author", "team", "bob".into()));
@@ -3209,7 +3208,7 @@ mod tests {
             state.ui.ui_events.last(),
             Some(&UiEvent::OverlayClosed(OverlayKind::Picker))
         );
-        assert_eq!(state.ui.tabs[1].author.as_deref(), Some("bob"));
+        assert_eq!(state.ui.tabs[2].author.as_deref(), Some("bob"));
         let model = frame::active_list(&mut state, &TABS);
         assert_eq!(
             model.rows.len(),
@@ -3219,7 +3218,7 @@ mod tests {
         key(&mut state, 'a');
         assert_eq!(
             picker(&state).map(|p| p.cursor),
-            Some(2),
+            Some(1),
             "the cursor on bob"
         );
         key(&mut state, 'g');
@@ -3228,7 +3227,7 @@ mod tests {
             &Keymap::default(),
             press(KeyCode::Enter, KeyModifiers::NONE),
         );
-        assert_eq!(state.ui.tabs[1].author, None);
+        assert_eq!(state.ui.tabs[2].author, None);
     }
 
     #[test]
@@ -3244,7 +3243,7 @@ mod tests {
             press(KeyCode::Esc, KeyModifiers::NONE),
         );
         assert_eq!(picker(&state), None);
-        assert_eq!(state.ui.tabs[1].author, None);
+        assert_eq!(state.ui.tabs[2].author, None);
         key(&mut state, 'a');
         let ctrl_c = press(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(
@@ -4685,13 +4684,13 @@ mod tests {
     fn a_click_on_a_picker_item_picks_it() {
         let mut state = team_state();
         key(&mut state, 'a');
-        let cmds = update(&mut state, &Keymap::default(), click_on(Hit::Item(2)));
+        let cmds = update(&mut state, &Keymap::default(), click_on(Hit::Item(1)));
         assert_eq!(cmds[0], persist("author", "team", "bob".into()));
         assert_eq!(picker(&state), None, "the picker closes");
-        assert_eq!(state.ui.tabs[1].author.as_deref(), Some("bob"));
+        assert_eq!(state.ui.tabs[2].author.as_deref(), Some("bob"));
         key(&mut state, 'a');
         update(&mut state, &Keymap::default(), click_on(Hit::Item(0)));
-        assert_eq!(state.ui.tabs[1].author, None, "all authors");
+        assert_eq!(state.ui.tabs[2].author, None, "all authors");
         key(&mut state, 'a');
         update(&mut state, &Keymap::default(), click_on(Hit::Item(9)));
         assert!(picker(&state).is_some(), "no such item");

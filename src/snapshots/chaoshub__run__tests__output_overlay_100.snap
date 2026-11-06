@@ -2,7 +2,7 @@
 source: src/run.rs
 expression: screen(&mut app)
 ---
-"▌ 1 M I N E   2 T E A M     ░         ˙                ˙                            ˙      chaoshub "
+"▌ 1 M I N E   2 R E V I E W   3 T E A M                ˙                            ˙      chaoshub "
 "▌─ fix(store): reope▛▀▌ P R _ A G E N T   O U T P U T▀▀▓▒▀▀▀▀▒▀▀▀▀▀▀▀▓▀▀▀▀▀▀▀▀▒▀░▀▀▀▀▓▀▀▀▀▀▀▀▀▀▀▀▀▀▜"
 " stack #12 -> main ·▌ pr-agent: step 17                                                            ▐"
 " ┌ feat(ui): popup f▌ pr-agent: step 18                                                            ▐"

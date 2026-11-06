@@ -133,8 +133,13 @@ pub(crate) fn list_interest(tab: &dyn Tab, model: &ListModel, height: u16) -> In
 }
 
 /// The tab registry, in tab bar order.
-pub(crate) static TABS: LazyLock<Vec<Box<dyn Tab>>> =
-    LazyLock::new(|| vec![Box::new(mine::Mine), Box::new(team::Team)]);
+pub(crate) static TABS: LazyLock<Vec<Box<dyn Tab>>> = LazyLock::new(|| {
+    vec![
+        Box::new(mine::Mine),
+        Box::new(team::Team::Review),
+        Box::new(team::Team::Rest),
+    ]
+});
 
 /// The values that occur more than once, sorted.
 #[cfg(test)]
