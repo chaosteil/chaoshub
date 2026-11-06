@@ -710,7 +710,8 @@ pub(crate) fn spinner(now: DateTime<Utc>) -> &'static str {
 
 /// The work that runs, for example `syncing team · prefetch 2`: the
 /// syncs, the pull requests that the prefetch batch has left, the
-/// conversation loads and the files loads. `None` when no work runs.
+/// conversation loads, the files loads, and one `agent review #7` item
+/// per pr-agent run. `None` when no work runs.
 fn activity(data: &AppData) -> Option<String> {
     let mut parts = Vec::new();
     let scopes: Vec<&str> = [(Scope::Mine, "mine"), (Scope::Team, "team")]
@@ -733,6 +734,9 @@ fn activity(data: &AppData) -> Option<String> {
         0 => {}
         1 => parts.push("loading 1 diff".to_owned()),
         n => parts.push(format!("loading {n} diffs")),
+    }
+    for (key, kind) in &data.agent_jobs {
+        parts.push(format!("agent {} #{}", kind.name(), key.number));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
@@ -963,6 +967,27 @@ mod tests {
         state.data.details_loading.clear();
         state.data.files_loading.insert(key(2));
         assert_eq!(right(&state)[1], " loading 2 diffs   ");
+
+        state.data.files_loading.clear();
+        assert!(!state.data.busy());
+        state
+            .data
+            .agent_jobs
+            .insert((key(7), crate::domain::agent::ToolKind::Review));
+        assert_eq!(right(&state)[1], " agent review #7   ");
+        assert!(state.data.busy());
+        state
+            .data
+            .agent_jobs
+            .insert((key(7), crate::domain::agent::ToolKind::Ask));
+        state
+            .data
+            .agent_jobs
+            .insert((key(9), crate::domain::agent::ToolKind::Improve));
+        assert_eq!(
+            right(&state)[1],
+            " agent review #7 · agent ask #7 · agent improve #9   "
+        );
     }
 
     #[test]
