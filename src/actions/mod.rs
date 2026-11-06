@@ -13,6 +13,7 @@ mod agent;
 mod approve;
 mod browser;
 mod close;
+mod codeview_send;
 mod copy;
 mod draft;
 mod merge;
@@ -128,6 +129,7 @@ pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(|| {
         Box::new(copy::CopyUrl),
         Box::new(copy::CopyChangeId),
         Box::new(agent::Agent),
+        Box::new(codeview_send::CodeviewSend),
     ]
 });
 
