@@ -65,14 +65,24 @@ pub(crate) fn render(
             let content = Rect::new(inner.x + 1, y, inner.width.saturating_sub(1 + tail), 1);
             punk::shift_right(buf, content, selection.shift, style);
         } else {
-            buf.set_string(
-                inner.x + 2,
-                y,
-                text::truncate(item, width),
-                Style::new().fg(p.fg_dim),
-            );
+            plain_item(item, line, buf, theme);
         }
     }
+}
+
+/// Draws an item without the cursor on `line`, a row of the picker. The
+/// transitions use it for the row under a band wipe.
+pub(crate) fn plain_item(item: &str, line: Rect, buf: &mut Buffer, theme: &Theme) {
+    let p = &theme.palette;
+    let selection = theme.selected_row();
+    let tail = if selection.tail.is_some() { 2 } else { 0 };
+    let width = usize::from(line.width.saturating_sub(2 + tail + selection.shift));
+    buf.set_string(
+        line.x + 2,
+        line.y,
+        text::truncate(item, width),
+        Style::new().fg(p.fg_dim),
+    );
 }
 
 #[cfg(test)]

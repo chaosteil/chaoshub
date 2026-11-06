@@ -12,7 +12,12 @@
 //!   `slide_out` on close.
 //! - Popup, output and help: `slide_in` from the right edge, `slide_out`
 //!   to the right.
-//! - Scroll: the list rows move from the old offset to the new one.
+//! - Scroll (`FxKey::Scroll`): the list rows move from the old offset to
+//!   the new one.
+//! - Cursor move (`FxKey::Band`): in the list, a pane table and the
+//!   picker, the selection band wipes onto the new row from the left in
+//!   60 ms. The old row loses its band at once. Not on the first frame of
+//!   a list, a pane or a picker.
 //! - Expired status message: `fade_to_fg` toward the status bar grey.
 
 use std::rc::Rc;
@@ -26,11 +31,12 @@ use tachyonfx::{
 };
 
 use crate::app::layout::Areas;
-use crate::app::models::{FrameModel, OverlayContent, TabBarModel};
+use crate::app::models::{FrameModel, OverlayContent, PaneModel, TabBarModel};
 use crate::bus::{Hit, OverlayKind, UiEvent};
 use crate::theme::{Skin, Theme, ThemeKind};
 use crate::ui::hits::HitMap;
-use crate::ui::{list, list_areas, overlay_area, rect, render_overlay, screen, tabbar};
+use crate::ui::list::Window;
+use crate::ui::{list, list_areas, overlay_area, picker, rect, render_overlay, screen, tabbar};
 
 /// The duration of the confirm and prompt slides, in milliseconds.
 const DIALOG_MS: u64 = 100;
@@ -39,6 +45,8 @@ const STATUS_FADE_MS: u64 = 300;
 /// The duration of the tab glide and the pane tab glide, in
 /// milliseconds.
 const TAB_GLIDE_MS: u64 = 120;
+/// The duration of the band wipe, in milliseconds.
+const BAND_WIPE_MS: u64 = 60;
 /// The length of the gradient at the edge of a sliding overlay.
 const SLIDE_GRADIENT: u16 = 3;
 /// The frame deadline of the event loop while a transition runs.
@@ -53,6 +61,7 @@ enum FxKey {
     #[default]
     Tab,
     PaneTab,
+    Band,
     Scroll,
     Status,
     Overlay(usize),
@@ -94,6 +103,50 @@ struct ScrollState {
     list: RefRect,
     /// True when the list scrolls down.
     down: bool,
+}
+
+/// What the cursor moves in: the list of a tab, the table pane of the
+/// popup, or the picker. A band wipe runs only when the cursor moves
+/// inside the same view, so the first frame of a view has none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CursorView {
+    List { tab: usize, filter: Option<String> },
+    Pane { title: String, tab: usize },
+    Picker { title: String },
+}
+
+/// The view of the cursor in a frame and the cursor index. `None` when
+/// the top overlay has no band, for example the help.
+fn cursor_view(model: &FrameModel) -> Option<(CursorView, usize)> {
+    let Some(overlay) = model.overlays.iter().rev().find(|o| !o.closing) else {
+        let view = CursorView::List {
+            tab: model.tab_bar.active,
+            filter: model.filter.as_ref().map(|f| f.text.clone()),
+        };
+        return Some((view, model.list.cursor));
+    };
+    match &overlay.content {
+        OverlayContent::Popup {
+            title,
+            active,
+            pane: PaneModel::Table { .. },
+            cursor,
+            ..
+        } => Some((
+            CursorView::Pane {
+                title: title.clone(),
+                tab: *active,
+            },
+            *cursor,
+        )),
+        OverlayContent::Picker { title, cursor, .. } => Some((
+            CursorView::Picker {
+                title: title.clone(),
+            },
+            *cursor,
+        )),
+        _ => None,
+    }
 }
 
 /// The state of a tab glide: in the tab bar or on a pane tab row.
@@ -152,6 +205,8 @@ pub(crate) struct Transitions {
     /// The old and the new pane (registry indexes) of a pane tab glide
     /// that `prepare` starts.
     pending_pane: Option<(usize, usize)>,
+    /// The view and the cursor of the last `prepare`.
+    last_cursor: Option<(CursorView, usize)>,
     /// The list rows during a scroll.
     rows: RefCount<Buffer>,
     /// The offsets of the running scroll.
@@ -177,6 +232,7 @@ impl Transitions {
             overlays: std::array::from_fn(|_| RefRect::new(Rect::default())),
             pending_tab: None,
             pending_pane: None,
+            last_cursor: None,
             rows: empty(),
             scroll: None,
             status_pending: false,
@@ -316,6 +372,89 @@ impl Transitions {
         })
     }
 
+    /// The band wipes onto the cursor row: at alpha `a`, the cells left of
+    /// `a × width` have the band (the frame), and the others the row
+    /// without the band (`plain`).
+    fn band_wipe(&mut self, plain: Buffer) {
+        let timer = Self::timer(Duration::from_millis(BAND_WIPE_MS));
+        let effect = fx::effect_fn_buf(plain, timer, |plain, cx, buf| {
+            let area = plain.area;
+            let cut = (f32::from(area.width) * cx.alpha().clamp(0.0, 1.0)).round();
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "cut is rounded and between 0 and the width"
+            )]
+            let cut = (cut as u16).min(area.width);
+            let rest = Rect::new(area.x + cut, area.y, area.width - cut, area.height);
+            for (x, y) in positions(rest) {
+                if let Some(dst) = buf.cell_mut((x, y)) {
+                    *dst = plain[(x, y)].clone();
+                }
+            }
+        });
+        self.manager.add_unique_effect(FxKey::Band, effect);
+    }
+
+    /// The cursor row of `view` drawn without the band, at its place on
+    /// the screen. `None` when the row is not drawn.
+    fn plain_row(
+        &self,
+        model: &FrameModel,
+        areas: &Areas,
+        view: &CursorView,
+        cursor: usize,
+    ) -> Option<Buffer> {
+        let mut buf = Buffer::empty(screen(areas));
+        let mut hits = HitMap::default();
+        let overlay = || model.overlays.iter().rev().find(|o| !o.closing).cloned();
+        let row = match view {
+            CursorView::List { .. } => {
+                let window = Window {
+                    cursor: None,
+                    scroll: model.list.scroll,
+                    hit: Hit::Row,
+                };
+                let body = list_areas(model, areas).body;
+                let list = &model.list;
+                list::render_rows(
+                    &list.columns,
+                    &list.rows,
+                    window,
+                    body,
+                    &mut buf,
+                    &self.theme,
+                    &mut hits,
+                );
+                hits.region(Hit::Row(cursor))?
+            }
+            CursorView::Pane { .. } => {
+                let mut overlay = overlay()?;
+                if let OverlayContent::Popup { cursor, .. } = &mut overlay.content {
+                    *cursor = usize::MAX;
+                }
+                render_overlay(&overlay, areas, &mut buf, &self.theme, &mut hits);
+                hits.region(Hit::PaneRow(cursor))?
+            }
+            CursorView::Picker { .. } => {
+                let overlay = overlay()?;
+                let OverlayContent::Picker { items, .. } = &overlay.content else {
+                    return None;
+                };
+                render_overlay(&overlay, areas, &mut buf, &self.theme, &mut hits);
+                let line = hits.region(Hit::Item(cursor))?;
+                let p = &self.theme.palette;
+                buf.set_style(line, ratatui::style::Style::new().bg(p.bg).fg(p.fg));
+                for (x, y) in positions(line) {
+                    buf[(x, y)].set_symbol(" ");
+                }
+                picker::plain_item(items.get(cursor)?, line, &mut buf, &self.theme);
+                line
+            }
+        };
+        Some(copy(&buf, row))
+    }
+
     /// An overlay slides in or out of its area.
     fn overlay_slide(&mut self, key: FxKey, kind: OverlayKind, open: bool) {
         let duration = match kind {
@@ -401,6 +540,15 @@ impl Transitions {
         {
             self.glide(FxKey::Tab, glide);
         }
+        let current = cursor_view(model);
+        if let (Some((view, cursor)), Some((last_view, last))) = (&current, &self.last_cursor)
+            && view == last_view
+            && cursor != last
+            && let Some(plain) = self.plain_row(model, areas, view, *cursor)
+        {
+            self.band_wipe(plain);
+        }
+        self.last_cursor = current;
         if let Some((from, to)) = self.pending_pane.take() {
             match self.pane_glide(model, areas, from, to) {
                 Some(glide) => self.glide(FxKey::PaneTab, glide),
@@ -1103,6 +1251,131 @@ mod tests {
             popup,
             "clipped to the screen and to the rows above the key hint bar"
         );
+    }
+
+    /// For each cell of the row `y` from `x0` to `x1`: true when it has
+    /// the band background of the plain skins.
+    fn band(buf: &Buffer, y: u16, x0: u16, x1: u16) -> Vec<bool> {
+        let surface = testdata::pierre().palette.surface;
+        (x0..x1).map(|x| buf[(x, y)].bg == surface).collect()
+    }
+
+    /// The mine list frame with the cursor on row `cursor`.
+    fn list_at(cursor: usize) -> FrameModel {
+        let mut model = testdata::frame();
+        model.list.cursor = cursor;
+        model
+    }
+
+    /// The screen row of the list row `index` (no scroll).
+    fn list_y(index: usize) -> u16 {
+        let model = testdata::frame();
+        let body = list_areas(&model, &testdata::areas(WIDTH, HEIGHT)).body;
+        body.y + u16::try_from(index).unwrap()
+    }
+
+    #[test]
+    fn the_band_wipes_onto_the_new_list_row() {
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut fx = new();
+        draw_view(&mut terminal, &mut fx, &list_at(1), 0);
+        assert!(!fx.active(), "no wipe on the first frame");
+        let start = draw_view(&mut terminal, &mut fx, &list_at(2), 0);
+        assert!(fx.active());
+        assert_eq!(band(&start, list_y(2), 0, WIDTH), vec![false; 100]);
+        assert_eq!(
+            band(&start, list_y(1), 0, WIDTH),
+            vec![false; 100],
+            "the old row loses its band at once"
+        );
+        let middle = draw_view(&mut terminal, &mut fx, &list_at(2), 30);
+        let lit = band(&middle, list_y(2), 0, WIDTH);
+        let cut = lit.iter().position(|&b| !b).unwrap();
+        assert!(cut > 10 && cut < 99, "the band is part of the row: {cut}");
+        assert!(lit[..cut].iter().all(|&b| b) && lit[cut..].iter().all(|&b| !b));
+        let end = draw_view(&mut terminal, &mut fx, &list_at(2), 30);
+        assert_eq!(band(&end, list_y(2), 0, WIDTH), vec![true; 100]);
+        draw_view(&mut terminal, &mut fx, &list_at(2), 16);
+        assert!(!fx.active());
+    }
+
+    #[test]
+    fn a_second_move_retargets_the_band_wipe() {
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut fx = new();
+        draw_view(&mut terminal, &mut fx, &list_at(1), 0);
+        draw_view(&mut terminal, &mut fx, &list_at(2), 0);
+        draw_view(&mut terminal, &mut fx, &list_at(2), 30);
+        draw_view(&mut terminal, &mut fx, &list_at(3), 0);
+        let start = draw_view(&mut terminal, &mut fx, &list_at(3), 0);
+        assert_eq!(band(&start, list_y(3), 0, WIDTH), vec![false; 100]);
+        assert_eq!(band(&start, list_y(2), 0, WIDTH), vec![false; 100]);
+        let end = draw_view(&mut terminal, &mut fx, &list_at(3), 60);
+        assert_eq!(band(&end, list_y(3), 0, WIDTH), vec![true; 100]);
+    }
+
+    #[test]
+    fn no_band_wipe_on_a_new_list_or_with_animations_off() {
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut fx = new();
+        draw_view(&mut terminal, &mut fx, &list_at(1), 0);
+        let mut other = testdata::sliding_frame();
+        other.list.cursor = 3;
+        draw_view(&mut terminal, &mut fx, &other, 0);
+        assert!(!fx.active(), "a tab switch is a new list");
+        let mut filtered = list_at(2);
+        filtered.filter = Some(crate::app::models::FilterModel {
+            text: "x".into(),
+            editing: true,
+        });
+        draw_view(&mut terminal, &mut fx, &list_at(1), 0);
+        draw_view(&mut terminal, &mut fx, &filtered, 0);
+        assert!(!fx.active(), "a filter change is a new list");
+        let mut fx = Transitions::new(false, 160).with_theme(testdata::pierre());
+        draw_view(&mut terminal, &mut fx, &list_at(1), 0);
+        let buf = draw_view(&mut terminal, &mut fx, &list_at(2), 0);
+        assert!(!fx.active());
+        assert_eq!(band(&buf, list_y(2), 0, WIDTH), vec![true; 100]);
+    }
+
+    #[test]
+    fn the_band_wipes_in_a_pane_table_and_the_picker() {
+        let areas = testdata::areas(WIDTH, HEIGHT);
+        let popup = |cursor: usize| {
+            let mut overlay = testdata::popup_overlay();
+            if let OverlayContent::Popup { cursor: c, .. } = &mut overlay.content {
+                *c = cursor;
+            }
+            testdata::with_overlay(overlay)
+        };
+        let picker = |cursor| testdata::with_overlay(testdata::picker_overlay(5, cursor));
+        let row_of = |model: &FrameModel, hit: Hit| {
+            let mut buf = Buffer::empty(screen(&areas));
+            let mut hits = HitMap::default();
+            render_overlay(
+                &model.overlays[0],
+                &areas,
+                &mut buf,
+                &testdata::pierre(),
+                &mut hits,
+            );
+            hits.region(hit).unwrap()
+        };
+        let cases = [
+            (popup(0), popup(1), row_of(&popup(1), Hit::PaneRow(1))),
+            (picker(0), picker(2), row_of(&picker(2), Hit::Item(2))),
+        ];
+        for (before, after, row) in cases {
+            let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+            let mut fx = new();
+            draw_view(&mut terminal, &mut fx, &before, 0);
+            let start = draw_view(&mut terminal, &mut fx, &after, 0);
+            let width = usize::from(row.width);
+            let (x0, x1) = (row.x, row.right());
+            assert_eq!(band(&start, row.y, x0, x1), vec![false; width], "{row:?}");
+            let end = draw_view(&mut terminal, &mut fx, &after, 60);
+            assert_eq!(band(&end, row.y, x0, x1), vec![true; width], "{row:?}");
+        }
     }
 
     #[test]
