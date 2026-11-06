@@ -346,7 +346,7 @@ command = [
 
 The style and the palette are two switches. The style sets the shapes,
 and the palette sets the colors. The punk style keeps the palette and
-changes the shapes: cut corners, diagonal accents, ransom-note headers,
+changes the shapes: cut corners, diagonal accents, inverted headers,
 slanted tab cards, a two-layer selection band and drop shadows under
 popups. To try it, start chaoshub with `--theme punk`.
 
