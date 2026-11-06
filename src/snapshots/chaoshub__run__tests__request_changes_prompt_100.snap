@@ -3,13 +3,13 @@ source: src/run.rs
 expression: screen(&mut app)
 ---
 "▌ 1 M I N E   2 R E V I E W   3 T E A M                ˙                            ˙      chaoshub "
+" TITLE                                             # CHANGE   COMMIT   WORKSPACE  CHECKS  REVI… FLA…"
 "▌─ fix(store): reopen the connection after a…    #99                                 ·      ·       "
 " stack #12 -> main · 3 PRs                                                                          "
 " ┌ feat(ui): popup frame with pane tabs         #103 wqnvzxop oid103   default       ·      ○   D   "
 " ├ feat(app): checks pane                       #102 xlmkrtpq 9f9f9f9f default       ·     ✓2       "
 " └ feat(app): Pane trait, registry and overl…   #101                               ✗ 1/3  ✓1 ✗1 C   "
 " ─ docs: describe the export file format in …     #7                                 ·      ·       "
-"    ░˙ ·    ˙                     ·      ˙    ˙      ˙  ░              ˙ ˙ ˙     ˙ ░ ˙    ░       ░ "
 " ░   ˙                  ·                        ·        · ·     ·        ˙          ░˙░         ˙ "
 "     ·    ·        ˙                  ░˙      ˙             ░               ░                       "
 "                  ▛▀▌ R E Q U E S T   C H A N G E S   O N   # 9 9▀▀▀▓▀▀▀░▀▀▒▀▀▀▀▀▜                  "

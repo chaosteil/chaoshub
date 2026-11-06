@@ -63,6 +63,41 @@ fn centered(outer: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
+/// The parts of the list area: the header row, the rows and the filter
+/// line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ListAreas {
+    /// The header row: the first row, when the column headers are on.
+    pub header: Option<Rect>,
+    /// The rows of the list.
+    pub body: Rect,
+    /// The filter line: the last row, when the filter shows.
+    pub filter: Option<Rect>,
+}
+
+/// Splits the list area into the header row, the rows and the filter
+/// line. `view` draws the list there, and the scroll effect moves the
+/// rows of `body`.
+pub(crate) fn list_areas(model: &FrameModel, areas: &Areas) -> ListAreas {
+    let mut body = rect(areas.list);
+    let mut header = None;
+    if model.column_headers && body.height > 0 {
+        header = Some(Rect::new(body.x, body.y, body.width, 1));
+        body.y += 1;
+        body.height -= 1;
+    }
+    let mut filter = None;
+    if model.filter.is_some() && body.height > 0 {
+        body.height -= 1;
+        filter = Some(Rect::new(body.x, body.bottom(), body.width, 1));
+    }
+    ListAreas {
+        header,
+        body,
+        filter,
+    }
+}
+
 /// The area of an overlay. `ui` draws the overlay there, and the
 /// transitions slide it there.
 pub(crate) fn overlay_area(overlay: &OverlayModel, areas: &Areas) -> Rect {
@@ -97,15 +132,14 @@ pub(crate) fn view(
     hits.clear();
     let buf = frame.buffer_mut();
     tabbar::render(&model.tab_bar, rect(areas.tab_bar), buf, theme, hits);
-    let mut list_area = rect(areas.list);
-    if let Some(line) = &model.filter
-        && list_area.height > 0
-    {
-        list_area.height -= 1;
-        let line_area = Rect::new(list_area.x, list_area.bottom(), list_area.width, 1);
+    let parts = list_areas(model, areas);
+    if let Some(header) = parts.header {
+        list::render_header(&model.list.columns, header, buf, theme);
+    }
+    if let (Some(line), Some(line_area)) = (&model.filter, parts.filter) {
         filter::render(line, line_area, buf, theme);
     }
-    list::render(&model.list, list_area, buf, theme, hits);
+    list::render(&model.list, parts.body, buf, theme, hits);
     for overlay in &model.overlays {
         render_overlay(overlay, areas, buf, theme, hits);
     }
@@ -196,6 +230,50 @@ mod tests {
             .draw(|frame| view(frame, model, &areas, &testdata::pierre(), &mut hits))
             .unwrap();
         hits
+    }
+
+    #[test]
+    fn the_header_row_moves_the_list_down_one_row() {
+        let areas = testdata::areas(100, 30);
+        let list = rect(areas.list);
+        let off = testdata::frame();
+        assert_eq!(
+            list_areas(&off, &areas),
+            ListAreas {
+                header: None,
+                body: list,
+                filter: None,
+            }
+        );
+        let on = FrameModel {
+            column_headers: true,
+            filter: Some(crate::app::models::FilterModel {
+                text: "x".into(),
+                editing: false,
+            }),
+            ..testdata::frame()
+        };
+        let parts = list_areas(&on, &areas);
+        assert_eq!(parts.header, Some(Rect::new(0, list.y, 100, 1)));
+        assert_eq!(
+            parts.body,
+            Rect::new(0, list.y + 1, 100, list.height - 2),
+            "one row lower and one row shorter, and the filter line"
+        );
+        assert_eq!(parts.filter, Some(Rect::new(0, list.bottom() - 1, 100, 1)));
+        let on = FrameModel {
+            column_headers: true,
+            ..testdata::frame()
+        };
+        let screen = draw(&on, 100, 30, &testdata::pierre());
+        let rows: Vec<&str> = screen.lines().collect();
+        assert!(rows[list.y as usize].contains("TITLE"), "{screen}");
+        let plain = draw(&off, 100, 30, &testdata::pierre());
+        let plain: Vec<&str> = plain.lines().collect();
+        assert_eq!(rows[list.y as usize + 1], plain[list.y as usize]);
+        let hits = hits(&on);
+        assert_eq!(hits.at(5, list.y), None, "the header row is no row");
+        assert_eq!(hits.at(5, list.y + 1), Some(crate::bus::Hit::Row(0)));
     }
 
     #[test]

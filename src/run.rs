@@ -161,6 +161,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         chrono::Utc::now(),
     )
     .with_action_config(action_tables(&settings.config))
+    .with_column_headers(settings.config.theme.column_headers)
     .with_detail_pane(detail);
     // The pinned app comes before the first interest, so the workers
     // start with the pinned interest.
@@ -1773,6 +1774,26 @@ mod tests {
     }
 
     #[test]
+    fn a_cached_column_header_switch_wins_over_the_config() {
+        let app = seeded_app(100, 14, crate::app::testdata::mine_snapshot());
+        assert!(!app.with_column_headers(false).column_headers());
+        let mut snapshot = crate::app::testdata::mine_snapshot();
+        snapshot
+            .ui_state
+            .insert("column_headers".into(), "true".into());
+        let app = seeded_app(100, 14, snapshot);
+        assert!(app.with_column_headers(false).column_headers());
+        let mut snapshot = crate::app::testdata::mine_snapshot();
+        snapshot
+            .ui_state
+            .insert("column_headers".into(), "false".into());
+        let mut app = seeded_app(100, 14, snapshot).with_column_headers(true);
+        assert!(!app.column_headers());
+        let screen = screen(&mut app);
+        assert!(!screen.contains("TITLE"), "{screen}");
+    }
+
+    #[test]
     fn mine_list_160() {
         let mut app = seeded_app(160, 14, crate::app::testdata::mine_snapshot());
         insta::assert_snapshot!(screen(&mut app));
@@ -2362,7 +2383,9 @@ mod tests {
             Msg::Mouse { hit, .. } => hit,
             _ => None,
         };
-        assert_eq!(hit(with_hit(click(5, 3), &hits, false)), Some(Hit::Row(2)));
+        // Row 1 is the header row, so the third list row is at y 4.
+        assert_eq!(hit(with_hit(click(5, 1), &hits, false)), None);
+        assert_eq!(hit(with_hit(click(5, 4), &hits, false)), Some(Hit::Row(2)));
         assert_eq!(hit(with_hit(click(2, 0), &hits, false)), Some(Hit::Tab(0)));
         assert_eq!(
             hit(with_hit(click(2, 13), &hits, false)),

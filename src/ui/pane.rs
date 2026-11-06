@@ -3,7 +3,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
@@ -89,23 +89,12 @@ fn render_table(
     theme: &Theme,
     hits: &mut HitMap,
 ) {
-    let p = &theme.palette;
-    let header_style = Style::new()
-        .bg(p.bg)
-        .fg(p.fg_mute)
-        .add_modifier(Modifier::BOLD);
-    buf.set_style(Rect::new(area.x, area.y, area.width, 1), header_style);
-    let widths = list::column_widths(columns, list::content_width(area.width, theme));
-    let mut x = list::columns_x(area);
-    for (column, &w) in columns.iter().zip(&widths) {
-        if x >= area.right() {
-            break;
-        }
-        let w = w.min(area.right() - x);
-        let title = text::fit(&column.title.to_uppercase(), usize::from(w), column.align);
-        buf.set_stringn(x, area.y, title, usize::from(w), header_style);
-        x = x.saturating_add(w + list::GAP);
-    }
+    list::render_header(
+        columns,
+        Rect::new(area.x, area.y, area.width, area.height.min(1)),
+        buf,
+        theme,
+    );
     let body = Rect::new(
         area.x,
         area.y + 1,

@@ -182,6 +182,11 @@ pub(crate) struct UiState {
     /// The pull request of the pinned mode (`chaoshub pr`). Its popup is
     /// the overlay at index 0 and never closes. `None` in the list mode.
     pub pinned: Option<PrKey>,
+    /// True when the list shows the header row with the column titles.
+    pub column_headers: bool,
+    /// The `column_headers` value in the `ui_state` table of the cache,
+    /// if any. It wins over `[theme] column_headers`.
+    pub saved_column_headers: Option<bool>,
 }
 
 /// The state of the syncs, for the status bar and the terminal status.
@@ -283,6 +288,8 @@ pub(crate) struct StatusMsg {
 pub(crate) const FILTER_KEY: &str = "filter";
 /// The `ui_state` key kind of the author filter of a tab.
 pub(crate) const AUTHOR_KEY: &str = "author";
+/// The `ui_state` key of the column header switch: `true` or `false`.
+pub(crate) const COLUMN_HEADERS_KEY: &str = "column_headers";
 
 /// The `ui_state` key of a setting of a tab, for example `filter.team`.
 pub(crate) fn ui_key(kind: &str, tab: &str) -> String {
@@ -448,6 +455,8 @@ impl AppState {
                 interest: None,
                 filter_edit: false,
                 pinned: None,
+                column_headers: true,
+                saved_column_headers: None,
             },
             generation: 0,
             cache: ModelCache::default(),
@@ -510,6 +519,18 @@ impl AppState {
             ts.filter = saved(FILTER_KEY).unwrap_or_default();
             ts.author = saved(AUTHOR_KEY);
         }
+        self.ui.saved_column_headers = match snapshot
+            .ui_state
+            .get(COLUMN_HEADERS_KEY)
+            .map(String::as_str)
+        {
+            Some("true") => Some(true),
+            Some("false") => Some(false),
+            _ => None,
+        };
+        if let Some(on) = self.ui.saved_column_headers {
+            self.ui.column_headers = on;
+        }
         self.bump();
     }
 }
@@ -518,6 +539,29 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::app::tabs::fake::FakeTab;
+
+    #[test]
+    fn the_column_header_switch_comes_back_from_the_cache() {
+        let size = Size {
+            width: 100,
+            height: 30,
+        };
+        let load = |value: Option<&str>| {
+            let mut state = AppState::new(size);
+            let mut snapshot = Snapshot::default();
+            if let Some(value) = value {
+                snapshot
+                    .ui_state
+                    .insert(COLUMN_HEADERS_KEY.into(), value.into());
+            }
+            state.load(snapshot, Vec::new());
+            (state.ui.column_headers, state.ui.saved_column_headers)
+        };
+        assert_eq!(load(None), (true, None));
+        assert_eq!(load(Some("false")), (false, Some(false)));
+        assert_eq!(load(Some("true")), (true, Some(true)));
+        assert_eq!(load(Some("maybe")), (true, None), "a bad value is ignored");
+    }
 
     #[test]
     fn new_state_is_empty_and_bump_moves_the_generation() {

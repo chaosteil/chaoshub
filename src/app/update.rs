@@ -19,8 +19,9 @@ use crate::app::panes::{PANES, Pane, PaneState, applicable, display_rows, items}
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
-    AUTHOR_KEY, ActionDialog, AppData, AppState, AuthorPicker, Condition, FILTER_KEY, Failure,
-    OUTPUT_LINES, Overlay, OverlayState, PaneHandleState, PopupState, error_text, ui_key,
+    AUTHOR_KEY, ActionDialog, AppData, AppState, AuthorPicker, COLUMN_HEADERS_KEY, Condition,
+    FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaneHandleState, PopupState,
+    error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, pr_ref};
 use crate::app::target::{pr_target, row_target};
@@ -255,6 +256,9 @@ fn key(
     if keymap.matches("authors", chord) {
         open_authors(state, tabs);
         return Vec::new();
+    }
+    if keymap.matches("column_headers", chord) {
+        return toggle_column_headers(state, tabs);
     }
     if keymap.matches("open", chord) {
         return open_selected(state, tabs, panes);
@@ -1293,6 +1297,26 @@ fn filter_key(state: &mut AppState, tabs: &[Box<dyn Tab>], chord: KeyChord) -> V
         _ => return Vec::new(),
     }
     state.bump();
+    cmds.extend(after_change(state, tabs));
+    cmds
+}
+
+/// Shows or hides the header row of the list for the session, and
+/// writes the switch into `ui_state`. The cursor stays visible in the
+/// new list height.
+fn toggle_column_headers(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
+    state.ui.column_headers = !state.ui.column_headers;
+    state.bump();
+    let height = usize::from(frame::list_size(state).height);
+    let model = frame::active_list(state, tabs);
+    if let Some(ts) = state.ui.tabs.get_mut(state.ui.active) {
+        ts.scroll = nav::keep_visible(model.rows.len(), model.cursor, model.scroll, height);
+    }
+    state.bump();
+    let mut cmds = vec![Cmd::Persist(Persist::UiState {
+        key: COLUMN_HEADERS_KEY.to_owned(),
+        value: state.ui.column_headers.to_string(),
+    })];
     cmds.extend(after_change(state, tabs));
     cmds
 }
@@ -3064,10 +3088,12 @@ mod tests {
 
     /// The real tabs with the mine pull requests and no jj scan, on a
     /// screen with a list of `height` rows.
+    /// The mine state with `height` list rows: the screen also has the
+    /// tab bar, the header row, the key hint bar and the status bar.
     fn mine_state(height: u16) -> AppState {
         let mut state = AppState::new(Size {
             width: 100,
-            height: height + 3,
+            height: height + 4,
         });
         let snapshot = crate::store::Snapshot {
             local: Vec::new(),
@@ -3117,6 +3143,70 @@ mod tests {
         assert_eq!(key(&mut state, 'k'), vec![], "no move at the top");
         assert_eq!(state.generation, generation);
         assert_eq!(state.ui.ui_events, vec![], "no scroll in a tall list");
+    }
+
+    #[test]
+    fn the_header_key_toggles_the_row_and_writes_the_cache() {
+        let mut state = mine_state(4);
+        assert!(state.ui.column_headers, "on by default");
+        assert_eq!(frame::list_size(&state).height, 4);
+        let generation = state.generation;
+        let cmds = key(&mut state, 'H');
+        assert!(!state.ui.column_headers);
+        assert!(state.generation > generation);
+        assert_eq!(
+            cmds[0],
+            Cmd::Persist(Persist::UiState {
+                key: "column_headers".into(),
+                value: "false".into(),
+            })
+        );
+        assert_eq!(frame::list_size(&state).height, 5, "the list takes the row");
+        assert!(!frame::frame_model(&mut state).column_headers);
+        let cmds = key(&mut state, 'H');
+        assert!(state.ui.column_headers);
+        assert_eq!(
+            cmds[0],
+            Cmd::Persist(Persist::UiState {
+                key: "column_headers".into(),
+                value: "true".into(),
+            })
+        );
+        assert!(frame::frame_model(&mut state).column_headers);
+    }
+
+    #[test]
+    fn the_header_row_takes_a_row_from_the_scroll_window() {
+        // Rows: #99, header, #103, #102, #101, #7. The window has 5 rows
+        // without the header row and 4 with it.
+        let mut state = mine_state(4);
+        state.ui.column_headers = false;
+        state.bump();
+        for _ in 0..3 {
+            key(&mut state, 'j');
+        }
+        assert_eq!(selected_number(&mut state), Some(101));
+        assert_eq!(state.ui.tabs[0].scroll, 0, "#101 is the fifth row");
+        key(&mut state, 'H');
+        assert!(state.ui.column_headers);
+        assert_eq!(
+            state.ui.tabs[0].scroll, 1,
+            "the cursor stays visible in the shorter window"
+        );
+        assert_eq!(selected_number(&mut state), Some(101));
+        key(&mut state, 'H');
+        assert_eq!(
+            state.ui.tabs[0].scroll, 1,
+            "a taller window keeps the scroll"
+        );
+        let mut state = mine_state(4);
+        for _ in 0..3 {
+            key(&mut state, 'j');
+        }
+        assert_eq!(
+            state.ui.tabs[0].scroll, 1,
+            "with the header row, the fourth move scrolls"
+        );
     }
 
     #[test]

@@ -70,6 +70,21 @@ impl App {
         self
     }
 
+    /// True when the list shows the header row.
+    #[cfg(test)]
+    pub(crate) fn column_headers(&self) -> bool {
+        self.state.ui.column_headers
+    }
+
+    /// Sets the `[theme] column_headers` switch. A value in the cache wins
+    /// over it.
+    pub(crate) fn with_column_headers(mut self, on: bool) -> Self {
+        let ui = &mut self.state.ui;
+        ui.column_headers = ui.saved_column_headers.unwrap_or(on);
+        self.state.bump();
+        self
+    }
+
     /// Sets the command of the detail pane. With `Some`, `enter` opens the
     /// pull request in a pane. With `None`, it opens the sidebar.
     pub(crate) fn with_detail_pane(mut self, detail: Option<DetailPane>) -> Self {

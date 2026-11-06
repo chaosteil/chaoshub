@@ -216,6 +216,8 @@ pub(crate) struct ThemeConfig {
     pub animation_ms: u64,
     /// Shows the key hint bar above the status bar.
     pub key_hints: bool,
+    /// Shows the header row with the column names above the list.
+    pub column_headers: bool,
 }
 
 impl Default for ThemeConfig {
@@ -228,6 +230,7 @@ impl Default for ThemeConfig {
             animations: true,
             animation_ms: 160,
             key_hints: true,
+            column_headers: true,
         }
     }
 }

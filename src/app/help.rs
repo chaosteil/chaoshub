@@ -24,6 +24,7 @@ const APP_KEYS: &[(&[&str], &str)] = &[
     (&["authors"], "pick an author"),
     (&["toggle_all"], "show all open"),
     (&["refresh"], "refresh"),
+    (&["column_headers"], "show or hide the column names"),
     (&["quit"], "quit"),
 ];
 
