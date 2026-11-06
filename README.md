@@ -478,7 +478,7 @@ selects the next pane:
 
 | Key | Pane | What it shows |
 |---|---|---|
-| `1` | Description | The body of the pull request as markdown. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. Below the block, the section `Codeview comments (N unsent)` lists the codeview comments of the head that did not go to GitHub yet (see "Codeview comments" below). Only for a repo with a `path`. |
+| `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. Below the block, the section `Codeview comments (N unsent)` lists the codeview comments of the head that did not go to GitHub yet (see "Codeview comments" below). Only for a repo with a `path`. |
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order. |
 | `4` | Stack | The entries of the stack. Only for a stacked pull request. |
