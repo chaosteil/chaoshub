@@ -11,6 +11,7 @@
 //! agent: reads domain, bus, github and config; read by actions, app and run.
 //! codeview: reads domain and config; read by actions, app (exec) and run.
 //! osc: reads bus only; read by run and clipboard.   clipboard: read by app (exec).
+//! markup: reads no module; read by app and ui.
 //! ```
 #![forbid(unsafe_code)]
 
@@ -25,6 +26,7 @@ mod config;
 mod domain;
 mod github;
 mod launch;
+mod markup;
 mod osc;
 mod run;
 mod store;
@@ -259,6 +261,7 @@ mod tests {
                 "cli",
             ],
         ),
+        ("markup", &[]),
         ("config", &["domain"]),
         ("theme", &[]),
         ("osc", &["bus"]),

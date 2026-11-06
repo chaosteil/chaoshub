@@ -1,0 +1,24 @@
+---
+source: src/markup/mod.rs
+expression: "texts(&rows).join(\"\\n\")"
+---
+## Why
+
+Some bold and code text, thanks
+@chaosteil 🎉.
+
+▸ Click to see logs
+
+let x = 1;
+
+─────┬──────────────────────────────
+Name │Value                         
+─────┼──────────────────────────────
+alpha│some long text that needs     
+     │wrapping inside the cell      
+─────┴──────────────────────────────
+* ☑ done
+* ☐ todo
+
+screenshot of the bug
+Line after br. struck
