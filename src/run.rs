@@ -1894,7 +1894,7 @@ mod tests {
         for _ in 0..3 {
             press(&mut app, 'j');
         }
-        press(&mut app, 'a');
+        press(&mut app, 'P');
         let key = crate::app::testdata::pr_key("chaoshub", 101);
         let record = |kind: ToolKind, head: &str, data: serde_json::Value| Record {
             version: VERSION,

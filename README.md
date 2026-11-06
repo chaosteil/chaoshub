@@ -417,7 +417,7 @@ for `[keys]`.
 | `confirm` | `y` | Confirms in a confirm popup. `enter` also confirms. |
 | `cancel` | `n` | Cancels a confirm popup. |
 | `filter` | `/` | Types a fuzzy filter for the active tab. |
-| `authors` | `a` | Opens the author picker of the Review or the Team tab. On a tab without an author picker, `a` goes to the `agent` action. |
+| `authors` | `a` | Opens the author picker of the Review or the Team tab. |
 | `toggle_all` | `t` | On the Review and the Team tab, shows every open pull request, not only the ready ones. |
 | `refresh` | `r` | Syncs both lists now. In the pull request detail, syncs the pull request and its stack, and scans its repo. |
 | `help` | `?` | Shows the help overlay with every binding. |
@@ -487,7 +487,7 @@ says why.
 | `browser` | `o` | Opens the pull request in the browser. |
 | `copy_url` | `y` | Copies the pull request URL. |
 | `copy_change_id` | `Y` | Copies the jj change id of the local change that matches the pull request. Hidden when no local change matches. |
-| `agent` | `a` | Opens the detail on the Agent pane. Needs a repo with a `path`. On the Team tab, `a` opens the author picker, so use `a` in the detail there. |
+| `agent` | `P` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
 
 A merge of a stacked pull request includes every entry up to it. The
 `[merge] stack` key sets how chaoshub sends the merge. In `auto` mode,
@@ -539,7 +539,7 @@ needs a `path`.
 
 ### The Agent pane
 
-`a` on a pull request opens the detail on the Agent pane (`6`). The
+`P` on a pull request opens the detail on the Agent pane (`6`). The
 pane has one section per tool. Each section shows the state (`never`,
 `running` with a spinner, `done 5m ago`, or `failed` with the error), the
 model and the head commit of the result. When the head of the pull
@@ -560,8 +560,7 @@ the review runs only says `review runs already`. Different tools, and
 different pull requests, run at the same time.
 
 The pane keys win over the action keys, so `d` (draft) does not work
-while the Agent pane is selected. On the Team tab, `a` opens the author
-picker. There, open the detail with `enter` and press `a` in it.
+while the Agent pane is selected.
 
 While a run goes, the status bar shows the spinner and one item per run,
 for example `agent review #7 · agent ask #7`. The last output line of

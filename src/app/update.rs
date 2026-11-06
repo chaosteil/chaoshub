@@ -253,13 +253,6 @@ fn key(
         return Vec::new();
     }
     if keymap.matches("authors", chord) {
-        // A tab without an author picker leaves the key to the actions:
-        // `a` is also the key of the agent action.
-        if !has_authors(state, tabs)
-            && let Some(cmds) = action_key(state, keymap, tabs, panes, actions, chord)
-        {
-            return cmds;
-        }
         open_authors(state, tabs);
         return Vec::new();
     }
@@ -592,21 +585,6 @@ fn open_popup(
     } else {
         Vec::new()
     }
-}
-
-/// True when the active tab has an author picker with authors.
-fn has_authors(state: &AppState, tabs: &[Box<dyn Tab>]) -> bool {
-    let Some(tab) = tabs.get(state.ui.active) else {
-        return false;
-    };
-    let areas = frame::areas(state);
-    let cx = KeyCx {
-        data: &state.data,
-        target: None,
-        areas: &areas,
-        keys: &keymap::DEFAULT,
-    };
-    !tab.authors(&cx).is_empty()
 }
 
 /// Opens the confirm popup of the action `id` on the pull request `key`.
@@ -3495,13 +3473,13 @@ mod tests {
     }
 
     #[test]
-    fn the_mine_tab_has_no_author_picker_so_a_goes_to_the_agent_action() {
+    fn the_mine_tab_has_no_author_picker() {
         let mut state = mine_state(10);
         key(&mut state, 'a');
         assert_eq!(state.ui.overlays.len(), 0);
         assert_eq!(
             state.ui.status.as_ref().map(|m| m.text.as_str()),
-            Some("the repo has no local path")
+            Some("no authors to pick here")
         );
     }
 
@@ -5428,9 +5406,9 @@ mod tests {
     }
 
     #[test]
-    fn a_opens_the_popup_on_the_agent_pane_and_loads_the_results() {
+    fn shift_p_opens_the_popup_on_the_agent_pane_and_loads_the_results() {
         let (mut state, pr) = agent_state();
-        assert_eq!(key(&mut state, 'a'), vec![Cmd::LoadAgent(pr.clone())]);
+        assert_eq!(key(&mut state, 'P'), vec![Cmd::LoadAgent(pr.clone())]);
         let Some(Overlay {
             state: OverlayState::Popup(popup),
             ..
@@ -5440,16 +5418,16 @@ mod tests {
         };
         assert_eq!(popup.key, pr);
         assert_eq!(PANES[popup.active].id(), "agent");
-        // In another pane, `a` moves the open popup to the Agent pane.
+        // In another pane, `P` moves the open popup to the Agent pane.
         key(&mut state, '1');
-        assert_eq!(key(&mut state, 'a'), vec![Cmd::LoadAgent(pr)]);
+        assert_eq!(key(&mut state, 'P'), vec![Cmd::LoadAgent(pr)]);
         assert_eq!(state.ui.overlays.len(), 1);
     }
 
     #[test]
     fn a_tool_key_starts_one_run_per_tool_and_pull_request() {
         let (mut state, pr) = agent_state();
-        key(&mut state, 'a');
+        key(&mut state, 'P');
         let review = agent_job(&state, &pr, Tool::Review);
         assert_eq!(key(&mut state, 'r'), vec![Cmd::RunAgent(review)]);
         assert!(
@@ -5469,7 +5447,7 @@ mod tests {
     #[test]
     fn the_end_of_a_run_stores_the_result_and_frees_the_tool() {
         let (mut state, pr) = agent_state();
-        key(&mut state, 'a');
+        key(&mut state, 'P');
         key(&mut state, 'r');
         key(&mut state, 'i');
         let done = Msg::AgentFinished {
@@ -5519,7 +5497,7 @@ mod tests {
     #[test]
     fn ask_opens_a_prompt_and_runs_with_the_question() {
         let (mut state, pr) = agent_state();
-        key(&mut state, 'a');
+        key(&mut state, 'P');
         assert_eq!(key(&mut state, 'a'), Vec::new());
         assert!(matches!(
             state.ui.overlays.last().map(|o| &o.state),
@@ -5540,7 +5518,7 @@ mod tests {
     #[test]
     fn p_then_y_runs_the_agent_action_with_the_confirm() {
         let (mut state, pr) = agent_state();
-        key(&mut state, 'a');
+        key(&mut state, 'P');
         let describe = Record {
             tool: "describe".into(),
             data: serde_json::json!({"title": "New title", "description": "- New"}),
