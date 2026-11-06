@@ -140,9 +140,11 @@ pub(crate) enum CellStyle {
     Warn,
     Info,
     Merge,
-    /// A comment body in markdown. `ui` renders it through tui-markdown
-    /// and wraps it to the width of the pane.
+    /// A comment body in markdown. `ui` renders it through the `markup`
+    /// module and wraps it to the width of the pane.
     Markdown,
+    /// A body in HTML that GitHub rendered.
+    Html,
     /// A badge: bold text in the background color on the tone color.
     Badge(Tone),
 }

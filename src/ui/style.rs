@@ -24,7 +24,7 @@ pub(crate) fn cell_style(cell: CellStyle, palette: &Palette) -> Style {
             .add_modifier(Modifier::BOLD);
     }
     let fg = match cell {
-        CellStyle::Normal | CellStyle::Markdown => palette.fg,
+        CellStyle::Normal | CellStyle::Markdown | CellStyle::Html => palette.fg,
         CellStyle::Dim => palette.fg_mute,
         CellStyle::Primary => palette.primary,
         CellStyle::Success => palette.success,

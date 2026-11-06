@@ -8,10 +8,6 @@
 //!
 //! The rows of each source and width stay in a cache, because the ui
 //! renders the bodies again on each frame.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the panes use the module in the next commit")
-)]
 
 use std::cell::RefCell;
 use std::collections::HashMap;

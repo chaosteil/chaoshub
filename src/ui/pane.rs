@@ -9,6 +9,7 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::models::{Cell, CellStyle, Column, PaneModel, Row, TreeNode};
 use crate::bus::Hit;
+use crate::markup::Source;
 use crate::theme::{Palette, Theme, punk};
 use crate::ui::hits::HitMap;
 use crate::ui::list::{self, Window};
@@ -53,17 +54,26 @@ pub(crate) fn render(
     }
 }
 
-/// The display lines of one line of cells. A markdown cell becomes the
-/// rendered body, wrapped to the width after the cells before it. The
+/// The display lines of one line of cells. A markdown or HTML cell becomes
+/// the rendered body, wrapped to the width after the cells before it. The
 /// next rows of the body are indented under it.
 fn expand(cells: &[Cell], width: u16, palette: &Palette) -> Vec<Line<'static>> {
-    let Some(at) = cells.iter().position(|c| c.style == CellStyle::Markdown) else {
+    let Some(at) = cells
+        .iter()
+        .position(|c| matches!(c.style, CellStyle::Markdown | CellStyle::Html))
+    else {
         return vec![style::line(cells, palette)];
     };
     let mut first = style::line(&cells[..at], palette);
     let indent = first.width();
     let body_width = width.saturating_sub(u16::try_from(indent).unwrap_or(u16::MAX));
-    let mut body = markdown::render(&cells[at].text, body_width, palette).into_iter();
+    let text = cells[at].text.as_str();
+    let source = if cells[at].style == CellStyle::Html {
+        Source::Html(text)
+    } else {
+        Source::Markdown(text)
+    };
+    let mut body = markdown::render(source, body_width, palette).into_iter();
     if let Some(line) = body.next() {
         first.spans.extend(line.spans);
     }
