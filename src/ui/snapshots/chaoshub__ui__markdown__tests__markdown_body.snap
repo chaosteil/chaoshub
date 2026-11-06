@@ -6,12 +6,9 @@ expression: "texts(&lines).join(\"\\n\")"
 
 The Transitions::apply call must run
 before prepare.
-
-- one
-- two
+* one
+* two
 
 > quoted text
 
-```rust
 let x = 1;
-```

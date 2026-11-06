@@ -238,7 +238,7 @@ mod tests {
                 "clipboard",
             ],
         ),
-        ("ui", &["domain", "bus", "app", "theme"]),
+        ("ui", &["domain", "bus", "app", "theme", "markup"]),
         (
             "run",
             &[

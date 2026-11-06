@@ -35,7 +35,6 @@ toml = "1.1.8"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = "0.3.23"
-tui-markdown = "0.3.12"
 
 # The dependencies (ratatui, tachyonfx) are optimized in `cargo run`, so
 # the transitions stay fast. The crate itself keeps the dev level.
