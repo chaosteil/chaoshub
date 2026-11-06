@@ -4,6 +4,7 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::bus::MergeProgress;
+use crate::domain::files::{ChangedFile, FileStatus, PrFiles};
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::github::{GithubClient, GithubError, error_message, status_error};
 
@@ -11,6 +12,22 @@ use crate::github::{GithubClient, GithubError, error_message, status_error};
 const MERGE_API_VERSION: &str = "2026-03-10";
 /// The media type of the GitHub REST API.
 const ACCEPT: &str = "application/vnd.github+json";
+/// The largest page of the pull request files endpoint.
+const FILES_PAGE_SIZE: usize = 100;
+/// The number of file pages that [`GithubClient::pr_files`] reads.
+const FILES_PAGES: u32 = 3;
+
+/// One item of `GET .../pulls/{number}/files`.
+#[derive(Debug, Deserialize)]
+struct FileJson {
+    filename: String,
+    status: String,
+    additions: u32,
+    deletions: u32,
+    /// Absent for a binary file or a very large diff.
+    patch: Option<String>,
+    previous_filename: Option<String>,
+}
 
 /// The arguments of an async merge.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,6 +187,63 @@ impl GithubClient {
         tracing::info!(suite_id, "check suite re-requested");
         Ok(())
     }
+
+    /// The changed files of the pull request `key` at the head
+    /// `head_oid`. It reads at most 3 pages of 100 files. When the third
+    /// page is full, the result is `truncated`.
+    pub(crate) async fn pr_files(
+        &self,
+        key: &PrKey,
+        head_oid: &str,
+    ) -> Result<PrFiles, GithubError> {
+        let mut files = Vec::new();
+        let mut truncated = false;
+        for page in 1..=FILES_PAGES {
+            let url = self.url(&format!(
+                "/repos/{}/{}/pulls/{}/files?per_page={FILES_PAGE_SIZE}&page={page}",
+                key.repo.owner, key.repo.name, key.number
+            ));
+            let response = self
+                .send(|http| http.get(&url).header("accept", ACCEPT))
+                .await?;
+            let items: Vec<FileJson> = response.json().await?;
+            let full = items.len() >= FILES_PAGE_SIZE;
+            files.extend(items.into_iter().map(changed_file));
+            if !full {
+                break;
+            }
+            if page == FILES_PAGES {
+                truncated = true;
+            }
+        }
+        Ok(PrFiles {
+            files,
+            truncated,
+            head_oid: head_oid.to_owned(),
+        })
+    }
+}
+
+/// A changed file from one item of the files endpoint. The terminal
+/// renderer does not expand tabs, so each tab of the patch becomes 4
+/// spaces.
+fn changed_file(json: FileJson) -> ChangedFile {
+    ChangedFile {
+        path: json.filename,
+        previous_path: json.previous_filename,
+        status: match json.status.as_str() {
+            "added" => FileStatus::Added,
+            "removed" => FileStatus::Removed,
+            "modified" => FileStatus::Modified,
+            "renamed" => FileStatus::Renamed,
+            "copied" => FileStatus::Copied,
+            "unchanged" => FileStatus::Unchanged,
+            _ => FileStatus::Changed,
+        },
+        additions: json.additions,
+        deletions: json.deletions,
+        patch: json.patch.map(|patch| patch.replace('\t', "    ")),
+    }
 }
 
 /// The merge progress of a merge-async response.
@@ -192,7 +266,7 @@ fn progress(json: MergeJson) -> Result<MergeProgress, GithubError> {
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
@@ -438,6 +512,119 @@ mod tests {
             matches!(&err, GithubError::Http { status: Some(403), message } if message == "This workflow run is not completed"),
             "{err:?}"
         );
+    }
+
+    /// A page of `count` modified files.
+    fn full_page(count: usize) -> Value {
+        Value::Array(
+            (0..count)
+                .map(|n| {
+                    json!({
+                        "filename": format!("src/f{n}.rs"),
+                        "status": "modified",
+                        "additions": 1,
+                        "deletions": 0,
+                        "patch": "@@ -0,0 +1 @@\n+x"
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    /// Answers the files page `page` of #42 with `body`.
+    async fn mount_files_page(server: &MockServer, page: &str, body: Value) {
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/deploy/pulls/42/files"))
+            .and(query_param("per_page", "100"))
+            .and(query_param("page", page))
+            .and(header("accept", "application/vnd.github+json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn pr_files_reads_one_page() {
+        let server = MockServer::start().await;
+        let body: Value = serde_json::from_str(include_str!("testdata/pr_files.json")).unwrap();
+        mount_files_page(&server, "1", body).await;
+
+        let files = client(&server).pr_files(&key(), "abc123").await.unwrap();
+
+        assert!(!files.truncated);
+        assert_eq!(files.head_oid, "abc123");
+        let summary: Vec<_> = files
+            .files
+            .iter()
+            .map(|f| {
+                (
+                    f.path.as_str(),
+                    f.previous_path.as_deref(),
+                    f.status,
+                    f.additions,
+                    f.deletions,
+                    f.patch.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("docs/usage.md", None, FileStatus::Added, 3, 0, true),
+                ("old.txt", None, FileStatus::Removed, 0, 2, true),
+                (
+                    "src/app/panes/files.rs",
+                    None,
+                    FileStatus::Modified,
+                    2,
+                    1,
+                    true
+                ),
+                (
+                    "src/main.rs",
+                    Some("src/start.rs"),
+                    FileStatus::Renamed,
+                    1,
+                    1,
+                    true
+                ),
+                ("assets/logo.png", None, FileStatus::Modified, 0, 0, false),
+            ]
+        );
+        assert_eq!(
+            files.files[2].patch.as_deref(),
+            Some(
+                "@@ -1,3 +1,4 @@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new\");\n+    println!(\"more\");\n }\n\\ No newline at end of file"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn pr_files_stops_after_a_short_page() {
+        let server = MockServer::start().await;
+        mount_files_page(&server, "1", full_page(100)).await;
+        mount_files_page(&server, "2", full_page(7)).await;
+
+        let files = client(&server).pr_files(&key(), "abc123").await.unwrap();
+
+        assert_eq!(files.files.len(), 107);
+        assert!(!files.truncated);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn pr_files_is_truncated_after_three_full_pages() {
+        let server = MockServer::start().await;
+        for page in ["1", "2", "3"] {
+            mount_files_page(&server, page, full_page(100)).await;
+        }
+
+        let files = client(&server).pr_files(&key(), "abc123").await.unwrap();
+
+        assert_eq!(files.files.len(), 300);
+        assert!(files.truncated);
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
     }
 
     #[test]

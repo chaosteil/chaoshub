@@ -6,6 +6,7 @@
 
 pub(crate) mod check;
 pub(crate) mod detail;
+pub(crate) mod files;
 pub(crate) mod keys;
 pub(crate) mod local;
 pub(crate) mod matching;
