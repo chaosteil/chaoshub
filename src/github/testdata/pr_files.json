@@ -1,0 +1,62 @@
+[
+  {
+    "sha": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+    "filename": "docs/usage.md",
+    "status": "added",
+    "additions": 3,
+    "deletions": 0,
+    "changes": 3,
+    "blob_url": "https://github.com/acme/deploy/blob/abc123/docs/usage.md",
+    "raw_url": "https://github.com/acme/deploy/raw/abc123/docs/usage.md",
+    "contents_url": "https://api.github.com/repos/acme/deploy/contents/docs/usage.md?ref=abc123",
+    "patch": "@@ -0,0 +1,3 @@\n+# Usage\n+\n+Run the tool."
+  },
+  {
+    "sha": "0000000000000000000000000000000000000000",
+    "filename": "old.txt",
+    "status": "removed",
+    "additions": 0,
+    "deletions": 2,
+    "changes": 2,
+    "blob_url": "https://github.com/acme/deploy/blob/abc123/old.txt",
+    "raw_url": "https://github.com/acme/deploy/raw/abc123/old.txt",
+    "contents_url": "https://api.github.com/repos/acme/deploy/contents/old.txt?ref=abc123",
+    "patch": "@@ -1,2 +0,0 @@\n-first\n-second"
+  },
+  {
+    "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+    "filename": "src/app/panes/files.rs",
+    "status": "modified",
+    "additions": 2,
+    "deletions": 1,
+    "changes": 3,
+    "blob_url": "https://github.com/acme/deploy/blob/abc123/src/app/panes/files.rs",
+    "raw_url": "https://github.com/acme/deploy/raw/abc123/src/app/panes/files.rs",
+    "contents_url": "https://api.github.com/repos/acme/deploy/contents/src/app/panes/files.rs?ref=abc123",
+    "patch": "@@ -1,3 +1,4 @@\n fn main() {\n-\tprintln!(\"old\");\n+\tprintln!(\"new\");\n+\tprintln!(\"more\");\n }\n\\ No newline at end of file"
+  },
+  {
+    "sha": "b2c3d4e5f60718293a4b5c6d7e8f901234567890",
+    "filename": "src/main.rs",
+    "status": "renamed",
+    "additions": 1,
+    "deletions": 1,
+    "changes": 2,
+    "blob_url": "https://github.com/acme/deploy/blob/abc123/src/main.rs",
+    "raw_url": "https://github.com/acme/deploy/raw/abc123/src/main.rs",
+    "contents_url": "https://api.github.com/repos/acme/deploy/contents/src/main.rs?ref=abc123",
+    "patch": "@@ -1 +1 @@\n-fn old() {}\n+fn new() {}",
+    "previous_filename": "src/start.rs"
+  },
+  {
+    "sha": "c3d4e5f60718293a4b5c6d7e8f90123456789012",
+    "filename": "assets/logo.png",
+    "status": "modified",
+    "additions": 0,
+    "deletions": 0,
+    "changes": 0,
+    "blob_url": "https://github.com/acme/deploy/blob/abc123/assets/logo.png",
+    "raw_url": "https://github.com/acme/deploy/raw/abc123/assets/logo.png",
+    "contents_url": "https://api.github.com/repos/acme/deploy/contents/assets/logo.png?ref=abc123"
+  }
+]
