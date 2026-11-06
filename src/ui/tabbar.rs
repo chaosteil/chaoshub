@@ -89,7 +89,7 @@ mod tests {
         };
         let mut hits = HitMap::default();
         render(&model, area, &mut buf, &testdata::punk(), &mut hits);
-        // `◤ 1 MINE ◢  2 TEAM  `: the first label is 10 cells wide.
+        // `◢ 1 MINE ◤◢ 2 TEAM ◤`: the first label is 10 cells wide.
         assert_eq!(hits.at(0, 0), Some(Hit::Tab(0)));
         assert_eq!(hits.at(9, 0), Some(Hit::Tab(0)));
         assert_eq!(hits.at(10, 0), Some(Hit::Tab(1)));
@@ -126,13 +126,21 @@ mod tests {
     }
 
     #[test]
-    fn punk_active_tab_is_angled_and_red() {
+    fn punk_active_tab_is_a_blue_card() {
         let theme = testdata::punk();
+        let p = theme.palette;
         let buf = draw(100, 0, &theme);
         let text = row(&buf);
-        assert!(text.starts_with("◤ 1 MINE ◢  2 TEAM  "), "{text}");
-        assert_eq!(buf[(2, 0)].bg, theme.palette.primary);
-        assert_eq!(buf[(2, 0)].fg, theme.palette.bg);
-        assert_eq!(buf[(12, 0)].bg, theme.palette.bg);
+        assert!(text.starts_with("◢ 1 MINE ◤◢ 2 TEAM ◤"), "{text}");
+        assert_eq!(buf[(0, 0)].fg, p.primary);
+        assert_eq!(buf[(2, 0)].bg, p.primary);
+        assert_eq!(buf[(2, 0)].fg, p.bg);
+        assert_eq!(buf[(9, 0)].fg, p.primary);
+        // The other tab is a grey card with black text.
+        assert_eq!(buf[(10, 0)].fg, p.fg_mute);
+        assert_eq!(buf[(10, 0)].bg, p.bg);
+        assert_eq!(buf[(12, 0)].bg, p.fg_mute);
+        assert_eq!(buf[(12, 0)].fg, p.bg);
+        assert_eq!(buf[(19, 0)].fg, p.fg_mute);
     }
 }

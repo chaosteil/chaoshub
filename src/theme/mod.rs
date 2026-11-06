@@ -232,32 +232,23 @@ impl Theme {
     }
 
     /// The spans of one tab with its label. The active tab stands out.
-    /// A punk tab is angled, `◤ label ◢`, and the active one is filled
-    /// with the primary color. The other punk tabs are plain.
+    /// A punk tab is a slanted card, `◢ label ◤`: the active one has
+    /// black bold text on the primary color, the others have black text
+    /// on grey.
     pub(crate) fn tab(&self, label: &str, active: bool) -> Vec<Span<'static>> {
         let p = &self.palette;
         if self.skin == Skin::Punk {
-            let edge = Style::new().bg(p.bg).fg(p.primary);
-            return if active {
-                vec![
-                    Span::styled("◤", edge),
-                    Span::styled(
-                        label.to_owned(),
-                        Style::new()
-                            .bg(p.primary)
-                            .fg(p.bg)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled("◢", edge),
-                ]
+            let (card, text) = if active {
+                (p.primary, Style::new().add_modifier(Modifier::BOLD))
             } else {
-                let style = Style::new().bg(p.bg).fg(p.fg_dim);
-                vec![
-                    Span::styled(" ", style),
-                    Span::styled(label.to_owned(), style),
-                    Span::styled(" ", style),
-                ]
+                (p.fg_mute, Style::new())
             };
+            let edge = Style::new().bg(p.bg).fg(card);
+            return vec![
+                Span::styled("◢", edge),
+                Span::styled(label.to_owned(), text.bg(card).fg(p.bg)),
+                Span::styled("◤", edge),
+            ];
         }
         if active {
             let style = Style::new().bg(p.surface).fg(p.fg);
@@ -431,12 +422,20 @@ mod tests {
                 .map(|s| s.content.to_string())
                 .collect::<String>()
         };
-        assert_eq!(text(theme.tab(" MINE ", true)), "◤ MINE ◢");
-        assert_eq!(text(theme.tab(" TEAM ", false)), "  TEAM  ");
-        assert_eq!(
-            theme.tab(" MINE ", true)[1].style.bg,
-            Some(theme.palette.primary)
-        );
+        let p = theme.palette;
+        assert_eq!(text(theme.tab(" MINE ", true)), "◢ MINE ◤");
+        assert_eq!(text(theme.tab(" TEAM ", false)), "◢ TEAM ◤");
+        let active = theme.tab(" MINE ", true);
+        assert_eq!(active[1].style.bg, Some(p.primary));
+        assert_eq!(active[1].style.fg, Some(p.bg));
+        assert!(active[1].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(active[0].style.fg, Some(p.primary));
+        assert_eq!(active[0].style.bg, Some(p.bg));
+        let other = theme.tab(" TEAM ", false);
+        assert_eq!(other[1].style.bg, Some(p.fg_mute));
+        assert_eq!(other[1].style.fg, Some(p.bg));
+        assert_eq!(other[2].style.fg, Some(p.fg_mute));
+        assert_eq!(other[2].style.bg, Some(p.bg));
         assert_eq!(theme.tab_title("mine"), "MINE");
     }
 
