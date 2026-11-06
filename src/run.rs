@@ -1921,6 +1921,40 @@ mod tests {
         insta::assert_snapshot!(screen(&mut app));
     }
 
+    /// The popup on #101 with its changed files, on the files pane, with
+    /// the nested file `src/app/panes/files.rs` open.
+    fn files_app(width: u16, height: u16) -> App {
+        let mut app = popup_app(width, height);
+        let key = crate::app::testdata::pr_key("chaoshub", 101);
+        let mut files = crate::app::testdata::files();
+        files.head_oid = "oid101".into();
+        let observed = crate::domain::observed::Observed {
+            value: files,
+            observed_at: crate::domain::test_time(),
+        };
+        app.update(Msg::FilesLoaded(key, Ok(observed)));
+        press(&mut app, '5');
+        for _ in 0..8 {
+            press(&mut app, 'j');
+        }
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(enter));
+        app
+    }
+
+    #[test]
+    fn popup_files_100() {
+        insta::assert_snapshot!(screen(&mut files_app(100, 30)));
+    }
+
+    #[test]
+    fn popup_files_160() {
+        insta::assert_snapshot!(screen(&mut files_app(160, 40)));
+    }
+
     #[test]
     fn popup_stale_detail_160() {
         let mut app = popup_app(160, 40);
