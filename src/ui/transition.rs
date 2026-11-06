@@ -19,6 +19,9 @@
 //!   60 ms. The old row loses its band at once. Not on the first frame of
 //!   a list, a pane or a picker.
 //! - Expired status message: `fade_to_fg` toward the status bar grey.
+//! - Action success (`FxKey::Flash`): the list row of the pull request
+//!   fades from the primary color to its background in 200 ms. Not when
+//!   the row is out of view or under an overlay.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -26,13 +29,16 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::{Offset, Rect};
+use ratatui::style::Color;
 use tachyonfx::{
-    EffectManager, EffectTimer, Interpolation, Motion, RefCount, RefRect, fx, ref_count,
+    EffectManager, EffectTimer, Interpolatable, Interpolation, Motion, RefCount, RefRect, fx,
+    ref_count,
 };
 
 use crate::app::layout::Areas;
-use crate::app::models::{FrameModel, OverlayContent, PaneModel, TabBarModel};
+use crate::app::models::{FrameModel, OverlayContent, PaneModel, RowItem, TabBarModel};
 use crate::bus::{Hit, OverlayKind, UiEvent};
+use crate::domain::keys::PrKey;
 use crate::theme::{Skin, Theme, ThemeKind};
 use crate::ui::hits::HitMap;
 use crate::ui::list::Window;
@@ -47,6 +53,8 @@ const STATUS_FADE_MS: u64 = 300;
 const TAB_GLIDE_MS: u64 = 120;
 /// The duration of the band wipe, in milliseconds.
 const BAND_WIPE_MS: u64 = 60;
+/// The duration of the row flash after an action, in milliseconds.
+const ROW_FLASH_MS: u64 = 200;
 /// The length of the gradient at the edge of a sliding overlay.
 const SLIDE_GRADIENT: u16 = 3;
 /// The frame deadline of the event loop while a transition runs.
@@ -62,6 +70,7 @@ enum FxKey {
     Tab,
     PaneTab,
     Band,
+    Flash,
     Scroll,
     Status,
     Overlay(usize),
@@ -87,6 +96,7 @@ fn key(event: &UiEvent) -> FxKey {
     match event {
         UiEvent::TabChanged { .. } => FxKey::Tab,
         UiEvent::PaneTabChanged { .. } => FxKey::PaneTab,
+        UiEvent::RowFlash(_) => FxKey::Flash,
         UiEvent::OverlayOpened(kind) | UiEvent::OverlayClosed(kind) => FxKey::Overlay(slot(*kind)),
         UiEvent::ScrollTo { .. } => FxKey::Scroll,
         UiEvent::StatusExpired => FxKey::Status,
@@ -207,6 +217,8 @@ pub(crate) struct Transitions {
     pending_pane: Option<(usize, usize)>,
     /// The view and the cursor of the last `prepare`.
     last_cursor: Option<(CursorView, usize)>,
+    /// The pull request of a row flash that `prepare` starts.
+    pending_flash: Option<PrKey>,
     /// The list rows during a scroll.
     rows: RefCount<Buffer>,
     /// The offsets of the running scroll.
@@ -233,6 +245,7 @@ impl Transitions {
             pending_tab: None,
             pending_pane: None,
             last_cursor: None,
+            pending_flash: None,
             rows: empty(),
             scroll: None,
             status_pending: false,
@@ -264,6 +277,7 @@ impl Transitions {
             match event {
                 UiEvent::TabChanged { from, to } => self.pending_tab = Some((from, to)),
                 UiEvent::PaneTabChanged { from, to } => self.pending_pane = Some((from, to)),
+                UiEvent::RowFlash(pr) => self.pending_flash = Some(pr),
                 UiEvent::OverlayOpened(kind) => self.overlay_slide(key, kind, true),
                 UiEvent::OverlayClosed(kind) => self.overlay_slide(key, kind, false),
                 UiEvent::ScrollTo { from, to, .. } => self.scroll(key, from, to),
@@ -455,6 +469,45 @@ impl Transitions {
         Some(copy(&buf, row))
     }
 
+    /// The background of the cells of `row` fades from `from` to the
+    /// background of the frame in `ms`. The text keeps its color, and a
+    /// row with the band fades toward the band.
+    fn row_fade(&mut self, key: FxKey, row: Rect, from: Color, ms: u64) {
+        let behind = self.theme.palette.bg;
+        let timer = Self::timer(Duration::from_millis(ms));
+        let effect = fx::effect_fn_buf(row, timer, move |row, cx, buf| {
+            let alpha = cx.alpha().clamp(0.0, 1.0);
+            for (x, y) in positions(*row) {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    let target = if cell.bg == Color::Reset {
+                        behind
+                    } else {
+                        cell.bg
+                    };
+                    cell.set_bg(from.lerp(&target, alpha));
+                }
+            }
+        });
+        self.manager.add_unique_effect(key, effect);
+    }
+
+    /// The screen row of the list row of `pr`. `None` when the row is out
+    /// of view, or when an overlay is open over the list.
+    fn list_row(model: &FrameModel, areas: &Areas, pr: &PrKey) -> Option<Rect> {
+        if model.overlays.iter().any(|o| !o.closing) {
+            return None;
+        }
+        let list = &model.list;
+        let index = list
+            .rows
+            .iter()
+            .position(|row| matches!(&row.item, RowItem::Pr(r) if r.key == *pr))?;
+        let body = list_areas(model, areas).body;
+        let offset = index.checked_sub(list.scroll)?;
+        let offset = u16::try_from(offset).ok().filter(|&o| o < body.height)?;
+        Some(Rect::new(body.x, body.y + offset, body.width, 1))
+    }
+
     /// An overlay slides in or out of its area.
     fn overlay_slide(&mut self, key: FxKey, kind: OverlayKind, open: bool) {
         let duration = match kind {
@@ -540,6 +593,11 @@ impl Transitions {
         {
             self.glide(FxKey::Tab, glide);
         }
+        if let Some(pr) = self.pending_flash.take()
+            && let Some(row) = Self::list_row(model, areas, &pr)
+        {
+            self.row_fade(FxKey::Flash, row, self.theme.palette.primary, ROW_FLASH_MS);
+        }
         let current = cursor_view(model);
         if let (Some((view, cursor)), Some((last_view, last))) = (&current, &self.last_cursor)
             && view == last_view
@@ -624,6 +682,7 @@ impl Transitions {
         self.manager = EffectManager::default();
         self.pending_tab = None;
         self.pending_pane = None;
+        self.pending_flash = None;
         self.scroll = None;
         self.status_pending = false;
     }
@@ -1376,6 +1435,80 @@ mod tests {
             let end = draw_view(&mut terminal, &mut fx, &after, 60);
             assert_eq!(band(&end, row.y, x0, x1), vec![true; width], "{row:?}");
         }
+    }
+
+    /// The key of the pull request of the mine list row `index`.
+    fn row_key(index: usize) -> PrKey {
+        match &testdata::frame().list.rows[index].item {
+            RowItem::Pr(pr) => pr.key.clone(),
+            item => panic!("not a pull request row: {item:?}"),
+        }
+    }
+
+    #[test]
+    fn a_row_flashes_after_an_action() {
+        let p = testdata::pierre().palette;
+        let model = list_at(1);
+        let bg = |buf: &Buffer, index: usize| buf[(10, list_y(index))].bg;
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut fx = new();
+        let plain = draw_view(&mut terminal, &mut fx, &model, 0);
+        fx.apply(vec![UiEvent::RowFlash(row_key(2))]);
+        let start = draw_view(&mut terminal, &mut fx, &model, 0);
+        assert!(fx.active());
+        assert_eq!(bg(&start, 2), p.primary);
+        assert_eq!(
+            start[(10, list_y(2))].fg,
+            plain[(10, list_y(2))].fg,
+            "the text keeps its color"
+        );
+        let middle = draw_view(&mut terminal, &mut fx, &model, 100);
+        assert_ne!(bg(&middle, 2), p.primary);
+        assert_ne!(bg(&middle, 2), bg(&plain, 2));
+        let end = draw_view(&mut terminal, &mut fx, &model, 100);
+        assert_eq!(bg(&end, 2), bg(&plain, 2));
+        draw_view(&mut terminal, &mut fx, &model, 16);
+        assert!(!fx.active());
+        // On the cursor row, the flash fades toward the band.
+        fx.apply(vec![UiEvent::RowFlash(row_key(1))]);
+        draw_view(&mut terminal, &mut fx, &model, 0);
+        let end = draw_view(&mut terminal, &mut fx, &model, 200);
+        assert_eq!(bg(&end, 1), p.surface);
+    }
+
+    #[test]
+    fn a_second_flash_retargets_and_hidden_rows_do_not_flash() {
+        let p = testdata::pierre().palette;
+        let model = list_at(1);
+        let bg = |buf: &Buffer, index: usize| buf[(10, list_y(index))].bg;
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut fx = new();
+        let plain = draw_view(&mut terminal, &mut fx, &model, 0);
+        fx.apply(vec![UiEvent::RowFlash(row_key(2))]);
+        draw_view(&mut terminal, &mut fx, &model, 0);
+        draw_view(&mut terminal, &mut fx, &model, 50);
+        fx.apply(vec![UiEvent::RowFlash(row_key(3))]);
+        draw_view(&mut terminal, &mut fx, &model, 0);
+        let start = draw_view(&mut terminal, &mut fx, &model, 0);
+        assert_eq!(bg(&start, 3), p.primary, "the new row flashes");
+        assert_eq!(bg(&start, 2), bg(&plain, 2), "the old flash stops");
+        let mut fx = new();
+        let with_popup = testdata::with_overlay(testdata::popup_overlay());
+        draw_view(&mut terminal, &mut fx, &with_popup, 0);
+        fx.apply(vec![UiEvent::RowFlash(row_key(2))]);
+        draw_view(&mut terminal, &mut fx, &with_popup, 0);
+        assert!(!fx.active(), "the row is under the popup");
+        let mut scrolled = list_at(4);
+        scrolled.list.scroll = 3;
+        draw_view(&mut terminal, &mut fx, &scrolled, 0);
+        fx.apply(vec![UiEvent::RowFlash(row_key(2))]);
+        draw_view(&mut terminal, &mut fx, &scrolled, 0);
+        assert!(!fx.active(), "the row is above the window");
+        let mut fx = Transitions::new(false, 160).with_theme(testdata::pierre());
+        fx.apply(vec![UiEvent::RowFlash(row_key(2))]);
+        let buf = draw_view(&mut terminal, &mut fx, &model, 0);
+        assert!(!fx.active());
+        assert_eq!(bg(&buf, 2), bg(&plain, 2), "nothing with animations off");
     }
 
     #[test]
