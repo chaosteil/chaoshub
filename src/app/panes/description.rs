@@ -6,17 +6,28 @@
 //!
 //! The reviews, the threads and the activity come from the conversation
 //! detail, which loads in the background. The pane does not start a load.
+//!
+//! Between the block and the body, the pane lists the codeview comments of
+//! the head that went to GitHub not yet. `J` and `K` move the comment
+//! cursor, and `space` marks the comment of the cursor. A comment on a
+//! commit message shows dim and cannot be marked: GitHub takes no such
+//! comment. A dim line counts the comments of an older push. Without
+//! comments, the pane shows no section.
+
+use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 
 use crate::app::age::age;
 use crate::app::models::{Cell, CellStyle, PaneModel, Tone};
+use crate::app::panes::agent::head;
 use crate::app::panes::checks::failed;
 use crate::app::panes::{Pane, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx};
-use crate::bus::{KeyChord, Size, Target};
+use crate::bus::{KeyChord, KeyCode, Size, Target};
 use crate::domain::check::{Check, CheckConclusion, CheckStatus};
+use crate::domain::codeview::Comment;
 use crate::domain::detail::{PrDetail, ReviewState};
 use crate::domain::pr::{
     CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest, ReviewDecision,
@@ -24,6 +35,16 @@ use crate::domain::pr::{
 
 /// The description pane.
 pub(crate) struct DescriptionPane;
+
+/// The own state of the description pane: the comment cursor and the
+/// marked comments, by comment id. A load of the comments keeps them.
+#[derive(Debug, Default)]
+pub(crate) struct CodeviewState {
+    /// The id of the comment of the cursor. `None` puts the cursor on
+    /// the first comment that can go to GitHub.
+    pub cursor: Option<String>,
+    pub marked: BTreeSet<String>,
+}
 
 impl Pane for DescriptionPane {
     fn id(&self) -> &'static str {
@@ -43,10 +64,13 @@ impl Pane for DescriptionPane {
     }
 
     fn init_state(&self) -> PaneState {
-        PaneState::default()
+        PaneState {
+            ext: Box::new(CodeviewState::default()),
+            ..PaneState::default()
+        }
     }
 
-    fn model(&self, cx: &KeyCx<'_>, _ps: &PaneState, _size: Size) -> PaneModel {
+    fn model(&self, cx: &KeyCx<'_>, ps: &PaneState, size: Size) -> PaneModel {
         let Some(Target::Pr { pr, .. }) = cx.target else {
             return PaneModel::Lines {
                 lines: Vec::new(),
@@ -61,15 +85,185 @@ impl Pane for DescriptionPane {
         } else {
             vec![cell(body, CellStyle::Markdown)]
         };
+        let empty = CodeviewState::default();
+        let state = ps.ext.downcast_ref::<CodeviewState>().unwrap_or(&empty);
         let mut lines = readiness(cx, pr);
+        let section = codeview_section(cx, pr, state, usize::from(size.width));
+        if !section.is_empty() {
+            lines.push(Vec::new());
+            lines.extend(section);
+        }
         lines.push(Vec::new());
         lines.push(line);
         PaneModel::Lines { lines, wrap: true }
     }
 
-    fn handle_key(&self, _key: KeyChord, _cx: &KeyCx<'_>, _ps: &mut PaneState) -> Option<Handled> {
-        None
+    /// The comment keys, while the section lists a comment that can go to
+    /// GitHub: `J` and `K` move the comment cursor, `space` marks or
+    /// unmarks the comment of the cursor.
+    fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
+        if !key.mods.is_empty() {
+            return None;
+        }
+        let Some(Target::Pr { pr, .. }) = cx.target else {
+            return None;
+        };
+        let comments = sendable(cx, pr);
+        if comments.is_empty() {
+            return None;
+        }
+        let state = ps.ext.downcast_mut::<CodeviewState>()?;
+        let at = cursor_index(state, &comments);
+        match key.code {
+            KeyCode::Char('J') => {
+                let to = (at + 1).min(comments.len() - 1);
+                state.cursor = Some(comments[to].id.clone());
+            }
+            KeyCode::Char('K') => {
+                state.cursor = Some(comments[at.saturating_sub(1)].id.clone());
+            }
+            KeyCode::Char(' ') => {
+                let id = &comments[at].id;
+                if !state.marked.remove(id) {
+                    state.marked.insert(id.clone());
+                }
+            }
+            _ => return None,
+        }
+        Some(Handled {
+            changed: true,
+            ..Handled::default()
+        })
     }
+}
+
+/// The unsent codeview comments of the head of `pr`. Empty before the
+/// load and after a failed load.
+fn comments<'a>(cx: &KeyCx<'a>, pr: &PullRequest) -> &'a [Comment] {
+    match cx.data.codeview.get(&pr.key) {
+        Some(Ok(comments)) => comments.current(&head(cx.data, pr)),
+        _ => &[],
+    }
+}
+
+/// The unsent comments of the head of `pr` that can go to GitHub.
+pub(crate) fn sendable<'a>(cx: &KeyCx<'a>, pr: &PullRequest) -> Vec<&'a Comment> {
+    comments(cx, pr)
+        .iter()
+        .filter(|comment| comment.sendable())
+        .collect()
+}
+
+/// The index of the cursor in `comments`: the comment of the cursor id,
+/// else the first comment.
+fn cursor_index(state: &CodeviewState, comments: &[&Comment]) -> usize {
+    state
+        .cursor
+        .as_ref()
+        .and_then(|id| comments.iter().position(|comment| &comment.id == id))
+        .unwrap_or(0)
+}
+
+/// The lines of the codeview section: the header, one row per comment,
+/// and the line of the older pushes. Empty without comments. A failed
+/// load shows the header and the error.
+fn codeview_section(
+    cx: &KeyCx<'_>,
+    pr: &PullRequest,
+    state: &CodeviewState,
+    width: usize,
+) -> Vec<Vec<Cell>> {
+    let header = |count: usize| {
+        vec![
+            cell("Codeview comments", CellStyle::Primary),
+            cell(format!(" ({count} unsent)"), CellStyle::Dim),
+            cell(" [J/K] move · [space] mark · [S] send", CellStyle::Dim),
+        ]
+    };
+    let comments = match cx.data.codeview.get(&pr.key) {
+        None => return Vec::new(),
+        Some(Err(err)) => return vec![header(0), vec![cell(err.clone(), CellStyle::Danger)]],
+        Some(Ok(comments)) => comments,
+    };
+    let head = head(cx.data, pr);
+    let current = comments.current(&head);
+    let older = comments.older(&head);
+    if current.is_empty() && older == 0 {
+        return Vec::new();
+    }
+    let sendable: Vec<&Comment> = current.iter().filter(|c| c.sendable()).collect();
+    let cursor = sendable
+        .get(cursor_index(state, &sendable))
+        .map(|comment| comment.id.as_str());
+    let mut lines = vec![header(current.len())];
+    for comment in current {
+        lines.push(row(comment, cursor, state, width));
+    }
+    if older > 0 {
+        let noun = if older == 1 { "comment" } else { "comments" };
+        lines.push(vec![cell(
+            format!("{older} {noun} on an older push. Open codeview (v) to see them."),
+            CellStyle::Dim,
+        )]);
+    }
+    lines
+}
+
+/// One row of a comment: the cursor, the mark, the place and the first
+/// line of the body, cut to `width`. A commit message comment shows dim.
+fn row(comment: &Comment, cursor: Option<&str>, state: &CodeviewState, width: usize) -> Vec<Cell> {
+    let pointer = if cursor == Some(comment.id.as_str()) {
+        "> "
+    } else {
+        "  "
+    };
+    if !comment.sendable() {
+        let text = format!("{pointer}[-] {} {}", comment.place(), comment.summary());
+        return vec![cell(cut(&text, width), CellStyle::Dim)];
+    }
+    let mark = if state.marked.contains(&comment.id) {
+        "[x] "
+    } else {
+        "[ ] "
+    };
+    let lead = format!("{pointer}{mark}");
+    let place = format!("{} ", comment.place());
+    let used = display_width(&lead) + display_width(&place);
+    let rest = width.saturating_sub(used);
+    if rest == 0 {
+        return vec![cell(cut(&format!("{lead}{place}"), width), CellStyle::Info)];
+    }
+    vec![
+        cell(lead, CellStyle::Primary),
+        cell(place, CellStyle::Info),
+        cell(cut(comment.summary(), rest), CellStyle::Normal),
+    ]
+}
+
+/// `text` cut to `width` display columns. A cut text ends with `…`.
+fn cut(text: &str, width: usize) -> String {
+    if display_width(text) <= width {
+        return text.to_owned();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = display_width(c.encode_utf8(&mut [0; 4]));
+        if used + w + 1 > width {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    if width > 0 {
+        out.push('…');
+    }
+    out
+}
+
+/// The display width of `text`.
+fn display_width(text: &str) -> usize {
+    textwrap::core::display_width(text)
 }
 
 /// The three lines of the readiness block: the verdict, the signals and
