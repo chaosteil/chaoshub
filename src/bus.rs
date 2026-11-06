@@ -17,6 +17,7 @@ pub(crate) use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers}
 
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;
+use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::{LocalMatch, LocalState};
 use crate::domain::observed::Observed;
@@ -386,6 +387,10 @@ pub(crate) enum Msg {
     /// request from GitHub. A `DetailLoaded` of the same key follows.
     DetailLoading(PrKey),
     DetailLoaded(PrKey, Result<Observed<PrDetail>, SyncError>),
+    /// The detail worker starts to read the changed files of a pull
+    /// request from GitHub. A `FilesLoaded` of the same key follows.
+    FilesLoading(PrKey),
+    FilesLoaded(PrKey, Result<Observed<PrFiles>, SyncError>),
     JjScanned {
         repo: RepoKey,
         state: Observed<LocalState>,

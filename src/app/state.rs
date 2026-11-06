@@ -22,6 +22,7 @@ use crate::bus::{
     SyncError, TargetKey, UiEvent,
 };
 use crate::domain::detail::PrDetail;
+use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
@@ -59,6 +60,13 @@ pub(crate) struct AppData {
     /// The reason of the last failed detail load of each pull request,
     /// until a load succeeds.
     pub detail_errors: BTreeMap<PrKey, String>,
+    pub files: BTreeMap<PrKey, Observed<PrFiles>>,
+    /// The pull requests whose changed files the detail worker reads
+    /// from GitHub now.
+    pub files_loading: BTreeSet<PrKey>,
+    /// The reason of the last failed files load of each pull request,
+    /// until a load succeeds.
+    pub files_errors: BTreeMap<PrKey, String>,
     pub repos: BTreeMap<RepoKey, Repo>,
     /// The newest sync time of the cached pull requests at startup: the
     /// age of the cache. `None` when the cache was empty.
@@ -123,13 +131,14 @@ pub(crate) struct PrefetchBatch {
 }
 
 impl AppData {
-    /// True while a sync, a prefetch batch or a conversation load runs.
-    /// The status bar then shows a spinner.
+    /// True while a sync, a prefetch batch, a conversation load or a files
+    /// load runs. The status bar then shows a spinner.
     pub(crate) fn busy(&self) -> bool {
         !self.sync.pending.is_empty()
             || !self.sync.running.is_empty()
             || self.prefetch.is_some()
             || !self.details_loading.is_empty()
+            || !self.files_loading.is_empty()
     }
 
     /// True while a pane of any action is open for `key`.
@@ -410,6 +419,9 @@ impl AppState {
                 details: BTreeMap::new(),
                 details_loading: BTreeSet::new(),
                 detail_errors: BTreeMap::new(),
+                files: BTreeMap::new(),
+                files_loading: BTreeSet::new(),
+                files_errors: BTreeMap::new(),
                 repos: BTreeMap::new(),
                 cache_at: None,
                 synced: HashMap::new(),

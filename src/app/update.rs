@@ -33,6 +33,7 @@ use crate::bus::{
 };
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;
+use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::{Observed, apply_newer};
@@ -57,6 +58,10 @@ pub(crate) fn update_with(
 
 /// Applies one message to the state, with the tabs of `tabs`, the panes
 /// of `panes` and the actions of `actions`.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the dispatch has one arm per message"
+)]
 pub(crate) fn update_full(
     state: &mut AppState,
     keymap: &Keymap,
@@ -122,6 +127,17 @@ pub(crate) fn update_full(
                 back_online(state);
             }
             if detail_loaded(state, key, result) {
+                after_change(state, tabs)
+            } else {
+                Vec::new()
+            }
+        }
+        Msg::FilesLoading(key) => files_loading(state, key),
+        Msg::FilesLoaded(key, result) => {
+            if result.is_ok() {
+                back_online(state);
+            }
+            if files_loaded(state, key, result) {
                 after_change(state, tabs)
             } else {
                 Vec::new()
@@ -1339,6 +1355,15 @@ fn detail_loading(state: &mut AppState, key: PrKey) -> Vec<Cmd> {
     Vec::new()
 }
 
+/// The detail worker started to read the changed files of `key`. It runs
+/// until `FilesLoaded`.
+fn files_loading(state: &mut AppState, key: PrKey) -> Vec<Cmd> {
+    if state.data.files_loading.insert(key) {
+        state.bump();
+    }
+    Vec::new()
+}
+
 /// A page of a sync of one scope, or its end: the pull requests go into
 /// the data under the freshness rule. After a complete full sync (`seen`
 /// is `Some`), the open pull requests of the scope that the sync did not
@@ -1469,6 +1494,41 @@ fn detail_loaded(
         Err(err) => {
             let reason = error_text(&err);
             data.detail_errors.insert(key, reason.clone()) != Some(reason)
+        }
+    };
+    if changed {
+        state.bump();
+    }
+    changed
+}
+
+/// The changed files of a pull request, under the freshness rule, or the
+/// reason why they did not load. Their load ends. True when it changed
+/// the data.
+fn files_loaded(
+    state: &mut AppState,
+    key: PrKey,
+    result: Result<Observed<PrFiles>, SyncError>,
+) -> bool {
+    if state.data.files_loading.remove(&key) {
+        state.bump();
+    }
+    let data = &mut state.data;
+    let changed = match result {
+        Ok(files) => {
+            let cleared = data.files_errors.remove(&key).is_some();
+            let applied = match data.files.get_mut(&key) {
+                None => {
+                    data.files.insert(key, files);
+                    true
+                }
+                Some(current) => apply(current, files, &key, "files"),
+            };
+            cleared || applied
+        }
+        Err(err) => {
+            let reason = error_text(&err);
+            data.files_errors.insert(key, reason.clone()) != Some(reason)
         }
     };
     if changed {
@@ -1886,7 +1946,10 @@ fn sync_failed(
 fn worker_died(state: &mut AppState, name: &'static str, restart_in: Duration) -> Vec<Cmd> {
     match name {
         "sync" => state.data.sync.running.clear(),
-        "detail" => state.data.details_loading.clear(),
+        "detail" => {
+            state.data.details_loading.clear();
+            state.data.files_loading.clear();
+        }
         _ => {}
     }
     state.data.sync.failure = Some(Failure {
@@ -3475,6 +3538,69 @@ mod tests {
         let generation = state.generation;
         assert_eq!(run(&mut state, &tabs, loaded(Ok(older))), vec![]);
         assert_eq!(state.data.details.get(&key), Some(&at_secs(10)));
+        assert_eq!(state.generation, generation);
+    }
+
+    #[test]
+    fn a_files_load_runs_until_its_result_or_a_dead_worker() {
+        let (tabs, mut state) = setup(None);
+        let one = testdata::pr_key("chaoshub", 1);
+        let two = testdata::pr_key("chaoshub", 2);
+        run(&mut state, &tabs, Msg::FilesLoading(one.clone()));
+        run(&mut state, &tabs, Msg::FilesLoading(two.clone()));
+        assert!(state.data.busy());
+        run(
+            &mut state,
+            &tabs,
+            Msg::FilesLoaded(one, Err(SyncError::Offline)),
+        );
+        assert_eq!(state.data.files_loading, BTreeSet::from([two]));
+        let died = Msg::WorkerDied {
+            name: "detail",
+            restart_in: Duration::from_secs(1),
+        };
+        run(&mut state, &tabs, died);
+        assert!(!state.data.busy(), "a dead detail worker loads nothing");
+    }
+
+    #[test]
+    fn files_loads_follow_the_freshness_rule_and_keep_errors() {
+        use crate::domain::files::{ChangedFile, FileStatus};
+
+        let (tabs, mut state) = setup(None);
+        let key = testdata::pr_key("chaoshub", 7);
+        let at_secs = |secs| Observed {
+            value: PrFiles {
+                files: vec![ChangedFile {
+                    path: "src/lib.rs".into(),
+                    previous_path: None,
+                    status: FileStatus::Modified,
+                    additions: 1,
+                    deletions: 0,
+                    patch: Some("@@ -0,0 +1 @@\n+x".into()),
+                }],
+                truncated: false,
+                head_oid: "oid7".into(),
+            },
+            observed_at: at(secs),
+        };
+        let loaded = |result| Msg::FilesLoaded(key.clone(), result);
+        run(&mut state, &tabs, loaded(Err(SyncError::Offline)));
+        assert_eq!(
+            state.data.files_errors.get(&key).map(String::as_str),
+            Some("offline")
+        );
+        let generation = state.generation;
+        run(&mut state, &tabs, loaded(Err(SyncError::Offline)));
+        assert_eq!(state.generation, generation, "the same error again");
+        run(&mut state, &tabs, loaded(Ok(at_secs(10))));
+        assert_eq!(state.data.files.get(&key), Some(&at_secs(10)));
+        assert_eq!(state.data.files_errors.get(&key), None);
+        let mut older = at_secs(5);
+        older.value.files.clear();
+        let generation = state.generation;
+        assert_eq!(run(&mut state, &tabs, loaded(Ok(older))), vec![]);
+        assert_eq!(state.data.files.get(&key), Some(&at_secs(10)));
         assert_eq!(state.generation, generation);
     }
 

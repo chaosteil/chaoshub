@@ -1,13 +1,22 @@
-//! The detail worker: loads the conversation of the selected and the
-//! visible pull requests.
+//! The detail worker: loads the conversation and the changed files of the
+//! selected and the visible pull requests.
 //!
 //! It reacts to the first `Interest` and to its changes, after 250 ms
 //! without a change. A new `selected` loads at once. The `visible` pull
 //! requests load in the background, at most 2 at a time. A load reads the
-//! `pr_details` cache first: a row with the same head oid as the `PrRef`
-//! and an age under 5 min is sent as it is. Else the worker sends
-//! `DetailLoading`, runs `pr_detail`, sends `DetailLoaded` and then writes
-//! the row. A failure sends `DetailLoaded(key, Err(..))`.
+//! conversation and the files at the same time.
+//!
+//! The conversation load reads the `pr_details` cache first: a row with
+//! the same head oid as the `PrRef` and an age under 5 min is sent as it
+//! is. Else the worker sends `DetailLoading`, runs `pr_detail`, sends
+//! `DetailLoaded` and then writes the row. A failure sends
+//! `DetailLoaded(key, Err(..))`.
+//!
+//! The files load does the same with the `pr_files` cache, an age under
+//! 30 min, `FilesLoading`, `pr_files` and `FilesLoaded`. The diff changes
+//! only with the head or with a move of the base, so the longer age is
+//! safe. A load is done only when both parts succeed, so a failed part
+//! loads again at the next `Interest` change.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
@@ -18,6 +27,7 @@ use tokio::task::{JoinError, JoinSet};
 
 use crate::bus::{Msg, PrRef, SyncError};
 use crate::domain::detail::PrDetail;
+use crate::domain::files::PrFiles;
 use crate::domain::keys::PrKey;
 use crate::domain::observed::Observed;
 use crate::workers::ctx::WorkerCtx;
@@ -38,6 +48,9 @@ const MAX_CONCURRENT: usize = 2;
 
 /// The age under which a cached detail with the same head oid is used.
 const MAX_AGE: TimeDelta = TimeDelta::minutes(5);
+
+/// The age under which cached files with the same head oid are used.
+const FILES_MAX_AGE: TimeDelta = TimeDelta::minutes(30);
 
 /// The key and head oid of a successful load, or `None`.
 type Loaded = Option<(PrKey, String)>;
@@ -101,9 +114,19 @@ fn record(loaded: &mut HashMap<PrKey, String>, done: Result<Loaded, JoinError>) 
     }
 }
 
+/// Loads the conversation and the files of `pr` at the same time.
+/// Returns the key and head oid only when both succeed.
+async fn load(ctx: WorkerCtx, pr: PrRef) -> Loaded {
+    let (conversation, files) = tokio::join!(
+        load_conversation(ctx.clone(), pr.clone()),
+        load_files(ctx, pr)
+    );
+    conversation.and(files)
+}
+
 /// Loads the detail of `pr` from the cache or from GitHub and sends
 /// `DetailLoaded`. Returns the key and head oid on success.
-async fn load(ctx: WorkerCtx, pr: PrRef) -> Loaded {
+async fn load_conversation(ctx: WorkerCtx, pr: PrRef) -> Loaded {
     if let Some(detail) = cached(&ctx, &pr).await {
         let _ = ctx
             .tx
@@ -160,20 +183,80 @@ async fn cached(ctx: &WorkerCtx, pr: &PrRef) -> Option<Observed<PrDetail>> {
     (fresh && detail.value.head_oid == pr.head_oid).then_some(detail)
 }
 
+/// Loads the changed files of `pr` from the cache or from GitHub and
+/// sends `FilesLoaded`. Returns the key and head oid on success.
+async fn load_files(ctx: WorkerCtx, pr: PrRef) -> Loaded {
+    if let Some(files) = cached_files(&ctx, &pr).await {
+        let _ = ctx
+            .tx
+            .send(Msg::FilesLoaded(pr.key.clone(), Ok(files)))
+            .await;
+        return Some((pr.key, pr.head_oid));
+    }
+    if ctx
+        .tx
+        .send(Msg::FilesLoading(pr.key.clone()))
+        .await
+        .is_err()
+    {
+        return None;
+    }
+    let observed_at = Utc::now();
+    let result = match ctx.client.pr_files(&pr.key, &pr.head_oid).await {
+        Ok(files) => Ok(Observed {
+            value: files,
+            observed_at,
+        }),
+        Err(err) => {
+            tracing::warn!(key = ?pr.key, %err, "pr files failed");
+            Err(sync_error(&err))
+        }
+    };
+    let ok = result.is_ok();
+    let _ = ctx
+        .tx
+        .send(Msg::FilesLoaded(pr.key.clone(), result.clone()))
+        .await;
+    if let Ok(files) = result
+        && let Err(err) = ctx.store.put_files(pr.key.clone(), files).await
+    {
+        tracing::warn!(key = ?pr.key, %err, "cannot cache the pr files");
+    }
+    ok.then_some((pr.key, pr.head_oid))
+}
+
+/// The cached files of `pr` when their head oid equals the head oid of
+/// `pr` and they are younger than `FILES_MAX_AGE`.
+async fn cached_files(ctx: &WorkerCtx, pr: &PrRef) -> Option<Observed<PrFiles>> {
+    let files = match ctx.store.files(pr.key.clone()).await {
+        Ok(files) => files?,
+        Err(err) => {
+            tracing::warn!(key = ?pr.key, %err, "cannot read the pr files cache");
+            return None;
+        }
+    };
+    let fresh = Utc::now() - files.observed_at < FILES_MAX_AGE;
+    (fresh && files.value.head_oid == pr.head_oid).then_some(files)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
 
     use pretty_assertions::assert_eq;
     use serde_json::Value;
-    use wiremock::matchers::{body_string_contains, method};
+    use wiremock::matchers::{body_string_contains, method, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
     use crate::workers::testkit::{self, Harness};
 
     const PR_DETAIL: &str = include_str!("../github/testdata/pr_detail.json");
+    const PR_FILES: &str = include_str!("../github/testdata/pr_files.json");
     const FIXTURE_OID: &str = "00000000000000000000000000000000c0de0003";
+
+    /// The path of the files endpoint of any pull request.
+    const FILES_PATH: &str = r"^/repos/[^/]+/[^/]+/pulls/\d+/files$";
 
     async fn serve(server: &MockServer, delay: Duration) {
         Mock::given(method("POST"))
@@ -182,6 +265,13 @@ mod tests {
                 ResponseTemplate::new(200)
                     .set_body_raw(PR_DETAIL.as_bytes(), "application/json")
                     .set_delay(delay),
+            )
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(FILES_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(PR_FILES.as_bytes(), "application/json"),
             )
             .mount(server)
             .await;
@@ -199,13 +289,14 @@ mod tests {
         out
     }
 
-    /// The pull request numbers in the requests to `server`.
+    /// The pull request numbers in the GraphQL requests to `server`.
     async fn requested(server: &MockServer) -> Vec<u64> {
         server
             .received_requests()
             .await
             .unwrap()
             .iter()
+            .filter(|request| request.url.path() == "/graphql")
             .map(|request| {
                 let body: Value = serde_json::from_slice(&request.body).unwrap();
                 body["variables"]["number"].as_u64().unwrap()
@@ -219,6 +310,17 @@ mod tests {
                 comments: Vec::new(),
                 reviews: Vec::new(),
                 threads: Vec::new(),
+                head_oid: head_oid.to_owned(),
+            },
+            observed_at: Utc::now() - age,
+        }
+    }
+
+    fn files(head_oid: &str, age: TimeDelta) -> Observed<PrFiles> {
+        Observed {
+            value: PrFiles {
+                files: Vec::new(),
+                truncated: false,
                 head_oid: head_oid.to_owned(),
             },
             observed_at: Utc::now() - age,
@@ -270,15 +372,15 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(load(ctx.clone(), hit.clone()).await.is_some());
+        assert!(load_conversation(ctx.clone(), hit.clone()).await.is_some());
         assert_eq!(
             harness.recv().await,
             Msg::DetailLoaded(hit.key.clone(), Ok(cached_hit))
         );
         assert_eq!(requested(&server).await, Vec::<u64>::new());
 
-        assert!(load(ctx.clone(), moved).await.is_some());
-        assert!(load(ctx.clone(), old.clone()).await.is_some());
+        assert!(load_conversation(ctx.clone(), moved).await.is_some());
+        assert!(load_conversation(ctx.clone(), old.clone()).await.is_some());
         assert_eq!(requested(&server).await, [2, 3]);
 
         let cached = ctx.store.detail(old.key).await.unwrap().unwrap();
@@ -334,11 +436,69 @@ mod tests {
     async fn a_failed_load_is_an_error_result() {
         let (ctx, mut harness) = testkit::ctx("http://127.0.0.1:1");
         let pr = testkit::pr_ref(1, "PR_1", "h");
-        assert_eq!(load(ctx, pr.clone()).await, None);
+        assert_eq!(load_conversation(ctx, pr.clone()).await, None);
         assert_eq!(harness.recv().await, Msg::DetailLoading(pr.key.clone()));
         assert_eq!(
             harness.recv().await,
             Msg::DetailLoaded(pr.key, Err(SyncError::Offline))
         );
+    }
+
+    #[tokio::test]
+    async fn a_fresh_files_cache_row_is_sent_without_a_request() {
+        let server = MockServer::start().await;
+        serve(&server, Duration::ZERO).await;
+        let (ctx, mut harness) = testkit::ctx(&server.uri());
+        let hit = testkit::pr_ref(1, "PR_1", "abc");
+        let cached_hit = files("abc", TimeDelta::minutes(20));
+        ctx.store
+            .put_files(hit.key.clone(), cached_hit.clone())
+            .await
+            .unwrap();
+
+        assert!(load_files(ctx.clone(), hit.clone()).await.is_some());
+        assert_eq!(
+            harness.recv().await,
+            Msg::FilesLoaded(hit.key, Ok(cached_hit))
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+
+        let old = testkit::pr_ref(2, "PR_2", "abc");
+        ctx.store
+            .put_files(old.key.clone(), files("abc", TimeDelta::minutes(31)))
+            .await
+            .unwrap();
+        assert!(load_files(ctx.clone(), old.clone()).await.is_some());
+        let cached = ctx.store.files(old.key).await.unwrap().unwrap();
+        assert_eq!(cached.value.files.len(), 5);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_files_load_does_not_stop_the_conversation() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(FILES_PATH))
+            .respond_with(ResponseTemplate::new(500))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        serve(&server, Duration::ZERO).await;
+        let (ctx, mut harness) = testkit::ctx(&server.uri());
+        let pr = testkit::pr_ref(1, "PR_1", "h");
+
+        assert_eq!(load(ctx, pr.clone()).await, None);
+
+        let mut conversation = None;
+        let mut files = None;
+        while conversation.is_none() || files.is_none() {
+            match harness.recv().await {
+                Msg::DetailLoaded(key, result) => conversation = Some((key, result.is_ok())),
+                Msg::FilesLoaded(key, result) => files = Some((key, result.is_err())),
+                _ => {}
+            }
+        }
+        assert_eq!(conversation, Some((pr.key.clone(), true)));
+        assert_eq!(files, Some((pr.key, true)));
     }
 }
