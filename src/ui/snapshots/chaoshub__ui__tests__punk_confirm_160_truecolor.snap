@@ -2,7 +2,7 @@
 source: src/ui/mod.rs
 expression: "draw(model, width, height, &theme)"
 ---
-"◤ 1 MINE ◢  2 TEAM                                                                                                                                     chaoshub "
+"◢ 1 MINE ◤◢ 2 TEAM ◤                                                                                                                                   chaoshub "
 " stack #12 -> main · 3 PRs                                                                                                                                      "
 "▶┌ feat(ui): popup frame with pane tabs                                                                          #103 wqnvzxop 3ccf7581 default     ●   ○  D   ╱"
 " ├ feat(app): checks pane                                                                                        #102 xlmkrtpq 3ccf7581 default     ✓   ✓       "
