@@ -1,13 +1,15 @@
 //! The review action: opens codeview.
 //!
 //! The action opens nvim with `:Codeview pr <N>` in the repo directory, in
-//! a pane beside the TUI. nvim quits when the codeview session closes:
+//! a pane beside the TUI. `CHAOSHUB_AGENT_ROOT` tells codeview where the
+//! pr-agent result files are. nvim quits when the codeview session closes:
 //! `Session:close()` in codeview sends `User CodeViewSessionClosed`, also
 //! for a session of `:Codeview pr`.
 
 use futures::future::BoxFuture;
 
 use crate::actions::{Action, Applicability, Prepare, Services};
+use crate::agent::store::Store;
 use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, LaunchRequest, Selection, Target};
 
 /// The action that reviews a pull request in codeview.
@@ -66,7 +68,7 @@ impl Action for Review {
                 format!("Codeview pr {number}"),
             ],
             cwd: repo.path.clone().unwrap_or_default(),
-            env: Vec::new(),
+            env: agent_env(),
             label: format!(
                 "chaoshub-review-{}-{}-{number}-{:04x}",
                 repo.key.owner,
@@ -88,6 +90,21 @@ impl Action for Review {
     ) -> BoxFuture<'static, Result<String, String>> {
         Box::pin(async { Err("the review runs in a terminal".to_owned()) })
     }
+}
+
+/// The env that points codeview to the pr-agent results:
+/// `CHAOSHUB_AGENT_ROOT=<state_dir>/agent`. Empty without a state
+/// directory.
+fn agent_env() -> Vec<(String, String)> {
+    crate::config::paths::state_dir()
+        .map(|dir| {
+            let root = Store::new(dir).root();
+            vec![(
+                "CHAOSHUB_AGENT_ROOT".to_owned(),
+                root.to_string_lossy().into_owned(),
+            )]
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -150,7 +167,14 @@ mod tests {
             ]
         );
         assert_eq!(req.cwd, std::path::PathBuf::from("/code/chaoshub"));
-        assert_eq!(req.env, []);
+        let root = crate::config::paths::state_dir().unwrap().join("agent");
+        assert_eq!(
+            req.env,
+            [(
+                "CHAOSHUB_AGENT_ROOT".to_owned(),
+                root.to_string_lossy().into_owned()
+            )]
+        );
         assert!(req.zoom, "the pane zooms by default");
         let suffix = req
             .label
