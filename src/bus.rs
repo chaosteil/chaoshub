@@ -275,6 +275,33 @@ pub(crate) enum ActionInput {
     None,
     Confirmed,
     Text(String),
+    /// The codeview comments to send as one review, the event and the
+    /// text of the review.
+    Review {
+        ids: Vec<String>,
+        event: ReviewKind,
+        body: String,
+    },
+}
+
+/// The event of a review of codeview comments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReviewKind {
+    Comment,
+    Approve,
+    RequestChanges,
+}
+
+impl ReviewKind {
+    /// The name of the event in the request of codeview: `comment`,
+    /// `approve` or `request-changes`.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Comment => "comment",
+            Self::Approve => "approve",
+            Self::RequestChanges => "request-changes",
+        }
+    }
 }
 
 /// The content of a confirm popup.
@@ -284,6 +311,16 @@ pub(crate) struct ConfirmSpec {
     pub lines: Vec<String>,
     /// True for a danger border.
     pub danger: bool,
+}
+
+/// The content of a choice popup: a title, the lines, and one key per
+/// option. `esc` and `n` cancel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChooseSpec {
+    pub title: String,
+    pub lines: Vec<String>,
+    /// The key and the label of each option.
+    pub options: Vec<(char, String)>,
 }
 
 /// The content of a prompt popup.
@@ -464,6 +501,8 @@ pub(crate) enum Msg {
         key: PrKey,
         comments: Result<Comments, String>,
     },
+    /// The editor of `Cmd::EditText` ended: the new text, or the error.
+    TextEdited(Result<String, String>),
     PaneEnded {
         id: &'static str,
         key: TargetKey,
@@ -509,6 +548,16 @@ pub(crate) enum Cmd {
     LoadAgent(PrKey),
     /// Reads the codeview comment files of a pull request.
     LoadCodeview(PrKey),
+    /// Sends the codeview comments `ids` of `key`. It never leaves `app`:
+    /// the description pane sends it, and `app` reads the comment files
+    /// again and opens the send dialog.
+    SendCodeview {
+        key: PrKey,
+        ids: Vec<String>,
+    },
+    /// Opens the text in the editor of the user. The event loop runs the
+    /// editor in the foreground and sends `Msg::TextEdited`.
+    EditText(String),
     Persist(Persist),
     Copy(String),
     OpenUrl(String),

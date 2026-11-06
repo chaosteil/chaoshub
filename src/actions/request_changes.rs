@@ -62,7 +62,9 @@ impl Action for RequestChanges {
             let Target::Pr { pr, .. } = sel.target;
             let body = match input {
                 ActionInput::Text(text) => text,
-                ActionInput::None | ActionInput::Confirmed => String::new(),
+                ActionInput::None | ActionInput::Confirmed | ActionInput::Review { .. } => {
+                    String::new()
+                }
             };
             if body.trim().is_empty() {
                 return Err("a change request needs a message".to_owned());

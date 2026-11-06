@@ -32,7 +32,7 @@ use crate::bus::{
     KeyModifiers, LaunchRequest, MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection,
     Size, SyncError, Target, TargetKey, UiEvent,
 };
-use crate::bus::{ConfirmSpec, PromptSpec};
+use crate::bus::{ChooseSpec, ConfirmSpec, PromptSpec, ReviewKind};
 use crate::domain::agent::{AgentResults, Record, Tool, ToolKind, short_tokens};
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;
@@ -165,7 +165,11 @@ pub(crate) fn update_full(
         msg @ (Msg::AgentStarted { .. } | Msg::AgentFinished { .. } | Msg::AgentLoaded { .. }) => {
             agent_msg(state, msg)
         }
-        Msg::CodeviewLoaded { key, comments } => codeview_loaded(state, key, comments),
+        Msg::CodeviewLoaded { key, comments } => codeview_loaded(state, &key, comments),
+        Msg::TextEdited(result) => {
+            text_edited(state, result);
+            Vec::new()
+        }
         Msg::PaneStarted { id, key } => {
             state.data.panes.insert((id, key), PaneHandleState::Running);
             state.bump();
@@ -620,12 +624,21 @@ const REVIEW_ID: &str = "review";
 /// redraws.
 fn codeview_loaded(
     state: &mut AppState,
-    key: PrKey,
+    key: &PrKey,
     comments: Result<crate::domain::codeview::Comments, String>,
 ) -> Vec<Cmd> {
-    if state.data.codeview.get(&key) != Some(&comments) {
-        state.data.codeview.insert(key, comments);
+    if state.data.codeview.get(key) != Some(&comments) {
+        state.data.codeview.insert(key.clone(), comments);
         state.bump();
+    }
+    if state
+        .ui
+        .codeview_send
+        .as_ref()
+        .is_some_and(|(send, _)| send == key)
+        && let Some((_, ids)) = state.ui.codeview_send.take()
+    {
+        open_send(state, key, &ids);
     }
     Vec::new()
 }
@@ -654,16 +667,261 @@ fn open_confirm(state: &mut AppState, key: &PrKey, id: &'static str, spec: Confi
 const AGENT_ID: &str = crate::agent::ID;
 
 /// The commands of a pane, with each `Cmd::RunAgent` through
-/// `start_agent`.
+/// `start_agent` and each `Cmd::SendCodeview` through `start_send`.
 fn pane_cmds(state: &mut AppState, cmds: Vec<Cmd>) -> Vec<Cmd> {
     let mut out = Vec::new();
     for cmd in cmds {
         match cmd {
             Cmd::RunAgent(job) => out.extend(start_agent(state, job)),
+            Cmd::SendCodeview { key, ids } => out.push(start_send(state, key, ids)),
             cmd => out.push(cmd),
         }
     }
     out
+}
+
+/// The action id of the codeview send.
+const CODEVIEW_SEND_ID: &str = "codeview_send";
+
+/// The start of a codeview send of the comments `ids` of `key`: the
+/// comment files load again, and the send dialog opens after the load.
+fn start_send(state: &mut AppState, key: PrKey, ids: Vec<String>) -> Cmd {
+    state.ui.codeview_send = Some((key.clone(), ids));
+    Cmd::LoadCodeview(key)
+}
+
+/// `N comment` or `N comments`.
+fn comments_noun(count: usize) -> String {
+    if count == 1 {
+        "1 comment".to_owned()
+    } else {
+        format!("{count} comments")
+    }
+}
+
+/// Opens the send dialog of the comments `ids` of `key` after a new read
+/// of the comment files. A chosen comment that went out in the meantime
+/// drops out, and the dialog says so. When no chosen comment is left,
+/// the status line says so and no dialog opens.
+fn open_send(state: &mut AppState, key: &PrKey, ids: &[String]) {
+    let Some(target) = pr_target(&state.data, key) else {
+        return;
+    };
+    let Target::Pr { pr, .. } = &target;
+    let comments = match state.data.codeview.get(key) {
+        Some(Ok(comments)) => comments.current(&crate::app::panes::agent::head(&state.data, pr)),
+        Some(Err(err)) => {
+            let text = format!("cannot read the codeview comments: {err}");
+            state.message(text, CellStyle::Danger, ERROR_TTL);
+            return;
+        }
+        None => &[],
+    };
+    let chosen: Vec<_> = ids
+        .iter()
+        .filter_map(|id| {
+            comments
+                .iter()
+                .find(|comment| &comment.id == id && comment.sendable())
+        })
+        .collect();
+    let gone = ids.len() - chosen.len();
+    if chosen.is_empty() {
+        let text = if gone > 0 {
+            format!("{} went out from codeview already", comments_noun(gone))
+        } else {
+            "no codeview comment to send".to_owned()
+        };
+        state.message(text, CellStyle::Warn, INFO_TTL);
+        return;
+    }
+    let mut lines: Vec<String> = chosen
+        .iter()
+        .map(|comment| format!("{}  {}", comment.place(), comment.summary()))
+        .collect();
+    if gone > 0 {
+        lines.push(String::new());
+        lines.push(format!(
+            "{} went out from codeview already",
+            comments_noun(gone)
+        ));
+    }
+    let spec = ChooseSpec {
+        title: format!(
+            "send {} as one review to #{}",
+            comments_noun(chosen.len()),
+            key.number
+        ),
+        lines,
+        options: vec![
+            ('c', "comment".to_owned()),
+            ('a', "approve".to_owned()),
+            ('r', "request changes".to_owned()),
+        ],
+    };
+    let ids = chosen.iter().map(|comment| comment.id.clone()).collect();
+    let action = ActionDialog {
+        id: CODEVIEW_SEND_ID,
+        selection: Box::new(Selection {
+            target,
+            me: state.data.session.login.clone().unwrap_or_default(),
+            action_config: state.data.action_config.get(CODEVIEW_SEND_ID).cloned(),
+        }),
+    };
+    open_overlay(
+        state,
+        OverlayKind::Confirm,
+        OverlayState::Choose { action, spec, ids },
+    );
+}
+
+/// A key for the send dialog on top of the overlay stack: the key of an
+/// option opens the text popup of the review with its event, `cancel`
+/// closes the dialog.
+fn choose_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) {
+    let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
+        return;
+    };
+    let OverlayState::Choose { action, spec, ids } = &overlay.state else {
+        return;
+    };
+    if keymap.matches("cancel", chord) {
+        close_overlay(state);
+        return;
+    }
+    let KeyCode::Char(c) = chord.code else {
+        return;
+    };
+    if !chord.mods.is_empty() {
+        return;
+    }
+    let Some(event) = spec
+        .options
+        .iter()
+        .find(|(key, _)| *key == c)
+        .and_then(|(key, _)| review_kind(*key))
+    else {
+        return;
+    };
+    let action = ActionDialog {
+        id: action.id,
+        selection: action.selection.clone(),
+    };
+    let ids = ids.clone();
+    close_overlay(state);
+    open_review_text(state, action, ids, event);
+}
+
+/// The event of an option key of the send dialog.
+fn review_kind(key: char) -> Option<ReviewKind> {
+    match key {
+        'c' => Some(ReviewKind::Comment),
+        'a' => Some(ReviewKind::Approve),
+        'r' => Some(ReviewKind::RequestChanges),
+        _ => None,
+    }
+}
+
+/// Opens the text popup of the review of the comments `ids`.
+fn open_review_text(
+    state: &mut AppState,
+    action: ActionDialog,
+    ids: Vec<String>,
+    event: ReviewKind,
+) {
+    let Target::Pr { pr, .. } = &action.selection.target;
+    let title = format!("text of the {} review on #{}", event.name(), pr.key.number);
+    let overlay = OverlayState::ReviewText {
+        action,
+        title,
+        ids,
+        event,
+        text: String::new(),
+        error: None,
+    };
+    open_overlay(state, OverlayKind::Prompt, overlay);
+}
+
+/// A key for the text popup of a review on top of the overlay stack:
+/// characters and backspace edit the text, `enter` adds a line, `ctrl-s`
+/// runs the codeview send with the text, `ctrl-e` opens the text in the
+/// editor, `esc` cancels the send. A change request with an empty text
+/// shows an error and keeps the popup open. `None` when the top overlay
+/// is not the text popup.
+fn review_text_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
+    let overlay = state.ui.overlays.iter_mut().rev().find(|o| !o.closing)?;
+    let OverlayState::ReviewText {
+        action,
+        ids,
+        event,
+        text,
+        error,
+        ..
+    } = &mut overlay.state
+    else {
+        return None;
+    };
+    let control = chord.mods.contains(KeyModifiers::CONTROL);
+    match chord.code {
+        KeyCode::Esc => {
+            close_overlay(state);
+            return Some(Vec::new());
+        }
+        KeyCode::Char('s') if control => {
+            if *event == ReviewKind::RequestChanges && text.trim().is_empty() {
+                *error = Some("a change request needs a text".to_owned());
+                state.bump();
+                return Some(Vec::new());
+            }
+            let cmd = Cmd::RunAction {
+                id: action.id,
+                selection: action.selection.clone(),
+                input: ActionInput::Review {
+                    ids: ids.clone(),
+                    event: *event,
+                    body: text.clone(),
+                },
+            };
+            close_overlay(state);
+            return Some(vec![cmd]);
+        }
+        KeyCode::Char('e') if control => return Some(vec![Cmd::EditText(text.clone())]),
+        KeyCode::Enter => text.push('\n'),
+        KeyCode::Backspace => {
+            text.pop();
+        }
+        KeyCode::Char(c)
+            if !chord
+                .mods
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            text.push(c);
+        }
+        _ => return Some(Vec::new()),
+    }
+    *error = None;
+    state.bump();
+    Some(Vec::new())
+}
+
+/// The editor of the text popup ended: the text of the file replaces the
+/// text of the popup, without the last line break that an editor adds.
+/// An error shows in the popup.
+fn text_edited(state: &mut AppState, result: Result<String, String>) {
+    let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
+        return;
+    };
+    let OverlayState::ReviewText { text, error, .. } = &mut overlay.state else {
+        return;
+    };
+    match result {
+        Ok(new) => {
+            new.strip_suffix('\n').unwrap_or(&new).clone_into(text);
+            *error = None;
+        }
+        Err(err) => *error = Some(err),
+    }
+    state.bump();
 }
 
 /// Starts a pr-agent run, unless the same tool runs for the same pull
@@ -945,6 +1203,9 @@ fn overlay_key(
     if let Some(cmds) = prompt_key(state, chord) {
         return cmds;
     }
+    if let Some(cmds) = review_text_key(state, chord) {
+        return cmds;
+    }
     if keymap.matches("close_overlay", chord) {
         return close_top(state);
     }
@@ -1022,7 +1283,11 @@ fn overlay_key(
             }
             Vec::new()
         }
-        OverlayState::Prompt { .. } => Vec::new(),
+        OverlayState::Choose { .. } => {
+            choose_key(state, keymap, chord);
+            Vec::new()
+        }
+        OverlayState::Prompt { .. } | OverlayState::ReviewText { .. } => Vec::new(),
     }
 }
 
@@ -1074,7 +1339,9 @@ fn scroll_text(overlay: &mut OverlayState, motion: Motion) -> bool {
         OverlayState::Popup(_)
         | OverlayState::Authors(_)
         | OverlayState::Confirm { .. }
-        | OverlayState::Prompt { .. } => return false,
+        | OverlayState::Prompt { .. }
+        | OverlayState::Choose { .. }
+        | OverlayState::ReviewText { .. } => return false,
     }
     true
 }
@@ -3579,6 +3846,8 @@ mod tests {
                 OverlayState::Popup(_)
                 | OverlayState::Confirm { .. }
                 | OverlayState::Prompt { .. }
+                | OverlayState::Choose { .. }
+                | OverlayState::ReviewText { .. }
                 | OverlayState::Help { .. }
                 | OverlayState::Output { .. } => None,
             })

@@ -9,7 +9,9 @@
 //!
 //! Between the block and the body, the pane lists the codeview comments of
 //! the head that went to GitHub not yet. `J` and `K` move the comment
-//! cursor, and `space` marks the comment of the cursor. A comment on a
+//! cursor, and `space` marks the comment of the cursor. `S` sends the
+//! marked comments, or all of them when none is marked: `app` reads the
+//! comment files again and opens the send dialog. A comment on a
 //! commit message shows dim and cannot be marked: GitHub takes no such
 //! comment. A dim line counts the comments of an older push. Without
 //! comments, the pane shows no section.
@@ -25,7 +27,7 @@ use crate::app::panes::checks::failed;
 use crate::app::panes::{Pane, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx};
-use crate::bus::{KeyChord, KeyCode, Size, Target};
+use crate::bus::{Cmd, KeyChord, KeyCode, Size, Target};
 use crate::domain::check::{Check, CheckConclusion, CheckStatus};
 use crate::domain::codeview::Comment;
 use crate::domain::detail::{PrDetail, ReviewState};
@@ -100,7 +102,8 @@ impl Pane for DescriptionPane {
 
     /// The comment keys, while the section lists a comment that can go to
     /// GitHub: `J` and `K` move the comment cursor, `space` marks or
-    /// unmarks the comment of the cursor.
+    /// unmarks the comment of the cursor, and `S` sends the marked
+    /// comments, or all of them when none is marked.
     fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
         if !key.mods.is_empty() {
             return None;
@@ -127,6 +130,25 @@ impl Pane for DescriptionPane {
                 if !state.marked.remove(id) {
                     state.marked.insert(id.clone());
                 }
+            }
+            KeyCode::Char('S') => {
+                let marked: Vec<String> = comments
+                    .iter()
+                    .filter(|comment| state.marked.contains(&comment.id))
+                    .map(|comment| comment.id.clone())
+                    .collect();
+                let ids = if marked.is_empty() {
+                    comments.iter().map(|comment| comment.id.clone()).collect()
+                } else {
+                    marked
+                };
+                return Some(Handled {
+                    cmds: vec![Cmd::SendCodeview {
+                        key: pr.key.clone(),
+                        ids,
+                    }],
+                    ..Handled::default()
+                });
             }
             _ => return None,
         }

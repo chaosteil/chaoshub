@@ -216,8 +216,7 @@ mod tests {
         (
             "actions",
             &[
-                "domain", "bus", "github", "vcs", "store", "launch", "config", "agent",
-                "codeview",
+                "domain", "bus", "github", "vcs", "store", "launch", "config", "agent", "codeview",
             ],
         ),
         (
