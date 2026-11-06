@@ -38,9 +38,16 @@ progress = true
 merge = "M"
 refresh = "ctrl-r"
 
-[actions.pr_agent]
-command = "pr-agent"
-env = { OPENAI_KEY = "secret" }
+[agent]
+command = ["uvx", "--from", "pr-agent", "pr-agent"]
+model = "anthropic/claude-sonnet-5-5"
+fallback_models = ["openai/gpt-6-luna"]
+timeout_secs = 600
+extra_instructions = { review = "Focus on correctness." }
+
+[agent.env]
+ANTHROPIC__KEY = { command = "op read op://dev/anthropic/key" }
+OPENAI__KEY = { from_env = "OPENAI_API_KEY" }
 
 [workspaces]
 root = "~/work/ws"

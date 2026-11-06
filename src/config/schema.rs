@@ -301,6 +301,144 @@ impl Default for WorkspacesConfig {
     }
 }
 
+/// The `[agent]` section: the pr-agent runs. chaoshub does not read the
+/// model names. It gives them to pr-agent, and pr-agent gives them to
+/// `LiteLLM`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub(crate) struct AgentConfig {
+    /// The program and its first arguments. A string is one program
+    /// name.
+    #[serde(deserialize_with = "command_words")]
+    pub command: Vec<String>,
+    /// The `LiteLLM` name of the model.
+    pub model: String,
+    /// The `LiteLLM` names of the models to try when the model fails.
+    pub fallback_models: Vec<String>,
+    /// The env of the pr-agent process: a variable name to a value.
+    pub env: BTreeMap<String, EnvValue>,
+    /// The time after which chaoshub stops a run.
+    pub timeout_secs: u64,
+    /// The extra instructions that each tool gives to the model.
+    pub extra_instructions: ExtraInstructions,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            command: vec!["pr-agent".to_owned()],
+            model: "anthropic/claude-sonnet-5-5".to_owned(),
+            fallback_models: Vec::new(),
+            env: BTreeMap::new(),
+            timeout_secs: 900,
+            extra_instructions: ExtraInstructions::default(),
+        }
+    }
+}
+
+/// One value of `[agent] env`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum EnvValue {
+    /// The value as it is in the file.
+    Literal(String),
+    /// `{ from_env = "NAME" }`: the value of a variable in the env of
+    /// chaoshub.
+    FromEnv { from_env: String },
+    /// `{ command = "..." }`: the trimmed standard output of a shell
+    /// command.
+    Command { command: String },
+}
+
+/// The `[agent] extra_instructions` table: one text per tool. An empty
+/// text gives no extra instructions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub(crate) struct ExtraInstructions {
+    pub review: String,
+    pub improve: String,
+    pub describe: String,
+    pub ask: String,
+}
+
+/// An error that stops a run before pr-agent starts. The text holds the
+/// names of the variables, but never their values.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EnvError {
+    #[error("env {name}: the variable {var} is not set")]
+    Missing { name: String, var: String },
+    #[error("env {name}: the command did not start: {source}")]
+    Spawn {
+        name: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("env {name}: the command failed: {stderr}")]
+    Failed { name: String, stderr: String },
+}
+
+impl AgentConfig {
+    /// Reads each value of `env`. `var` gives the value of a variable in
+    /// the env of chaoshub. A command runs in `sh -c`. The first value
+    /// that fails stops the read.
+    pub(crate) async fn resolve_env(
+        &self,
+        var: impl Fn(&str) -> Option<String>,
+    ) -> Result<BTreeMap<String, String>, EnvError> {
+        let mut env = BTreeMap::new();
+        for (name, value) in &self.env {
+            let resolved = match value {
+                EnvValue::Literal(text) => text.clone(),
+                EnvValue::FromEnv { from_env } => {
+                    var(from_env).ok_or_else(|| EnvError::Missing {
+                        name: name.clone(),
+                        var: from_env.clone(),
+                    })?
+                }
+                EnvValue::Command { command } => run_env_command(name, command).await?,
+            };
+            env.insert(name.clone(), resolved);
+        }
+        Ok(env)
+    }
+}
+
+/// Runs `command` in `sh -c` and returns its trimmed standard output.
+async fn run_env_command(name: &str, command: &str) -> Result<String, EnvError> {
+    let output = tokio::process::Command::new("sh")
+        .args(["-c", command])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|source| EnvError::Spawn {
+            name: name.to_owned(),
+            source,
+        })?;
+    if !output.status.success() {
+        return Err(EnvError::Failed {
+            name: name.to_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+/// Deserializes a string or a list of strings into a list. A string
+/// gives a list of one.
+fn command_words<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Words {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Words::deserialize(deserializer)? {
+        Words::One(word) => vec![word],
+        Words::Many(words) => words,
+    })
+}
+
 /// Reads `owner/name` into a `RepoKey`. `None` when the text has not
 /// exactly one `/` or a part is empty.
 pub(crate) fn parse_repo_name(text: &str) -> Option<RepoKey> {
@@ -418,6 +556,96 @@ mod tests {
         let theme: ThemeConfig = toml::from_str("").unwrap();
         assert_eq!(theme.palette, PaletteSetting::Pierre);
         assert!(toml::from_str::<ThemeConfig>("palette = \"neon\"").is_err());
+    }
+
+    #[test]
+    fn agent_defaults() {
+        let agent: AgentConfig = toml::from_str("").unwrap();
+        assert_eq!(agent.command, ["pr-agent"]);
+        assert_eq!(agent.model, "anthropic/claude-sonnet-5-5");
+        assert_eq!(agent.fallback_models, Vec::<String>::new());
+        assert!(agent.env.is_empty());
+        assert_eq!(agent.timeout_secs, 900);
+        assert_eq!(agent.extra_instructions, ExtraInstructions::default());
+    }
+
+    #[test]
+    fn agent_command_is_a_string_or_a_list() {
+        let agent: AgentConfig = toml::from_str("command = \"pr-agent\"").unwrap();
+        assert_eq!(agent.command, ["pr-agent"]);
+        let agent: AgentConfig =
+            toml::from_str("command = [\"uvx\", \"--from\", \"pr-agent\", \"pr-agent\"]").unwrap();
+        assert_eq!(agent.command, ["uvx", "--from", "pr-agent", "pr-agent"]);
+    }
+
+    #[test]
+    fn agent_env_value_forms_parse() {
+        let text = concat!(
+            "[env]\n",
+            "A = \"literal\"\n",
+            "B = { from_env = \"HOME\" }\n",
+            "C = { command = \"echo hi\" }\n",
+        );
+        let agent: AgentConfig = toml::from_str(text).unwrap();
+        assert_eq!(
+            agent.env,
+            BTreeMap::from([
+                ("A".to_owned(), EnvValue::Literal("literal".into())),
+                (
+                    "B".to_owned(),
+                    EnvValue::FromEnv {
+                        from_env: "HOME".into()
+                    }
+                ),
+                (
+                    "C".to_owned(),
+                    EnvValue::Command {
+                        command: "echo hi".into()
+                    }
+                ),
+            ])
+        );
+        assert!(toml::from_str::<AgentConfig>("[env]\nA = { file = \"x\" }").is_err());
+    }
+
+    #[tokio::test]
+    async fn agent_env_resolves_the_three_forms() {
+        let text = concat!(
+            "[env]\n",
+            "A = \"literal\"\n",
+            "B = { from_env = \"SOURCE\" }\n",
+            "C = { command = \"printf '  from command \\\\n'\" }\n",
+        );
+        let agent: AgentConfig = toml::from_str(text).unwrap();
+        let env = agent
+            .resolve_env(|var| (var == "SOURCE").then(|| "from env".to_owned()))
+            .await
+            .unwrap();
+        assert_eq!(
+            env,
+            BTreeMap::from([
+                ("A".to_owned(), "literal".to_owned()),
+                ("B".to_owned(), "from env".to_owned()),
+                ("C".to_owned(), "from command".to_owned()),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_env_fails_on_a_missing_variable() {
+        let agent: AgentConfig = toml::from_str("[env]\nB = { from_env = \"NOPE\" }").unwrap();
+        let err = agent.resolve_env(|_| None).await.unwrap_err();
+        assert!(matches!(err, EnvError::Missing { .. }), "{err}");
+        assert_eq!(err.to_string(), "env B: the variable NOPE is not set");
+    }
+
+    #[tokio::test]
+    async fn agent_env_fails_on_a_failed_command() {
+        let text = "[env]\nC = { command = \"echo secret; echo no key >&2; exit 3\" }";
+        let agent: AgentConfig = toml::from_str(text).unwrap();
+        let err = agent.resolve_env(|_| None).await.unwrap_err();
+        assert!(matches!(err, EnvError::Failed { .. }), "{err}");
+        assert_eq!(err.to_string(), "env C: the command failed: no key");
     }
 
     #[test]
