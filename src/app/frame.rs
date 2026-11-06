@@ -703,7 +703,7 @@ fn pinned_status(data: &AppData, key: &PrKey) -> Vec<Cell> {
 }
 
 /// The frame of the spinner at the time `now`.
-fn spinner(now: DateTime<Utc>) -> &'static str {
+pub(crate) fn spinner(now: DateTime<Utc>) -> &'static str {
     let step = now.timestamp_millis() / i64::try_from(SPINNER_FRAME.as_millis()).unwrap_or(1);
     SPINNER[usize::try_from(step).unwrap_or(0) % SPINNER.len()]
 }

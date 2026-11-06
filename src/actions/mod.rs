@@ -9,6 +9,7 @@
     reason = "the concrete actions of phase E2 fill the registry"
 )]
 
+mod agent;
 mod approve;
 mod browser;
 mod close;
@@ -80,6 +81,9 @@ pub(crate) enum Prepare {
     Terminal(LaunchRequest),
     /// Execute this command. `execute` is not called.
     Command(Cmd),
+    /// Open the pull request popup of the target on the pane with this
+    /// id. `execute` is not called.
+    OpenPopup(&'static str),
 }
 
 /// One action of the registry.
@@ -123,6 +127,7 @@ pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(|| {
         Box::new(browser::Browser),
         Box::new(copy::CopyUrl),
         Box::new(copy::CopyChangeId),
+        Box::new(agent::Agent),
     ]
 });
 

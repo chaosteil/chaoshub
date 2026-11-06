@@ -26,11 +26,13 @@ use crate::app::tabs::{Handled, KeyCx, TABS, Tab, pr_ref};
 use crate::app::target::{pr_target, row_target};
 use crate::app::term::term_status;
 use crate::bus::MergeProgress;
+use crate::bus::PromptSpec;
 use crate::bus::{
-    ActionEvent, ActionInput, Cmd, Hit, KeyChord, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-    LaunchRequest, MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection, Size, SyncError,
-    Target, TargetKey, UiEvent,
+    ActionEvent, ActionInput, AgentJob, Cmd, Hit, KeyChord, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, LaunchRequest, MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection,
+    Size, SyncError, Target, TargetKey, UiEvent,
 };
+use crate::domain::agent::{AgentResults, Record, Tool, ToolKind, short_tokens};
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;
 use crate::domain::files::PrFiles;
@@ -155,6 +157,9 @@ pub(crate) fn update_full(
             ..
         } => merge_status(state, key, progress),
         Msg::ActionEvent { id, key, event } => action_event(state, actions, id, key, event),
+        msg @ (Msg::AgentStarted { .. } | Msg::AgentFinished { .. } | Msg::AgentLoaded { .. }) => {
+            agent_msg(state, msg)
+        }
         Msg::PaneStarted { id, key } => {
             state.data.panes.insert((id, key), PaneHandleState::Running);
             state.bump();
@@ -248,6 +253,13 @@ fn key(
         return Vec::new();
     }
     if keymap.matches("authors", chord) {
+        // A tab without an author picker leaves the key to the actions:
+        // `a` is also the key of the agent action.
+        if !has_authors(state, tabs)
+            && let Some(cmds) = action_key(state, keymap, tabs, panes, actions, chord)
+        {
+            return cmds;
+        }
         open_authors(state, tabs);
         return Vec::new();
     }
@@ -263,7 +275,7 @@ fn key(
         );
         return Vec::new();
     }
-    if let Some(cmds) = action_key(state, keymap, tabs, actions, chord) {
+    if let Some(cmds) = action_key(state, keymap, tabs, panes, actions, chord) {
         return cmds;
     }
     let index = state.ui.active;
@@ -296,6 +308,7 @@ fn action_key(
     state: &mut AppState,
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
     actions: &[Box<dyn Action>],
     chord: KeyChord,
 ) -> Option<Vec<Cmd>> {
@@ -305,7 +318,7 @@ fn action_key(
     let model = frame::active_list(state, tabs);
     let item = &model.rows.get(model.cursor)?.item;
     let target = row_target(&state.data, item)?;
-    run_action_key(state, keymap, actions, target, chord)
+    run_action_key(state, keymap, panes, actions, target, chord)
 }
 
 /// An action key on `target`: `applies`, then `prepare`, then the route
@@ -314,6 +327,7 @@ fn action_key(
 fn run_action_key(
     state: &mut AppState,
     keymap: &Keymap,
+    panes: &[Box<dyn Pane>],
     actions: &[Box<dyn Action>],
     target: Target,
     chord: KeyChord,
@@ -374,6 +388,7 @@ fn run_action_key(
             vec![start_pane(state, id, key, request)]
         }
         Prepare::Command(cmd) => vec![cmd],
+        Prepare::OpenPopup(pane) => open_popup(state, panes, &selection.target, Some(pane)),
     };
     Some(cmds)
 }
@@ -388,6 +403,11 @@ fn prompt_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
     };
     let cmd = match chord.code {
         KeyCode::Esc => None,
+        KeyCode::Enter if action.id == AGENT_ID => {
+            let (selection, question) = (action.selection.clone(), text.trim().to_owned());
+            close_overlay(state);
+            return Some(ask(state, &selection, question));
+        }
         KeyCode::Enter => Some(Cmd::RunAction {
             id: action.id,
             selection: action.selection.clone(),
@@ -480,8 +500,7 @@ fn open_selected(state: &mut AppState, tabs: &[Box<dyn Tab>], panes: &[Box<dyn P
     if state.data.detail.is_some() {
         return open_pane(state, &target);
     }
-    open_popup(state, panes, &target);
-    Vec::new()
+    open_popup(state, panes, &target, None)
 }
 
 /// Opens `chaoshub pr OWNER/NAME NUMBER` for `target` in the detail
@@ -533,20 +552,207 @@ fn open_pane(state: &mut AppState, target: &Target) -> Vec<Cmd> {
     cmds
 }
 
-/// Opens the pull request popup for `target`, on the first pane that
-/// applies.
-fn open_popup(state: &mut AppState, panes: &[Box<dyn Pane>], target: &Target) {
-    let Target::Pr { pr, .. } = target;
-    let active = applicable(panes, target).first().copied().unwrap_or(0);
-    open_overlay(
-        state,
-        OverlayKind::Popup,
-        OverlayState::Popup(PopupState {
-            key: pr.key.clone(),
-            active,
-            panes: panes.iter().map(|pane| pane.init_state()).collect(),
-        }),
-    );
+/// Opens the pull request popup for `target`, on the pane with the id
+/// `pane` when it applies, else on the first pane that applies. When the
+/// popup of `target` is on top already, only the pane changes. For a
+/// repo with a path, it loads the pr-agent results.
+fn open_popup(
+    state: &mut AppState,
+    panes: &[Box<dyn Pane>],
+    target: &Target,
+    pane: Option<&str>,
+) -> Vec<Cmd> {
+    let Target::Pr { pr, repo, .. } = target;
+    let order = applicable(panes, target);
+    let active = pane
+        .and_then(|id| order.iter().copied().find(|&i| panes[i].id() == id))
+        .or_else(|| order.first().copied())
+        .unwrap_or(0);
+    let top = state.ui.overlays.iter_mut().rev().find(|o| !o.closing);
+    match top {
+        Some(Overlay {
+            state: OverlayState::Popup(popup),
+            ..
+        }) if popup.key == pr.key => {
+            popup.active = active;
+            state.bump();
+        }
+        _ => open_overlay(
+            state,
+            OverlayKind::Popup,
+            OverlayState::Popup(PopupState {
+                key: pr.key.clone(),
+                active,
+                panes: panes.iter().map(|pane| pane.init_state()).collect(),
+            }),
+        ),
+    }
+    if repo.path.is_some() {
+        vec![Cmd::LoadAgent(pr.key.clone())]
+    } else {
+        Vec::new()
+    }
+}
+
+/// True when the active tab has an author picker with authors.
+fn has_authors(state: &AppState, tabs: &[Box<dyn Tab>]) -> bool {
+    let Some(tab) = tabs.get(state.ui.active) else {
+        return false;
+    };
+    let areas = frame::areas(state);
+    let cx = KeyCx {
+        data: &state.data,
+        target: None,
+        areas: &areas,
+        keys: &keymap::DEFAULT,
+    };
+    !tab.authors(&cx).is_empty()
+}
+
+/// The action id of the agent action. Its prompt asks pr-agent.
+const AGENT_ID: &str = crate::agent::ID;
+
+/// The commands of a pane, with each `Cmd::RunAgent` through
+/// `start_agent`.
+fn pane_cmds(state: &mut AppState, cmds: Vec<Cmd>) -> Vec<Cmd> {
+    let mut out = Vec::new();
+    for cmd in cmds {
+        match cmd {
+            Cmd::RunAgent(job) => out.extend(start_agent(state, job)),
+            cmd => out.push(cmd),
+        }
+    }
+    out
+}
+
+/// Starts a pr-agent run, unless the same tool runs for the same pull
+/// request: then the status line says so. An `Ask` without a question
+/// opens the question prompt first.
+fn start_agent(state: &mut AppState, job: AgentJob) -> Vec<Cmd> {
+    if let Tool::Ask(question) = &job.tool
+        && question.trim().is_empty()
+    {
+        open_ask(state, &job.key);
+        return Vec::new();
+    }
+    let kind = job.tool.kind();
+    if !state.data.agent_jobs.insert((job.key.clone(), kind)) {
+        state.message(
+            format!("{} runs already", kind.name()),
+            CellStyle::Warn,
+            INFO_TTL,
+        );
+        return Vec::new();
+    }
+    state.bump();
+    vec![Cmd::RunAgent(job)]
+}
+
+/// Opens the prompt for a question to pr-agent about `key`.
+fn open_ask(state: &mut AppState, key: &PrKey) {
+    let Some(target) = pr_target(&state.data, key) else {
+        return;
+    };
+    let selection = Selection {
+        target,
+        me: state.data.session.login.clone().unwrap_or_default(),
+        action_config: None,
+    };
+    let prompt = OverlayState::Prompt {
+        action: ActionDialog {
+            id: AGENT_ID,
+            selection: Box::new(selection),
+        },
+        spec: PromptSpec {
+            title: format!("ask pr-agent about #{}", key.number),
+            placeholder: "a question about the pull request".to_owned(),
+        },
+        text: String::new(),
+    };
+    open_overlay(state, OverlayKind::Prompt, prompt);
+}
+
+/// Starts an ask run with `question` on the pull request of
+/// `selection`. An empty question starts nothing.
+fn ask(state: &mut AppState, selection: &Selection, question: String) -> Vec<Cmd> {
+    let Target::Pr { pr, repo, .. } = &selection.target;
+    let Some(repo_path) = repo.path.clone() else {
+        return Vec::new();
+    };
+    if question.is_empty() {
+        return Vec::new();
+    }
+    let job = AgentJob {
+        key: pr.key.clone(),
+        head_sha: crate::app::panes::agent::head(&state.data, pr),
+        repo_path,
+        tool: Tool::Ask(question),
+    };
+    start_agent(state, job)
+}
+
+/// A message of the pr-agent runs.
+fn agent_msg(state: &mut AppState, msg: Msg) -> Vec<Cmd> {
+    match msg {
+        Msg::AgentStarted { key, kind } => {
+            state.data.agent_jobs.insert((key, kind));
+            state.bump();
+            Vec::new()
+        }
+        Msg::AgentFinished { key, kind, result } => agent_finished(state, key, kind, result),
+        Msg::AgentLoaded { key, results } => {
+            agent_loaded(state, key, results);
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The end of a pr-agent run: the job leaves the job set, the record or
+/// the error goes to the results, and the status line says
+/// `review done (12k tokens)` or the error. The files load again.
+fn agent_finished(
+    state: &mut AppState,
+    key: PrKey,
+    kind: ToolKind,
+    result: Result<Record, String>,
+) -> Vec<Cmd> {
+    state.data.agent_jobs.remove(&(key.clone(), kind));
+    let results = state.data.agent.entry(key.clone()).or_default();
+    let name = kind.name();
+    let (text, style, ttl) = match result {
+        Ok(record) => {
+            let text = match record.total_tokens() {
+                Some(tokens) => format!("{name} done ({} tokens)", short_tokens(tokens)),
+                None => format!("{name} done"),
+            };
+            results.errors.remove(&kind);
+            results.records.insert(kind, record);
+            (text, CellStyle::Success, INFO_TTL)
+        }
+        Err(err) => {
+            results.errors.insert(kind, err.clone());
+            (
+                format!("{name} failed: {err}"),
+                CellStyle::Danger,
+                ERROR_TTL,
+            )
+        }
+    };
+    state.message(text, style, ttl);
+    vec![Cmd::LoadAgent(key)]
+}
+
+/// The result files of `key` from disk. The records replace the old
+/// ones. The errors of failed runs stay until a run succeeds.
+fn agent_loaded(state: &mut AppState, key: PrKey, loaded: AgentResults) {
+    let results = state.data.agent.entry(key).or_default();
+    if results.records == loaded.records && loaded.errors.is_empty() {
+        return;
+    }
+    results.records = loaded.records;
+    results.errors.extend(loaded.errors);
+    state.bump();
 }
 
 /// A key in the pull request popup: a pane key or `next_tab` selects a
@@ -719,13 +925,14 @@ fn overlay_key(
                 let Some(target) = pr_target(&state.data, &popup.key) else {
                     return Vec::new();
                 };
-                return run_action_key(state, keymap, actions, target, chord).unwrap_or_default();
+                return run_action_key(state, keymap, panes, actions, target, chord)
+                    .unwrap_or_default();
             };
             if handled.changed {
                 state.bump();
             }
             state.ui.ui_events.extend(handled.events);
-            handled.cmds
+            pane_cmds(state, handled.cmds)
         }
         OverlayState::Authors(picker) => {
             if let Some(motion) = motion(keymap, chord) {
@@ -1334,6 +1541,14 @@ fn pinned_startup(data: &AppData, key: &PrKey) -> Vec<Cmd> {
         Some(pr) => Cmd::RefreshPr(vec![pr_ref(pr)]),
         None => Cmd::LoadPr(key.clone()),
     });
+    if data
+        .session
+        .repos
+        .iter()
+        .any(|repo| repo.key == key.repo && repo.path.is_some())
+    {
+        cmds.push(Cmd::LoadAgent(key.clone()));
+    }
     cmds
 }
 
@@ -3255,13 +3470,13 @@ mod tests {
     }
 
     #[test]
-    fn the_mine_tab_has_no_author_picker() {
+    fn the_mine_tab_has_no_author_picker_so_a_goes_to_the_agent_action() {
         let mut state = mine_state(10);
         key(&mut state, 'a');
         assert_eq!(state.ui.overlays.len(), 0);
         assert_eq!(
             state.ui.status.as_ref().map(|m| m.text.as_str()),
-            Some("no authors to pick here")
+            Some("the repo has no local path")
         );
     }
 
@@ -4847,6 +5062,7 @@ mod tests {
                 Cmd::SetSession(state.data.session.clone()),
                 Cmd::ScanJj(testdata::repo_key("chaoshub")),
                 Cmd::LoadPr(not_cached()),
+                Cmd::LoadAgent(not_cached()),
             ]
         );
     }
@@ -4863,6 +5079,7 @@ mod tests {
                 Cmd::SetSession(state.data.session.clone()),
                 Cmd::ScanJj(testdata::repo_key("chaoshub")),
                 Cmd::RefreshPr(vec![pr]),
+                Cmd::LoadAgent(key),
             ]
         );
     }
@@ -5134,5 +5351,175 @@ mod tests {
         let (key, _) = detail_run(&cmds[0]);
         assert_eq!(key, TargetKey::Pr(testdata::pr_key("chaoshub", 99)));
         assert!(state.ui.overlays.is_empty(), "no sidebar");
+    }
+
+    /// The mine state with a path for the repo of the cursor row, and the
+    /// key of the cursor row.
+    fn agent_state() -> (AppState, PrKey) {
+        let mut state = mine_state(10);
+        let model = frame::active_list(&mut state, &TABS);
+        let crate::app::models::RowItem::Pr(pr) = &model.rows[model.cursor].item else {
+            panic!("the cursor row is no pull request");
+        };
+        let key = pr.key.clone();
+        state.data.repos.insert(
+            key.repo.clone(),
+            Repo {
+                key: key.repo.clone(),
+                path: Some("/code/chaoshub".into()),
+                settings: None,
+            },
+        );
+        (state, key)
+    }
+
+    /// The job of `tool` on `key` at the head of the pull request.
+    fn agent_job(state: &AppState, key: &PrKey, tool: Tool) -> AgentJob {
+        AgentJob {
+            key: key.clone(),
+            head_sha: state.data.prs[key].head.value.head_oid.clone(),
+            repo_path: "/code/chaoshub".into(),
+            tool,
+        }
+    }
+
+    /// A finished review record with 12000 tokens.
+    fn review_record() -> Record {
+        Record {
+            version: crate::domain::agent::VERSION,
+            tool: "review".into(),
+            pr: 7,
+            head_sha: "oid7".into(),
+            model: "m".into(),
+            started_at: crate::domain::test_time(),
+            finished_at: crate::domain::test_time(),
+            usage: serde_json::json!({"total_tokens": 12000}),
+            data: serde_json::json!({"review": {}}),
+        }
+    }
+
+    fn status_text(state: &AppState) -> Option<&str> {
+        state.ui.status.as_ref().map(|m| m.text.as_str())
+    }
+
+    #[test]
+    fn a_opens_the_popup_on_the_agent_pane_and_loads_the_results() {
+        let (mut state, pr) = agent_state();
+        assert_eq!(key(&mut state, 'a'), vec![Cmd::LoadAgent(pr.clone())]);
+        let Some(Overlay {
+            state: OverlayState::Popup(popup),
+            ..
+        }) = state.ui.overlays.last()
+        else {
+            panic!("no popup");
+        };
+        assert_eq!(popup.key, pr);
+        assert_eq!(PANES[popup.active].id(), "agent");
+        // In another pane, `a` moves the open popup to the Agent pane.
+        key(&mut state, '1');
+        assert_eq!(key(&mut state, 'a'), vec![Cmd::LoadAgent(pr)]);
+        assert_eq!(state.ui.overlays.len(), 1);
+    }
+
+    #[test]
+    fn a_tool_key_starts_one_run_per_tool_and_pull_request() {
+        let (mut state, pr) = agent_state();
+        key(&mut state, 'a');
+        let review = agent_job(&state, &pr, Tool::Review);
+        assert_eq!(key(&mut state, 'r'), vec![Cmd::RunAgent(review)]);
+        assert!(
+            state
+                .data
+                .agent_jobs
+                .contains(&(pr.clone(), ToolKind::Review))
+        );
+        assert_eq!(key(&mut state, 'r'), Vec::new());
+        assert_eq!(status_text(&state), Some("review runs already"));
+        // Another tool on the same pull request runs at the same time.
+        let improve = agent_job(&state, &pr, Tool::Improve);
+        assert_eq!(key(&mut state, 'i'), vec![Cmd::RunAgent(improve)]);
+        assert_eq!(state.data.agent_jobs.len(), 2);
+    }
+
+    #[test]
+    fn the_end_of_a_run_stores_the_result_and_frees_the_tool() {
+        let (mut state, pr) = agent_state();
+        key(&mut state, 'a');
+        key(&mut state, 'r');
+        key(&mut state, 'i');
+        let done = Msg::AgentFinished {
+            key: pr.clone(),
+            kind: ToolKind::Review,
+            result: Ok(review_record()),
+        };
+        assert_eq!(
+            update(&mut state, &Keymap::default(), done),
+            vec![Cmd::LoadAgent(pr.clone())]
+        );
+        assert_eq!(status_text(&state), Some("review done (12k tokens)"));
+        let failed = Msg::AgentFinished {
+            key: pr.clone(),
+            kind: ToolKind::Improve,
+            result: Err("pr-agent failed (exit status: 3): no key".into()),
+        };
+        update(&mut state, &Keymap::default(), failed);
+        assert_eq!(
+            status_text(&state),
+            Some("improve failed: pr-agent failed (exit status: 3): no key")
+        );
+        assert!(state.data.agent_jobs.is_empty());
+        let results = &state.data.agent[&pr];
+        assert_eq!(results.records[&ToolKind::Review], review_record());
+        assert_eq!(
+            results.errors[&ToolKind::Improve],
+            "pr-agent failed (exit status: 3): no key"
+        );
+        // A load replaces the records and keeps the run errors.
+        let loaded = Msg::AgentLoaded {
+            key: pr.clone(),
+            results: AgentResults::default(),
+        };
+        update(&mut state, &Keymap::default(), loaded);
+        assert!(state.data.agent[&pr].records.is_empty());
+        assert!(
+            state.data.agent[&pr]
+                .errors
+                .contains_key(&ToolKind::Improve)
+        );
+        // The tool is free again.
+        let review = agent_job(&state, &pr, Tool::Review);
+        assert_eq!(key(&mut state, 'r'), vec![Cmd::RunAgent(review)]);
+    }
+
+    #[test]
+    fn ask_opens_a_prompt_and_runs_with_the_question() {
+        let (mut state, pr) = agent_state();
+        key(&mut state, 'a');
+        assert_eq!(key(&mut state, 'a'), Vec::new());
+        assert!(matches!(
+            state.ui.overlays.last().map(|o| &o.state),
+            Some(OverlayState::Prompt { .. })
+        ));
+        for c in "why?".chars() {
+            key(&mut state, c);
+        }
+        let enter = press(KeyCode::Enter, KeyModifiers::NONE);
+        let ask = agent_job(&state, &pr, Tool::Ask("why?".into()));
+        assert_eq!(
+            update(&mut state, &Keymap::default(), enter),
+            vec![Cmd::RunAgent(ask)]
+        );
+        assert!(state.data.agent_jobs.contains(&(pr, ToolKind::Ask)));
+    }
+
+    #[test]
+    fn agent_started_marks_the_job() {
+        let (mut state, pr) = agent_state();
+        let started = Msg::AgentStarted {
+            key: pr.clone(),
+            kind: ToolKind::Describe,
+        };
+        update(&mut state, &Keymap::default(), started);
+        assert!(state.data.agent_jobs.contains(&(pr, ToolKind::Describe)));
     }
 }

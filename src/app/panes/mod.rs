@@ -4,6 +4,7 @@
 //! panes whose `applies` is true, in registry order. A new pane is one
 //! module plus one line in `PANES`.
 
+pub(crate) mod agent;
 mod checks;
 pub(crate) mod conversation;
 mod description;
@@ -63,6 +64,7 @@ pub(crate) static PANES: LazyLock<Vec<Box<dyn Pane>>> = LazyLock::new(|| {
         Box::new(conversation::Conversation),
         Box::new(stack::StackPane),
         Box::new(files::FilesPane),
+        Box::new(agent::AgentPane),
     ]
 });
 
@@ -218,6 +220,7 @@ mod tests {
                 ('3', "conversation"),
                 ('4', "stack"),
                 ('5', "files"),
+                ('6', "agent"),
             ]
         );
     }

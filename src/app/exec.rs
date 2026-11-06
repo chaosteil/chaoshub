@@ -20,11 +20,15 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::actions::{Action, Services};
+use crate::agent::run::Job;
+use crate::agent::store::Store;
 use crate::bus::{
-    ActionEvent, ActionInput, Cmd, Interest, JjReq, LaunchRequest, Msg, Selection, Session,
-    SyncReq, TargetKey,
+    ActionEvent, ActionInput, AgentJob, Cmd, Interest, JjReq, LaunchRequest, Msg, Selection,
+    Session, SyncReq, TargetKey,
 };
-use crate::github::GithubClient;
+use crate::config::schema::AgentConfig;
+use crate::domain::keys::PrKey;
+use crate::github::{GithubClient, TokenSource};
 use crate::launch::{LaunchHandle, Launcher};
 use crate::store::handle::StoreHandle;
 use crate::vcs::lock::RepoLocks;
@@ -65,6 +69,17 @@ pub(crate) struct ActionEnv {
     /// The launcher of detached panes. `None` when the event loop runs
     /// terminal commands in the foreground.
     pub launcher: Option<Arc<dyn Launcher>>,
+    /// What the pr-agent runs need. `None` without a state directory.
+    pub agent: Option<Arc<AgentEnv>>,
+}
+
+/// What the pr-agent runs need: the `[agent]` section, the result files
+/// and the GitHub token.
+#[derive(Debug)]
+pub(crate) struct AgentEnv {
+    pub config: AgentConfig,
+    pub store: Store,
+    pub token: TokenSource,
 }
 
 impl std::fmt::Debug for ActionEnv {
@@ -171,7 +186,67 @@ impl Runtime {
             }
             Cmd::RunTerminal { id, key, request } => self.run_terminal(id, key, request),
             Cmd::FocusPane { id, key } => self.focus(id, key),
+            Cmd::RunAgent(job) => self.run_agent(job),
+            Cmd::LoadAgent(key) => self.load_agent(key),
         }
+    }
+
+    /// Spawns a pr-agent run with a child token of the root token. The
+    /// task sends `AgentStarted`, then `AgentFinished` with the record or
+    /// the error. A cancel kills the process.
+    fn run_agent(&mut self, job: AgentJob) {
+        self.reap();
+        let id = crate::agent::ID;
+        let target = TargetKey::Pr(job.key.clone());
+        let (serial, cancel) = self.track(id, target.clone());
+        let agent = self.env.agent.clone();
+        let tx = self.env.tx.clone();
+        self.tasks.spawn_on(
+            async move {
+                let kind = job.tool.kind();
+                let key = job.key.clone();
+                send(
+                    &tx,
+                    Msg::AgentStarted {
+                        key: key.clone(),
+                        kind,
+                    },
+                )
+                .await;
+                let result = match agent {
+                    Some(agent) => {
+                        let job = Job {
+                            key: job.key,
+                            head_sha: job.head_sha,
+                            repo_path: job.repo_path,
+                            tool: job.tool,
+                        };
+                        tokio::select! {
+                            result = crate::agent::run::run(
+                                &job, &agent.config, &agent.store, &agent.token, &tx,
+                            ) => result,
+                            () = cancel.cancelled() => Err("cancelled".to_owned()),
+                        }
+                    }
+                    None => Err("no state directory for the results".to_owned()),
+                };
+                send(&tx, Msg::AgentFinished { key, kind, result }).await;
+                ((id, target), serial)
+            },
+            &self.handle,
+        );
+    }
+
+    /// Reads the result files of `key` and sends `AgentLoaded`.
+    fn load_agent(&self, key: PrKey) {
+        let Some(agent) = self.env.agent.clone() else {
+            return;
+        };
+        let tx = self.env.tx.clone();
+        self.handle.spawn(async move {
+            let results = agent.store.load(&key);
+            send(&tx, Msg::AgentLoaded { key, results }).await;
+        });
     }
 
     /// Spawns the runner of a pane: it launches `request`, sends
@@ -331,6 +406,13 @@ impl Runtime {
     /// True after `Cmd::Quit`. The event loop then stops.
     pub(crate) fn quitting(&self) -> bool {
         self.quit
+    }
+}
+
+/// Sends `msg` to `app`. A closed channel means that `app` is gone.
+async fn send(tx: &mpsc::Sender<Msg>, msg: Msg) {
+    if tx.send(msg).await.is_err() {
+        tracing::debug!("app is gone, agent message dropped");
     }
 }
 
@@ -520,6 +602,7 @@ mod tests {
             locks: RepoLocks::default(),
             tx,
             launcher,
+            agent: None,
         };
         Fixture {
             runtime: Runtime::new(handle, senders, env, true),

@@ -33,7 +33,8 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
 
 use crate::actions::REGISTRY;
-use crate::app::exec::{ActionEnv, Runtime, Senders};
+use crate::agent::store::Store as AgentStore;
+use crate::app::exec::{ActionEnv, AgentEnv, Runtime, Senders};
 use crate::app::keymap::Keymap;
 use crate::app::{App, DetailPane, SPINNER_FRAME};
 use crate::bus::{
@@ -315,6 +316,13 @@ fn action_env(
             .launcher
             .clone()
             .map(|rex| Arc::new(rex) as Arc<dyn Launcher>),
+        agent: crate::config::paths::state_dir().map(|dir| {
+            Arc::new(AgentEnv {
+                config: settings.config.agent.clone(),
+                store: AgentStore::new(dir),
+                token: TokenSource::gh(),
+            })
+        }),
     }
 }
 
@@ -1863,6 +1871,91 @@ mod tests {
             press(&mut app, c);
         }
         insta::assert_snapshot!(screen(&mut app));
+    }
+
+    /// The mine app with `chaoshub` at a path, the popup of #101 on the
+    /// Agent pane, and results of review (for an old head), improve and
+    /// describe. Ask runs.
+    fn agent_app(width: u16, height: u16) -> App {
+        use crate::domain::agent::{AgentResults, Record, ToolKind, VERSION};
+        let repos = vec![crate::domain::repo::Repo {
+            key: crate::app::testdata::repo_key("chaoshub"),
+            path: Some("/code/chaoshub".into()),
+            settings: None,
+        }];
+        let mut app = App::new(
+            Size { width, height },
+            Keymap::default(),
+            true,
+            crate::app::testdata::mine_snapshot(),
+            repos,
+            crate::domain::test_time() + chrono::TimeDelta::minutes(5),
+        );
+        for _ in 0..3 {
+            press(&mut app, 'j');
+        }
+        press(&mut app, 'a');
+        let key = crate::app::testdata::pr_key("chaoshub", 101);
+        let record = |kind: ToolKind, head: &str, data: serde_json::Value| Record {
+            version: VERSION,
+            tool: kind.name().into(),
+            pr: 101,
+            head_sha: head.into(),
+            model: "anthropic/claude-sonnet-5-5".into(),
+            started_at: crate::domain::test_time(),
+            finished_at: crate::domain::test_time(),
+            usage: serde_json::json!({"total_tokens": 12000}),
+            data,
+        };
+        let review = serde_json::json!({"review": {
+            "estimated_effort_to_review_[1-5]": 2,
+            "key_issues_to_review": [{"relevant_file": "src/ui/list.rs",
+                "issue_header": "Possible Bug", "issue_content": "The cursor can pass the end.",
+                "start_line": 40, "end_line": 44}]
+        }});
+        let improve = serde_json::json!({"code_suggestions": [
+            {"relevant_file": "src/ui/list.rs", "relevant_lines_start": 42,
+             "one_sentence_summary": "Clamp the cursor", "label": "possible issue"}
+        ]});
+        let describe = serde_json::json!({"title": "feat(ui): the list",
+            "description": "- Draw the list", "pr_files": []});
+        let results = AgentResults {
+            records: [
+                (
+                    ToolKind::Review,
+                    record(ToolKind::Review, "3a1f2c0e", review),
+                ),
+                (
+                    ToolKind::Improve,
+                    record(ToolKind::Improve, "oid101", improve),
+                ),
+                (
+                    ToolKind::Describe,
+                    record(ToolKind::Describe, "oid101", describe),
+                ),
+            ]
+            .into(),
+            errors: std::collections::BTreeMap::new(),
+        };
+        app.update(Msg::AgentLoaded {
+            key: key.clone(),
+            results,
+        });
+        app.update(Msg::AgentStarted {
+            key,
+            kind: ToolKind::Ask,
+        });
+        app
+    }
+
+    #[test]
+    fn agent_pane_100() {
+        insta::assert_snapshot!(screen(&mut agent_app(100, 40)));
+    }
+
+    #[test]
+    fn agent_pane_160() {
+        insta::assert_snapshot!(screen(&mut agent_app(160, 40)));
     }
 
     /// The seeded mine app with the popup open on #101 (the fifth row).
