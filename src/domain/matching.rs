@@ -174,6 +174,8 @@ pub(crate) mod tests {
                 review_decision: None,
                 review_requested: false,
                 reviewers: Vec::new(),
+                approvals: 0,
+                changes_requested: 0,
                 stack: (!stack.is_empty()).then(|| StackRef {
                     id: stack.into(),
                     number: 1,

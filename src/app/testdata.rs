@@ -51,6 +51,8 @@ pub(crate) fn pr(repo: &str, number: u64, title: &str) -> PullRequest {
             review_decision: None,
             review_requested: false,
             reviewers: Vec::new(),
+            approvals: 0,
+            changes_requested: 0,
             stack: None,
             auto_merge: false,
             in_merge_queue: false,
