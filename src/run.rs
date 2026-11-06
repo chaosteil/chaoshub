@@ -615,12 +615,19 @@ struct EventLoop {
     overlay_drawn: bool,
 }
 
-/// Counts the slow frames in a row. The second slow frame in a row
-/// trips the latch, and the transitions stay off for the session.
+/// The number of the last drawn frames that the slow frame latch looks
+/// at.
+const SLOW_WINDOW: usize = 10;
+/// The slow frames in the window that trip the latch.
+const SLOW_LIMIT: usize = 5;
+
+/// Counts the slow frames among the last `SLOW_WINDOW` drawn frames.
+/// `SLOW_LIMIT` slow frames in the window trip the latch, and the
+/// transitions stay off for the session.
 #[derive(Debug, Default)]
 struct SlowFrames {
-    /// The slow frames since the last fast frame.
-    in_row: u8,
+    /// True for each slow frame of the window, oldest first.
+    window: VecDeque<bool>,
     /// True after the latch tripped.
     tripped: bool,
 }
@@ -632,12 +639,11 @@ impl SlowFrames {
         if self.tripped {
             return false;
         }
-        if render <= SLOW_FRAME {
-            self.in_row = 0;
-            return false;
+        if self.window.len() == SLOW_WINDOW {
+            self.window.pop_front();
         }
-        self.in_row += 1;
-        self.tripped = self.in_row >= 2;
+        self.window.push_back(render > SLOW_FRAME);
+        self.tripped = self.window.iter().filter(|&&slow| slow).count() >= SLOW_LIMIT;
         self.tripped
     }
 }
@@ -725,15 +731,15 @@ impl EventLoop {
         Ok(())
     }
 
-    /// Records the render time of a frame. Two slow frames in a row turn
-    /// the transitions off for the session.
+    /// Records the render time of a frame. 5 slow frames of the last 10
+    /// turn the transitions off for the session.
     fn frame_done(&mut self, render: Duration) {
         if self.slow.record(render) {
             self.transitions.disable();
             tracing::warn!(
                 render_us = render.as_micros(),
                 limit_ms = SLOW_FRAME.as_millis(),
-                "two slow frames in a row, the transitions are off for this session"
+                "5 of the last 10 frames were slow, the transitions are off for this session"
             );
         }
     }
@@ -1463,12 +1469,23 @@ mod tests {
     }
 
     #[test]
-    fn two_slow_frames_in_a_row_trip_the_latch_once() {
+    fn five_slow_frames_of_the_last_ten_trip_the_latch_once() {
         let mut latch = SlowFrames::default();
         assert_eq!(
-            renders(&mut latch, &[5, 13, 4, 13, 12, 20, 30]),
-            [false, false, false, false, false, false, true]
+            renders(&mut latch, &[13, 20]),
+            [false; 2],
+            "two slow frames in a row do not trip it"
         );
+        assert_eq!(renders(&mut latch, &[1, 2, 3, 4, 5, 6, 7, 12]), [false; 8]);
+        // The two slow frames leave the window of the last 10 frames.
+        assert_eq!(renders(&mut latch, &[20, 20]), [false; 2]);
+        assert_eq!(
+            renders(&mut latch, &[30, 30]),
+            [false; 2],
+            "4 slow frames of the last 10"
+        );
+        assert!(!latch.tripped);
+        assert_eq!(renders(&mut latch, &[40]), [true], "the fifth one trips");
         assert!(latch.tripped);
         assert_eq!(
             renders(&mut latch, &[40, 40, 1]),

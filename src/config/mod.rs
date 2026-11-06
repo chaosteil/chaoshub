@@ -199,7 +199,8 @@ mod tests {
         assert!(config.theme.grunge);
         assert!(config.theme.textures);
         assert!(config.theme.animations);
-        assert_eq!(config.theme.animation_ms, 160);
+        assert_eq!(config.theme.animation_ms, 120);
+        assert!(config.theme.column_headers);
         assert_eq!(config.terminal, TerminalConfig::default());
         assert!(config.keys.is_empty());
         assert!(config.actions.is_empty());

@@ -228,7 +228,7 @@ impl Default for ThemeConfig {
             grunge: true,
             textures: true,
             animations: true,
-            animation_ms: 160,
+            animation_ms: 120,
             key_hints: true,
             column_headers: true,
         }

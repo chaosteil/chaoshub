@@ -342,7 +342,7 @@ command = [
 | `grunge` | `true` | Draws the rough block borders. Applies to the grunge style only. |
 | `textures` | `true` | Fills empty areas with noise textures. Applies to the grunge style only. |
 | `animations` | `true` | Turns the transitions on: tab slides (the active tab glides in the tab bar), popup slides, scrolls and the status message fade. |
-| `animation_ms` | `160` | The duration of one transition, in milliseconds. The confirm and prompt popups always take 100 ms, the tab glide takes 120 ms, and the status fade takes 300 ms. |
+| `animation_ms` | `120` | The duration of one transition, in milliseconds. The confirm and prompt popups always take 100 ms, the tab glide takes 120 ms, and the status fade takes 300 ms. |
 | `key_hints` | `true` | Shows the key hint bar above the status bar. |
 | `column_headers` | `true` | Shows the header row with the column names above the list. The `H` key turns it on or off for the session and saves the choice in the cache. A saved choice wins over this value. |
 
@@ -352,8 +352,9 @@ changes the shapes: cut corners, diagonal accents, inverted headers,
 slanted tab cards, a two-layer selection band and drop shadows under
 popups. To try it, start chaoshub with `--theme punk`.
 
-If two frames in a row take longer than 12 ms to draw, chaoshub turns
-the transitions off until it quits, and writes a line in the log.
+If 5 of the last 10 drawn frames take longer than 12 ms to draw,
+chaoshub turns the transitions off until it quits, and writes a line in
+the log.
 
 ### `[keys]`
 
