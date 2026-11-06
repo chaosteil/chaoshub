@@ -810,10 +810,8 @@ fn in_pane<R>(
     let target = pr_target(data, &popup.key)?;
     let pane = panes.get(popup.active)?;
     let ps = popup.panes.get_mut(popup.active)?;
-    let size = Size {
-        width: areas.popup_body.width,
-        height: areas.popup_body.height,
-    };
+    let tabs = frame::pane_tabs(panes, &applicable(panes, &target));
+    let size = frame::pane_size(areas, &tabs);
     let cx = KeyCx {
         data,
         target: Some(&target),

@@ -241,6 +241,49 @@ pub(crate) struct PaneTab {
     pub title: &'static str,
 }
 
+/// The space between two pane tabs on one row. With the edge space of a
+/// tab, two tabs of the plain skins have two spaces between them.
+pub(crate) const PANE_TAB_GAP: &str = " ";
+
+/// The cells of a pane tab next to its label. The skins draw one or two
+/// edge cells, and `ui` fills a tab with one edge cell with a space. So
+/// `app` and `ui` get the same rows for each skin.
+const PANE_TAB_EDGES: usize = 2;
+
+impl PaneTab {
+    /// The text of the tab: ` 1 Description `.
+    pub(crate) fn label(&self) -> String {
+        format!(" {} {} ", self.key, self.title)
+    }
+
+    /// The width of the tab in cells: the label and the edges.
+    pub(crate) fn cells(&self) -> usize {
+        self.label().chars().count() + PANE_TAB_EDGES
+    }
+}
+
+/// The pane tabs in rows of at most `width` cells: the index range of
+/// the tabs of each row. A tab that is wider than `width` gets a row of
+/// its own. The result has one row or more.
+pub(crate) fn pane_tab_rows(tabs: &[PaneTab], width: u16) -> Vec<std::ops::Range<usize>> {
+    let width = usize::from(width);
+    let gap = PANE_TAB_GAP.len();
+    let mut rows = Vec::new();
+    let mut start = 0;
+    let mut used = 0;
+    for (i, tab) in tabs.iter().enumerate() {
+        let cells = tab.cells();
+        if i > start && used + gap + cells > width {
+            rows.push(start..i);
+            start = i;
+            used = 0;
+        }
+        used += if i > start { gap + cells } else { cells };
+    }
+    rows.push(start..tabs.len());
+    rows
+}
+
 /// The help overlay: key bindings in sections.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HelpModel {

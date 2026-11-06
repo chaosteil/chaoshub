@@ -45,7 +45,9 @@ const HELP_MIN_WIDTH: u16 = 40;
 const POPUP_BORDER: u16 = 1;
 /// The blank column inside the popup border on the left and the right.
 const POPUP_PADDING: u16 = 1;
-/// The popup rows above the pane: title, subtitle, pane tabs and a rule.
+/// The popup rows above the pane: title, subtitle, one row of pane tabs
+/// and a rule. More rows of pane tabs take rows from the body (see
+/// `frame::pane_size`).
 const POPUP_HEADER_ROWS: u16 = 4;
 
 /// `pct` percent of `value`, rounded down.

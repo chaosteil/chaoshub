@@ -16,7 +16,7 @@ use crate::app::layout::{Areas, layout_full};
 use crate::app::models::{
     Cell, CellStyle, FilterModel, FrameModel, HINT_CUT, HINT_GAP, HINT_PREFIX, KeyHint,
     KeyHintsModel, ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, StatusModel,
-    TabBarModel,
+    TabBarModel, pane_tab_rows,
 };
 use crate::app::panes::conversation::is_stale;
 use crate::app::panes::{PANES, Pane, applicable};
@@ -176,6 +176,30 @@ fn overlay_models(state: &AppState, panes: &[Box<dyn Pane>]) -> Vec<OverlayModel
         .collect()
 }
 
+/// The pane tabs of the panes at the registry indexes `order`.
+pub(crate) fn pane_tabs(panes: &[Box<dyn Pane>], order: &[usize]) -> Vec<PaneTab> {
+    order
+        .iter()
+        .map(|&i| PaneTab {
+            key: panes[i].key(),
+            title: panes[i].title(),
+        })
+        .collect()
+}
+
+/// The size of the pane body of the popup with `tabs`. Each row of pane
+/// tabs after the first takes one row from the body.
+pub(crate) fn pane_size(areas: &Areas, tabs: &[PaneTab]) -> Size {
+    let body = areas.popup_body;
+    let more = pane_tab_rows(tabs, body.width).len().saturating_sub(1);
+    Size {
+        width: body.width,
+        height: body
+            .height
+            .saturating_sub(u16::try_from(more).unwrap_or(u16::MAX)),
+    }
+}
+
 /// The content of the pull request popup in `areas`: the header, the
 /// tabs of the panes that apply, and the model of the active pane. A pull
 /// request that is not loaded is `not loaded yet` in the pinned mode, and
@@ -220,23 +244,14 @@ fn popup_content(
         .is_some_and(|detail| is_stale(&detail.value, pr));
     let tag = if old_detail { " · stale" } else { "" };
     let order = applicable(panes, &target);
-    let tabs = order
-        .iter()
-        .map(|&i| PaneTab {
-            key: panes[i].key(),
-            title: panes[i].title(),
-        })
-        .collect();
+    let tabs = pane_tabs(panes, &order);
     let cx = KeyCx {
         data,
         target: Some(&target),
         areas,
         keys: &keymap::DEFAULT,
     };
-    let size = Size {
-        width: areas.popup_body.width,
-        height: areas.popup_body.height,
-    };
+    let size = pane_size(areas, &tabs);
     let (pane, cursor, scroll) = match (panes.get(popup.active), popup.panes.get(popup.active)) {
         (Some(pane), Some(ps)) if order.contains(&popup.active) => {
             (pane.model(&cx, ps, size), ps.cursor, ps.scroll)
