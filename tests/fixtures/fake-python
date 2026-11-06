@@ -1,0 +1,18 @@
+#!/bin/sh
+# A fake Python for the ask tests of chaoshub. $1 is the ask script, $2
+# the URL of the pull request and $3 the question. It prints an answer.
+#
+# FAKE_LOG: when set, the fake writes its arguments to $FAKE_LOG.argv and
+# its env to $FAKE_LOG.env.
+# FAKE_MODE: "fail" exits with 1 and no answer.
+if [ -n "$FAKE_LOG" ]; then
+  printf '%s\n' "$@" > "$FAKE_LOG.argv"
+  env > "$FAKE_LOG.env"
+fi
+echo "answering" >&2
+if [ "$FAKE_MODE" = fail ]; then
+  echo "no answer" >&2
+  exit 1
+fi
+echo "The answer to $3 is 42."
+echo "It is short."

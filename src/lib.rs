@@ -7,12 +7,14 @@
 //!
 //! ```text
 //! domain <- bus <- github | vcs | store | launch <- workers | actions <- app <- ui <- run
-//! config: read by app, workers, actions, run.   theme: read by ui and run.   cli: read by main and run.
+//! config: read by app, workers, actions, agent, run.   theme: read by ui and run.   cli: read by main and run.
+//! agent: reads domain, bus, github and config; read by app and run.
 //! osc: reads bus only; read by run and clipboard.   clipboard: read by app (exec).
 //! ```
 #![forbid(unsafe_code)]
 
 mod actions;
+mod agent;
 mod app;
 mod bus;
 pub mod cli;
@@ -201,6 +203,7 @@ mod tests {
         ("vcs", &["domain", "bus"]),
         ("store", &["domain", "bus"]),
         ("launch", &["domain", "bus"]),
+        ("agent", &["domain", "bus", "github", "config"]),
         (
             "workers",
             &[
