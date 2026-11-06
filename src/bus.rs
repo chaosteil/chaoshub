@@ -337,6 +337,9 @@ pub(crate) enum UiEvent {
     },
     /// An action on the pull request ended with success.
     RowFlash(PrKey),
+    /// A sync or a CI poll changed the CI state, the check counts or the
+    /// review counts of the pull request, and its row is visible.
+    RowGlow(PrKey),
 }
 
 /// An event from a running action.
