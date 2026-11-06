@@ -66,7 +66,8 @@ impl Default for PrefetchConfig {
     }
 }
 
-/// The `[codeview]` section: the Rex pane that opens codeview.
+/// The `[codeview]` section: the Rex pane that opens codeview, and the
+/// directory of the codeview comment files.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub(crate) struct CodeviewConfig {
@@ -77,6 +78,10 @@ pub(crate) struct CodeviewConfig {
     /// The `rex split --ratio` value in percent. `None` uses the Rex
     /// default.
     pub ratio: Option<u8>,
+    /// The directory of the codeview comment files. `~` expands to the
+    /// home directory. `None` uses the default of codeview:
+    /// `<nvim data dir>/codeview/review`.
+    pub comments_dir: Option<PathBuf>,
 }
 
 impl Default for CodeviewConfig {
@@ -85,6 +90,7 @@ impl Default for CodeviewConfig {
             zoom: true,
             split: "right".to_owned(),
             ratio: None,
+            comments_dir: None,
         }
     }
 }

@@ -9,6 +9,7 @@
 //! domain <- bus <- github | vcs | store | launch <- workers | actions <- app <- ui <- run
 //! config: read by app, workers, actions, agent, run.   theme: read by ui and run.   cli: read by main and run.
 //! agent: reads domain, bus, github and config; read by actions, app and run.
+//! codeview: reads domain and config; read by actions, app (exec) and run.
 //! osc: reads bus only; read by run and clipboard.   clipboard: read by app (exec).
 //! ```
 #![forbid(unsafe_code)]
@@ -19,6 +20,7 @@ mod app;
 mod bus;
 pub mod cli;
 mod clipboard;
+mod codeview;
 mod config;
 mod domain;
 mod github;
