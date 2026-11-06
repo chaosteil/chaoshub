@@ -18,6 +18,8 @@
 //!   picker, the selection band wipes onto the new row from the left in
 //!   60 ms. The old row loses its band at once. Not on the first frame of
 //!   a list, a pane or a picker.
+//! - New status message (`FxKey::StatusIn`): the message text slides in
+//!   from the left edge of the message area of the status bar in 80 ms.
 //! - Expired status message: `fade_to_fg` toward the status bar grey.
 //! - Action success (`FxKey::Flash`): the list row of the pull request
 //!   fades from the primary color to its background in 200 ms. Not when
@@ -45,6 +47,7 @@ use crate::domain::keys::PrKey;
 use crate::theme::{Skin, Theme, ThemeKind};
 use crate::ui::hits::HitMap;
 use crate::ui::list::Window;
+use crate::ui::status::message_place;
 use crate::ui::{list, list_areas, overlay_area, picker, rect, render_overlay, screen, tabbar};
 
 /// The duration of the confirm and prompt slides, in milliseconds.
@@ -60,6 +63,9 @@ const BAND_WIPE_MS: u64 = 60;
 const ROW_FLASH_MS: u64 = 200;
 /// The duration of the row glow after a sync, in milliseconds.
 const ROW_GLOW_MS: u64 = 250;
+/// The duration of the slide in of a new status message, in
+/// milliseconds.
+const STATUS_IN_MS: u64 = 80;
 /// The length of the gradient at the edge of a sliding overlay.
 const SLIDE_GRADIENT: u16 = 3;
 /// The frame deadline of the event loop while a transition runs.
@@ -80,6 +86,7 @@ enum FxKey {
     Glow(usize),
     Scroll,
     Status,
+    StatusIn,
     Overlay(usize),
 }
 
@@ -230,6 +237,14 @@ pub(crate) struct Transitions {
     pending_flash: Option<PrKey>,
     /// The pull requests of the row glows that `prepare` starts.
     pending_glows: Vec<PrKey>,
+    /// The status message of the last `prepare`.
+    last_message: Option<String>,
+    /// True after the first `prepare`: the message of the first frame
+    /// does not slide in.
+    prepared: bool,
+    /// The cells of a new status message that `process` slides in: from
+    /// the left edge of the message area to the end of the message.
+    message_in: Option<Rect>,
     /// The list rows during a scroll.
     rows: RefCount<Buffer>,
     /// The offsets of the running scroll.
@@ -258,6 +273,9 @@ impl Transitions {
             last_cursor: None,
             pending_flash: None,
             pending_glows: Vec::new(),
+            last_message: None,
+            prepared: false,
+            message_in: None,
             rows: empty(),
             scroll: None,
             status_pending: false,
@@ -617,6 +635,17 @@ impl Transitions {
                 self.row_fade(FxKey::Glow(index), row, surface, ROW_GLOW_MS);
             }
         }
+        let message = model.status.center.as_ref().map(|c| c.text.clone());
+        if self.prepared && message.is_some() && self.last_message != message {
+            self.message_in =
+                message_place(&model.status, rect(areas.status), &self.theme).map(|place| {
+                    let width = crate::ui::text::width(&place.text);
+                    let end = place.x + u16::try_from(width).unwrap_or(u16::MAX);
+                    Rect::new(place.area.x, place.area.y, end - place.area.x, 1)
+                });
+        }
+        self.last_message = message;
+        self.prepared = true;
         let current = cursor_view(model);
         if let (Some((view, cursor)), Some((last_view, last))) = (&current, &self.last_cursor)
             && view == last_view
@@ -653,9 +682,50 @@ impl Transitions {
             if std::mem::take(&mut self.status_pending) {
                 self.status_fade(buf, status);
             }
+            if let Some(span) = self.message_in.take() {
+                self.status_slide_in(buf, span.intersection(status));
+            }
             self.status_row = Some(copy(buf, status));
         }
         self.manager.process_effects(elapsed.into(), buf, area);
+    }
+
+    /// Starts the slide in of a new status message. `span` runs from the
+    /// left edge of the message area to the end of the message. At alpha
+    /// `a`, the cells of the span show the text moved left by
+    /// `(1 − a) × width`, and the cells right of the text are blank.
+    fn status_slide_in(&mut self, buf: &Buffer, span: Rect) {
+        if span.is_empty() {
+            return;
+        }
+        let cells = copy(buf, span);
+        let mut blank = ratatui::buffer::Cell::default();
+        blank
+            .set_symbol(" ")
+            .set_style(self.theme.status_band().bar);
+        let timer = Self::timer(Duration::from_millis(STATUS_IN_MS));
+        let effect = fx::effect_fn_buf(cells, timer, move |cells, cx, buf| {
+            let area = cells.area;
+            let shift = (f32::from(area.width) * (1.0 - cx.alpha().clamp(0.0, 1.0))).round();
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "shift is rounded and between 0 and the width"
+            )]
+            let shift = shift as u16;
+            for dx in 0..area.width {
+                let source = dx + shift;
+                let cell = if source < area.width {
+                    cells[(area.x + source, area.y)].clone()
+                } else {
+                    blank.clone()
+                };
+                if let Some(dst) = buf.cell_mut((area.x + dx, area.y)) {
+                    *dst = cell;
+                }
+            }
+        });
+        self.manager.add_unique_effect(FxKey::StatusIn, effect);
     }
 
     /// Starts the fade of an expired status message. The message is gone
@@ -1564,6 +1634,78 @@ mod tests {
         let buf = draw_view(&mut terminal, &mut fx, &model, 0);
         assert!(!fx.active());
         assert_eq!(bg(&buf, 2), bg(&plain, 2), "nothing with animations off");
+    }
+
+    /// The frame with the status message `text`.
+    fn with_message(text: &str) -> FrameModel {
+        let mut model = testdata::frame();
+        model.status.center = Some(testdata::cell(text, crate::app::models::CellStyle::Success));
+        model
+    }
+
+    /// The text of the status row.
+    fn status_text(buf: &Buffer) -> String {
+        let y = rect(testdata::areas(WIDTH, HEIGHT).status).y;
+        (0..WIDTH).map(|x| buf[(x, y)].symbol()).collect()
+    }
+
+    #[test]
+    fn a_new_status_message_slides_in_from_the_left() {
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let new_message = with_message("fetched 3 pull requests");
+        let plain = status_text(&draw_view(
+            &mut terminal,
+            &mut Transitions::new(false, 160),
+            &new_message,
+            0,
+        ));
+        let at = plain.find("fetched").unwrap();
+        let mut fx = new();
+        let first = draw_view(&mut terminal, &mut fx, &with_message("merged #101"), 0);
+        assert!(!fx.active(), "the first frame does not slide");
+        assert!(status_text(&first).contains("merged #101"));
+        let start = status_text(&draw_view(&mut terminal, &mut fx, &new_message, 0));
+        assert!(fx.active());
+        assert!(!start.contains("fetched"), "{start}");
+        let middle = status_text(&draw_view(&mut terminal, &mut fx, &new_message, 40));
+        let middle_at = middle.find("ests").unwrap();
+        let final_at = plain.find("ests").unwrap();
+        assert!(middle_at < final_at, "the text moves in from the left");
+        assert!(!middle.contains("fetched"), "the start of the text is out");
+        let end = status_text(&draw_view(&mut terminal, &mut fx, &new_message, 40));
+        assert_eq!(end, plain);
+        assert_eq!(end.find("fetched"), Some(at));
+        draw_view(&mut terminal, &mut fx, &new_message, 16);
+        assert!(!fx.active());
+    }
+
+    #[test]
+    fn a_second_status_message_retargets_the_slide() {
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let third = with_message("approved #102");
+        let plain = status_text(&draw_view(
+            &mut terminal,
+            &mut Transitions::new(false, 160),
+            &third,
+            0,
+        ));
+        let mut fx = new();
+        draw_view(&mut terminal, &mut fx, &with_message("merged #101"), 0);
+        draw_view(&mut terminal, &mut fx, &with_message("rebased"), 0);
+        draw_view(&mut terminal, &mut fx, &with_message("rebased"), 40);
+        draw_view(&mut terminal, &mut fx, &third, 0);
+        let start = status_text(&draw_view(&mut terminal, &mut fx, &third, 0));
+        assert!(
+            !start.contains("approved") && !start.contains("rebased"),
+            "{start}"
+        );
+        let end = status_text(&draw_view(&mut terminal, &mut fx, &third, 80));
+        assert_eq!(end, plain);
+        let mut fx = Transitions::new(false, 160).with_theme(testdata::pierre());
+        draw_view(&mut terminal, &mut fx, &with_message("merged #101"), 0);
+        let off = status_text(&draw_view(&mut terminal, &mut fx, &third, 0));
+        assert!(!fx.active());
+        assert_eq!(off, plain, "nothing with animations off");
     }
 
     #[test]
