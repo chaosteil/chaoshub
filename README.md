@@ -71,6 +71,7 @@ chaoshub pr chaosteil/chaoshub-test 7
 | Configuration | `~/.config/chaoshub/config.toml` (`$XDG_CONFIG_HOME/chaoshub/config.toml`) |
 | Cache (SQLite) | `~/.cache/chaoshub/chaoshub.db` (`$XDG_CACHE_HOME/chaoshub/chaoshub.db`) |
 | Log | `~/.local/state/chaoshub/chaoshub.log` (`$XDG_STATE_HOME/chaoshub/chaoshub.log`) |
+| pr-agent results | `~/.local/state/chaoshub/agent/<owner>/<repo>/<n>/` (see "pr-agent") |
 
 chaoshub uses these XDG paths on macOS too, not `~/Library`.
 
@@ -208,6 +209,129 @@ Each action reads the table with its id. Two actions use a table:
 The other actions ignore their table. A new action can read its own
 table (see "How to extend").
 
+### `[agent]`
+
+The pr-agent runs (see "pr-agent" below).
+
+```toml
+[agent]
+command = ["pr-agent"]
+model = "anthropic/claude-sonnet-5-5"
+fallback_models = []
+timeout_secs = 900
+extra_instructions = { review = "", improve = "", describe = "", ask = "" }
+
+[agent.env]
+ANTHROPIC__KEY = { command = "op read op://dev/anthropic/key" }
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `command` | `["pr-agent"]` | The pr-agent program and its first arguments. A list of strings, or a string. A string is one program name: chaoshub does not split it at the spaces. So write `uvx --from pr-agent pr-agent` as a list. |
+| `model` | `"anthropic/claude-sonnet-5-5"` | The LiteLLM name of the model. chaoshub does not read it. It gives it to pr-agent. |
+| `fallback_models` | `[]` | The LiteLLM names of the models that pr-agent tries when the model fails. |
+| `env` | `{}` | The env of the pr-agent process: a variable name to a value. See below. |
+| `timeout_secs` | `900` | After this time, chaoshub stops the run. |
+| `extra_instructions` | `""` for each tool | Extra instructions for the model, one text per tool: `review`, `improve`, `describe` and `ask`. |
+
+A value of `env` has one of these forms:
+
+| Form | Value |
+|---|---|
+| `"text"` | The text as it is. |
+| `{ from_env = "NAME" }` | The value of the variable `NAME` in the env of chaoshub. A missing variable stops the run. |
+| `{ command = "op read op://dev/anthropic/key" }` | The standard output of the shell command, without the spaces and the line breaks at the two ends. A command that fails stops the run, and the status line shows its error output. |
+
+chaoshub reads each value once per run, when the run starts. chaoshub
+writes no value to the log or to the screen. The process also gets the
+env of chaoshub.
+
+chaoshub has no provider code. pr-agent reaches every provider through
+LiteLLM, so a provider is only a model name and the keys in `env`. For
+the names of the keys, see the pr-agent docs:
+https://github.com/qodo-ai/pr-agent/blob/main/docs/docs/usage-guide/changing_a_model.md
+
+Anthropic direct
+([docs](https://github.com/qodo-ai/pr-agent/blob/main/docs/docs/usage-guide/changing_a_model.md#anthropic)):
+
+```toml
+[agent]
+model = "anthropic/claude-sonnet-5-5"
+
+[agent.env]
+ANTHROPIC__KEY = { from_env = "ANTHROPIC_API_KEY" }
+```
+
+OpenAI direct
+([docs](https://github.com/qodo-ai/pr-agent/blob/main/docs/docs/usage-guide/changing_a_model.md#changing-a-model-in-pr-agent)):
+
+```toml
+[agent]
+model = "openai/gpt-6.1-sol"
+fallback_models = ["openai/gpt-6-luna"]
+
+[agent.env]
+OPENAI__KEY = { command = "op read op://dev/openai/key" }
+```
+
+OpenRouter
+([docs](https://github.com/qodo-ai/pr-agent/blob/main/docs/docs/usage-guide/changing_a_model.md#openrouter)):
+
+```toml
+[agent]
+model = "openrouter/anthropic/claude-sonnet-5"
+
+[agent.env]
+OPENROUTER__KEY = { from_env = "OPENROUTER_API_KEY" }
+```
+
+An OpenAI-compatible gateway, for example a LiteLLM proxy
+([pr-agent docs](https://github.com/qodo-ai/pr-agent/blob/main/docs/docs/usage-guide/changing_a_model.md#changing-a-model-in-pr-agent),
+[LiteLLM proxy docs](https://docs.litellm.ai/docs/simple_proxy)). Use
+the `openai/` prefix and the model id of the gateway. For a model that
+pr-agent does not know, also set the input limit:
+
+```toml
+[agent]
+model = "openai/claude-sonnet"
+
+[agent.env]
+OPENAI__API_BASE = "http://localhost:4000"
+OPENAI__KEY = { from_env = "LITELLM_PROXY_KEY" }
+CONFIG__CUSTOM_MODEL_MAX_TOKENS = "200000"
+```
+
+Ollama
+([docs](https://github.com/qodo-ai/pr-agent/blob/main/docs/docs/usage-guide/changing_a_model.md#ollama)):
+
+```toml
+[agent]
+model = "ollama/qwen2.5-coder:32b"
+
+[agent.env]
+OLLAMA__API_BASE = "http://localhost:11434"
+CONFIG__CUSTOM_MODEL_MAX_TOKENS = "128000"
+```
+
+Other forms of `command`:
+
+```toml
+# pr-agent from PyPI through uv, with no install.
+command = ["uvx", "--from", "pr-agent", "pr-agent"]
+
+# The Docker image. ask does not work with this form (see "pr-agent").
+# The container gets only the env names that -e lists, and it must see
+# the state directory at the same path for the JSON result.
+command = [
+  "docker", "run", "--rm",
+  "-v", "/Users/me/.local/state/chaoshub:/Users/me/.local/state/chaoshub",
+  "-e", "GITHUB__USER_TOKEN", "-e", "CONFIG__MODEL", "-e", "CONFIG__FALLBACK_MODELS",
+  "-e", "CONFIG__PUBLISH_OUTPUT", "-e", "CONFIG__PROPAGATE_TOOL_ERRORS",
+  "-e", "ANTHROPIC__KEY",
+  "pragent/pr-agent:latest",
+]
+```
+
 ### `[theme]`
 
 | Key | Default | Meaning |
@@ -328,7 +452,8 @@ selects the next pane:
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order. |
 | `4` | Stack | The entries of the stack. Only for a stacked pull request. |
-| `5` | Agent | The pr-agent results: one section per tool. Only for a repo with a `path`. |
+| `5` | Files | The changed files as a tree, with the diff of each file inline. |
+| `6` | Agent | The pr-agent results: one section per tool. Only for a repo with a `path`. |
 
 `j`, `k` and the other motion keys move the cursor of the pane. In the
 description pane and the stack pane, they scroll the text.
@@ -399,6 +524,141 @@ A click acts on what it hits:
 | An author in the author picker | Picks the author. |
 | A cell outside of the sidebar or the overlay | Closes it. For a confirm popup, this cancels the action. |
 
+## pr-agent
+
+chaoshub runs [pr-agent](https://github.com/qodo-ai/pr-agent) on a pull
+request and keeps the result on your disk. codeview shows the result in
+the diff. pr-agent runs with `publish_output=false`, so it writes nothing
+to GitHub. A result goes to GitHub only when you take it as your own: in
+codeview, you adopt a suggestion as a local comment and submit it, or in
+chaoshub, you apply a describe result with `p` and `y`.
+
+pr-agent must be installed, or `[agent] command` must start it (for
+example with `uvx`). pr-agent runs in the local checkout, so the repo
+needs a `path`.
+
+### The Agent pane
+
+`a` on a pull request opens the detail on the Agent pane (`6`). The
+pane has one section per tool. Each section shows the state (`never`,
+`running` with a spinner, `done 5m ago`, or `failed` with the error), the
+model and the head commit of the result. When the head of the pull
+request moved after the run, the section says
+`outdated: for 3a1f2c0, the head is now 9bd2e11`. chaoshub does not run
+pr-agent again by itself.
+
+| Key | Tool | What it shows |
+|---|---|---|
+| `r` | review | The fields of the review and the key issues, with file and lines. |
+| `i` | improve | One line per suggestion: `label · file:line · summary`. |
+| `d` | describe | The new title and the new body. |
+| `a` | ask | Asks for a question first. Shows the questions and the answers, newest first. |
+| `p` | | Opens a confirm popup with the line diff of the old and the new title and body. `y` sets the title and the body of the pull request on GitHub. |
+
+One run per tool per pull request runs at a time. A second `r` while
+the review runs only says `review runs already`. Different tools, and
+different pull requests, run at the same time.
+
+The pane keys win over the action keys, so `d` (draft) does not work
+while the Agent pane is selected. On the Team tab, `a` opens the author
+picker. There, open the detail with `enter` and press `a` in it.
+
+While a run goes, the status bar shows the spinner and one item per run,
+for example `agent review #7 · agent ask #7`. The last output line of
+pr-agent shows in the status line. At the end, the status line shows
+`review done (12k tokens)`, or the error.
+
+### What chaoshub runs
+
+For `review`, `improve` and `describe`, chaoshub runs this command in
+the repo path:
+
+```sh
+<command> --pr_url https://github.com/<owner>/<repo>/pull/<n> --json-output <tmp file> <tool>
+```
+
+pr-agent reads its settings from env variables in the `SECTION__KEY`
+form. chaoshub sets these, after the `[agent] env` table:
+
+| Variable | Value |
+|---|---|
+| `GITHUB__USER_TOKEN` | The output of `gh auth token`. |
+| `CONFIG__MODEL` | `[agent] model`. |
+| `CONFIG__FALLBACK_MODELS` | `[agent] fallback_models`. |
+| `CONFIG__PUBLISH_OUTPUT` | `false`: pr-agent writes nothing to the pull request. |
+| `CONFIG__PROPAGATE_TOOL_ERRORS` | `true`: a failed tool exits with an error code. |
+| `PR_REVIEWER__EXTRA_INSTRUCTIONS`, `PR_CODE_SUGGESTIONS__EXTRA_INSTRUCTIONS`, `PR_DESCRIPTION__EXTRA_INSTRUCTIONS`, `PR_QUESTIONS__EXTRA_INSTRUCTIONS` | `[agent] extra_instructions` of the tool, when it is not empty. |
+
+pr-agent reads env values as TOML, so chaoshub writes the texts in
+quotes and the model list as a TOML list. A name that chaoshub sets
+replaces the same name in `[agent] env`. pr-agent does not accept
+`config.fallback_models` as a command argument, so the env carries all
+settings.
+
+`--json-output` does not work for `ask`, and with
+`publish_output=false`, pr-agent prints the answer nowhere. So for `ask`,
+chaoshub writes the Python script
+`~/.local/state/chaoshub/chaoshub-agent-ask` and runs it with the Python
+of the pr-agent command:
+
+```sh
+<python> ~/.local/state/chaoshub/chaoshub-agent-ask https://github.com/<owner>/<repo>/pull/<n> "<question>"
+```
+
+The script runs the ask tool in its own settings scope, as the pr-agent
+CLI does, and prints the answer. chaoshub finds the Python this way:
+
+- `command` has one word, for example `["pr-agent"]` from pip or pipx:
+  chaoshub finds the program in `PATH` and reads its first line. A
+  `#!/path/to/python` line gives that Python, and
+  `#!/usr/bin/env python3` gives `/usr/bin/env python3`. A `#!/bin/sh`
+  line with an `'''exec' /path/to/python` second line (the pip form for
+  long paths) gives that Python. Any other first line is an error.
+- `command` has more than one word, for example
+  `["uvx", "--from", "pr-agent", "pr-agent"]`: chaoshub puts `python` in
+  place of the last word. So `uvx --from pr-agent python <script>` runs
+  the script in the env of the tool.
+- `docker run ...` does not work for `ask`: the last word is the image,
+  and the container cannot see the script. `review`, `improve` and
+  `describe` work with Docker when the container gets the env names
+  with `-e` and the state directory at the same path (see `[agent]`).
+
+At `[agent] timeout_secs`, chaoshub stops the process. A run that fails
+keeps the old result file.
+
+### The result files
+
+The results are in `~/.local/state/chaoshub/agent/<owner>/<repo>/<n>/`
+(`$XDG_STATE_HOME/chaoshub/agent/...`), one file per tool:
+`review.json`, `improve.json`, `describe.json` and `ask.json`. chaoshub
+writes a file to a temporary name first and then renames it, so a
+reader never sees a part of a file. codeview reads the same files.
+
+Each file holds one JSON object:
+
+| Field | Meaning |
+|---|---|
+| `version` | `1`. A reader refuses other versions. |
+| `tool` | `review`, `improve`, `describe` or `ask`. |
+| `pr` | The number of the pull request. |
+| `head_sha` | The head commit of the pull request when the run started. |
+| `model` | The LiteLLM name of the model. |
+| `started_at`, `finished_at` | The times of the run, in RFC 3339. |
+| `usage` | The token counts of pr-agent (`prompt_tokens`, `completion_tokens`, `total_tokens`), or `{}`. |
+| `data` | The JSON of pr-agent. For `ask`, a list of `{question, answer, head_sha, at}`, newest first. |
+
+The `data` of pr-agent:
+
+- review: `{review: {key_issues_to_review: [{relevant_file, issue_header, issue_content, start_line, end_line}], ...}, usage, coverage}`.
+- improve: `{code_suggestions: [{relevant_file, relevant_lines_start, relevant_lines_end, existing_code, improved_code, suggestion_content, one_sentence_summary, label, score}], usage}`.
+- describe: `{title, type, description, changes_diagram, pr_files: [{filename, changes_title, changes_summary, label}], usage}`.
+
+The JSON has no markdown. chaoshub makes the text of the review from the
+fields. The body that `p` applies is the `description`, then a `Files`
+list with one line per entry of `pr_files`.
+
+`v` gives codeview the root of the files in `CHAOSHUB_AGENT_ROOT`.
+
 ## Rex, Ghostty and codeview
 
 ### What `v` runs
@@ -411,7 +671,8 @@ nvim -c "autocmd User CodeViewSessionClosed ++once qall" -c "Codeview pr <N>"
 
 `Codeview pr <N>` opens the pull request in codeview. When you close the
 codeview session, codeview sends `User CodeViewSessionClosed`, and nvim
-quits.
+quits. nvim gets `CHAOSHUB_AGENT_ROOT=<state dir>/agent`, so codeview
+finds the pr-agent results.
 
 Inside Rex, chaoshub opens a pane beside its own block with
 `rex split -b $REX_BLOCK --split=<split> [--ratio <ratio>] -c <repo path>
@@ -493,6 +754,8 @@ has 2 pull requests left. The right part shows these items:
 - `prefetch N`: the prefetch of pull request refs.
 - `loading N conversations`: the comments, reviews and threads of N
   pull requests load from GitHub.
+- `agent review #7`: a pr-agent run of one tool on one pull request.
+  Each run has its own item.
 
 When no work runs, the spinner and the items go away. A sync reads the
 pull requests in pages, and the rows of each page show in the list when
