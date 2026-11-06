@@ -98,10 +98,13 @@ pub(crate) fn mine_prs() -> Vec<PullRequest> {
     base.ci_state.value = CiState::Failure;
     base.checks.value = checks();
     base.head.value.review_decision = Some(ReviewDecision::ChangesRequested);
+    base.head.value.approvals = 1;
+    base.head.value.changes_requested = 1;
     base.head.value.mergeable = Mergeable::Conflicting;
     let mut middle = stacked(102, 2, "feat(app): checks pane");
     middle.ci_state.value = CiState::Success;
     middle.head.value.review_decision = Some(ReviewDecision::Approved);
+    middle.head.value.approvals = 2;
     let mut top = stacked(103, 3, "feat(ui): popup frame with pane tabs");
     top.ci_state.value = CiState::Pending;
     top.head.value.review_decision = Some(ReviewDecision::ReviewRequired);
@@ -260,6 +263,7 @@ pub(crate) fn team_prs() -> Vec<PullRequest> {
     let mut other = colleague(86, "perf(ui): cache the texture", "bob", 50);
     other.key.repo = repo_key("codeview");
     other.head.value.review_decision = Some(ReviewDecision::Approved);
+    other.head.value.approvals = 1;
     vec![
         requested,
         colleague(87, "perf(store): batch inserts", "bob", 3),

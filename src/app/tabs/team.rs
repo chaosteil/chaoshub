@@ -149,8 +149,8 @@ impl Tab for Team {
     }
 }
 
-/// The columns: title, number, repo, author, updated, CI, review and
-/// flags.
+/// The columns: title, number, repo, author, updated, checks, reviews
+/// and flags.
 fn columns() -> Vec<Column> {
     let column = |title: &str, width, align| Column {
         title: title.into(),
@@ -169,8 +169,8 @@ fn columns() -> Vec<Column> {
         column("repo", ColumnWidth::Fixed(12), Align::Left),
         column("author", ColumnWidth::Fixed(12), Align::Left),
         column("updated", ColumnWidth::Fixed(6), Align::Right),
-        column("ci", ColumnWidth::Fixed(3), Align::Center),
-        column("rv", ColumnWidth::Fixed(3), Align::Center),
+        column("checks", ColumnWidth::Fixed(7), Align::Center),
+        column("reviews", ColumnWidth::Fixed(5), Align::Center),
         column("flags", ColumnWidth::Fixed(4), Align::Left),
     ]
 }
@@ -223,8 +223,8 @@ fn pr_row(pr: &PullRequest, cx: &KeyCx<'_>) -> Row {
         cell(pr.key.repo.name.clone(), CellStyle::Dim),
         cell(head.author.clone(), CellStyle::Info),
         cell(age(head.updated_at, cx.data.now), CellStyle::Dim),
-        cells::ci(pr.ci_state.value),
-        cells::review(head.review_decision),
+        cells::checks(pr),
+        cells::reviews(head),
         cells::flags(pr, cx.data.pane_open(&TargetKey::Pr(pr.key.clone()))),
     ];
     Row {
@@ -370,7 +370,7 @@ mod tests {
                 cell("chaoshub", CellStyle::Dim),
                 cell("alice", CellStyle::Info),
                 cell("2h", CellStyle::Dim),
-                cell("✓", CellStyle::Success),
+                cell("·", CellStyle::Dim),
                 cell("○", CellStyle::Dim),
                 cell("", CellStyle::Warn),
             ]

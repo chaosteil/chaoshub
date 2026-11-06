@@ -137,7 +137,7 @@ impl Tab for Mine {
 }
 
 /// The columns: tree and title, number, change id, commit, workspace,
-/// CI, review and flags. The narrow set has no commit and no workspace.
+/// checks, reviews and flags. The narrow set has no commit and no workspace.
 fn columns(set: Columns) -> Vec<Column> {
     let column = |title: &str, width, align| Column {
         title: title.into(),
@@ -164,8 +164,8 @@ fn columns(set: Columns) -> Vec<Column> {
         columns.push(column("workspace", ColumnWidth::Fixed(10), Align::Left));
     }
     columns.extend([
-        column("ci", ColumnWidth::Fixed(3), Align::Center),
-        column("rv", ColumnWidth::Fixed(3), Align::Center),
+        column("checks", ColumnWidth::Fixed(7), Align::Center),
+        column("reviews", ColumnWidth::Fixed(5), Align::Center),
         column("flags", ColumnWidth::Fixed(4), Align::Left),
     ]);
     columns
@@ -329,8 +329,8 @@ fn pr_row(pr: &PullRequest, local: &LocalMatch, set: Columns, glyph: char, pane:
     ];
     cells.extend(local_cells(local, set));
     cells.extend([
-        cells::ci(pr.ci_state.value),
-        cells::review(head.review_decision),
+        cells::checks(pr),
+        cells::reviews(head),
         cells::flags(pr, pane),
     ]);
     Row {
@@ -374,6 +374,7 @@ mod tests {
         let mut single = pr("codeview", 3, "Fix the export");
         single.head.value.updated_at += chrono::TimeDelta::hours(1);
         single.ci_state.value = CiState::Failure;
+        single.checks.value = testdata::checks();
         single.head.value.review_decision = Some(ReviewDecision::Approved);
         single.head.value.is_draft = true;
         let mut closed = pr("chaoshub", 4, "Closed");
@@ -450,7 +451,7 @@ mod tests {
                 cell("", CellStyle::Dim),
                 cell("", CellStyle::Dim),
                 cell("", CellStyle::Dim),
-                cell("✗", CellStyle::Danger),
+                cell("✗ 1/3", CellStyle::Danger),
                 cell("✓", CellStyle::Success),
                 cell("D", CellStyle::Warn),
             ]
