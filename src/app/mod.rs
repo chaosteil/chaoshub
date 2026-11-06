@@ -125,11 +125,11 @@ impl App {
         frame::areas(&self.state)
     }
 
-    /// True when the frame still holds what a transition shows: the list
-    /// of the previous tab or an overlay that slides out. Without a
-    /// running transition, `run` then sends `Msg::TransitionsDone`.
+    /// True when the frame still holds what a transition shows: an
+    /// overlay that slides out. Without a running transition, `run` then
+    /// sends `Msg::TransitionsDone`.
     pub(crate) fn transition_leftovers(&self) -> bool {
-        self.state.ui.prev_list.is_some() || self.state.ui.overlays.iter().any(|o| o.closing)
+        self.state.ui.overlays.iter().any(|o| o.closing)
     }
 
     /// Takes the UI events for the transitions.

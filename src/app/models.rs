@@ -9,9 +9,6 @@ use crate::bus::{ConfirmSpec, KeyChord, OverlayKind, PrRef, PromptSpec, TermStat
 pub(crate) struct FrameModel {
     pub tab_bar: TabBarModel,
     pub list: ListModel,
-    /// The list of the previous tab while a tab slide runs, and the
-    /// direction of the slide.
-    pub prev_list: Option<(ListModel, Direction)>,
     pub status: StatusModel,
     /// The overlay stack, bottom first.
     pub overlays: Vec<OverlayModel>,
@@ -64,13 +61,6 @@ pub(crate) struct FilterModel {
 pub(crate) struct TabBarModel {
     pub titles: Vec<&'static str>,
     pub active: usize,
-}
-
-/// The direction of a slide.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Direction {
-    Left,
-    Right,
 }
 
 /// A list of rows with columns, a cursor and a scroll offset. Any tab

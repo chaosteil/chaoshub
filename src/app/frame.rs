@@ -119,7 +119,6 @@ pub(crate) fn frame_model_full<'s>(
                 active: state.ui.active,
             },
             list,
-            prev_list: state.ui.prev_list.clone(),
             status: status_model(state, tabs),
             overlays: overlay_models(state, panes),
             term: term_status(state),
@@ -800,7 +799,6 @@ fn empty_frame() -> FrameModel {
             active: 0,
         },
         list: empty_list(),
-        prev_list: None,
         status: StatusModel {
             left: Vec::new(),
             center: None,
@@ -823,7 +821,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-    use crate::app::models::Direction;
     use crate::app::tabs::fake::FakeTab;
 
     const SIZE: Size = Size {
@@ -883,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_has_the_tab_bar_status_and_prev_list() {
+    fn frame_has_the_tab_bar_and_the_status() {
         let (tabs, mut state, [one, two]) = fake_tabs();
         state.ui.active = 1;
         state.ui.status = Some(crate::app::state::StatusMsg {
@@ -891,7 +888,6 @@ mod tests {
             style: CellStyle::Normal,
             expires: chrono::DateTime::UNIX_EPOCH,
         });
-        state.ui.prev_list = Some((empty_list(), Direction::Left));
         let frame = frame_model_with(&mut state, &tabs).clone();
         assert_eq!(builds(&one), 0);
         assert_eq!(builds(&two), 1);
@@ -925,7 +921,6 @@ mod tests {
                 }],
             }
         );
-        assert_eq!(frame.prev_list, Some((empty_list(), Direction::Left)));
         assert_eq!(frame.term, term_status(&state));
     }
 

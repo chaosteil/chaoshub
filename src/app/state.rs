@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 
 use crate::app::frame::ModelCache;
-use crate::app::models::{CellStyle, Direction, HelpModel, ListModel};
+use crate::app::models::{CellStyle, HelpModel};
 use crate::app::panes::PaneState;
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{
@@ -175,9 +175,6 @@ pub(crate) struct UiState {
     pub status: Option<StatusMsg>,
     /// The events for the transitions since the last draw.
     pub ui_events: Vec<UiEvent>,
-    /// The list of the previous tab and the slide direction, until the tab
-    /// slide is done.
-    pub prev_list: Option<(ListModel, Direction)>,
     /// The interest that was last sent to the workers.
     pub interest: Option<Interest>,
     /// True while the user types the filter of the active tab.
@@ -448,7 +445,6 @@ impl AppState {
                 overlays: Vec::new(),
                 status: None,
                 ui_events: Vec::new(),
-                prev_list: None,
                 interest: None,
                 filter_edit: false,
                 pinned: None,

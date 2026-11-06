@@ -2131,15 +2131,24 @@ mod tests {
         app.update(Msg::Key(two));
         let start = frame(&mut app, &mut transitions, 0);
         assert!(transitions.active());
-        let middle = frame(&mut app, &mut transitions, 80);
-        let end = frame(&mut app, &mut transitions, 80);
+        let middle = frame(&mut app, &mut transitions, 60);
+        let end = frame(&mut app, &mut transitions, 60);
         assert!(!transitions.active());
+        let below_the_bar = |screen: &str| {
+            screen
+                .lines()
+                .skip(1)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            below_the_bar(&start),
+            below_the_bar(&end),
+            "the list shows the new tab from the first frame"
+        );
         insta::assert_snapshot!("app_tab_slide_0ms", start);
-        insta::assert_snapshot!("app_tab_slide_80ms", middle);
-        insta::assert_snapshot!("app_tab_slide_160ms", end);
-        assert!(app.frame().prev_list.is_some());
-        app.update(Msg::TransitionsDone);
-        assert_eq!(app.frame().prev_list, None);
+        insta::assert_snapshot!("app_tab_slide_60ms", middle);
+        insta::assert_snapshot!("app_tab_slide_120ms", end);
     }
 
     #[test]

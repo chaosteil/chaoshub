@@ -273,6 +273,17 @@ impl Theme {
         }
     }
 
+    /// The background and the foreground of the active tab: black on the
+    /// primary color for punk, the surface background for grunge and
+    /// plain.
+    pub(crate) fn active_tab_colors(&self) -> (Color, Color) {
+        let p = &self.palette;
+        match self.skin {
+            Skin::Punk => (p.primary, p.bg),
+            Skin::Grunge { .. } | Skin::Plain => (p.surface, p.fg),
+        }
+    }
+
     /// The spans of each tab of a tab bar, in order. Grunge and plain tabs
     /// are the same as `tab`. Punk tabs are joined cards: the first tab
     /// starts with `◢`, and each tab ends with one `◤` in its own card

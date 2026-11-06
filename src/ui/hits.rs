@@ -31,6 +31,16 @@ impl HitMap {
             .map(|&(_, hit)| hit)
     }
 
+    /// The region of a target: the last region with `hit`. `None` when no
+    /// region has it.
+    pub(crate) fn region(&self, hit: Hit) -> Option<Rect> {
+        self.regions
+            .iter()
+            .rev()
+            .find(|&&(_, h)| h == hit)
+            .map(|&(rect, _)| rect)
+    }
+
     /// Removes every region.
     pub(crate) fn clear(&mut self) {
         self.regions.clear();
