@@ -183,6 +183,7 @@ pub(crate) fn pane_tabs(panes: &[Box<dyn Pane>], order: &[usize]) -> Vec<PaneTab
         .map(|&i| PaneTab {
             key: panes[i].key(),
             title: panes[i].title(),
+            pane: i,
         })
         .collect()
 }

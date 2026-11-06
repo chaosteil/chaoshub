@@ -244,6 +244,8 @@ pub(crate) enum OverlayContent {
 pub(crate) struct PaneTab {
     pub key: char,
     pub title: &'static str,
+    /// The index of the pane in the pane registry.
+    pub pane: usize,
 }
 
 /// The space between two pane tabs on one row. With the edge space of a

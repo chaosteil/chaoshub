@@ -162,7 +162,11 @@ mod tests {
 
     #[test]
     fn pane_tabs_wrap_to_rows_that_fit() {
-        let tab = |key, title| PaneTab { key, title };
+        let tab = |key, title| PaneTab {
+            key,
+            title,
+            pane: 0,
+        };
         let tabs = [
             tab('1', "Description"),
             tab('2', "Checks"),
@@ -189,7 +193,8 @@ mod tests {
             ('6', "Agent"),
         ]
         .into_iter()
-        .map(|(key, title)| PaneTab { key, title })
+        .enumerate()
+        .map(|(pane, (key, title))| PaneTab { key, title, pane })
         .collect();
         let pane = PaneModel::Lines {
             lines: vec![vec![crate::app::models::Cell {
