@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::config::schema::{
-    CodeviewConfig, DetailConfig, MergeConfig, PrefetchConfig, RefreshConfig, RepoEntry, RepoMerge,
-    TerminalConfig, ThemeConfig, WorkspacesConfig,
+    AgentConfig, CodeviewConfig, DetailConfig, MergeConfig, PrefetchConfig, RefreshConfig,
+    RepoEntry, RepoMerge, TerminalConfig, ThemeConfig, WorkspacesConfig,
 };
 use crate::domain::keys::RepoKey;
 use crate::domain::repo::Repo;
@@ -40,6 +40,8 @@ pub(crate) struct Config {
     /// Where `enter` opens the detail of a pull request.
     pub detail: DetailConfig,
     pub merge: MergeConfig,
+    /// The pr-agent runs.
+    pub agent: AgentConfig,
     pub theme: ThemeConfig,
     pub terminal: TerminalConfig,
     /// Key binding overrides: an action id or app key name to a key.
@@ -167,7 +169,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::config::schema::{MergeMethodSetting, StackSetting};
+    use crate::config::schema::{EnvValue, MergeMethodSetting, StackSetting};
 
     const SAMPLE: &str = include_str!("testdata/sample.toml");
 
@@ -193,6 +195,7 @@ mod tests {
         assert!(config.codeview.zoom);
         assert_eq!(config.codeview.split, "right");
         assert_eq!(config.codeview.ratio, None);
+        assert_eq!(config.agent, AgentConfig::default());
         assert!(config.theme.grunge);
         assert!(config.theme.textures);
         assert!(config.theme.animations);
@@ -250,9 +253,36 @@ mod tests {
             config.keys.get("refresh").map(String::as_str),
             Some("ctrl-r")
         );
-        let agent = config.action("pr_agent").unwrap();
-        assert_eq!(agent["command"].as_str(), Some("pr-agent"));
-        assert_eq!(agent["env"]["OPENAI_KEY"].as_str(), Some("secret"));
+        assert_eq!(
+            config.agent.command,
+            ["uvx", "--from", "pr-agent", "pr-agent"]
+        );
+        assert_eq!(config.agent.model, "anthropic/claude-sonnet-5-5");
+        assert_eq!(config.agent.fallback_models, ["openai/gpt-6-luna"]);
+        assert_eq!(
+            config.agent.env,
+            BTreeMap::from([
+                (
+                    "ANTHROPIC__KEY".to_owned(),
+                    EnvValue::Command {
+                        command: "op read op://dev/anthropic/key".into()
+                    }
+                ),
+                (
+                    "OPENAI__KEY".to_owned(),
+                    EnvValue::FromEnv {
+                        from_env: "OPENAI_API_KEY".into()
+                    }
+                ),
+            ])
+        );
+        assert_eq!(config.agent.timeout_secs, 600);
+        assert_eq!(
+            config.agent.extra_instructions.review,
+            "Focus on correctness."
+        );
+        assert_eq!(config.agent.extra_instructions.ask, "");
+        assert_eq!(config.action("pr_agent"), None);
         let merge: MergeConfig = toml::Value::Table(config.action("merge").unwrap().clone())
             .try_into()
             .unwrap();
