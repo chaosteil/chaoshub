@@ -708,10 +708,8 @@ impl EventLoop {
                 tracing::warn!(%err, "cannot write the terminal status");
             }
 
-            let mut deadline = self.transitions.deadline();
-            if self.app.busy() {
-                deadline = deadline.min(SPINNER_FRAME);
-            }
+            let redraw = self.drawn != Some(self.app.generation());
+            let deadline = wait_deadline(&self.transitions, self.app.busy(), redraw);
             let wait = async { timeout(deadline, rx.recv()).await };
             match self.handle.block_on(wait) {
                 Ok(Some(msg)) => {
@@ -828,6 +826,23 @@ fn run_command(request: &LaunchRequest) -> io::Result<std::process::ExitStatus> 
         .current_dir(&request.cwd)
         .envs(request.env.iter().map(|(name, value)| (name, value)))
         .status()
+}
+
+/// How long the event loop waits for a message: the transition deadline,
+/// at most one spinner frame while the app is busy. Zero when `redraw` is
+/// true: the app changed after the last draw, for example when
+/// `Msg::TransitionsDone` dropped a closing overlay, so the next frame
+/// draws at once.
+fn wait_deadline(transitions: &Transitions, busy: bool, redraw: bool) -> Duration {
+    if redraw {
+        return Duration::ZERO;
+    }
+    let deadline = transitions.deadline();
+    if busy {
+        deadline.min(SPINNER_FRAME)
+    } else {
+        deadline
+    }
 }
 
 /// The time step of a transition frame: clamped to `MAX_ELAPSED`, and zero
@@ -2128,6 +2143,75 @@ mod tests {
         assert!(app.frame().prev_list.is_some());
         app.update(Msg::TransitionsDone);
         assert_eq!(app.frame().prev_list, None);
+    }
+
+    #[test]
+    fn the_frame_after_a_closing_overlay_draws_without_a_wait() {
+        let mut app = seeded_app(100, 14, crate::app::testdata::mine_snapshot());
+        let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
+        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let mut transitions = Transitions::new(true, 160).with_theme(theme);
+        let mut drawn = None;
+        let mut was_active = false;
+        // One pass of the event loop: a frame when a transition runs or
+        // the app changed, then `TransitionsDone` when the transitions
+        // ended, then the wait for the next message.
+        let mut pass = |app: &mut App, transitions: &mut Transitions| {
+            let mut screen = None;
+            if transitions.active() || drawn != Some(app.generation()) {
+                drawn = Some(app.generation());
+                draw(
+                    &mut terminal,
+                    app,
+                    transitions,
+                    &theme,
+                    Duration::from_millis(16),
+                    &mut HitMap::default(),
+                )
+                .unwrap();
+                screen = Some(terminal.backend().to_string());
+            }
+            let active = transitions.active();
+            if !active && (was_active || app.transition_leftovers()) {
+                app.update(Msg::TransitionsDone);
+            }
+            was_active = active;
+            let redraw = drawn != Some(app.generation());
+            (screen, wait_deadline(transitions, app.busy(), redraw))
+        };
+        let (plain, _) = pass(&mut app, &mut transitions);
+        let plain = plain.unwrap();
+        press(&mut app, '?');
+        for _ in 0..100 {
+            let (_, deadline) = pass(&mut app, &mut transitions);
+            if !transitions.active() && deadline == transitions.deadline() {
+                break;
+            }
+        }
+        assert!(!app.frame().overlays.is_empty(), "the help is open");
+        assert!(!transitions.active(), "the slide in ends");
+        app.update(Msg::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        )));
+        let mut passes = 0;
+        let deadline = loop {
+            passes += 1;
+            assert!(passes < 100, "the slide out ends");
+            let (_, deadline) = pass(&mut app, &mut transitions);
+            if !transitions.active() {
+                break deadline;
+            }
+        };
+        assert!(app.frame().overlays.is_empty(), "the overlay is gone");
+        assert_eq!(
+            deadline,
+            Duration::ZERO,
+            "the loop does not wait for the idle deadline"
+        );
+        let (screen, deadline) = pass(&mut app, &mut transitions);
+        assert_eq!(screen.as_deref(), Some(plain.as_str()));
+        assert_eq!(deadline, transitions.deadline(), "then the loop idles");
     }
 
     /// The same event every 2 ms, a `j` key by default. It counts its
