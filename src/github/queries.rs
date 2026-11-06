@@ -26,6 +26,12 @@ type DateTime = chrono::DateTime<chrono::Utc>;
 type URI = String;
 /// The GraphQL `GitObjectID` scalar: a commit SHA.
 type GitObjectID = String;
+/// The GraphQL `HTML` scalar: a string of rendered HTML.
+#[allow(
+    clippy::upper_case_acronyms,
+    reason = "the derive needs the GraphQL scalar name"
+)]
+type HTML = String;
 
 /// `viewer { login }`: the login of the token owner.
 #[derive(GraphQLQuery)]

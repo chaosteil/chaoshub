@@ -162,6 +162,7 @@ pub(crate) mod tests {
             head: observed(PrHead {
                 title: format!("Change {number}"),
                 body: String::new(),
+                body_html: String::new(),
                 author: "me".into(),
                 state: PrState::Open,
                 is_draft: false,

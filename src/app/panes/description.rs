@@ -755,6 +755,7 @@ mod tests {
         Comment {
             author: author.into(),
             body: "text".into(),
+            body_html: String::new(),
             created_at: test_time() + TimeDelta::minutes(minutes),
             url: String::new(),
         }
@@ -766,6 +767,7 @@ mod tests {
             author: author.into(),
             state,
             body: String::new(),
+            body_html: String::new(),
             submitted_at: minutes.map(|m| test_time() + TimeDelta::minutes(m)),
         }
     }

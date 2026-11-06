@@ -11,6 +11,7 @@
                 "login": "ci-bot"
               },
               "body": "Body 1.\r\nSecond line.  ",
+              "bodyHTML": "<p dir=\"auto\">Body 1.<br>\nSecond line.</p>",
               "createdAt": "2026-10-08T22:32:12Z",
               "url": "https://github.com/acme/monorepo/pull/3311#issuecomment-70007"
             },
@@ -20,6 +21,7 @@
                 "login": "colleague-1"
               },
               "body": "Body 2.\r\nSecond line.  ",
+              "bodyHTML": "<p dir=\"auto\">Body 2.<br>\nSecond line.</p>",
               "createdAt": "2026-10-08T22:32:16Z",
               "url": "https://github.com/acme/monorepo/pull/3311#issuecomment-70008"
             }
@@ -34,6 +36,7 @@
               },
               "state": "COMMENTED",
               "body": "Body 3.\r\nSecond line.  ",
+              "bodyHTML": "<p dir=\"auto\">Body 3.<br>\nSecond line.</p>",
               "submittedAt": "2026-10-08T22:36:01Z"
             },
             {
@@ -43,6 +46,7 @@
               },
               "state": "COMMENTED",
               "body": "",
+              "bodyHTML": "",
               "submittedAt": "2026-10-08T22:41:03Z"
             },
             {
@@ -52,6 +56,7 @@
               },
               "state": "COMMENTED",
               "body": "",
+              "bodyHTML": "",
               "submittedAt": "2026-10-08T22:41:05Z"
             }
           ]
@@ -70,6 +75,7 @@
                       "login": "colleague-1"
                     },
                     "body": "Body 6.\r\nSecond line.  ",
+                    "bodyHTML": "<p dir=\"auto\">Body 6.<br>\nSecond line.</p>",
                     "createdAt": "2026-10-08T22:36:01Z",
                     "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70003"
                   },
@@ -79,6 +85,7 @@
                       "login": "colleague-2"
                     },
                     "body": "Body 7.\r\nSecond line.  ",
+                    "bodyHTML": "<p dir=\"auto\">Body 7.<br>\nSecond line.</p>",
                     "createdAt": "2026-10-08T22:41:03Z",
                     "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70005"
                   }
@@ -97,6 +104,7 @@
                       "login": "colleague-1"
                     },
                     "body": "Body 8.\r\nSecond line.  ",
+                    "bodyHTML": "<p dir=\"auto\">Body 8.<br>\nSecond line.</p>",
                     "createdAt": "2026-10-08T22:36:01Z",
                     "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70004"
                   },
@@ -106,6 +114,7 @@
                       "login": "colleague-2"
                     },
                     "body": "Body 9.\r\nSecond line.  ",
+                    "bodyHTML": "<p dir=\"auto\">Body 9.<br>\nSecond line.</p>",
                     "createdAt": "2026-10-08T22:41:05Z",
                     "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70006"
                   }

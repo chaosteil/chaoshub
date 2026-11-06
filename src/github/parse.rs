@@ -230,6 +230,10 @@ macro_rules! pr_fields_parser {
 
         /// A pull request from the `PrFields` fragment. Every field group
         /// carries `observed_at`, the start time of the request.
+        #[allow(
+            clippy::too_many_lines,
+            reason = "the fragment maps to one pull request field by field"
+        )]
         pub(super) fn pull_request(
             fields: q::PrFields,
             me: &Me<'_>,
@@ -274,6 +278,7 @@ macro_rules! pr_fields_parser {
             let head = PrHead {
                 title: fields.title,
                 body: fields.body,
+                body_html: fields.body_html,
                 author: fields
                     .author
                     .map_or_else(|| "ghost".to_owned(), |author| author.login),
@@ -542,6 +547,7 @@ pub(crate) mod pr_detail {
                     .author
                     .map_or_else(|| "ghost".to_owned(), |author| author.login),
                 body: node.body,
+                body_html: node.body_html,
                 created_at: node.created_at,
                 url: node.url,
             }
@@ -585,6 +591,7 @@ pub(crate) mod pr_detail {
                     q::PullRequestReviewState::PENDING => ReviewState::Pending,
                 },
                 body: node.body,
+                body_html: node.body_html,
                 submitted_at: node.submitted_at,
             })
             .collect();

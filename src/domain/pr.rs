@@ -26,6 +26,8 @@ pub(crate) struct PullRequest {
 pub(crate) struct PrHead {
     pub title: String,
     pub body: String,
+    #[serde(default)]
+    pub body_html: String,
     pub author: String,
     pub state: PrState,
     pub is_draft: bool,
@@ -140,6 +142,7 @@ mod tests {
             head: observed(PrHead {
                 title: "Add the thing".into(),
                 body: "Body".into(),
+                body_html: String::new(),
                 author: "chaosteil".into(),
                 state: PrState::Open,
                 is_draft: false,

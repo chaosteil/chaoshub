@@ -39,6 +39,7 @@ pub(crate) fn pr(repo: &str, number: u64, title: &str) -> PullRequest {
         head: observed(PrHead {
             title: title.into(),
             body: String::new(),
+            body_html: String::new(),
             author: "chaosteil".into(),
             state: PrState::Open,
             is_draft: false,
@@ -293,6 +294,7 @@ pub(crate) fn detail() -> crate::domain::detail::PrDetail {
     let comment = |author: &str, body: &str, minutes: i64| Comment {
         author: author.into(),
         body: body.into(),
+        body_html: String::new(),
         created_at: test_time() + chrono::TimeDelta::minutes(minutes),
         url: format!("https://github.com/c/{minutes}"),
     };
@@ -307,12 +309,14 @@ pub(crate) fn detail() -> crate::domain::detail::PrDetail {
                 author: "bob".into(),
                 state: ReviewState::ChangesRequested,
                 body: "Please split the **transition** module.".into(),
+                body_html: String::new(),
                 submitted_at: Some(test_time() + chrono::TimeDelta::hours(2)),
             },
             Review {
                 author: "carol".into(),
                 state: ReviewState::Pending,
                 body: String::new(),
+                body_html: String::new(),
                 submitted_at: None,
             },
         ],

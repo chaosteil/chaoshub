@@ -16,6 +16,7 @@ fragment PrFields on PullRequest {
   number
   title
   body
+  bodyHTML
   url
   isDraft
   state
