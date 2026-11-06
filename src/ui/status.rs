@@ -14,16 +14,101 @@ const PAD: u16 = 1;
 /// The minimum space between the message and its neighbors.
 const SPACE: u16 = 2;
 
+/// The places of the parts of the bar.
+struct Parts {
+    /// The bar without the space at each end.
+    inner: Rect,
+    /// The width of the left part, without the band end.
+    left_width: u16,
+    /// The cells of the band end after the left part.
+    tail: u16,
+    right_x: u16,
+    right_width: u16,
+}
+
+/// Where the parts of the bar go. `None` when the bar is too small.
+fn parts(model: &StatusModel, area: Rect, theme: &Theme) -> Option<Parts> {
+    if area.width <= 2 * PAD || area.height == 0 {
+        return None;
+    }
+    let palette = &theme.palette;
+    let inner = Rect::new(area.x + PAD, area.y, area.width - 2 * PAD, 1);
+    let right_width = u16::try_from(style::line(&model.right, palette).width())
+        .unwrap_or(u16::MAX)
+        .min(inner.width);
+    let right_x = inner.right() - right_width;
+    // The band takes one cell after the text and one for its end.
+    let tail = if theme.status_band().end.is_some() {
+        2
+    } else {
+        0
+    };
+    let left_width = u16::try_from(style::line(&model.left, palette).width())
+        .unwrap_or(u16::MAX)
+        .min((right_x - inner.x).saturating_sub(tail));
+    Some(Parts {
+        inner,
+        left_width,
+        tail,
+        right_x,
+        right_width,
+    })
+}
+
+/// The place of the message: the message area between the left and the
+/// right part, and the x and the text of the message in that area. The
+/// message sits in the middle of the bar, or as close to it as the left
+/// and right parts permit. A long message is cut. `None` without a
+/// message or without room.
+pub(crate) struct MessagePlace {
+    pub area: Rect,
+    pub x: u16,
+    pub text: String,
+}
+
+/// The place of the message of `model` in the bar `area`.
+pub(crate) fn message_place(
+    model: &StatusModel,
+    area: Rect,
+    theme: &Theme,
+) -> Option<MessagePlace> {
+    let center = model.center.as_ref()?;
+    let parts = parts(model, area, theme)?;
+    let left_width = parts.left_width + parts.tail;
+    let lo = parts.inner.x + left_width + if left_width > 0 { SPACE } else { 0 };
+    let hi = parts
+        .right_x
+        .saturating_sub(if parts.right_width > 0 { SPACE } else { 0 });
+    if hi <= lo {
+        return None;
+    }
+    let free = hi - lo;
+    let text = crate::ui::text::truncate(&center.text, usize::from(free));
+    let width = u16::try_from(crate::ui::text::width(&text)).unwrap_or(free);
+    let middle = (area.x + area.width / 2).saturating_sub(width / 2);
+    Some(MessagePlace {
+        area: Rect::new(lo, parts.inner.y, free, 1),
+        x: middle.clamp(lo, hi - width),
+        text,
+    })
+}
+
 /// Draws the status bar. The theme picks the bar style, an optional band
 /// behind the left part with a diagonal end, and the message color.
 pub(crate) fn render(model: &StatusModel, area: Rect, buf: &mut Buffer, theme: &Theme) {
     let palette = &theme.palette;
     let band = theme.status_band();
     buf.set_style(area, band.bar);
-    if area.width <= 2 * PAD || area.height == 0 {
+    let Some(parts) = parts(model, area, theme) else {
         return;
-    }
-    let inner = Rect::new(area.x + PAD, area.y, area.width - 2 * PAD, 1);
+    };
+    let Parts {
+        inner,
+        left_width,
+        tail,
+        right_x,
+        right_width,
+    } = parts;
     let mut left = style::line(&model.left, palette);
     if let Some(style) = band.left {
         for span in &mut left.spans {
@@ -31,16 +116,7 @@ pub(crate) fn render(model: &StatusModel, area: Rect, buf: &mut Buffer, theme: &
         }
     }
     let right = style::line(&model.right, palette);
-    let right_width = u16::try_from(right.width())
-        .unwrap_or(u16::MAX)
-        .min(inner.width);
-    let right_x = inner.right() - right_width;
     right.render(Rect::new(right_x, inner.y, right_width, 1), buf);
-    // The band takes one cell after the text and one for its end.
-    let tail = if band.end.is_some() { 2 } else { 0 };
-    let left_width = u16::try_from(left.width())
-        .unwrap_or(u16::MAX)
-        .min((right_x - inner.x).saturating_sub(tail));
     if let Some(style) = band.left {
         let width = inner.x - area.x + left_width + tail.saturating_sub(1);
         buf.set_style(Rect::new(area.x, area.y, width, 1), style);
@@ -49,22 +125,11 @@ pub(crate) fn render(model: &StatusModel, area: Rect, buf: &mut Buffer, theme: &
     if let Some((glyph, style)) = band.end {
         buf.set_string(inner.x + left_width + 1, inner.y, glyph, style);
     }
-    let left_width = left_width + tail;
-    let Some(center) = &model.center else {
+    let (Some(center), Some(MessagePlace { x, text, .. })) =
+        (&model.center, message_place(model, area, theme))
+    else {
         return;
     };
-    // The message sits in the middle of the bar, or as close to it as the
-    // left and right parts permit. A long message is cut.
-    let lo = inner.x + left_width + if left_width > 0 { SPACE } else { 0 };
-    let hi = right_x.saturating_sub(if right_width > 0 { SPACE } else { 0 });
-    if hi <= lo {
-        return;
-    }
-    let free = hi - lo;
-    let text = crate::ui::text::truncate(&center.text, usize::from(free));
-    let width = u16::try_from(crate::ui::text::width(&text)).unwrap_or(free);
-    let middle = (area.x + area.width / 2).saturating_sub(width / 2);
-    let x = middle.clamp(lo, hi - width);
     let mut message = band.bar.patch(style::cell_style(center.style, palette));
     // A message with a state keeps its state color.
     if !matches!(center.style, CellStyle::Danger | CellStyle::Warn)
