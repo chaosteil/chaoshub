@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use crate::app::models::{Cell, CellStyle, PaneModel, TreeNode};
 use crate::app::panes::{Pane, PaneState};
 use crate::app::tabs::cells::cell;
-use crate::app::tabs::{Handled, KeyCx};
+use crate::app::tabs::{Handled, KeyCx, tree_toggled};
 use crate::bus::{Cmd, KeyChord, Size, Target};
 use crate::domain::files::{ChangedFile, FileStatus, PrFiles};
 use crate::domain::pr::PullRequest;
@@ -69,9 +69,11 @@ impl Pane for FilesPane {
         if !cx.keys.matches("open", key) {
             return None;
         }
-        let toggle = {
+        let (toggle, before) = {
             let state = ps.ext.downcast_ref::<FilesState>()?;
-            nodes(cx, state).into_iter().nth(ps.cursor)?.1?
+            let nodes = nodes(cx, state);
+            let before = nodes.len();
+            (nodes.into_iter().nth(ps.cursor)?.1?, before)
         };
         let state = ps.ext.downcast_mut::<FilesState>()?;
         match toggle {
@@ -86,10 +88,8 @@ impl Pane for FilesPane {
                 }
             }
         }
-        Some(Handled {
-            changed: true,
-            ..Handled::default()
-        })
+        let after = nodes(cx, state).len();
+        Some(tree_toggled(ps.cursor, before, after))
     }
 }
 
@@ -321,7 +321,7 @@ mod tests {
     use crate::app::state::AppState;
     use crate::app::target::pr_target;
     use crate::app::testdata;
-    use crate::bus::{KeyCode, KeyModifiers};
+    use crate::bus::{KeyCode, KeyModifiers, UiEvent};
 
     /// The text of each node, with its depth and expand marker.
     fn outline(model: &PaneModel) -> Vec<String> {
@@ -459,7 +459,16 @@ mod tests {
         let mut ps = FilesPane.init_state();
         ps.cursor = 8;
         let (model, handled) = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
-        assert!(handled.is_some_and(|h| h.changed));
+        let handled = handled.unwrap();
+        assert!(handled.changed);
+        assert_eq!(
+            handled.events,
+            [UiEvent::TreeExpanded {
+                first_row: 9,
+                rows: 7
+            }],
+            "the patch unfolds"
+        );
         assert_eq!(
             outline(&model)[8..16],
             [
@@ -495,7 +504,8 @@ mod tests {
                 .all(|n| n.cells.iter().all(|c| c.style != CellStyle::Markdown))
         );
         assert!(tree_nodes(&model)[9..16].iter().all(|n| n.depth == 4));
-        let (model, _) = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        let (model, handled) = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        assert_eq!(handled.unwrap().events, [], "a collapse is instant");
         assert_eq!(outline(&model)[8], "      ▸ files.rs +2 −1");
         assert_eq!(
             outline(&model)[9],
@@ -513,8 +523,12 @@ mod tests {
             outline(&model)[5..],
             ["▸ src/ +3 −2", "▸ old.txt +0 −2 removed"]
         );
-        let (model, _) = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        let (model, handled) = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
         assert_eq!(outline(&model)[6], "  ▾ app/ +2 −1");
+        assert!(matches!(
+            handled.unwrap().events.as_slice(),
+            [UiEvent::TreeExpanded { first_row: 6, .. }]
+        ));
         ps.cursor = 0;
         let (_, handled) = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
         assert_eq!(handled, None, "Enter on the summary does nothing");

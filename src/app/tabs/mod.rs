@@ -66,6 +66,25 @@ pub(crate) struct KeyCx<'a> {
     pub keys: &'a Keymap,
 }
 
+/// The result of a `open` key on a tree node: the node at `cursor`
+/// expanded when the tree has more nodes `after` than `before`. Its new
+/// nodes follow it, and `UiEvent::TreeExpanded` lets them unfold.
+pub(crate) fn tree_toggled(cursor: usize, before: usize, after: usize) -> Handled {
+    let events = if after > before {
+        vec![UiEvent::TreeExpanded {
+            first_row: cursor + 1,
+            rows: after - before,
+        }]
+    } else {
+        Vec::new()
+    };
+    Handled {
+        events,
+        changed: true,
+        ..Handled::default()
+    }
+}
+
 /// The result of a key that a tab or a pane handled.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct Handled {

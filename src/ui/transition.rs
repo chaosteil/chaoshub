@@ -18,6 +18,10 @@
 //!   picker, the selection band wipes onto the new row from the left in
 //!   60 ms. The old row loses its band at once. Not on the first frame of
 //!   a list, a pane or a picker.
+//! - Tree expand (`FxKey::Unfold`): in a pane tree of the popup, the new
+//!   rows of an expanded node show from top to bottom in 80 ms, and the
+//!   rows below them stay where they were until the new rows push them
+//!   down. Collapsing is instant.
 //! - New status message (`FxKey::StatusIn`): the message text slides in
 //!   from the left edge of the message area of the status bar in 80 ms.
 //! - Expired status message: `fade_to_fg` toward the status bar grey.
@@ -44,7 +48,7 @@ use crate::app::layout::Areas;
 use crate::app::models::{FrameModel, OverlayContent, PaneModel, RowItem, TabBarModel};
 use crate::bus::{Hit, OverlayKind, UiEvent};
 use crate::domain::keys::PrKey;
-use crate::theme::{Skin, Theme, ThemeKind};
+use crate::theme::{Skin, Theme, ThemeBlock, ThemeKind};
 use crate::ui::hits::HitMap;
 use crate::ui::list::Window;
 use crate::ui::status::message_place;
@@ -66,6 +70,9 @@ const ROW_GLOW_MS: u64 = 250;
 /// The duration of the slide in of a new status message, in
 /// milliseconds.
 const STATUS_IN_MS: u64 = 80;
+/// The duration of the unfold of the new rows of a tree node, in
+/// milliseconds.
+const UNFOLD_MS: u64 = 80;
 /// The length of the gradient at the edge of a sliding overlay.
 const SLIDE_GRADIENT: u16 = 3;
 /// The frame deadline of the event loop while a transition runs.
@@ -84,6 +91,7 @@ enum FxKey {
     Flash,
     /// The glow of the list row at this index.
     Glow(usize),
+    Unfold,
     Scroll,
     Status,
     StatusIn,
@@ -113,6 +121,7 @@ fn key(event: &UiEvent) -> FxKey {
         UiEvent::RowFlash(_) => FxKey::Flash,
         // `prepare` keys a glow by its row.
         UiEvent::RowGlow(_) => FxKey::Glow(0),
+        UiEvent::TreeExpanded { .. } => FxKey::Unfold,
         UiEvent::OverlayOpened(kind) | UiEvent::OverlayClosed(kind) => FxKey::Overlay(slot(*kind)),
         UiEvent::ScrollTo { .. } => FxKey::Scroll,
         UiEvent::StatusExpired => FxKey::Status,
@@ -245,6 +254,14 @@ pub(crate) struct Transitions {
     /// The cells of a new status message that `process` slides in: from
     /// the left edge of the message area to the end of the message.
     message_in: Option<Rect>,
+    /// The first node and the number of the new nodes of an expanded tree
+    /// node that `prepare` unfolds.
+    pending_unfold: Option<(usize, usize)>,
+    /// The area of the popup while its pane is a tree, from `prepare`.
+    tree_area: Option<Rect>,
+    /// The popup of the last frame while its pane is a tree, before the
+    /// effects: the rows before an expand.
+    tree_frame: Option<Buffer>,
     /// The list rows during a scroll.
     rows: RefCount<Buffer>,
     /// The offsets of the running scroll.
@@ -276,6 +293,9 @@ impl Transitions {
             last_message: None,
             prepared: false,
             message_in: None,
+            pending_unfold: None,
+            tree_area: None,
+            tree_frame: None,
             rows: empty(),
             scroll: None,
             status_pending: false,
@@ -309,6 +329,9 @@ impl Transitions {
                 UiEvent::PaneTabChanged { from, to } => self.pending_pane = Some((from, to)),
                 UiEvent::RowFlash(pr) => self.pending_flash = Some(pr),
                 UiEvent::RowGlow(pr) => self.pending_glows.push(pr),
+                UiEvent::TreeExpanded { first_row, rows } => {
+                    self.pending_unfold = Some((first_row, rows));
+                }
                 UiEvent::OverlayOpened(kind) => self.overlay_slide(key, kind, true),
                 UiEvent::OverlayClosed(kind) => self.overlay_slide(key, kind, false),
                 UiEvent::ScrollTo { from, to, .. } => self.scroll(key, from, to),
@@ -539,6 +562,74 @@ impl Transitions {
         Some((index, Rect::new(body.x, body.y + offset, body.width, 1)))
     }
 
+    /// The top popup of a frame and its area, when its pane is a tree.
+    fn tree_popup<'m>(
+        model: &'m FrameModel,
+        areas: &Areas,
+    ) -> Option<(&'m crate::app::models::OverlayModel, Rect)> {
+        let overlay = model.overlays.iter().rev().find(|o| !o.closing)?;
+        matches!(
+            overlay.content,
+            OverlayContent::Popup {
+                pane: PaneModel::Tree { .. },
+                ..
+            }
+        )
+        .then(|| (overlay, overlay_area(overlay, areas)))
+    }
+
+    /// Unfolds the new nodes `first..first + rows` of the tree pane of the
+    /// popup. The screen rows of the new nodes come from the hit regions
+    /// of the new frame. `old` is the popup of the frame before the
+    /// expand. At alpha `a`, the first `a × n` new screen rows show, and
+    /// the rows of `old` from the first new row down stay below them.
+    fn unfold(&mut self, model: &FrameModel, areas: &Areas, first: usize, rows: usize) {
+        let (Some((overlay, area)), Some(old)) = (Self::tree_popup(model, areas), &self.tree_frame)
+        else {
+            return;
+        };
+        if old.area != area.intersection(screen(areas)) {
+            return;
+        }
+        let mut buf = Buffer::empty(screen(areas));
+        let mut hits = HitMap::default();
+        render_overlay(overlay, areas, &mut buf, &self.theme, &mut hits);
+        let Some(top) = hits.region(Hit::PaneRow(first)) else {
+            return;
+        };
+        let bottom = ThemeBlock::inner(area).bottom();
+        // New nodes past the pane bottom are cut: they end at the bottom.
+        let end = hits
+            .region(Hit::PaneRow(first + rows - 1))
+            .map_or(bottom, Rect::bottom)
+            .min(bottom);
+        let pane = Rect::new(top.x, top.y, top.width, bottom.saturating_sub(top.y));
+        let new_rows = end.saturating_sub(top.y);
+        if new_rows == 0 || pane.is_empty() {
+            return;
+        }
+        let old = copy(old, pane);
+        let timer = Self::timer(Duration::from_millis(UNFOLD_MS));
+        let effect = fx::effect_fn_buf(old, timer, move |old, cx, buf| {
+            let area = old.area;
+            let shown = (f32::from(new_rows) * cx.alpha().clamp(0.0, 1.0)).round();
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "shown is rounded and between 0 and new_rows"
+            )]
+            let shown = (shown as u16).min(new_rows);
+            for y in area.y + shown..area.bottom() {
+                for x in area.left()..area.right() {
+                    if let Some(dst) = buf.cell_mut((x, y)) {
+                        *dst = old[(x, y - shown)].clone();
+                    }
+                }
+            }
+        });
+        self.manager.add_unique_effect(FxKey::Unfold, effect);
+    }
+
     /// An overlay slides in or out of its area.
     fn overlay_slide(&mut self, key: FxKey, kind: OverlayKind, open: bool) {
         let duration = match kind {
@@ -635,6 +726,12 @@ impl Transitions {
                 self.row_fade(FxKey::Glow(index), row, surface, ROW_GLOW_MS);
             }
         }
+        if let Some((first, rows)) = self.pending_unfold.take()
+            && rows > 0
+        {
+            self.unfold(model, areas, first, rows);
+        }
+        self.tree_area = Self::tree_popup(model, areas).map(|(_, area)| area);
         let message = model.status.center.as_ref().map(|c| c.text.clone());
         if self.prepared && message.is_some() && self.last_message != message {
             self.message_in =
@@ -685,6 +782,9 @@ impl Transitions {
             if let Some(span) = self.message_in.take() {
                 self.status_slide_in(buf, span.intersection(status));
             }
+            self.tree_frame = self
+                .tree_area
+                .map(|area| copy(buf, area.intersection(buf.area)));
             self.status_row = Some(copy(buf, status));
         }
         self.manager.process_effects(elapsed.into(), buf, area);
@@ -773,6 +873,7 @@ impl Transitions {
         self.pending_pane = None;
         self.pending_flash = None;
         self.pending_glows.clear();
+        self.pending_unfold = None;
         self.scroll = None;
         self.status_pending = false;
     }
@@ -1706,6 +1807,126 @@ mod tests {
         let off = status_text(&draw_view(&mut terminal, &mut fx, &third, 0));
         assert!(!fx.active());
         assert_eq!(off, plain, "nothing with animations off");
+    }
+
+    /// The popup with the tree pane fixture, its second node collapsed and
+    /// under the cursor, and `children` new nodes after it when it is
+    /// expanded.
+    fn tree_frame(children: &[&str]) -> FrameModel {
+        let PaneModel::Tree { mut nodes } = testdata::tree_pane() else {
+            unreachable!()
+        };
+        nodes[1].expanded = Some(!children.is_empty());
+        let new = children.iter().map(|text| crate::app::models::TreeNode {
+            depth: 1,
+            expanded: None,
+            cells: vec![testdata::cell(text, crate::app::models::CellStyle::Normal)],
+        });
+        nodes.splice(2..2, new);
+        let mut overlay = testdata::popup_overlay();
+        if let OverlayContent::Popup { pane, cursor, .. } = &mut overlay.content {
+            *pane = PaneModel::Tree { nodes };
+            *cursor = 1;
+        }
+        testdata::with_overlay(overlay)
+    }
+
+    /// The text of the screen rows.
+    fn screen_rows(buf: &Buffer) -> Vec<String> {
+        (0..HEIGHT)
+            .map(|y| (0..WIDTH).map(|x| buf[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    /// The screen row of the first line that contains `text`.
+    fn row_with(buf: &Buffer, text: &str) -> usize {
+        screen_rows(buf)
+            .iter()
+            .position(|row| row.contains(text))
+            .unwrap_or_else(|| panic!("no {text:?}"))
+    }
+
+    #[test]
+    fn the_new_rows_of_an_expanded_node_unfold() {
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let expanded = tree_frame(&["first child", "second child", "third child"]);
+        let plain = draw_view(
+            &mut terminal,
+            &mut Transitions::new(false, 160),
+            &expanded,
+            0,
+        );
+        let mut fx = new();
+        let before = draw_view(&mut terminal, &mut fx, &tree_frame(&[]), 0);
+        let y0 = row_with(&before, "src/ui/pane.rs:7");
+        assert_eq!(row_with(&plain, "first child"), y0);
+        fx.apply(vec![UiEvent::TreeExpanded {
+            first_row: 2,
+            rows: 3,
+        }]);
+        let start = draw_view(&mut terminal, &mut fx, &expanded, 0);
+        assert!(fx.active());
+        assert_eq!(
+            screen_rows(&start)[y0..],
+            screen_rows(&before)[y0..],
+            "the rows below stay where they were"
+        );
+        let middle = draw_view(&mut terminal, &mut fx, &expanded, 20);
+        assert_eq!(row_with(&middle, "first child"), y0);
+        assert_eq!(row_with(&middle, "second child"), y0 + 1);
+        assert_eq!(row_with(&middle, "src/ui/pane.rs:7"), y0 + 2, "pushed down");
+        assert!(
+            !screen_rows(&middle)
+                .iter()
+                .any(|r| r.contains("third child"))
+        );
+        let end = draw_view(&mut terminal, &mut fx, &expanded, 60);
+        assert_eq!(screen_rows(&end), screen_rows(&plain));
+        draw_view(&mut terminal, &mut fx, &expanded, 16);
+        assert!(!fx.active());
+    }
+
+    #[test]
+    fn a_second_expand_retargets_the_unfold_and_off_shows_the_rows_at_once() {
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let one = tree_frame(&["first child"]);
+        let two = tree_frame(&["first child", "second child"]);
+        let plain = draw_view(&mut terminal, &mut Transitions::new(false, 160), &two, 0);
+        let mut fx = new();
+        draw_view(&mut terminal, &mut fx, &tree_frame(&[]), 0);
+        fx.apply(vec![UiEvent::TreeExpanded {
+            first_row: 2,
+            rows: 1,
+        }]);
+        draw_view(&mut terminal, &mut fx, &one, 0);
+        let before = draw_view(&mut terminal, &mut fx, &one, 20);
+        let y0 = row_with(&before, "first child") + 1;
+        fx.apply(vec![UiEvent::TreeExpanded {
+            first_row: 3,
+            rows: 1,
+        }]);
+        draw_view(&mut terminal, &mut fx, &two, 0);
+        let start = draw_view(&mut terminal, &mut fx, &two, 0);
+        assert_eq!(
+            row_with(&start, "src/ui/pane.rs:7"),
+            y0,
+            "from the last frame"
+        );
+        let end = draw_view(&mut terminal, &mut fx, &two, 80);
+        assert_eq!(screen_rows(&end), screen_rows(&plain));
+        let mut fx = Transitions::new(false, 160).with_theme(testdata::pierre());
+        draw_view(&mut terminal, &mut fx, &tree_frame(&[]), 0);
+        fx.apply(vec![UiEvent::TreeExpanded {
+            first_row: 2,
+            rows: 2,
+        }]);
+        let off = draw_view(&mut terminal, &mut fx, &two, 0);
+        assert!(!fx.active());
+        assert_eq!(
+            screen_rows(&off),
+            screen_rows(&plain),
+            "nothing with animations off"
+        );
     }
 
     #[test]
