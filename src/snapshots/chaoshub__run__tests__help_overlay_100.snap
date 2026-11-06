@@ -3,12 +3,12 @@ source: src/run.rs
 expression: screen(&mut app)
 ---
 "▌ 1 M I N E   2 R E V I E W   3 T E A M                ˙                            ˙      chaoshub "
-"▌─ fix(store): reopen the connection after an error    #99  ▛▀▌ H E L P▀▀▀▀▀▀░▀▀▀▀▒▀▀▀▀▀▀▀▀▀▓▀▀▓▒▀▀▜"
+"▌─ fix(store): reopen the connection after a…    #99        ▛▀▌ H E L P▀▀▀▀▀▀░▀▀▀▀▒▀▀▀▀▀▀▀▀▀▓▀▀▓▒▀▀▜"
 " stack #12 -> main · 3 PRs                                  ▌                                      ▐"
-" ┌ feat(ui): popup frame with pane tabs               #103 w▌ ▌ K E Y S                            ▐"
-" ├ feat(app): checks pane                             #102 x▌ 1             tab Mine               ▒"
-" └ feat(app): Pane trait, registry and overlay sta…   #101  ▌ 2             tab Review             ▐"
-" ─ docs: describe the export file format in the RE…     #7  ▌ 3             tab Team               ▒"
+" ┌ feat(ui): popup frame with pane tabs         #103 wqnvzxo▌ ▌ K E Y S                            ▐"
+" ├ feat(app): checks pane                       #102 xlmkrtp▌ 1             tab Mine               ▒"
+" └ feat(app): Pane trait, registry and overl…   #101        ▌ 2             tab Review             ▐"
+" ─ docs: describe the export file format in …     #7        ▌ 3             tab Team               ▒"
 "    ░˙ ·    ˙                     ·      ˙    ˙      ˙  ░   ▌ tab           next tab               ▐"
 " ░   ˙                  ·                        ·        · ▌ j k           down, up               ▐"
 "     ·    ·        ˙                  ░˙      ˙             ▌ g G           top, bottom            ▐"
