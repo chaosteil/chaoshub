@@ -22,6 +22,9 @@
 //! - Action success (`FxKey::Flash`): the list row of the pull request
 //!   fades from the primary color to its background in 200 ms. Not when
 //!   the row is out of view or under an overlay.
+//! - Sync change (`FxKey::Glow(row)`): a visible row whose CI state, check
+//!   counts or review counts changed fades from the surface color to its
+//!   background in 250 ms. One glow per row at a time.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -55,6 +58,8 @@ const TAB_GLIDE_MS: u64 = 120;
 const BAND_WIPE_MS: u64 = 60;
 /// The duration of the row flash after an action, in milliseconds.
 const ROW_FLASH_MS: u64 = 200;
+/// The duration of the row glow after a sync, in milliseconds.
+const ROW_GLOW_MS: u64 = 250;
 /// The length of the gradient at the edge of a sliding overlay.
 const SLIDE_GRADIENT: u16 = 3;
 /// The frame deadline of the event loop while a transition runs.
@@ -71,6 +76,8 @@ enum FxKey {
     PaneTab,
     Band,
     Flash,
+    /// The glow of the list row at this index.
+    Glow(usize),
     Scroll,
     Status,
     Overlay(usize),
@@ -97,6 +104,8 @@ fn key(event: &UiEvent) -> FxKey {
         UiEvent::TabChanged { .. } => FxKey::Tab,
         UiEvent::PaneTabChanged { .. } => FxKey::PaneTab,
         UiEvent::RowFlash(_) => FxKey::Flash,
+        // `prepare` keys a glow by its row.
+        UiEvent::RowGlow(_) => FxKey::Glow(0),
         UiEvent::OverlayOpened(kind) | UiEvent::OverlayClosed(kind) => FxKey::Overlay(slot(*kind)),
         UiEvent::ScrollTo { .. } => FxKey::Scroll,
         UiEvent::StatusExpired => FxKey::Status,
@@ -219,6 +228,8 @@ pub(crate) struct Transitions {
     last_cursor: Option<(CursorView, usize)>,
     /// The pull request of a row flash that `prepare` starts.
     pending_flash: Option<PrKey>,
+    /// The pull requests of the row glows that `prepare` starts.
+    pending_glows: Vec<PrKey>,
     /// The list rows during a scroll.
     rows: RefCount<Buffer>,
     /// The offsets of the running scroll.
@@ -246,6 +257,7 @@ impl Transitions {
             pending_pane: None,
             last_cursor: None,
             pending_flash: None,
+            pending_glows: Vec::new(),
             rows: empty(),
             scroll: None,
             status_pending: false,
@@ -278,6 +290,7 @@ impl Transitions {
                 UiEvent::TabChanged { from, to } => self.pending_tab = Some((from, to)),
                 UiEvent::PaneTabChanged { from, to } => self.pending_pane = Some((from, to)),
                 UiEvent::RowFlash(pr) => self.pending_flash = Some(pr),
+                UiEvent::RowGlow(pr) => self.pending_glows.push(pr),
                 UiEvent::OverlayOpened(kind) => self.overlay_slide(key, kind, true),
                 UiEvent::OverlayClosed(kind) => self.overlay_slide(key, kind, false),
                 UiEvent::ScrollTo { from, to, .. } => self.scroll(key, from, to),
@@ -491,9 +504,9 @@ impl Transitions {
         self.manager.add_unique_effect(key, effect);
     }
 
-    /// The screen row of the list row of `pr`. `None` when the row is out
-    /// of view, or when an overlay is open over the list.
-    fn list_row(model: &FrameModel, areas: &Areas, pr: &PrKey) -> Option<Rect> {
+    /// The index and the screen row of the list row of `pr`. `None` when
+    /// the row is out of view, or when an overlay is open over the list.
+    fn list_row(model: &FrameModel, areas: &Areas, pr: &PrKey) -> Option<(usize, Rect)> {
         if model.overlays.iter().any(|o| !o.closing) {
             return None;
         }
@@ -505,7 +518,7 @@ impl Transitions {
         let body = list_areas(model, areas).body;
         let offset = index.checked_sub(list.scroll)?;
         let offset = u16::try_from(offset).ok().filter(|&o| o < body.height)?;
-        Some(Rect::new(body.x, body.y + offset, body.width, 1))
+        Some((index, Rect::new(body.x, body.y + offset, body.width, 1)))
     }
 
     /// An overlay slides in or out of its area.
@@ -594,9 +607,15 @@ impl Transitions {
             self.glide(FxKey::Tab, glide);
         }
         if let Some(pr) = self.pending_flash.take()
-            && let Some(row) = Self::list_row(model, areas, &pr)
+            && let Some((_, row)) = Self::list_row(model, areas, &pr)
         {
             self.row_fade(FxKey::Flash, row, self.theme.palette.primary, ROW_FLASH_MS);
+        }
+        for pr in std::mem::take(&mut self.pending_glows) {
+            if let Some((index, row)) = Self::list_row(model, areas, &pr) {
+                let surface = self.theme.palette.surface;
+                self.row_fade(FxKey::Glow(index), row, surface, ROW_GLOW_MS);
+            }
         }
         let current = cursor_view(model);
         if let (Some((view, cursor)), Some((last_view, last))) = (&current, &self.last_cursor)
@@ -683,6 +702,7 @@ impl Transitions {
         self.pending_tab = None;
         self.pending_pane = None;
         self.pending_flash = None;
+        self.pending_glows.clear();
         self.scroll = None;
         self.status_pending = false;
     }
@@ -1506,6 +1526,41 @@ mod tests {
         assert!(!fx.active(), "the row is above the window");
         let mut fx = Transitions::new(false, 160).with_theme(testdata::pierre());
         fx.apply(vec![UiEvent::RowFlash(row_key(2))]);
+        let buf = draw_view(&mut terminal, &mut fx, &model, 0);
+        assert!(!fx.active());
+        assert_eq!(bg(&buf, 2), bg(&plain, 2), "nothing with animations off");
+    }
+
+    #[test]
+    fn a_synced_row_glows_and_each_row_has_one_glow() {
+        let p = testdata::pierre().palette;
+        let model = list_at(1);
+        let bg = |buf: &Buffer, index: usize| buf[(10, list_y(index))].bg;
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut fx = new();
+        let plain = draw_view(&mut terminal, &mut fx, &model, 0);
+        fx.apply(vec![
+            UiEvent::RowGlow(row_key(2)),
+            UiEvent::RowGlow(row_key(3)),
+        ]);
+        let start = draw_view(&mut terminal, &mut fx, &model, 0);
+        assert!(fx.active());
+        assert_eq!((bg(&start, 2), bg(&start, 3)), (p.surface, p.surface));
+        let middle = draw_view(&mut terminal, &mut fx, &model, 125);
+        assert_ne!(bg(&middle, 2), p.surface);
+        assert_ne!(bg(&middle, 2), bg(&plain, 2));
+        // A second glow of row 2 starts it again; row 3 runs on.
+        fx.apply(vec![UiEvent::RowGlow(row_key(2))]);
+        draw_view(&mut terminal, &mut fx, &model, 0);
+        let again = draw_view(&mut terminal, &mut fx, &model, 0);
+        assert_eq!(bg(&again, 2), p.surface, "the glow of row 2 restarts");
+        assert_ne!(bg(&again, 3), p.surface, "row 3 keeps its own glow");
+        let end = draw_view(&mut terminal, &mut fx, &model, 250);
+        assert_eq!((bg(&end, 2), bg(&end, 3)), (bg(&plain, 2), bg(&plain, 3)));
+        draw_view(&mut terminal, &mut fx, &model, 16);
+        assert!(!fx.active());
+        let mut fx = Transitions::new(false, 160).with_theme(testdata::pierre());
+        fx.apply(vec![UiEvent::RowGlow(row_key(2))]);
         let buf = draw_view(&mut terminal, &mut fx, &model, 0);
         assert!(!fx.active());
         assert_eq!(bg(&buf, 2), bg(&plain, 2), "nothing with animations off");

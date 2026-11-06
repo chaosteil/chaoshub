@@ -13,7 +13,7 @@ use crate::app::frame;
 use crate::app::help::help_model;
 use crate::app::keymap::{self, Keymap};
 use crate::app::layout::Areas;
-use crate::app::models::{CellStyle, PaneModel, RowItem};
+use crate::app::models::{Cell, CellStyle, PaneModel, RowItem};
 use crate::app::nav::{self, Motion};
 use crate::app::panes::{PANES, Pane, PaneState, applicable, display_rows, items};
 use crate::app::state::MergeState;
@@ -23,7 +23,7 @@ use crate::app::state::{
     FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaneHandleState, PopupState,
     error_text, ui_key,
 };
-use crate::app::tabs::{Handled, KeyCx, TABS, Tab, pr_ref};
+use crate::app::tabs::{Handled, KeyCx, TABS, Tab, cells, pr_ref};
 use crate::app::target::{pr_target, row_target};
 use crate::app::term::term_status;
 use crate::bus::MergeProgress;
@@ -94,7 +94,9 @@ pub(crate) fn update_full(
             last,
         } => {
             back_online(state);
+            let before = glow_before(state, tabs, state.data.synced.contains_key(&scope));
             let mut cmds = prs_synced(state, scope, prs, seen, started_at, last);
+            push_glows(state, &before);
             cmds.extend(after_change(state, tabs));
             cmds
         }
@@ -118,7 +120,9 @@ pub(crate) fn update_full(
             selected_checks,
         } => {
             back_online(state);
+            let before = glow_before(state, tabs, !state.data.synced.is_empty());
             if ci_updated(state, states, selected_checks) {
+                push_glows(state, &before);
                 after_change(state, tabs)
             } else {
                 Vec::new()
@@ -1720,6 +1724,57 @@ fn ci_updated(
         state.bump();
     }
     changed
+}
+
+/// What a row glow shows a change of: the CI state, and the checks and
+/// the reviews cells of the list.
+type GlowValues = (CiState, Cell, Cell);
+
+/// The glow values of the pull requests in the window of the active
+/// list, before a sync or a CI poll. Empty when `glow` is false: the
+/// first sync after start makes every row new, so nothing glows.
+fn glow_before(
+    state: &mut AppState,
+    tabs: &[Box<dyn Tab>],
+    glow: bool,
+) -> Vec<(PrKey, GlowValues)> {
+    if !glow {
+        return Vec::new();
+    }
+    let height = usize::from(frame::list_size(state).height);
+    let model = frame::active_list(state, tabs);
+    model
+        .rows
+        .iter()
+        .skip(model.scroll)
+        .take(height)
+        .filter_map(|row| match &row.item {
+            RowItem::Pr(pr) => state.data.prs.get(&pr.key),
+            _ => None,
+        })
+        .map(|pr| (pr.key.clone(), pr_glow_values(pr)))
+        .collect()
+}
+
+/// The glow values of one pull request.
+fn pr_glow_values(pr: &PullRequest) -> GlowValues {
+    (
+        pr.ci_state.value,
+        cells::checks(pr),
+        cells::reviews(&pr.head.value),
+    )
+}
+
+/// A `UiEvent::RowGlow` for each pull request of `before` whose glow
+/// values changed.
+fn push_glows(state: &mut AppState, before: &[(PrKey, GlowValues)]) {
+    for (key, values) in before {
+        if let Some(pr) = state.data.prs.get(key)
+            && pr_glow_values(pr) != *values
+        {
+            state.ui.ui_events.push(UiEvent::RowGlow(key.clone()));
+        }
+    }
 }
 
 /// The conversation of a pull request, under the freshness rule, or the
@@ -3806,6 +3861,69 @@ mod tests {
         };
         assert_eq!(run(&mut state, &tabs, older), vec![]);
         assert_eq!(pr(&state, 1).ci_state, ci(5));
+    }
+
+    #[test]
+    fn a_sync_or_a_poll_that_changes_a_visible_row_glows_it() {
+        // Rows: #99, header, #103 in the window; #102, #101, #7 below it.
+        let mut state = mine_state(3);
+        start(&mut state);
+        let later = |minutes| crate::domain::test_time() + chrono::TimeDelta::minutes(minutes);
+        let with_ci = |minutes, states: &[(u64, CiState)]| {
+            let mut prs = testdata::mine_prs();
+            for pr in &mut prs {
+                pr.ci_state.observed_at = later(minutes);
+                if let Some(&(_, ci)) = states.iter().find(|(n, _)| *n == pr.key.number) {
+                    pr.ci_state.value = ci;
+                }
+            }
+            Msg::PrsSynced {
+                scope: Scope::Mine,
+                prs,
+                seen: None,
+                started_at: later(minutes),
+                last: true,
+            }
+        };
+        let send = |state: &mut AppState, msg| {
+            state.ui.ui_events.clear();
+            update(state, &Keymap::default(), msg);
+            state.ui.ui_events.clone()
+        };
+        let glow = |n| UiEvent::RowGlow(testdata::pr_key("chaoshub", n));
+        assert_eq!(
+            send(&mut state, with_ci(1, &[(103, CiState::Success)])),
+            vec![],
+            "the first sync after start does not glow"
+        );
+        assert_eq!(
+            send(
+                &mut state,
+                with_ci(2, &[(103, CiState::Failure), (102, CiState::Failure)])
+            ),
+            vec![glow(103)],
+            "#102 is below the window"
+        );
+        assert_eq!(
+            send(
+                &mut state,
+                with_ci(3, &[(103, CiState::Failure), (102, CiState::Failure)])
+            ),
+            vec![],
+            "no change, no glow"
+        );
+        let poll = Msg::CiUpdated {
+            states: vec![(
+                testdata::pr_key("chaoshub", 103),
+                "oid103".into(),
+                Observed {
+                    value: CiState::Pending,
+                    observed_at: later(4),
+                },
+            )],
+            selected_checks: None,
+        };
+        assert_eq!(send(&mut state, poll), vec![glow(103)]);
     }
 
     #[test]
