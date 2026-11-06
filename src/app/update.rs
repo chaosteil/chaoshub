@@ -2313,7 +2313,13 @@ fn action_event(
                 state.data.panes.remove(&pane);
                 state.bump();
             }
-            follow_up(&state.data, &key)
+            let mut cmds = follow_up(&state.data, &key);
+            // A send marks comments as sent in the comment files.
+            if id == CODEVIEW_SEND_ID {
+                let TargetKey::Pr(pr) = &key;
+                cmds.push(Cmd::LoadCodeview(pr.clone()));
+            }
+            cmds
         }
         ActionEvent::Popup(_) | ActionEvent::MergeStatus(_) => {
             tracing::trace!(id, "action event not handled yet");

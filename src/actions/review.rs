@@ -12,6 +12,9 @@ use crate::actions::{Action, Applicability, Prepare, Services};
 use crate::agent::store::Store;
 use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, LaunchRequest, Selection, Target};
 
+/// The nvim binary that runs codeview.
+pub(crate) const NVIM: &str = "nvim";
+
 /// The action that reviews a pull request in codeview.
 pub(crate) struct Review;
 
@@ -61,7 +64,7 @@ impl Action for Review {
             .unwrap_or(true);
         Prepare::Terminal(LaunchRequest {
             argv: vec![
-                "nvim".to_owned(),
+                NVIM.to_owned(),
                 "-c".to_owned(),
                 "autocmd User CodeViewSessionClosed ++once qall".to_owned(),
                 "-c".to_owned(),
@@ -95,7 +98,7 @@ impl Action for Review {
 /// The env that points codeview to the pr-agent results:
 /// `CHAOSHUB_AGENT_ROOT=<state_dir>/agent`. Empty without a state
 /// directory.
-fn agent_env() -> Vec<(String, String)> {
+pub(crate) fn agent_env() -> Vec<(String, String)> {
     crate::config::paths::state_dir()
         .map(|dir| {
             let root = Store::new(dir).root();

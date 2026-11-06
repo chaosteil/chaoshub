@@ -534,7 +534,8 @@ fn pinned_key(repo: &str, number: u64) -> anyhow::Result<PrKey> {
 
 /// The `[actions.<id>]` tables for the selections. The table of the
 /// review action gets `zoom` from `[codeview] zoom` when it has no
-/// `zoom` of its own.
+/// `zoom` of its own. The table of the codeview send gets the comment
+/// directory of `[codeview] comments_dir`.
 fn action_tables(config: &Config) -> std::collections::BTreeMap<String, toml::Table> {
     let mut tables = config.actions.clone();
     tables
@@ -542,6 +543,14 @@ fn action_tables(config: &Config) -> std::collections::BTreeMap<String, toml::Ta
         .or_default()
         .entry("zoom")
         .or_insert(toml::Value::Boolean(config.codeview.zoom));
+    if let Some(dir) = crate::codeview::store::comments_dir(config.codeview.comments_dir.as_deref())
+    {
+        tables
+            .entry("codeview_send".to_owned())
+            .or_default()
+            .entry("comments_dir")
+            .or_insert(toml::Value::String(dir.to_string_lossy().into_owned()));
+    }
     tables
 }
 
