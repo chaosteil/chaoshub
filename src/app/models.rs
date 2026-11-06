@@ -150,6 +150,18 @@ pub(crate) enum CellStyle {
     /// A comment body in markdown. `ui` renders it through tui-markdown
     /// and wraps it to the width of the pane.
     Markdown,
+    /// A badge: bold text in the background color on the tone color.
+    Badge(Tone),
+}
+
+/// The color of a badge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Tone {
+    Success,
+    Danger,
+    Warn,
+    Merge,
+    Dim,
 }
 
 /// The semantic style of a row.
