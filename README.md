@@ -148,13 +148,14 @@ When the GitHub rate budget runs low, the sync intervals double.
 
 ### `[codeview]`
 
-The Rex pane of the review action.
+The Rex pane of the review action, and the codeview comment files.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `zoom` | `true` | Zooms the pane, so nvim fills the window. |
 | `split` | `"right"` | The direction of the new pane: `right`, `left`, `above` or `below`. |
 | `ratio` | none | The percent of the split that the pane gets. Without it, Rex uses its default. |
+| `comments_dir` | see "Meaning" | The directory of the codeview comment files. `~` expands to your home directory. The default is the default of codeview: `$XDG_DATA_HOME/<app>/codeview/review`, else `~/.local/share/<app>/codeview/review`. `<app>` is `$NVIM_APPNAME`, else `nvim`. Set it when you set the `comments.dir` option of codeview. |
 
 ### `[detail]`
 
@@ -200,11 +201,12 @@ chaoshub copies these keys into `[actions.merge]`. If you set a key in
 
 ### `[actions.<id>]`
 
-Each action reads the table with its id. Two actions use a table:
+Each action reads the table with its id. Three actions use a table:
 
 | Table | Key | Meaning |
 |---|---|---|
 | `[actions.review]` | `zoom` | Zooms the review pane. The default is the value of `[codeview] zoom`. |
+| `[actions.codeview_send]` | `comments_dir` | The directory of the codeview comment files. The default is the value of `[codeview] comments_dir`. |
 | `[actions.merge]` | `method`, `bypass_rules`, `stack`, `repos` | The same keys as `[merge]`. |
 
 The other actions ignore their table. A new action can read its own
@@ -476,7 +478,7 @@ selects the next pane:
 
 | Key | Pane | What it shows |
 |---|---|---|
-| `1` | Description | The body of the pull request as markdown. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. |
+| `1` | Description | The body of the pull request as markdown. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. Below the block, the section `Codeview comments (N unsent)` lists the codeview comments of the head that did not go to GitHub yet (see "Codeview comments" below). Only for a repo with a `path`. |
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order. |
 | `4` | Stack | The entries of the stack. Only for a stacked pull request. |
@@ -497,6 +499,57 @@ The pane keys win over the action keys. In the Agent pane, `r`, `i`,
 `d` and `a` start pr-agent, so `d` (draft) does not work while the Agent
 pane is selected.
 
+#### Codeview comments
+
+You write review comments in codeview (`v`). The Description pane shows
+the comments that did not go to GitHub yet, and sends some of them, or
+all of them, as one review. chaoshub reads the comment files of
+codeview (`[codeview] comments_dir`) and never writes them.
+
+Each row shows the cursor (`>`), the mark (`[x]` or `[ ]`), the place
+(`path:L12-14 (new)`, or `PR` for a comment on the pull request
+document), and the first line of the comment. GitHub takes no comment
+on a commit message, so such a row shows dim with `[-]`, and you cannot
+mark it. A dim line counts the comments of an older push of the head:
+open codeview (`v`) to see them. Without comments, the pane shows no
+section.
+
+These keys work while the section lists a comment that can go to GitHub:
+
+| Key | What it does |
+|---|---|
+| `J` / `K` | Moves the comment cursor down or up. |
+| `space` | Marks or unmarks the comment of the cursor. |
+| `S` | Sends the marked comments, or all of them when none is marked. |
+
+`S` reads the comment files again first. A comment that went out from
+codeview in the meantime drops out, and the dialog says
+`N comments went out from codeview already`. When no chosen comment is
+left, no dialog opens, and the status line says so.
+
+The send dialog lists the chosen comments. Pick the event of the review:
+
+| Key | What it does |
+|---|---|
+| `c` | A review that adds comments only. |
+| `a` | A review that approves the pull request. |
+| `r` | A review that requests changes. |
+| `n` / `esc` | Cancels the send. |
+
+A text popup then asks for the overall text of the review. The text can
+have more than one line, and its line breaks go to GitHub:
+
+| Key | What it does |
+|---|---|
+| `enter` | Adds a new line. |
+| `ctrl-s` | Sends the review. |
+| `ctrl-e` | Opens the text in `$VISUAL`, else `$EDITOR`, else `nvim`. chaoshub leaves its screen while the editor runs. When the editor quits, its text comes back into the popup. Then send with `ctrl-s`, or edit more. |
+| `esc` | Cancels the send. |
+
+An empty text is valid, except for a request of changes: then `ctrl-s`
+shows an error in the popup, and the popup stays open. A comment on the
+pull request document goes into the text of the review, after your text.
+
 ### Actions
 
 The actions work on the pull request of the selected row, or on the
@@ -516,6 +569,7 @@ says why.
 | `copy_url` | `y` | Copies the pull request URL. |
 | `copy_change_id` | `Y` | Copies the jj change id of the local change that matches the pull request. Hidden when no local change matches. |
 | `agent` | `P` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
+| `codeview_send` | none | Sends the chosen codeview comments as one review. The `S` key of the Description pane starts it (see "Codeview comments"). A key that you bind to it opens the Description pane. |
 
 A merge of a stacked pull request includes every entry up to it. The
 `[merge] stack` key sets how chaoshub sends the merge. In `auto` mode,
@@ -714,6 +768,41 @@ transition runs before or after nvim.
 
 When the review ends, chaoshub syncs the pull request again and scans
 the repo again.
+
+### What `S` runs
+
+The send of codeview comments runs codeview in a headless nvim, in the
+local path of the repo:
+
+```sh
+nvim --headless -c "lua require('codeview.bridge').submit_file('<request>')"
+```
+
+First chaoshub reads the comment files again, and leaves out each
+comment that went out from codeview in the meantime. When no comment is
+left, it runs nothing, and the status line says that the comments went
+out from codeview already.
+
+`<request>` is a JSON file in `<state dir>/codeview/`:
+
+```json
+{ "version": 1, "repo": "owner/name", "number": 14, "head": "<sha>",
+  "ids": ["..."], "event": "comment", "body": "...", "out": "<result>" }
+```
+
+`event` is `comment`, `approve` or `request-changes`. codeview opens the
+pull request, maps the comments to the lines of the diff, posts one
+review, marks the comments as sent in its comment file, and writes the
+result to `<result>`. nvim gets `CHAOSHUB_AGENT_ROOT=<state dir>/agent`,
+like the review of `v`. chaoshub stops nvim after 120 seconds.
+
+chaoshub never posts these comments to GitHub itself. Only codeview
+posts, so its lock file and its sent marks stop a second send of the
+same comment, also from an open codeview. The status line then says
+`posted N comments as a <event> review`, and names the comments that
+stay local and the comments that went out already. After the send,
+chaoshub reads the comment files again. See `:help codeview-bridge` in
+nvim for the request and the result.
 
 ### What `enter` runs inside Rex
 

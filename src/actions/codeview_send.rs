@@ -302,3 +302,169 @@ async fn run(job: &Job, request: &Path, result: &Path) -> Result<Outcome, String
 fn lua_quote(text: &str) -> String {
     text.replace('\\', "\\\\").replace('\'', "\\'")
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+    use crate::domain::keys::RepoKey;
+
+    /// A comment file of #14 at the head `h1` for the repo at `repo`:
+    /// `c1` is unsent, `c2` went out already.
+    fn comment_file(repo: &Path) -> String {
+        format!(
+            "---\nversion: 1\nrepo: {}\nrange: pr-14-h1\n---\n\n\
+             ## codeview-comment c1\n\n- file: src/a.rs\n- start_line: 2\n- end_line: 2\n\
+             - side: new\n- synced_at:\n\nFirst note\n\n\
+             ## codeview-comment c2\n\n- file: src/b.rs\n- start_line: 5\n- end_line: 5\n\
+             - side: new\n- synced_at: 2026-01-01T00:00:00Z\n\nSecond note\n",
+            repo.display()
+        )
+    }
+
+    /// A temporary setup: a repo, a comment directory, a work directory
+    /// and a fake nvim that runs `body` after it copies the request to
+    /// `request.json`. `$out` is the result path of the request.
+    struct Setup {
+        root: tempfile::TempDir,
+    }
+
+    impl Setup {
+        fn new(body: &str) -> Self {
+            let root = tempfile::tempdir().unwrap();
+            let dir = root.path();
+            std::fs::create_dir_all(dir.join("repo")).unwrap();
+            let comments = dir.join("comments").join("repo-1a2b3c4d");
+            std::fs::create_dir_all(&comments).unwrap();
+            std::fs::write(comments.join("k.md"), comment_file(&dir.join("repo"))).unwrap();
+            let script = format!(
+                "#!/bin/sh\n\
+                 req=$(printf '%s' \"$3\" | sed \"s/.*submit_file('\\(.*\\)').*/\\1/\")\n\
+                 cp \"$req\" '{copy}'\n\
+                 out=$(sed -n 's/.*\"out\":\"\\([^\"]*\\)\".*/\\1/p' \"$req\")\n\
+                 {body}\n",
+                copy = dir.join("request.json").display(),
+            );
+            let nvim = dir.join("nvim");
+            std::fs::write(&nvim, script).unwrap();
+            std::fs::set_permissions(&nvim, std::fs::Permissions::from_mode(0o755)).unwrap();
+            Self { root }
+        }
+
+        fn job(&self, ids: &[&str], timeout: Duration) -> Job {
+            let dir = self.root.path();
+            Job {
+                program: dir.join("nvim"),
+                env: Vec::new(),
+                repo: dir.join("repo"),
+                comments_dir: dir.join("comments"),
+                work_dir: dir.join("work"),
+                key: PrKey {
+                    repo: RepoKey {
+                        owner: "chaosteil".into(),
+                        name: "chaoshub-test".into(),
+                    },
+                    number: 14,
+                },
+                ids: ids.iter().map(|id| (*id).to_owned()).collect(),
+                event: ReviewKind::Comment,
+                body: "line one\nline two".into(),
+                timeout,
+            }
+        }
+
+        /// The request that the fake nvim got.
+        fn request(&self) -> serde_json::Value {
+            let text = std::fs::read_to_string(self.root.path().join("request.json")).unwrap();
+            serde_json::from_str(&text).unwrap()
+        }
+
+        /// The files that stay in the work directory.
+        fn leftovers(&self) -> usize {
+            std::fs::read_dir(self.root.path().join("work")).map_or(0, Iterator::count)
+        }
+    }
+
+    const OK: &str = r#"printf '%s' '{"version":1,"ok":true,"posted":1,"skipped":[],"already_sent":[],"url":"u","error":""}' > "$out""#;
+
+    #[tokio::test]
+    async fn an_ok_result_names_the_posted_and_the_sent_comments() {
+        let setup = Setup::new(OK);
+        let text = send(setup.job(&["c1", "c2"], TIMEOUT)).await.unwrap();
+        assert_eq!(
+            text,
+            "posted 1 comment as a comment review · went out from codeview already: c2"
+        );
+        let request = setup.request();
+        assert_eq!(request["version"], 1);
+        assert_eq!(request["repo"], "chaosteil/chaoshub-test");
+        assert_eq!(request["number"], 14);
+        assert_eq!(request["head"], "h1");
+        assert_eq!(request["ids"], serde_json::json!(["c1"]));
+        assert_eq!(request["event"], "comment");
+        assert_eq!(
+            request["body"], "line one\nline two",
+            "the line breaks stay"
+        );
+        assert_eq!(setup.leftovers(), 0, "the request and the result go away");
+    }
+
+    #[tokio::test]
+    async fn the_result_names_the_skipped_comments() {
+        let body = r#"printf '%s' '{"version":1,"ok":true,"posted":0,"skipped":[{"id":"c1","reason":"the diff does not hold new line 2"}],"already_sent":[],"url":"","error":""}' > "$out""#;
+        let setup = Setup::new(body);
+        let text = send(setup.job(&["c1"], TIMEOUT)).await.unwrap();
+        assert_eq!(
+            text,
+            "posted 0 comments as a comment review · stays local: src/a.rs:L2 (new): the diff does not hold new line 2"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_result_is_the_error() {
+        let body = r#"printf '%s' '{"version":1,"ok":false,"posted":0,"skipped":[],"already_sent":[],"url":"","error":"HTTP 422: Validation Failed"}' > "$out"; exit 1"#;
+        let setup = Setup::new(body);
+        let err = send(setup.job(&["c1"], TIMEOUT)).await.unwrap_err();
+        assert_eq!(err, "HTTP 422: Validation Failed");
+        assert_eq!(setup.leftovers(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_run_without_a_result_reports_the_exit_and_stderr() {
+        let setup = Setup::new("echo 'E5108: no codeview' >&2; exit 1");
+        let err = send(setup.job(&["c1"], TIMEOUT)).await.unwrap_err();
+        assert!(err.starts_with("nvim ended with exit status: 1"), "{err}");
+        assert!(err.ends_with("E5108: no codeview"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_run_past_the_timeout_is_killed() {
+        let setup = Setup::new("sleep 10");
+        let started = std::time::Instant::now();
+        let err = send(setup.job(&["c1"], Duration::from_millis(300)))
+            .await
+            .unwrap_err();
+        assert!(err.starts_with("nvim did not end in"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(setup.leftovers(), 0);
+    }
+
+    #[tokio::test]
+    async fn comments_that_went_out_already_post_nothing() {
+        let setup = Setup::new(OK);
+        let text = send(setup.job(&["c2"], TIMEOUT)).await.unwrap();
+        assert_eq!(text, SENT_ALREADY);
+        assert!(
+            !setup.root.path().join("request.json").exists(),
+            "nvim did not run"
+        );
+    }
+
+    #[test]
+    fn lua_quote_escapes_quotes_and_backslashes() {
+        assert_eq!(lua_quote(r"/tmp/it's\x"), r"/tmp/it\'s\\x");
+    }
+}

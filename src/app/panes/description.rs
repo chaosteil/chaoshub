@@ -1198,4 +1198,191 @@ mod tests {
             "no activity yet · stack 2 of 3"
         );
     }
+
+    /// The codeview comments of the tests on the head `oid7` of #7: a
+    /// comment on lines, a pull request comment and a commit message
+    /// comment, and one comment on the older push `old1`.
+    fn codeview_comments() -> crate::domain::codeview::Comments {
+        use crate::domain::codeview::{CommentKind, Comments, Push};
+        let comment = |id: &str, file: &str, lines: (u32, u32), body: &str| {
+            crate::domain::codeview::Comment {
+                id: id.into(),
+                file: file.into(),
+                start_line: lines.0,
+                end_line: lines.1,
+                side: "new".into(),
+                body: body.into(),
+                kind: CommentKind::of(file),
+            }
+        };
+        Comments {
+            pushes: vec![
+                Push {
+                    head: "oid7".into(),
+                    comments: vec![
+                        comment("c1", "src/lib.rs", (12, 14), "Trim the name.\nMore text."),
+                        comment("c2", "codeview://commit/oid7", (1, 1), "Fix the typo"),
+                        comment("c3", "codeview://pr/7", (1, 1), "Looks good overall."),
+                    ],
+                },
+                Push {
+                    head: "old1".into(),
+                    comments: vec![comment("c0", "src/lib.rs", (4, 4), "An old note")],
+                },
+            ],
+        }
+    }
+
+    /// The state of #7 with `comments`, the target and the pane state.
+    fn codeview_state(
+        comments: Option<Result<crate::domain::codeview::Comments, String>>,
+    ) -> AppState {
+        let mut state = AppState::new(Size {
+            width: 100,
+            height: 30,
+        });
+        let pr = testdata::pr("chaoshub", 7, "Seven");
+        if let Some(comments) = comments {
+            state.data.codeview.insert(pr.key.clone(), comments);
+        }
+        state.data.prs.insert(pr.key.clone(), pr);
+        state
+    }
+
+    /// The texts of the lines of the pane at `width`, with the pane state
+    /// `ps`.
+    fn codeview_texts(state: &AppState, ps: &PaneState, width: u16) -> Vec<String> {
+        let target = pr_target(&state.data, &testdata::pr_key("chaoshub", 7)).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let size = Size { width, height: 20 };
+        let PaneModel::Lines { lines, .. } = DescriptionPane.model(&cx, ps, size) else {
+            panic!("not lines");
+        };
+        lines.iter().map(|line| text(line)).collect()
+    }
+
+    /// Presses `c` in the pane.
+    fn press_in(state: &AppState, ps: &mut PaneState, c: char) -> Option<Handled> {
+        let target = pr_target(&state.data, &testdata::pr_key("chaoshub", 7)).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let chord = KeyChord {
+            code: KeyCode::Char(c),
+            mods: crate::bus::KeyModifiers::NONE,
+        };
+        DescriptionPane.handle_key(chord, &cx, ps)
+    }
+
+    #[test]
+    fn the_codeview_section_lists_the_unsent_comments_of_the_head() {
+        let state = codeview_state(Some(Ok(codeview_comments())));
+        let lines = codeview_texts(&state, &DescriptionPane.init_state(), 80);
+        assert_eq!(
+            lines[3..lines.len() - 2],
+            [
+                "",
+                "Codeview comments (3 unsent) [J/K] move · [space] mark · [S] send",
+                "> [ ] src/lib.rs:L12-14 (new) Trim the name.",
+                "  [-] commit message Fix the typo",
+                "  [ ] PR Looks good overall.",
+                "1 comment on an older push. Open codeview (v) to see them.",
+            ]
+        );
+        assert_eq!(lines.last().unwrap(), "(no description)");
+    }
+
+    #[test]
+    fn a_row_is_cut_to_the_width() {
+        let mut comments = codeview_comments();
+        comments.pushes[0].comments[0].body = "a very long first line of the comment body".into();
+        let state = codeview_state(Some(Ok(comments)));
+        let lines = codeview_texts(&state, &DescriptionPane.init_state(), 40);
+        assert_eq!(lines[5], "> [ ] src/lib.rs:L12-14 (new) a very lo…");
+        assert_eq!(display_width(&lines[5]), 40);
+    }
+
+    #[test]
+    fn without_comments_the_pane_shows_no_section() {
+        let empty = crate::domain::codeview::Comments::default();
+        for comments in [None, Some(Ok(empty))] {
+            let state = codeview_state(comments);
+            let lines = codeview_texts(&state, &DescriptionPane.init_state(), 80);
+            assert_eq!(lines.len(), 5, "{lines:?}");
+        }
+        let state = codeview_state(Some(Err("version 2 is not 1".into())));
+        let lines = codeview_texts(&state, &DescriptionPane.init_state(), 80);
+        assert_eq!(lines[5], "version 2 is not 1");
+    }
+
+    #[test]
+    fn the_comment_keys_move_mark_and_send() {
+        let state = codeview_state(Some(Ok(codeview_comments())));
+        let mut ps = DescriptionPane.init_state();
+        let changed = Some(Handled {
+            changed: true,
+            ..Handled::default()
+        });
+        assert_eq!(press_in(&state, &mut ps, 'J'), changed);
+        let lines = codeview_texts(&state, &ps, 80);
+        assert_eq!(
+            lines[7], "> [ ] PR Looks good overall.",
+            "J skips the commit message"
+        );
+        assert_eq!(
+            press_in(&state, &mut ps, 'J'),
+            changed,
+            "J stays on the last"
+        );
+        assert_eq!(press_in(&state, &mut ps, ' '), changed);
+        assert_eq!(
+            codeview_texts(&state, &ps, 80)[7],
+            "> [x] PR Looks good overall."
+        );
+        let send = |ids: &[&str]| {
+            Some(Handled {
+                cmds: vec![Cmd::SendCodeview {
+                    key: testdata::pr_key("chaoshub", 7),
+                    ids: ids.iter().map(|id| (*id).to_owned()).collect(),
+                }],
+                ..Handled::default()
+            })
+        };
+        assert_eq!(
+            press_in(&state, &mut ps, 'S'),
+            send(&["c3"]),
+            "the marked one"
+        );
+        assert_eq!(press_in(&state, &mut ps, ' '), changed);
+        assert_eq!(press_in(&state, &mut ps, 'K'), changed);
+        assert_eq!(
+            codeview_texts(&state, &ps, 80)[5],
+            "> [ ] src/lib.rs:L12-14 (new) Trim the name."
+        );
+        assert_eq!(
+            press_in(&state, &mut ps, 'S'),
+            send(&["c1", "c3"]),
+            "all without a mark"
+        );
+        assert_eq!(press_in(&state, &mut ps, 'x'), None);
+    }
+
+    #[test]
+    fn the_comment_keys_need_a_comment() {
+        let state = codeview_state(None);
+        let mut ps = DescriptionPane.init_state();
+        for c in ['J', 'K', ' ', 'S'] {
+            assert_eq!(press_in(&state, &mut ps, c), None, "{c}");
+        }
+    }
 }
