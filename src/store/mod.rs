@@ -137,6 +137,7 @@ mod tests {
     use super::*;
     use crate::bus::Persist;
     use crate::domain::detail::{Comment, PrDetail};
+    use crate::domain::files::{ChangedFile, FileStatus, PrFiles};
     use crate::domain::keys::PrKey;
     use crate::domain::local::Workspace;
     use crate::domain::pr::{CiState, MergeStateStatus, Mergeable, PrHead, PrState};
@@ -239,6 +240,7 @@ mod tests {
             [
                 "local_state",
                 "pr_details",
+                "pr_files",
                 "pull_requests",
                 "repos",
                 "sync_state",
@@ -514,6 +516,40 @@ mod tests {
         };
         handle.put_detail(key(1), newer.clone()).await.unwrap();
         assert_eq!(handle.detail(key(1)).await.unwrap(), Some(newer));
+    }
+
+    #[tokio::test]
+    async fn files_round_trip() {
+        let (_, handle) = Store::open(Path::new(":memory:")).unwrap();
+        assert_eq!(handle.files(key(1)).await.unwrap(), None);
+        let files = Observed {
+            value: PrFiles {
+                files: vec![ChangedFile {
+                    path: "src/lib.rs".into(),
+                    previous_path: None,
+                    status: FileStatus::Modified,
+                    additions: 2,
+                    deletions: 1,
+                    patch: Some("@@ -1 +1,2 @@\n-a\n+b\n+c".into()),
+                }],
+                truncated: false,
+                head_oid: "oid1".into(),
+            },
+            observed_at: test_time(),
+        };
+        handle.put_files(key(1), files.clone()).await.unwrap();
+        assert_eq!(handle.files(key(1)).await.unwrap(), Some(files.clone()));
+        assert_eq!(handle.files(key(2)).await.unwrap(), None);
+
+        let newer = Observed {
+            value: PrFiles {
+                head_oid: "oid2".into(),
+                ..files.value
+            },
+            observed_at: test_time() + TimeDelta::seconds(1),
+        };
+        handle.put_files(key(1), newer.clone()).await.unwrap();
+        assert_eq!(handle.files(key(1)).await.unwrap(), Some(newer));
     }
 
     #[tokio::test]

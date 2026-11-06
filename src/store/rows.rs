@@ -6,6 +6,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::bus::{Persist, Scope};
 use crate::domain::detail::PrDetail;
+use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
@@ -228,6 +229,52 @@ pub(crate) fn detail(
     let row = conn
         .query_row(
             "SELECT fetched_at, json FROM pr_details WHERE owner = ?1 AND name = ?2 AND number = ?3",
+            params![key.repo.owner, key.repo.name, number(key.number)?],
+            |row| Ok((row.get::<_, DateTime<Utc>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()?;
+    let Some((observed_at, json)) = row else {
+        return Ok(None);
+    };
+    Ok(Some(Observed {
+        value: serde_json::from_slice(&json)?,
+        observed_at,
+    }))
+}
+
+/// Writes the changed files of a pull request. `fetched_at` is the time
+/// when they were observed.
+pub(crate) fn put_files(
+    conn: &Connection,
+    key: &PrKey,
+    files: &Observed<PrFiles>,
+) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO pr_files(owner, name, number, fetched_at, head_oid, json) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+         ON CONFLICT(owner, name, number) DO UPDATE SET \
+           fetched_at = excluded.fetched_at, head_oid = excluded.head_oid, json = excluded.json",
+        params![
+            key.repo.owner,
+            key.repo.name,
+            number(key.number)?,
+            files.observed_at,
+            files.value.head_oid,
+            serde_json::to_vec(&files.value)?,
+        ],
+    )?;
+    Ok(())
+}
+
+/// The cached changed files of a pull request. `None` when the cache has
+/// none.
+pub(crate) fn files(
+    conn: &Connection,
+    key: &PrKey,
+) -> Result<Option<Observed<PrFiles>>, StoreError> {
+    let row = conn
+        .query_row(
+            "SELECT fetched_at, json FROM pr_files WHERE owner = ?1 AND name = ?2 AND number = ?3",
             params![key.repo.owner, key.repo.name, number(key.number)?],
             |row| Ok((row.get::<_, DateTime<Utc>>(0)?, row.get::<_, Vec<u8>>(1)?)),
         )

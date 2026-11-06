@@ -6,6 +6,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::bus::{Persist, Scope};
 use crate::domain::detail::PrDetail;
+use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
@@ -54,6 +55,15 @@ pub(crate) enum StoreOp {
     Detail {
         key: PrKey,
         reply: Reply<Option<Observed<PrDetail>>>,
+    },
+    PutFiles {
+        key: PrKey,
+        files: Observed<PrFiles>,
+        reply: Reply<()>,
+    },
+    Files {
+        key: PrKey,
+        reply: Reply<Option<Observed<PrFiles>>>,
     },
     PutLocal {
         repo: RepoKey,
@@ -165,6 +175,22 @@ impl StoreHandle {
         key: PrKey,
     ) -> Result<Option<Observed<PrDetail>>, StoreError> {
         self.request(|reply| StoreOp::Detail { key, reply }).await
+    }
+
+    /// Writes the changed files of a pull request.
+    pub(crate) async fn put_files(
+        &self,
+        key: PrKey,
+        files: Observed<PrFiles>,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreOp::PutFiles { key, files, reply })
+            .await
+    }
+
+    /// The cached changed files of a pull request. `None` when the cache
+    /// has none.
+    pub(crate) async fn files(&self, key: PrKey) -> Result<Option<Observed<PrFiles>>, StoreError> {
+        self.request(|reply| StoreOp::Files { key, reply }).await
     }
 
     /// Writes the result of one jj scan of a repo.
