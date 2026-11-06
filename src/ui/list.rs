@@ -12,7 +12,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::app::models::{Cell, CellStyle, Column, ColumnWidth, ListModel, Row, RowItem, RowStyle};
 use crate::bus::Hit;
-use crate::theme::Theme;
+use crate::theme::{Theme, punk};
 use crate::ui::hits::HitMap;
 use crate::ui::{style, text};
 
@@ -90,10 +90,12 @@ fn tree_prefix(row: &Row) -> String {
     }
 }
 
-/// The cells at the right end of every row that the selection tail of
-/// the theme keeps free.
+/// The cells at the right end of every row that the selection tail and
+/// the selection shift of the theme keep free.
 fn tail_width(theme: &Theme) -> u16 {
-    u16::from(theme.selected_row().tail.is_some())
+    let selection = theme.selected_row();
+    let tail = if selection.tail.is_some() { 2 } else { 0 };
+    tail + selection.shift
 }
 
 /// The width of the columns of a list `width` cells wide: the width
@@ -130,16 +132,14 @@ fn render_row(frame: &Frame<'_>, row: &Row, y: u16, selected: bool, buf: &mut Bu
     let banded = selected || row.style == RowStyle::Selected;
     // A band can force one text color on its cells.
     let fg = if banded { selection.cell_fg } else { None };
-    if banded && let Some((glyph, style)) = selection.tail {
-        buf.set_string(line.right() - 1, y, glyph, style);
+    if banded && let Some([(first, first_style), (second, second_style)]) = selection.tail {
+        buf.set_string(line.right().saturating_sub(2), y, first, first_style);
+        buf.set_string(line.right() - 1, y, second, second_style);
     }
     if selected {
-        buf.set_string(
-            area.x,
-            y,
-            selection.marker,
-            Style::new().patch(selection.patch).fg(selection.marker_fg),
-        );
+        let marker = Style::new().patch(selection.patch).fg(selection.marker_fg);
+        let marker = selection.marker_bg.map_or(marker, |bg| marker.bg(bg));
+        buf.set_string(area.x, y, selection.marker, marker);
     }
     let x0 = area.x + GUTTER;
     let right = area.right().saturating_sub(tail_width(theme)).max(x0);
@@ -268,8 +268,18 @@ pub(crate) fn render_rows(
         theme,
     };
     let mut drawn = 0;
+    let shift = theme.selected_row().shift;
     for (y, (index, row)) in (area.y..).zip(visible) {
-        render_row(&frame, row, y, window.cursor == Some(index), buf);
+        let selected = window.cursor == Some(index);
+        render_row(&frame, row, y, selected, buf);
+        if selected || row.style == RowStyle::Selected {
+            // The band jumps out: its text moves into the free cells.
+            let x0 = area.x + GUTTER;
+            let right = area.right().saturating_sub(tail_width(theme)).max(x0);
+            let end = right.saturating_add(shift).min(area.right());
+            let content = Rect::new(x0, y, end.saturating_sub(x0), 1);
+            punk::shift_right(buf, content, shift, row_style(row, selected, theme));
+        }
         hits.push(Rect::new(area.x, y, area.width, 1), (window.hit)(index));
         drawn += 1;
     }
@@ -428,18 +438,38 @@ mod tests {
         let p = theme.palette;
         let buf = draw(&testdata::mine_list(), 100, 9, &theme);
         let row = lines(&buf).lines().nth(1).unwrap().to_owned();
-        assert!(row.starts_with('▶'), "{row}");
-        assert!(row.ends_with('╱'), "{row}");
+        // The text moves one cell to the right.
+        assert!(row.starts_with("▶ ┌ feat(ui)"), "{row}");
+        assert!(row.ends_with("◤◤"), "{row}");
+        // The marker is black on white.
         assert_eq!(buf[(0, 1)].fg, p.bg);
-        assert_eq!(buf[(0, 1)].bg, p.primary);
+        assert_eq!(buf[(0, 1)].bg, p.fg);
         // Every cell on the band is black, colored markers too.
-        for x in 1..99 {
+        for x in 1..98 {
             assert_eq!(buf[(x, 1)].bg, p.primary, "x {x}");
             assert_eq!(buf[(x, 1)].fg, p.bg, "x {x}");
         }
-        assert_eq!(buf[(99, 1)].fg, p.primary);
+        // The blue card ends on the white card, and the white card ends.
+        assert_eq!(buf[(98, 1)].fg, p.primary);
+        assert_eq!(buf[(98, 1)].bg, p.fg);
+        assert_eq!(buf[(99, 1)].fg, p.fg);
         assert_eq!(buf[(99, 1)].bg, p.bg);
-        // Other rows keep the last cell free.
-        assert_eq!(buf[(99, 4)].symbol(), " ");
+        // Other rows keep the tail cells and the shift cell free.
+        for x in 97..100 {
+            assert_eq!(buf[(x, 4)].symbol(), " ", "x {x}");
+        }
+    }
+
+    #[test]
+    fn punk_selected_row_keeps_the_last_character() {
+        let mut model = testdata::mine_list();
+        model.columns.truncate(2);
+        for row in &mut model.rows {
+            row.cells.truncate(2);
+        }
+        assert_eq!(model.columns[1].align, Align::Right);
+        let text = lines(&draw(&model, 40, 3, &testdata::punk()));
+        let row = text.lines().nth(1).unwrap();
+        assert!(row.ends_with("#103◤◤"), "{row}");
     }
 }

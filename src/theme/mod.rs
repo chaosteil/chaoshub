@@ -107,12 +107,18 @@ pub(crate) struct Selection {
     pub marker: &'static str,
     /// The color of the marker.
     pub marker_fg: Color,
-    /// The glyph at the right end of the row, and its style. A row that
-    /// has a tail keeps its last cell free for it.
-    pub tail: Option<(&'static str, Style)>,
+    /// The background of the marker cell. `None` keeps the band
+    /// background.
+    pub marker_bg: Option<Color>,
+    /// The two glyphs at the right end of the row, and their styles. A
+    /// row that has a tail keeps its last two cells free for it.
+    pub tail: Option<[(&'static str, Style); 2]>,
     /// The text color of every cell on the selected row. `None` keeps the
     /// colors of the cells.
     pub cell_fg: Option<Color>,
+    /// The cells that the text of the selected row moves to the right.
+    /// Every row keeps this many cells free at its right end.
+    pub shift: u16,
 }
 
 impl Theme {
@@ -189,8 +195,9 @@ impl Theme {
     }
 
     /// How the selected row of a list looks. Grunge and plain rows get
-    /// the surface background and a `▌` marker. A punk row is a slanted
-    /// band: `▶`, the cells in black on the primary color, and a `╱` tail.
+    /// the surface background and a `▌` marker. A punk row is a blue card
+    /// on a white card: `▶` in black on white, the cells in black on the
+    /// primary color, a `◤◤` tail, and the text one cell to the right.
     pub(crate) fn selected_row(&self) -> Selection {
         let p = &self.palette;
         match self.skin {
@@ -198,21 +205,22 @@ impl Theme {
                 patch: Style::new().bg(p.primary).fg(p.bg),
                 marker: "▶",
                 marker_fg: p.bg,
-                tail: Some((
-                    "╱",
-                    Style::new()
-                        .bg(p.bg)
-                        .fg(p.primary)
-                        .add_modifier(Modifier::BOLD),
-                )),
+                marker_bg: Some(p.fg),
+                tail: Some([
+                    ("◤", Style::new().bg(p.fg).fg(p.primary)),
+                    ("◤", Style::new().bg(p.bg).fg(p.fg)),
+                ]),
                 cell_fg: Some(p.bg),
+                shift: 1,
             },
             Skin::Grunge { .. } | Skin::Plain => Selection {
                 patch: Style::new().bg(p.surface),
                 marker: "▌",
                 marker_fg: p.primary,
+                marker_bg: None,
                 tail: None,
                 cell_fg: None,
+                shift: 0,
             },
         }
     }
@@ -405,12 +413,16 @@ mod tests {
         assert_eq!(selection.patch.fg, Some(p.bg));
         assert_eq!(selection.marker, "▶");
         assert_eq!(selection.marker_fg, p.bg);
-        assert_eq!(selection.tail.map(|(glyph, _)| glyph), Some("╱"));
+        assert_eq!(selection.marker_bg, Some(p.fg));
+        let [(blue, blue_style), (white, white_style)] = selection.tail.unwrap();
+        assert_eq!((blue, white), ("◤", "◤"));
         assert_eq!(
-            selection.tail.map(|(_, style)| style.fg),
-            Some(Some(p.primary))
+            (blue_style.fg, blue_style.bg),
+            (Some(p.primary), Some(p.fg))
         );
+        assert_eq!((white_style.fg, white_style.bg), (Some(p.fg), Some(p.bg)));
         assert_eq!(selection.cell_fg, Some(p.bg));
+        assert_eq!(selection.shift, 1);
     }
 
     #[test]
