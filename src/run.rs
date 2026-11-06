@@ -197,6 +197,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         last_draw: None,
         started: Some(started),
         foreground: VecDeque::new(),
+        edits: VecDeque::new(),
         slow: SlowFrames::default(),
         hits: HitMap::default(),
         overlay_drawn: false,
@@ -610,6 +611,9 @@ struct EventLoop {
     /// The terminal commands to run in the foreground, without a
     /// launcher.
     foreground: VecDeque<Foreground>,
+    /// The texts of `Cmd::EditText` to open in the editor, in the
+    /// foreground.
+    edits: VecDeque<String>,
     /// The slow frames in a row.
     slow: SlowFrames,
     /// The targets of the last draw.
@@ -730,6 +734,7 @@ impl EventLoop {
                 Err(_) => self.update(Msg::Tick),
             }
             self.run_foreground(terminal, reader)?;
+            self.run_editor(terminal, reader)?;
         }
         Ok(())
     }
@@ -762,6 +767,7 @@ impl EventLoop {
                 Cmd::RunTerminal { id, key, request } if self.settings.launcher.is_none() => {
                     self.foreground.push_back(Foreground { id, key, request });
                 }
+                Cmd::EditText(text) => self.edits.push_back(text),
                 cmd => self.runtime.exec(cmd),
             }
         }
@@ -807,6 +813,88 @@ impl EventLoop {
         }
         Ok(())
     }
+}
+
+impl EventLoop {
+    /// Opens the queued texts in the editor of the user, one after the
+    /// other, the same way as `run_foreground`: the reader pauses, and the
+    /// terminal leaves the alternate screen and raw mode until the editor
+    /// ends. Each end sends `Msg::TextEdited` with the new text.
+    fn run_editor(
+        &mut self,
+        terminal: &mut CrosstermTerminal,
+        reader: &Reader,
+    ) -> anyhow::Result<()> {
+        while let Some(text) = self.edits.pop_front() {
+            if !reader.pause() {
+                tracing::warn!("the reader thread did not confirm the pause");
+            }
+            self.drop_transitions();
+            if let Err(err) = self.term.clear(&mut io::stdout()) {
+                tracing::warn!(%err, "cannot clear the terminal status");
+            }
+            restore_terminal();
+            let dir =
+                paths::state_dir().map_or_else(std::env::temp_dir, |dir| dir.join("codeview"));
+            let result = edit_text(&editor_argv(), &dir, &text);
+            enable_raw_mode()?;
+            execute!(io::stdout(), EnterAlternateScreen, Hide)?;
+            if self.settings.config.terminal.mouse {
+                execute!(io::stdout(), EnableMouseCapture)?;
+            }
+            terminal.clear()?;
+            reader.resume();
+            self.drawn = None;
+            self.update(Msg::TextEdited(result));
+            self.drop_transitions();
+        }
+        Ok(())
+    }
+}
+
+/// The editor of the user: `$VISUAL`, else `$EDITOR`, else `nvim`. The
+/// value splits at white space, so it can hold flags.
+fn editor_argv() -> Vec<String> {
+    let var = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    };
+    let editor = var("VISUAL")
+        .or_else(|| var("EDITOR"))
+        .unwrap_or_else(|| "nvim".to_owned());
+    editor.split_whitespace().map(str::to_owned).collect()
+}
+
+/// Opens `text` in the editor `editor` and returns the text of the file
+/// when the editor ends. The text goes to a temporary `.md` file in
+/// `dir`. The file goes away at the end, also after an error.
+fn edit_text(editor: &[String], dir: &Path, text: &str) -> Result<String, String> {
+    let (program, args) = editor.split_first().ok_or_else(|| "no editor".to_owned())?;
+    std::fs::create_dir_all(dir).map_err(|err| format!("cannot make {}: {err}", dir.display()))?;
+    let path = dir.join(format!(
+        "review-{}-{:08x}.md",
+        std::process::id(),
+        rand::random::<u32>()
+    ));
+    std::fs::write(&path, text).map_err(|err| format!("cannot write {}: {err}", path.display()))?;
+    let result = std::process::Command::new(program)
+        .args(args)
+        .arg(&path)
+        .status()
+        .map_err(|err| format!("cannot run {program}: {err}"))
+        .and_then(|status| {
+            if status.success() {
+                std::fs::read_to_string(&path)
+                    .map_err(|err| format!("cannot read {}: {err}", path.display()))
+            } else {
+                Err(format!("{program} ended with {status}"))
+            }
+        });
+    if let Err(err) = std::fs::remove_file(&path) {
+        tracing::warn!(%err, path = %path.display(), "cannot remove the text file");
+    }
+    result
 }
 
 /// A mouse message with the hit of its cell in the last frame. When the

@@ -157,6 +157,14 @@ fn overlay_models(state: &AppState, panes: &[Box<dyn Pane>]) -> Vec<OverlayModel
                     spec: spec.clone(),
                     text: text.clone(),
                 },
+                OverlayState::Choose { spec, .. } => OverlayContent::Choose(spec.clone()),
+                OverlayState::ReviewText {
+                    title, text, error, ..
+                } => OverlayContent::ReviewText {
+                    title: title.clone(),
+                    text: text.clone(),
+                    error: error.clone(),
+                },
                 OverlayState::Help { help, scroll } => OverlayContent::Help {
                     help: help.clone(),
                     scroll: *scroll,
@@ -409,6 +417,14 @@ fn plain_key(code: KeyCode) -> KeyChord {
     }
 }
 
+/// The chord of the character `c` with `ctrl`.
+fn ctrl_key(c: char) -> KeyChord {
+    KeyChord {
+        code: KeyCode::Char(c),
+        mods: KeyModifiers::CONTROL,
+    }
+}
+
 /// The hints of an overlay. They are all primary, except the action
 /// hints of the pull request popup: they come after the pane hints, the
 /// primary ones first.
@@ -453,6 +469,25 @@ fn overlay_hints(
         ],
         OverlayState::Prompt { .. } => vec![
             hint(&[plain_key(KeyCode::Enter)], "submit"),
+            hint(&[plain_key(KeyCode::Esc)], "cancel"),
+        ],
+        OverlayState::Choose { spec, .. } => {
+            let mut hints: Vec<Option<KeyHint>> = spec
+                .options
+                .iter()
+                .map(|(key, label)| hint(&[plain_key(KeyCode::Char(*key))], label))
+                .collect();
+            hints.push(app_hint(
+                keymap,
+                &["cancel", "close_overlay"],
+                "cancel",
+                true,
+            ));
+            hints
+        }
+        OverlayState::ReviewText { .. } => vec![
+            hint(&[ctrl_key('s')], "send"),
+            hint(&[ctrl_key('e')], "editor"),
             hint(&[plain_key(KeyCode::Esc)], "cancel"),
         ],
         OverlayState::Authors(_) => vec![

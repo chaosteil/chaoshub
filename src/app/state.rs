@@ -18,8 +18,8 @@ use crate::app::models::{CellStyle, HelpModel};
 use crate::app::panes::PaneState;
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{
-    ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, Scope, Selection, Session, Size,
-    SyncError, TargetKey, UiEvent,
+    ChooseSpec, ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReviewKind, Scope,
+    Selection, Session, Size, SyncError, TargetKey, UiEvent,
 };
 use crate::domain::agent::{AgentResults, ToolKind};
 use crate::domain::codeview::Comments;
@@ -191,6 +191,9 @@ pub(crate) struct UiState {
     /// The `column_headers` value in the `ui_state` table of the cache,
     /// if any. It wins over `[theme] column_headers`.
     pub saved_column_headers: Option<bool>,
+    /// The codeview send that waits for a new read of the comment files:
+    /// the pull request and the chosen comment ids.
+    pub codeview_send: Option<(PrKey, Vec<String>)>,
 }
 
 /// The state of the syncs, for the status bar and the terminal status.
@@ -344,6 +347,25 @@ pub(crate) enum OverlayState {
         spec: PromptSpec,
         text: String,
     },
+    /// The choice popup of the codeview send: the key of an option picks
+    /// the event of the review of the comments `ids`.
+    Choose {
+        action: ActionDialog,
+        spec: ChooseSpec,
+        ids: Vec<String>,
+    },
+    /// The multi-line text of the review of the codeview comments `ids`.
+    /// `ctrl-s` runs the action with the text.
+    ReviewText {
+        action: ActionDialog,
+        title: String,
+        ids: Vec<String>,
+        event: ReviewKind,
+        text: String,
+        /// The error that the popup shows, for example an empty text of
+        /// a change request.
+        error: Option<String>,
+    },
     /// The help overlay: the key bindings that it shows, and the index
     /// of its first visible line.
     Help { help: HelpModel, scroll: usize },
@@ -462,6 +484,7 @@ impl AppState {
                 pinned: None,
                 column_headers: true,
                 saved_column_headers: None,
+                codeview_send: None,
             },
             generation: 0,
             cache: ModelCache::default(),
