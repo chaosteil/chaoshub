@@ -2128,6 +2128,142 @@ mod tests {
         app
     }
 
+    /// Three unsent codeview comments on the head of #101 and one on an
+    /// older push.
+    fn codeview_comments() -> crate::domain::codeview::Comments {
+        use crate::domain::codeview::{Comment, CommentKind, Comments, Push};
+        let comment = |id: &str, file: &str, lines: (u32, u32), body: &str| Comment {
+            id: id.into(),
+            file: file.into(),
+            start_line: lines.0,
+            end_line: lines.1,
+            side: "new".into(),
+            body: body.into(),
+            kind: CommentKind::of(file),
+        };
+        Comments {
+            pushes: vec![
+                Push {
+                    head: "oid101".into(),
+                    comments: vec![
+                        comment(
+                            "c1",
+                            "src/ui/list.rs",
+                            (40, 44),
+                            "The cursor can pass the end of the list when the filter drops rows.",
+                        ),
+                        comment(
+                            "c2",
+                            "codeview://commit/oid101",
+                            (1, 1),
+                            "Name the list in the title.",
+                        ),
+                        comment(
+                            "c3",
+                            "codeview://pr/101",
+                            (1, 1),
+                            "Looks good after the fix.",
+                        ),
+                    ],
+                },
+                Push {
+                    head: "3a1f2c0e".into(),
+                    comments: vec![comment("c0", "src/ui/list.rs", (12, 12), "An old note")],
+                },
+            ],
+        }
+    }
+
+    /// The popup app with the comments of `codeview_comments`, and the
+    /// first comment marked.
+    fn codeview_app(width: u16, height: u16) -> App {
+        let mut app = popup_app(width, height);
+        app.update(Msg::CodeviewLoaded {
+            key: crate::app::testdata::pr_key("chaoshub", 101),
+            comments: Ok(codeview_comments()),
+        });
+        press(&mut app, ' ');
+        app
+    }
+
+    #[test]
+    fn codeview_comments_100() {
+        insta::assert_snapshot!(screen(&mut codeview_app(100, 30)));
+    }
+
+    #[test]
+    fn codeview_comments_160() {
+        insta::assert_snapshot!(screen(&mut codeview_app(160, 40)));
+    }
+
+    /// The codeview app with the text popup of a change request open,
+    /// with two lines of text.
+    fn review_text_app(width: u16, height: u16) -> App {
+        let mut app = codeview_app(width, height);
+        let key = crate::app::testdata::pr_key("chaoshub", 101);
+        press(&mut app, 'S');
+        app.update(Msg::CodeviewLoaded {
+            key,
+            comments: Ok(codeview_comments()),
+        });
+        press(&mut app, 'r');
+        for c in "Please clamp the cursor.".chars() {
+            press(&mut app, c);
+        }
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(enter));
+        for c in "Thanks!".chars() {
+            press(&mut app, c);
+        }
+        app
+    }
+
+    #[test]
+    fn review_text_100() {
+        insta::assert_snapshot!(screen(&mut review_text_app(100, 30)));
+    }
+
+    #[test]
+    fn review_text_160() {
+        insta::assert_snapshot!(screen(&mut review_text_app(160, 40)));
+    }
+
+    #[test]
+    fn the_editor_round_trip_returns_the_text_and_removes_the_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().unwrap();
+        let editor = root.path().join("editor");
+        let seen = root.path().join("seen.md");
+        std::fs::write(
+            &editor,
+            format!(
+                "#!/bin/sh\ncp \"$1\" '{}'\nprintf 'line one\\nline two\\n' > \"$1\"\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let dir = root.path().join("work");
+        let argv = vec![editor.to_string_lossy().into_owned()];
+        let text = edit_text(&argv, &dir, "old\ntext").unwrap();
+        assert_eq!(text, "line one\nline two\n");
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "old\ntext");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "the file goes away"
+        );
+        let failed = vec!["false".to_owned()];
+        assert_eq!(
+            edit_text(&failed, &dir, "x"),
+            Err("false ended with exit status: 1".to_owned())
+        );
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    }
+
     #[test]
     fn popup_checks_100() {
         let mut app = popup_app(100, 30);

@@ -283,3 +283,172 @@ fn section(id: String, lines: &[&str]) -> Section {
     comment.kind = CommentKind::of(&comment.file);
     Section { comment, synced_at }
 }
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    /// A comment directory with the fixture files for the repo at `repo`:
+    /// the current push `bbbb2222` and an older push `aaaa1111` of #14, a
+    /// file of #1, and a file of another repo.
+    fn fixture(dir: &Path, repo: &Path) {
+        let slug = dir.join("repo-1a2b3c4d");
+        std::fs::create_dir_all(&slug).unwrap();
+        let repo = repo.to_string_lossy();
+        let current = include_str!("testdata/current.md").replace("REPO", &repo);
+        let older = include_str!("testdata/older.md").replace("REPO", &repo);
+        std::fs::write(slug.join("current.md"), &current).unwrap();
+        std::fs::write(slug.join("older.md"), &older).unwrap();
+        std::fs::write(
+            slug.join("other-pr.md"),
+            current.replace("pr-14-bbbb2222", "pr-1-bbbb2222"),
+        )
+        .unwrap();
+        std::fs::write(slug.join("notes.txt"), "not a comment file").unwrap();
+        let other = dir.join("other-5e6f7a8b");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(
+            other.join("current.md"),
+            current.replace(&*repo, "/elsewhere/repo"),
+        )
+        .unwrap();
+    }
+
+    fn comment(id: &str, file: &str, lines: (u32, u32), side: &str, body: &str) -> Comment {
+        Comment {
+            id: id.into(),
+            file: file.into(),
+            start_line: lines.0,
+            end_line: lines.1,
+            side: side.into(),
+            body: body.into(),
+            kind: CommentKind::of(file),
+        }
+    }
+
+    #[test]
+    fn load_keeps_the_unsent_comments_of_the_pull_request_per_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        fixture(dir.path(), repo.path());
+        let comments = load(dir.path(), repo.path(), 14).unwrap();
+        assert_eq!(
+            comments.current("bbbb2222"),
+            [
+                comment(
+                    "68a1c2f30001",
+                    "src/lib.rs",
+                    (12, 14),
+                    "new",
+                    "Trim the name.\n\n## codeview-comment looks like a heading\n\\ starts with a backslash",
+                ),
+                comment(
+                    "68a1c2f30003",
+                    "codeview://pr/14",
+                    (1, 1),
+                    "new",
+                    "Looks good overall."
+                ),
+                comment(
+                    "68a1c2f30004",
+                    "codeview://commit/bbbb2222",
+                    (1, 1),
+                    "new",
+                    "Fix the typo in the title."
+                ),
+            ]
+        );
+        assert_eq!(comments.older("bbbb2222"), 1);
+        assert_eq!(
+            comments.current("aaaa1111")[0].body,
+            "A note on the first push."
+        );
+        let push = comments.push_of("68a1c2f30003").unwrap();
+        assert_eq!(push.head, "bbbb2222");
+        assert_eq!(comments.push_of("68a1c2f30002"), None, "the sent comment");
+    }
+
+    #[test]
+    fn the_kinds_and_the_places_of_the_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        fixture(dir.path(), repo.path());
+        let comments = load(dir.path(), repo.path(), 14).unwrap();
+        let current = comments.current("bbbb2222");
+        let kinds: Vec<_> = current.iter().map(|c| (c.kind, c.sendable())).collect();
+        assert_eq!(
+            kinds,
+            [
+                (CommentKind::Line, true),
+                (CommentKind::Pr, true),
+                (CommentKind::Message, false),
+            ]
+        );
+        let places: Vec<_> = current.iter().map(Comment::place).collect();
+        assert_eq!(places, ["src/lib.rs:L12-14 (new)", "PR", "commit message"]);
+        assert_eq!(current[0].summary(), "Trim the name.");
+    }
+
+    #[test]
+    fn a_file_of_another_version_is_an_error_for_the_pull_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        fixture(dir.path(), repo.path());
+        let path = dir.path().join("repo-1a2b3c4d").join("current.md");
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, text.replace("version: 1", "version: 2")).unwrap();
+        let err = load(dir.path(), repo.path(), 14).unwrap_err();
+        assert!(err.ends_with("current.md: version 2 is not 1"), "{err}");
+        assert!(
+            load(dir.path(), repo.path(), 1).is_ok(),
+            "another pull request"
+        );
+    }
+
+    #[test]
+    fn a_missing_directory_gives_no_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let comments = load(&dir.path().join("none"), dir.path(), 14).unwrap();
+        assert_eq!(comments, Comments::default());
+    }
+
+    #[test]
+    fn the_comment_directory_follows_the_config_and_the_environment() {
+        /// The config, `$XDG_DATA_HOME`, `$NVIM_APPNAME` and the directory.
+        type Case = (
+            Option<&'static str>,
+            Option<String>,
+            Option<String>,
+            &'static str,
+        );
+        let home = Path::new("/home/me");
+        let s = |text: &str| Some(text.to_owned());
+        let cases: [Case; 5] = [
+            (Some("~/reviews"), s("/data"), s("lazy"), "/home/me/reviews"),
+            (
+                None,
+                None,
+                None,
+                "/home/me/.local/share/nvim/codeview/review",
+            ),
+            (None, s("/data"), None, "/data/nvim/codeview/review"),
+            (
+                None,
+                s(""),
+                s("lazy"),
+                "/home/me/.local/share/lazy/codeview/review",
+            ),
+            (None, s("/data"), s("lazy"), "/data/lazy/codeview/review"),
+        ];
+        for (config, data, app, expected) in cases {
+            assert_eq!(
+                dir_from(config.map(Path::new), data, app, Some(home)),
+                Some(PathBuf::from(expected)),
+                "{config:?}"
+            );
+        }
+        assert_eq!(dir_from(None, None, None, None), None);
+    }
+}

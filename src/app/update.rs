@@ -830,7 +830,7 @@ fn open_review_text(
     event: ReviewKind,
 ) {
     let Target::Pr { pr, .. } = &action.selection.target;
-    let title = format!("text of the {} review on #{}", event.name(), pr.key.number);
+    let title = format!("{} review on #{}", event.name(), pr.key.number);
     let overlay = OverlayState::ReviewText {
         action,
         title,
@@ -6135,5 +6135,264 @@ mod tests {
         };
         update(&mut state, &Keymap::default(), started);
         assert!(state.data.agent_jobs.contains(&(pr, ToolKind::Describe)));
+    }
+
+    /// The agent state with the popup open on the Description pane, and
+    /// three unsent codeview comments on the head of the pull request:
+    /// `c1` and `c2` on lines, `c3` on a commit message.
+    fn codeview_state() -> (AppState, PrKey) {
+        use crate::domain::codeview::{Comment, CommentKind, Comments, Push};
+        let (mut state, key) = agent_state();
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        let comment = |id: &str, file: &str, body: &str| Comment {
+            id: id.into(),
+            file: file.into(),
+            start_line: 3,
+            end_line: 3,
+            side: "new".into(),
+            body: body.into(),
+            kind: CommentKind::of(file),
+        };
+        let head = state.data.prs[&key].head.value.head_oid.clone();
+        let comments = Comments {
+            pushes: vec![Push {
+                head,
+                comments: vec![
+                    comment("c1", "src/a.rs", "First note"),
+                    comment("c2", "src/b.rs", "Second note"),
+                    comment("c3", "codeview://commit/x", "Message note"),
+                ],
+            }],
+        };
+        state.data.codeview.insert(key.clone(), Ok(comments));
+        (state, key)
+    }
+
+    /// The comments of the state without the comment `id`, as a new load.
+    fn loaded_without(state: &AppState, key: &PrKey, id: &str) -> Msg {
+        let mut comments = state.data.codeview[key].clone().unwrap();
+        comments.pushes[0]
+            .comments
+            .retain(|comment| comment.id != id);
+        Msg::CodeviewLoaded {
+            key: key.clone(),
+            comments: Ok(comments),
+        }
+    }
+
+    /// The top overlay that is not closing.
+    fn top(state: &AppState) -> &OverlayState {
+        &state
+            .ui
+            .overlays
+            .iter()
+            .rev()
+            .find(|o| !o.closing)
+            .unwrap()
+            .state
+    }
+
+    fn ctrl(state: &mut AppState, c: char) -> Vec<Cmd> {
+        update(
+            state,
+            &Keymap::default(),
+            press(KeyCode::Char(c), KeyModifiers::CONTROL),
+        )
+    }
+
+    #[test]
+    fn s_reads_the_comments_again_and_then_opens_the_send_dialog() {
+        let (mut state, pr) = codeview_state();
+        assert_eq!(key(&mut state, 'S'), vec![Cmd::LoadCodeview(pr.clone())]);
+        assert!(
+            matches!(top(&state), OverlayState::Popup(_)),
+            "no dialog before the load"
+        );
+        let msg = loaded_without(&state, &pr, "c2");
+        update(&mut state, &Keymap::default(), msg);
+        let OverlayState::Choose { spec, ids, action } = top(&state) else {
+            panic!("no send dialog");
+        };
+        assert_eq!(action.id, "codeview_send");
+        assert_eq!(ids, &["c1"]);
+        assert_eq!(
+            spec.title,
+            format!("send 1 comment as one review to #{}", pr.number)
+        );
+        assert_eq!(
+            spec.lines,
+            [
+                "src/a.rs:L3 (new)  First note",
+                "",
+                "1 comment went out from codeview already",
+            ]
+        );
+        let keys: Vec<char> = spec.options.iter().map(|(c, _)| *c).collect();
+        assert_eq!(keys, ['c', 'a', 'r']);
+        assert_eq!(state.ui.codeview_send, None);
+    }
+
+    #[test]
+    fn no_dialog_opens_when_every_chosen_comment_went_out() {
+        let (mut state, pr) = codeview_state();
+        key(&mut state, ' ');
+        key(&mut state, 'S');
+        let msg = loaded_without(&state, &pr, "c1");
+        update(&mut state, &Keymap::default(), msg);
+        assert!(matches!(top(&state), OverlayState::Popup(_)));
+        assert_eq!(
+            status_text(&state),
+            Some("1 comment went out from codeview already")
+        );
+    }
+
+    #[test]
+    fn the_text_keeps_its_line_breaks_into_the_send() {
+        let (mut state, pr) = codeview_state();
+        key(&mut state, 'S');
+        let msg = loaded_without(&state, &pr, "none");
+        update(&mut state, &Keymap::default(), msg);
+        key(&mut state, 'c');
+        let OverlayState::ReviewText { event, title, .. } = top(&state) else {
+            panic!("no text popup");
+        };
+        assert_eq!(*event, ReviewKind::Comment);
+        assert_eq!(title, &format!("comment review on #{}", pr.number));
+        for c in "one q".chars() {
+            key(&mut state, c);
+        }
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        key(&mut state, 'n');
+        let cmds = ctrl(&mut state, 's');
+        let [Cmd::RunAction { id, input, .. }] = cmds.as_slice() else {
+            panic!("no send: {cmds:?}");
+        };
+        assert_eq!(*id, "codeview_send");
+        assert_eq!(
+            input,
+            &ActionInput::Review {
+                ids: vec!["c1".into(), "c2".into()],
+                event: ReviewKind::Comment,
+                body: "one q\nn".into(),
+            }
+        );
+        assert!(matches!(top(&state), OverlayState::Popup(_)));
+    }
+
+    #[test]
+    fn a_change_request_needs_a_text() {
+        let (mut state, pr) = codeview_state();
+        key(&mut state, 'S');
+        let msg = loaded_without(&state, &pr, "none");
+        update(&mut state, &Keymap::default(), msg);
+        key(&mut state, 'r');
+        assert_eq!(ctrl(&mut state, 's'), Vec::<Cmd>::new());
+        let OverlayState::ReviewText { error, .. } = top(&state) else {
+            panic!("the popup closed");
+        };
+        assert_eq!(error.as_deref(), Some("a change request needs a text"));
+        key(&mut state, 'x');
+        let OverlayState::ReviewText { error, .. } = top(&state) else {
+            panic!("the popup closed");
+        };
+        assert_eq!(*error, None, "an edit clears the error");
+        assert_eq!(ctrl(&mut state, 's').len(), 1);
+    }
+
+    #[test]
+    fn an_approval_with_an_empty_text_goes_out() {
+        let (mut state, pr) = codeview_state();
+        key(&mut state, 'S');
+        let msg = loaded_without(&state, &pr, "none");
+        update(&mut state, &Keymap::default(), msg);
+        key(&mut state, 'a');
+        let cmds = ctrl(&mut state, 's');
+        let [Cmd::RunAction { input, .. }] = cmds.as_slice() else {
+            panic!("no send: {cmds:?}");
+        };
+        assert_eq!(
+            input,
+            &ActionInput::Review {
+                ids: vec!["c1".into(), "c2".into()],
+                event: ReviewKind::Approve,
+                body: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn ctrl_e_opens_the_editor_and_its_text_comes_back() {
+        let (mut state, pr) = codeview_state();
+        key(&mut state, 'S');
+        let msg = loaded_without(&state, &pr, "none");
+        update(&mut state, &Keymap::default(), msg);
+        key(&mut state, 'c');
+        key(&mut state, 'h');
+        assert_eq!(ctrl(&mut state, 'e'), vec![Cmd::EditText("h".into())]);
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::TextEdited(Ok("line one\nline two\n".into())),
+        );
+        let OverlayState::ReviewText { text, .. } = top(&state) else {
+            panic!("no text popup");
+        };
+        assert_eq!(text, "line one\nline two");
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::TextEdited(Err("vim ended with exit status: 1".into())),
+        );
+        let OverlayState::ReviewText { text, error, .. } = top(&state) else {
+            panic!("no text popup");
+        };
+        assert_eq!(text, "line one\nline two", "an error keeps the text");
+        assert_eq!(error.as_deref(), Some("vim ended with exit status: 1"));
+    }
+
+    #[test]
+    fn esc_and_n_cancel_the_send() {
+        let (mut state, pr) = codeview_state();
+        key(&mut state, 'S');
+        let msg = loaded_without(&state, &pr, "none");
+        update(&mut state, &Keymap::default(), msg.clone());
+        key(&mut state, 'n');
+        assert!(matches!(top(&state), OverlayState::Popup(_)));
+        key(&mut state, 'S');
+        update(&mut state, &Keymap::default(), msg);
+        key(&mut state, 'c');
+        assert_eq!(
+            update(
+                &mut state,
+                &Keymap::default(),
+                press(KeyCode::Esc, KeyModifiers::NONE),
+            ),
+            Vec::<Cmd>::new()
+        );
+        assert!(matches!(top(&state), OverlayState::Popup(_)));
+    }
+
+    #[test]
+    fn the_end_of_a_send_loads_the_comments_again() {
+        let (mut state, pr) = codeview_state();
+        let done = Msg::ActionEvent {
+            id: "codeview_send",
+            key: TargetKey::Pr(pr.clone()),
+            event: ActionEvent::Done(Ok("posted 1 comment as a comment review".into())),
+        };
+        let cmds = update(&mut state, &Keymap::default(), done);
+        assert_eq!(cmds.last(), Some(&Cmd::LoadCodeview(pr)));
+        assert_eq!(
+            status_text(&state),
+            Some("posted 1 comment as a comment review")
+        );
     }
 }
