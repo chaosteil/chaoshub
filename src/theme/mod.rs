@@ -171,11 +171,11 @@ impl Theme {
     }
 
     /// A header line in the color `color`. Grunge and plain headers are
-    /// stencils in the color. Punk headers are ransom notes: each letter
-    /// is black on the color, black on white, or the color on black.
+    /// stencils in the color. Punk headers are inverted: black text on a
+    /// block of the color.
     pub(crate) fn header(&self, text: &str, color: Color) -> Line<'static> {
         match self.skin {
-            Skin::Punk => punk::ransom(text, color, self.palette.fg, self.palette.bg),
+            Skin::Punk => punk::inverted(text, color, self.palette.bg),
             Skin::Grunge { .. } | Skin::Plain => stencil(text, Style::new().fg(color)),
         }
     }
