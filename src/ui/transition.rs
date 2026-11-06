@@ -28,7 +28,7 @@ use tachyonfx::{
 use crate::app::layout::Areas;
 use crate::app::models::{FrameModel, OverlayContent, TabBarModel};
 use crate::bus::{Hit, OverlayKind, UiEvent};
-use crate::theme::{Theme, ThemeKind};
+use crate::theme::{Skin, Theme, ThemeKind};
 use crate::ui::hits::HitMap;
 use crate::ui::{list, list_areas, overlay_area, rect, render_overlay, screen, tabbar};
 
@@ -393,7 +393,8 @@ impl Transitions {
         let list_area = list_areas(model, areas).body;
         self.list.set(list_area);
         for overlay in &model.overlays {
-            self.overlays[slot(overlay.kind)].set(overlay_area(overlay, areas));
+            let area = effect_area(overlay_area(overlay, areas), areas, &self.theme);
+            self.overlays[slot(overlay.kind)].set(area);
         }
         if let Some((from, to)) = self.pending_tab.take()
             && let Some(glide) = self.tab_glide(model, areas, from, to)
@@ -493,6 +494,24 @@ impl Transitions {
             IDLE_DEADLINE
         }
     }
+}
+
+/// The area of the slide effect of an overlay in `area`. The punk skin
+/// draws a drop shadow one column right of the overlay and one row below
+/// it, so the effect also covers that column and that row, clipped to
+/// the screen and to the rows above the key hint bar. The shadow then
+/// slides with the overlay. Other skins keep the overlay area.
+fn effect_area(area: Rect, areas: &Areas, theme: &Theme) -> Rect {
+    if theme.skin != Skin::Punk || area.is_empty() {
+        return area;
+    }
+    let bars = if areas.hints.height > 0 {
+        areas.hints.y
+    } else {
+        areas.status.y
+    };
+    let screen = Rect::new(0, 0, areas.status.width, bars);
+    Rect::new(area.x, area.y, area.width + 1, area.height + 1).intersection(screen)
 }
 
 /// The positions of the cells of an area, row by row.
@@ -877,12 +896,28 @@ mod tests {
         model: &FrameModel,
         elapsed_ms: u64,
     ) -> Buffer {
+        draw_view_in(
+            terminal,
+            transitions,
+            model,
+            elapsed_ms,
+            &testdata::pierre(),
+        )
+    }
+
+    /// Draws one full frame with `view` in `theme`, then the effects.
+    fn draw_view_in(
+        terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+        transitions: &mut Transitions,
+        model: &FrameModel,
+        elapsed_ms: u64,
+        theme: &Theme,
+    ) -> Buffer {
         let areas = testdata::areas(WIDTH, HEIGHT);
-        let theme = testdata::pierre();
         transitions.prepare(model, &areas);
         terminal
             .draw(|frame| {
-                crate::ui::view(frame, model, &areas, &theme, &mut HitMap::default());
+                crate::ui::view(frame, model, &areas, theme, &mut HitMap::default());
                 transitions.process(frame, Duration::from_millis(elapsed_ms));
             })
             .unwrap();
@@ -1031,6 +1066,42 @@ mod tests {
         assert_eq!(
             pane_highlight(&buf, &tabs, tabs[0].2),
             (tabs[2].0, tabs[2].1)
+        );
+    }
+
+    #[test]
+    fn the_punk_shadow_slides_with_the_overlay() {
+        let theme = testdata::punk();
+        let areas = testdata::areas(WIDTH, HEIGHT);
+        let model = testdata::with_overlay(testdata::confirm_overlay(false));
+        let area = overlay_area(&model.overlays[0], &areas);
+        // A shadow cell of the right column and one of the row below.
+        let cells = [(area.right(), area.y + 1), (area.x + 1, area.bottom())];
+        let shadow = |buf: &Buffer| cells.map(|at| buf[at].bg == theme.palette.primary);
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut fx = Transitions::new(true, 160).with_theme(theme);
+        draw_view_in(&mut terminal, &mut fx, &testdata::frame(), 0, &theme);
+        fx.apply(vec![UiEvent::OverlayOpened(OverlayKind::Confirm)]);
+        let start = draw_view_in(&mut terminal, &mut fx, &model, 0, &theme);
+        assert_eq!(shadow(&start), [false, false], "no shadow before the slide");
+        let end = draw_view_in(&mut terminal, &mut fx, &model, 100, &theme);
+        draw_view_in(&mut terminal, &mut fx, &model, 16, &theme);
+        assert!(!fx.active());
+        assert_eq!(
+            shadow(&end),
+            [true, true],
+            "the shadow is in place at the end"
+        );
+        assert_eq!(
+            effect_area(area, &areas, &theme),
+            Rect::new(area.x, area.y, area.width + 1, area.height + 1)
+        );
+        assert_eq!(effect_area(area, &areas, &testdata::pierre()), area);
+        let popup = rect(areas.popup);
+        assert_eq!(
+            effect_area(popup, &areas, &theme),
+            popup,
+            "clipped to the screen and to the rows above the key hint bar"
         );
     }
 
