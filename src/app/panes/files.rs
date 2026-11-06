@@ -498,11 +498,11 @@ mod tests {
                 CellStyle::Dim,
             ]
         );
-        assert!(
-            tree_nodes(&model)
+        assert!(tree_nodes(&model).iter().all(|n| {
+            n.cells
                 .iter()
-                .all(|n| n.cells.iter().all(|c| c.style != CellStyle::Markdown))
-        );
+                .all(|c| !matches!(c.style, CellStyle::Markdown | CellStyle::Html))
+        }));
         assert!(tree_nodes(&model)[9..16].iter().all(|n| n.depth == 4));
         let (model, handled) = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
         assert_eq!(handled.unwrap().events, [], "a collapse is instant");

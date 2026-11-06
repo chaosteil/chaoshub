@@ -139,8 +139,13 @@ fn node(depth: u8, expanded: Option<bool>, cells: Vec<Cell>) -> TreeNode {
     }
 }
 
-/// The body of a comment or a review as a markdown node, if it has text.
-fn body(depth: u8, text: &str) -> Option<TreeNode> {
+/// The body of a comment or a review as a node, if it has text. The node
+/// has the HTML of GitHub when it is not empty, else the markdown.
+fn body(depth: u8, text: &str, html: &str) -> Option<TreeNode> {
+    let html = html.trim();
+    if !html.is_empty() {
+        return Some(node(depth, None, vec![cell(html, CellStyle::Html)]));
+    }
     let text = text.trim();
     (!text.is_empty()).then(|| node(depth, None, vec![cell(text, CellStyle::Markdown)]))
 }
@@ -194,11 +199,11 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<usi
         match entry {
             Entry::Comment(comment) => {
                 out.push((comment_header(0, comment, "commented", now), None));
-                out.extend(body(1, &comment.body).map(|n| (n, None)));
+                out.extend(body(1, &comment.body, &comment.body_html).map(|n| (n, None)));
             }
             Entry::Review(review) => {
                 out.push((review_header(review, now), None));
-                out.extend(body(1, &review.body).map(|n| (n, None)));
+                out.extend(body(1, &review.body, &review.body_html).map(|n| (n, None)));
             }
             Entry::Thread(index, thread) => {
                 let open = expanded.contains(&index);
@@ -206,7 +211,7 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<usi
                 if open {
                     for comment in &thread.comments {
                         out.push((comment_header(1, comment, "", now), None));
-                        out.extend(body(2, &comment.body).map(|n| (n, None)));
+                        out.extend(body(2, &comment.body, &comment.body_html).map(|n| (n, None)));
                     }
                 }
             }

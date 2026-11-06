@@ -80,9 +80,12 @@ impl Pane for DescriptionPane {
             };
         };
         let head = &pr.head.value;
+        let html = head.body_html.trim();
         let body = head.body.replace("\r\n", "\n");
         let body = body.trim();
-        let line = if body.is_empty() {
+        let line = if !html.is_empty() {
+            vec![cell(html, CellStyle::Html)]
+        } else if body.is_empty() {
             vec![cell("(no description)", CellStyle::Dim)]
         } else {
             vec![cell(body, CellStyle::Markdown)]

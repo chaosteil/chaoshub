@@ -236,6 +236,7 @@ mod tests {
                 "codeview",
                 "config",
                 "clipboard",
+                "markup",
             ],
         ),
         ("ui", &["domain", "bus", "app", "theme", "markup"]),
