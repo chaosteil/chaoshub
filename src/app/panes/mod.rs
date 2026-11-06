@@ -17,6 +17,7 @@ use std::sync::LazyLock;
 use crate::app::models::{Cell, CellStyle, PaneModel};
 use crate::app::tabs::{Handled, KeyCx};
 use crate::bus::{KeyChord, Size, Target};
+use crate::markup::{self, Source};
 
 /// The state of one pane, made by `Pane::init_state`.
 #[derive(Debug)]
@@ -88,41 +89,38 @@ pub(crate) fn items(model: &PaneModel) -> usize {
     }
 }
 
-/// The flat margin of rows for the block spacing of the markdown
-/// renderer, once per markdown cell.
+/// The flat margin of rows after each markdown or HTML cell.
 const BLOCK_MARGIN: usize = 2;
 
-/// The blank rows that the markdown renderer adds around a heading: one
-/// before and one after.
-const HEADING_ROWS: usize = 2;
-
 /// The display rows of the lines of a pane of lines at `width`. A line
-/// without a markdown cell takes one row. A line with a markdown cell
-/// takes one row or more per source line of the cell text, plus
-/// `HEADING_ROWS` per heading line (a line that starts with `#`), plus
-/// `BLOCK_MARGIN`. The estimate can be a few rows too high, but never too
-/// low, so the scroll can reach the last row.
+/// without a markdown or HTML cell takes one row. A line with one takes
+/// the rows of `markup::rows` at the width after the cells before it, at
+/// least one, plus `BLOCK_MARGIN`.
 pub(crate) fn display_rows(lines: &[Vec<Cell>], width: u16) -> usize {
     let width = usize::from(width.max(1));
     lines
         .iter()
         .map(|cells| {
-            let Some(markdown) = cells.iter().find(|c| c.style == CellStyle::Markdown) else {
+            let Some(at) = cells
+                .iter()
+                .position(|c| matches!(c.style, CellStyle::Markdown | CellStyle::Html))
+            else {
                 return 1;
             };
-            let rows: usize = markdown
-                .text
-                .lines()
-                .map(|line| {
-                    let rows = textwrap::core::display_width(line).div_ceil(width).max(1);
-                    if line.trim_start().starts_with('#') {
-                        rows + HEADING_ROWS
-                    } else {
-                        rows
-                    }
-                })
+            let indent: usize = cells[..at]
+                .iter()
+                .map(|c| textwrap::core::display_width(&c.text))
                 .sum();
-            rows + BLOCK_MARGIN
+            let text = cells[at].text.as_str();
+            let source = if cells[at].style == CellStyle::Html {
+                Source::Html(text)
+            } else {
+                Source::Markdown(text)
+            };
+            markup::rows(source, width.saturating_sub(indent))
+                .len()
+                .max(1)
+                + BLOCK_MARGIN
         })
         .sum()
 }
@@ -253,7 +251,7 @@ mod tests {
                     cell("ab\ncd", CellStyle::Markdown),
                 ]],
                 10,
-                2 + 2,
+                1 + 2,
             ),
             (
                 "mixed lines",
@@ -274,26 +272,26 @@ mod tests {
         let body = format!(
             "## Why\n{text}\n\n## What\n{text}\n\n## Testing\n{text}\n\n## Verification\n{text}"
         );
-        // The rendered rows of `ui::markdown::render`, measured.
+        // The rendered rows of `ui::markdown::render`, plus `BLOCK_MARGIN`.
         let cases: [(&str, &str, u16, usize); 4] = [
             (
                 "four headings",
                 "## Why\ntext\n## What\ntext\n## Testing\ntext\n## Verification\ntext",
                 76,
-                15,
+                15 + 2,
             ),
             (
                 "eight headings",
                 "# A\n# B\n# C\n# D\n# E\n# F\n# G\n# H\ntext",
                 76,
-                17,
+                17 + 2,
             ),
-            ("body at width 76", &body, 76, 15),
-            ("body at width 40", &body, 40, 19),
+            ("body at width 76", &body, 76, 15 + 2),
+            ("body at width 40", &body, 40, 19 + 2),
         ];
         for (name, text, width, rendered) in cases {
             let rows = display_rows(&[vec![cell(text, CellStyle::Markdown)]], width);
-            assert!(rows >= rendered, "{name}: {rows} < {rendered}");
+            assert_eq!(rows, rendered, "{name}");
         }
     }
 }
