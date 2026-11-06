@@ -265,6 +265,9 @@ macro_rules! pr_fields_parser {
                 head_ref: fields.head_ref_name,
                 head_oid: fields.head_ref_oid,
                 base_ref: fields.base_ref_name,
+                additions: uint(fields.additions, "additions")?,
+                deletions: uint(fields.deletions, "deletions")?,
+                changed_files: uint(fields.changed_files, "changedFiles")?,
                 review_decision: fields.review_decision.and_then(|decision| match decision {
                     q::PullRequestReviewDecision::APPROVED => Some(ReviewDecision::Approved),
                     q::PullRequestReviewDecision::CHANGES_REQUESTED => {

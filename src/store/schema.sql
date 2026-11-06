@@ -1,7 +1,7 @@
 -- The cache schema. A change here needs a new user_version, and the same
 -- value in SCHEMA_VERSION in mod.rs. On a mismatch the store drops every
 -- table except ui_state and runs this file again.
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 
 CREATE TABLE IF NOT EXISTS repos(
   owner TEXT NOT NULL,

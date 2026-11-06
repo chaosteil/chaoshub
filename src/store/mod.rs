@@ -30,7 +30,7 @@ use crate::store::handle::{CHANNEL_CAPACITY, StoreHandle};
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// The schema version. It must equal the `user_version` in `schema.sql`.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// The tables, the index and the `user_version`.
 const SCHEMA: &str = include_str!("schema.sql");
@@ -168,6 +168,9 @@ mod tests {
                     head_ref: format!("chaosteil/change{number}"),
                     head_oid: format!("oid{number}"),
                     base_ref: "main".into(),
+                    additions: 3,
+                    deletions: 1,
+                    changed_files: 1,
                     review_decision: None,
                     review_requested: false,
                     reviewers: Vec::new(),
