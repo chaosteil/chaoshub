@@ -5,9 +5,9 @@ use ratatui::backend::TestBackend;
 
 use crate::app::layout::{Areas, layout};
 use crate::app::models::{
-    Align, Cell, CellStyle, Column, ColumnWidth, Direction, FrameModel, HelpModel, HelpSection,
-    KeyHint, KeyHintsModel, ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, Row,
-    RowItem, RowStyle, StatusModel, TabBarModel, TreeNode,
+    Align, Cell, CellStyle, Column, ColumnWidth, FrameModel, HelpModel, HelpSection, KeyHint,
+    KeyHintsModel, ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, Row, RowItem,
+    RowStyle, StatusModel, TabBarModel, TreeNode,
 };
 use crate::bus::{
     ConfirmSpec, KeyChord, KeyCode, KeyModifiers, OverlayKind, PrRef, Progress, PromptSpec, Size,
@@ -239,7 +239,6 @@ pub(crate) fn frame() -> FrameModel {
             active: 0,
         },
         list: mine_list(),
-        prev_list: None,
         status: status(),
         overlays: Vec::new(),
         term: TermStatus {
@@ -275,7 +274,7 @@ pub(crate) fn hints() -> KeyHintsModel {
     }
 }
 
-/// A frame model during a slide from the mine tab to the team tab.
+/// A frame model after a switch from the mine tab to the team tab.
 pub(crate) fn sliding_frame() -> FrameModel {
     FrameModel {
         tab_bar: TabBarModel {
@@ -283,7 +282,6 @@ pub(crate) fn sliding_frame() -> FrameModel {
             active: 1,
         },
         list: team_list(),
-        prev_list: Some((mine_list(), Direction::Left)),
         ..frame()
     }
 }

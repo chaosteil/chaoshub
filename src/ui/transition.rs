@@ -2,8 +2,9 @@
 //! `Transitions` turns them into effects that run over the frame buffer
 //! after `view`.
 //!
-//! - Tab switch: the previous list slides out and the new list slides in,
-//!   as two `translate_buf` effects in `parallel`.
+//! - Tab switch: the highlight of the active tab glides from the old tab
+//!   to the new tab in the tab bar row. The list shows the new tab at
+//!   once.
 //! - Confirm, prompt and picker: `slide_in` from the bottom edge on open,
 //!   `slide_out` on close.
 //! - Popup, output and help: `slide_in` from the right edge, `slide_out`
@@ -22,16 +23,18 @@ use tachyonfx::{
 };
 
 use crate::app::layout::Areas;
-use crate::app::models::FrameModel;
-use crate::bus::{OverlayKind, UiEvent};
+use crate::app::models::{FrameModel, TabBarModel};
+use crate::bus::{Hit, OverlayKind, UiEvent};
 use crate::theme::{Theme, ThemeKind};
 use crate::ui::hits::HitMap;
-use crate::ui::{list, overlay_area, rect, screen};
+use crate::ui::{list, overlay_area, rect, tabbar};
 
 /// The duration of the confirm and prompt slides, in milliseconds.
 const DIALOG_MS: u64 = 100;
 /// The duration of the status fade, in milliseconds.
 const STATUS_FADE_MS: u64 = 300;
+/// The duration of the tab glide, in milliseconds.
+const TAB_GLIDE_MS: u64 = 120;
 /// The length of the gradient at the edge of a sliding overlay.
 const SLIDE_GRADIENT: u16 = 3;
 /// The frame deadline of the event loop while a transition runs.
@@ -87,6 +90,41 @@ struct ScrollState {
     down: bool,
 }
 
+/// The state of a tab glide.
+#[derive(Debug, Clone, Default)]
+struct TabGlide {
+    /// The tab bar row with no active tab.
+    bar: Buffer,
+    /// The x and the width of the old active tab.
+    from: (u16, u16),
+    /// The x and the width of the new active tab.
+    to: (u16, u16),
+}
+
+impl TabGlide {
+    /// The cells `[l, r)` of the highlight at `alpha`: from the span of
+    /// the old tab at 0 to the span of the new tab at 1.
+    fn span(&self, alpha: f32) -> (u16, u16) {
+        let alpha = alpha.clamp(0.0, 1.0);
+        let lerp = |a: u16, b: u16| {
+            let x = (f32::from(a) + (f32::from(b) - f32::from(a)) * alpha).round();
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "x is rounded and between a and b"
+            )]
+            let x = x as u16;
+            x
+        };
+        let (from_x, from_width) = self.from;
+        let (to_x, to_width) = self.to;
+        (
+            lerp(from_x, to_x),
+            lerp(from_x + from_width, to_x + to_width),
+        )
+    }
+}
+
 /// Turns UI events into effects and runs them over the frame buffer.
 #[derive(Debug)]
 pub(crate) struct Transitions {
@@ -102,11 +140,11 @@ pub(crate) struct Transitions {
     list: RefRect,
     /// The area of each overlay kind, shared with its slide effect.
     overlays: [RefRect; OVERLAY_KINDS],
-    /// The previous list during a tab slide: a full-screen buffer with the
-    /// cells outside the list area marked to skip.
-    prev: RefCount<Buffer>,
-    /// The new list during a tab slide, copied from the frame.
-    next: RefCount<Buffer>,
+    /// The state of the running tab glide.
+    tab_glide: RefCount<TabGlide>,
+    /// The old and the new active tab of a tab glide that `prepare` must
+    /// fill in.
+    pending_tab: Option<(usize, usize)>,
     /// The list rows during a scroll.
     rows: RefCount<Buffer>,
     /// The offsets of the running scroll.
@@ -130,8 +168,8 @@ impl Transitions {
             areas: None,
             list: RefRect::new(Rect::default()),
             overlays: std::array::from_fn(|_| RefRect::new(Rect::default())),
-            prev: empty(),
-            next: empty(),
+            tab_glide: ref_count(TabGlide::default()),
+            pending_tab: None,
             rows: empty(),
             scroll: None,
             status_pending: false,
@@ -170,35 +208,32 @@ impl Transitions {
         }
     }
 
-    /// The previous list slides out and the new list slides in. Moving to
-    /// a tab on the right brings the new list in from the right.
+    /// The highlight of the active tab glides from the old tab to the new
+    /// tab over the tab bar row. `prepare` draws the bar with no active tab
+    /// and finds the spans of the two tabs. Each frame, the effect copies
+    /// that bar over the tab bar and gives the cells of the highlight the
+    /// active tab colors. The list does not move.
     fn tab_slide(&mut self, key: FxKey, from: usize, to: usize) {
-        let Some(areas) = self.areas else {
-            return;
-        };
-        let width = i32::from(areas.list.width);
-        let sign = if to > from { 1 } else { -1 };
-        let timer = Self::timer(self.duration);
-        let out = fx::translate_buf(
-            Offset {
-                x: -sign * width,
-                y: 0,
-            },
-            Rc::clone(&self.prev),
-            timer,
-        );
-        // A mirrored timer runs from the full offset back to zero with the
-        // same ease-out curve, so both lists move together.
-        let into = fx::translate_buf(
-            Offset {
-                x: sign * width,
-                y: 0,
-            },
-            Rc::clone(&self.next),
-            timer.mirrored(),
-        );
-        self.manager
-            .add_unique_effect(key, fx::parallel(&[into, out]));
+        self.pending_tab = Some((from, to));
+        // A new state for each glide: a replaced glide keeps its own state
+        // for its last frame.
+        self.tab_glide = ref_count(TabGlide::default());
+        let (bg, fg) = self.theme.active_tab_colors();
+        let timer = Self::timer(Duration::from_millis(TAB_GLIDE_MS));
+        let effect = fx::effect_fn_buf(Rc::clone(&self.tab_glide), timer, move |glide, cx, buf| {
+            let glide = glide.borrow();
+            let (l, r) = glide.span(cx.alpha());
+            for (x, y) in positions(glide.bar.area) {
+                let Some(dst) = buf.cell_mut((x, y)) else {
+                    continue;
+                };
+                *dst = glide.bar[(x, y)].clone();
+                if (l..r).contains(&x) {
+                    dst.set_bg(bg).set_fg(fg);
+                }
+            }
+        });
+        self.manager.add_unique_effect(key, effect);
     }
 
     /// An overlay slides in or out of its area.
@@ -268,8 +303,8 @@ impl Transitions {
         self.manager.add_unique_effect(key, effect);
     }
 
-    /// Draws the previous list and the scroll rows into the scratch
-    /// buffers, and updates the areas of the running effects.
+    /// Draws the tab bar of a new tab glide and the scroll rows into the
+    /// scratch buffers, and updates the areas of the running effects.
     pub(crate) fn prepare(&mut self, model: &FrameModel, areas: &Areas) {
         self.areas = Some(*areas);
         if !self.enabled {
@@ -280,19 +315,19 @@ impl Transitions {
         for overlay in &model.overlays {
             self.overlays[slot(overlay.kind)].set(overlay_area(overlay, areas));
         }
-        if Rc::strong_count(&self.prev) > 1
-            && let Some((prev, _)) = &model.prev_list
-        {
-            let mut buf = Buffer::empty(screen(areas));
-            list::render(
-                prev,
-                list_area,
-                &mut buf,
-                &self.theme,
-                &mut HitMap::default(),
-            );
-            skip_outside(&mut buf, list_area);
-            *self.prev.borrow_mut() = buf;
+        if let Some((from, to)) = self.pending_tab.take() {
+            let bar_area = rect(areas.tab_bar);
+            let mut bar = Buffer::empty(bar_area);
+            let mut hits = HitMap::default();
+            let idle = TabBarModel {
+                titles: model.tab_bar.titles.clone(),
+                active: model.tab_bar.titles.len(),
+            };
+            tabbar::render(&idle, bar_area, &mut bar, &self.theme, &mut hits);
+            let span = |i| hits.region(Hit::Tab(i)).map(|r| (r.x, r.width));
+            if let (Some(from), Some(to)) = (span(from), span(to)) {
+                *self.tab_glide.borrow_mut() = TabGlide { bar, from, to };
+            }
         }
         if Rc::strong_count(&self.rows) > 1
             && let Some((from, to)) = self.scroll
@@ -312,15 +347,6 @@ impl Transitions {
                 self.status_fade(buf, status);
             }
             self.status_row = Some(copy(buf, status));
-            if Rc::strong_count(&self.next) > 1 {
-                let list_area = rect(areas.list).intersection(buf.area);
-                let mut next = Buffer::empty(buf.area);
-                for (x, y) in positions(list_area) {
-                    next[(x, y)] = buf[(x, y)].clone();
-                }
-                skip_outside(&mut next, list_area);
-                *self.next.borrow_mut() = next;
-            }
         }
         self.manager.process_effects(elapsed.into(), buf, area);
     }
@@ -615,17 +641,150 @@ mod tests {
         (start, middle, end)
     }
 
+    /// Draws one frame: the tab bar and the list, then the effects.
+    fn draw_tabs(
+        terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+        transitions: &mut Transitions,
+        model: &FrameModel,
+        elapsed_ms: u64,
+    ) -> Buffer {
+        let areas = testdata::areas(WIDTH, HEIGHT);
+        let theme = testdata::pierre();
+        transitions.prepare(model, &areas);
+        terminal
+            .draw(|frame| {
+                tabbar::render(
+                    &model.tab_bar,
+                    rect(areas.tab_bar),
+                    frame.buffer_mut(),
+                    &theme,
+                    &mut HitMap::default(),
+                );
+                list::render(
+                    &model.list,
+                    rect(areas.list),
+                    frame.buffer_mut(),
+                    &theme,
+                    &mut HitMap::default(),
+                );
+                transitions.process(frame, Duration::from_millis(elapsed_ms));
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// The cells `[l, r)` of each tab in the tab bar.
+    fn tab_spans(model: &FrameModel) -> Vec<(u16, u16)> {
+        let area = rect(testdata::areas(WIDTH, HEIGHT).tab_bar);
+        let mut hits = HitMap::default();
+        tabbar::render(
+            &model.tab_bar,
+            area,
+            &mut Buffer::empty(area),
+            &testdata::pierre(),
+            &mut hits,
+        );
+        (0..model.tab_bar.titles.len())
+            .map(|i| {
+                let r = hits.region(Hit::Tab(i)).unwrap();
+                (r.x, r.x + r.width)
+            })
+            .collect()
+    }
+
+    /// The cells `[l, r)` of the tabs that have the active tab background.
+    fn highlight(buf: &Buffer, tabs: &[(u16, u16)]) -> (u16, u16) {
+        let (bg, _) = testdata::pierre().active_tab_colors();
+        let y = rect(testdata::areas(WIDTH, HEIGHT).tab_bar).y;
+        let end = tabs.last().map_or(0, |&(_, r)| r);
+        let lit: Vec<u16> = (0..end).filter(|&x| buf[(x, y)].bg == bg).collect();
+        (lit[0], lit[lit.len() - 1] + 1)
+    }
+
+    /// The text of the list rows.
+    fn list_text(buf: &Buffer) -> Vec<String> {
+        let list = rect(testdata::areas(WIDTH, HEIGHT).list);
+        (list.top()..list.bottom())
+            .map(|y| {
+                (list.left()..list.right())
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// A frame with three tabs and `active` as the active tab.
+    fn three_tabs(active: usize) -> FrameModel {
+        let mut model = testdata::sliding_frame();
+        model.tab_bar = TabBarModel {
+            titles: vec!["mine", "team", "repos"],
+            active,
+        };
+        model
+    }
+
     #[test]
     fn tab_slide() {
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
         let model = testdata::sliding_frame();
-        let (start, middle, end) = steps(
-            &model,
-            &[UiEvent::TabChanged { from: 0, to: 1 }],
-            &testdata::frame(),
+        let tabs = tab_spans(&model);
+        let plain = draw_tabs(&mut terminal, &mut Transitions::new(false, 160), &model, 0);
+        let mut fx = new();
+        draw_tabs(&mut terminal, &mut fx, &testdata::frame(), 0);
+        fx.apply(vec![UiEvent::TabChanged { from: 0, to: 1 }]);
+        let start = draw_tabs(&mut terminal, &mut fx, &model, 0);
+        assert_eq!(highlight(&start, &tabs), tabs[0], "on the old tab");
+        assert_eq!(
+            list_text(&start),
+            list_text(&plain),
+            "the list shows the new tab at once"
         );
-        insta::assert_snapshot!("tab_slide_0ms", start);
-        insta::assert_snapshot!("tab_slide_80ms", middle);
-        insta::assert_snapshot!("tab_slide_160ms", end);
+        let middle = draw_tabs(&mut terminal, &mut fx, &model, 60);
+        let (l, r) = highlight(&middle, &tabs);
+        assert!(tabs[0].0 < l && l < tabs[1].0, "{l} between the tabs");
+        assert!(tabs[0].1 < r && r < tabs[1].1, "{r} between the tabs");
+        assert_eq!(list_text(&middle), list_text(&plain));
+        let end = draw_tabs(&mut terminal, &mut fx, &model, 60);
+        assert_eq!(highlight(&end, &tabs), tabs[1], "on the new tab");
+        draw_tabs(&mut terminal, &mut fx, &model, 16);
+        assert!(!fx.active());
+    }
+
+    #[test]
+    fn tab_slide_off_shows_the_new_tab_at_once() {
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let model = testdata::sliding_frame();
+        let tabs = tab_spans(&model);
+        let mut fx = Transitions::new(false, 160).with_theme(testdata::pierre());
+        fx.apply(vec![UiEvent::TabChanged { from: 0, to: 1 }]);
+        assert!(!fx.active());
+        let buf = draw_tabs(&mut terminal, &mut fx, &model, 0);
+        assert_eq!(highlight(&buf, &tabs), tabs[1]);
+    }
+
+    #[test]
+    fn a_second_tab_switch_retargets_the_tab_slide() {
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let tabs = tab_spans(&three_tabs(0));
+        let mut fx = new();
+        draw_tabs(&mut terminal, &mut fx, &three_tabs(0), 0);
+        fx.apply(vec![UiEvent::TabChanged { from: 0, to: 1 }]);
+        draw_tabs(&mut terminal, &mut fx, &three_tabs(1), 0);
+        draw_tabs(&mut terminal, &mut fx, &three_tabs(1), 60);
+        fx.apply(vec![UiEvent::TabChanged { from: 1, to: 2 }]);
+        let model = three_tabs(2);
+        draw_tabs(&mut terminal, &mut fx, &model, 0);
+        let start = draw_tabs(&mut terminal, &mut fx, &model, 0);
+        assert_eq!(highlight(&start, &tabs), tabs[1], "from the second tab");
+        let middle = draw_tabs(&mut terminal, &mut fx, &model, 60);
+        let (l, r) = highlight(&middle, &tabs);
+        assert!(tabs[1].0 < l && l < tabs[2].0, "{l} between the tabs");
+        assert!(tabs[1].1 < r && r < tabs[2].1, "{r} between the tabs");
+        assert!(fx.active(), "the new glide runs its full time");
+        let end = draw_tabs(&mut terminal, &mut fx, &model, 60);
+        assert_eq!(highlight(&end, &tabs), tabs[2], "on the third tab");
+        draw_tabs(&mut terminal, &mut fx, &model, 16);
+        assert!(!fx.active());
     }
 
     #[test]

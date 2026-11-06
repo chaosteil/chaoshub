@@ -340,8 +340,8 @@ command = [
 | `palette` | `pierre` | The colors: `pierre` or `ansi16`. On a 16-color terminal, `pierre` changes to `ansi16`. |
 | `grunge` | `true` | Draws the rough block borders. Applies to the grunge style only. |
 | `textures` | `true` | Fills empty areas with noise textures. Applies to the grunge style only. |
-| `animations` | `true` | Turns the transitions on: tab slides, popup slides, scrolls and the status message fade. |
-| `animation_ms` | `160` | The duration of one transition, in milliseconds. The confirm and prompt popups always take 100 ms, and the status fade takes 300 ms. |
+| `animations` | `true` | Turns the transitions on: tab slides (the active tab glides in the tab bar), popup slides, scrolls and the status message fade. |
+| `animation_ms` | `160` | The duration of one transition, in milliseconds. The confirm and prompt popups always take 100 ms, the tab glide takes 120 ms, and the status fade takes 300 ms. |
 | `key_hints` | `true` | Shows the key hint bar above the status bar. |
 
 The style and the palette are two switches. The style sets the shapes,

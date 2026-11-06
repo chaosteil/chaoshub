@@ -1,0 +1,16 @@
+---
+source: src/run.rs
+expression: end
+---
+"  1 M I N E   2 R E V I E W   3 T E A M                ˙                            ˙      chaoshub "
+" ready for review · 1 · t shows all open                                                            "
+"▌docs(readme): keymap table                        #88 chaoshub     alice            2h  ✓   ○      "
+"                ░            ˙       ˙              ░  ˙       ·      ˙       ░    ░       ░        "
+"      ˙·         ˙              ˙    ·                       ·˙  ░  ░   ░   · ˙          ˙          "
+"  ˙ ·           ░              ˙               ░              ·    ˙          ·  ·    ·             "
+"       ·                  ˙                    ░░  ░   ˙       ·    ·     ·           ░        ░    "
+"    ░˙ ·    ˙                     ·      ˙    ˙      ˙  ░              ˙ ˙ ˙     ˙ ░ ˙    ░       ░ "
+" ░   ˙                  ·                        ·        · ·     ·        ˙          ░˙░         ˙ "
+"     ·    ·        ˙                  ░˙      ˙             ░               ░                       "
+"▌ j/k move  Enter open  m merge  A approve  / filter  1/2/3/Tab tabs  r refresh  ? help  q quit  …  "
+" [REVIEW] 0 repos · cache from 5m ago                                                        ? help "

@@ -16,7 +16,8 @@ const NAME: &str = "chaoshub";
 
 /// Draws the tab bar. The active tab has the `▌` marker and the surface
 /// background. The free cells get the texture. Each tab label is a
-/// `Hit::Tab`.
+/// `Hit::Tab`. An `active` index past the last tab draws the bar with no
+/// active tab: every tab has the inactive style.
 pub(crate) fn render(
     model: &TabBarModel,
     area: Rect,
