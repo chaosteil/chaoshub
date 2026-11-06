@@ -340,6 +340,12 @@ pub(crate) enum UiEvent {
     /// A sync or a CI poll changed the CI state, the check counts or the
     /// review counts of the pull request, and its row is visible.
     RowGlow(PrKey),
+    /// A node of a pane tree expanded: `rows` new nodes follow it, from
+    /// the node index `first_row`.
+    TreeExpanded {
+        first_row: usize,
+        rows: usize,
+    },
 }
 
 /// An event from a running action.

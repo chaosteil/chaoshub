@@ -11,7 +11,7 @@ use crate::app::age::age;
 use crate::app::models::{Cell, CellStyle, PaneModel, TreeNode};
 use crate::app::panes::{Pane, PaneState};
 use crate::app::tabs::cells::cell;
-use crate::app::tabs::{Handled, KeyCx};
+use crate::app::tabs::{Handled, KeyCx, tree_toggled};
 use crate::bus::{KeyChord, Size, Target};
 use crate::domain::detail::{Comment, PrDetail, Review, ReviewState, Thread};
 use crate::domain::pr::PullRequest;
@@ -64,18 +64,17 @@ impl Pane for Conversation {
         if !cx.keys.matches("open", key) {
             return None;
         }
-        let thread = {
+        let (thread, before) = {
             let expanded = expanded(ps);
-            nodes(cx, &expanded).get(ps.cursor)?.1?
+            let nodes = nodes(cx, &expanded);
+            (nodes.get(ps.cursor)?.1?, nodes.len())
         };
         let state = ps.ext.downcast_mut::<ConversationState>()?;
         if !state.expanded.remove(&thread) {
             state.expanded.insert(thread);
         }
-        Some(Handled {
-            changed: true,
-            ..Handled::default()
-        })
+        let after = nodes(cx, &expanded(ps)).len();
+        Some(tree_toggled(ps.cursor, before, after))
     }
 }
 
@@ -291,7 +290,7 @@ mod tests {
     use crate::app::state::AppState;
     use crate::app::target::pr_target;
     use crate::app::testdata;
-    use crate::bus::{KeyCode, KeyModifiers};
+    use crate::bus::{KeyCode, KeyModifiers, UiEvent};
     use crate::domain::test_time;
 
     /// The text of each node, with its depth and expand marker.
@@ -422,6 +421,37 @@ mod tests {
             None,
             "Enter on a comment does nothing"
         );
+    }
+
+    #[test]
+    fn an_expanded_thread_unfolds_its_comments() {
+        let state = state_with(Some(testdata::detail()), None);
+        let key = testdata::pr_key("chaoshub", 7);
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let enter = KeyChord {
+            code: KeyCode::Enter,
+            mods: KeyModifiers::NONE,
+        };
+        let mut ps = Conversation.init_state();
+        ps.cursor = 3;
+        let handled = Conversation.handle_key(enter, &cx, &mut ps).unwrap();
+        assert_eq!(
+            handled.events,
+            [UiEvent::TreeExpanded {
+                first_row: 4,
+                rows: 2
+            }]
+        );
+        let handled = Conversation.handle_key(enter, &cx, &mut ps).unwrap();
+        assert!(handled.changed);
+        assert_eq!(handled.events, [], "a collapse is instant");
     }
 
     #[test]

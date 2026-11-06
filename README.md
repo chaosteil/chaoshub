@@ -341,8 +341,8 @@ command = [
 | `palette` | `pierre` | The colors: `pierre` or `ansi16`. On a 16-color terminal, `pierre` changes to `ansi16`. |
 | `grunge` | `true` | Draws the rough block borders. Applies to the grunge style only. |
 | `textures` | `true` | Fills empty areas with noise textures. Applies to the grunge style only. |
-| `animations` | `true` | Turns the transitions on: tab slides (the active tab glides in the tab bar), popup slides, scrolls and the status message fade. |
-| `animation_ms` | `120` | The duration of one transition, in milliseconds. The confirm and prompt popups always take 100 ms, the tab glide takes 120 ms, and the status fade takes 300 ms. |
+| `animations` | `true` | Turns the transitions on (see the list below the table). With `false`, none of them runs. |
+| `animation_ms` | `120` | The duration of the popup, output, help and picker slides and of the scroll, in milliseconds. The other transitions have their own fixed durations (see the list below the table). |
 | `key_hints` | `true` | Shows the key hint bar above the status bar. |
 | `column_headers` | `true` | Shows the header row with the column names above the list. The `H` key turns it on or off for the session and saves the choice in the cache. A saved choice wins over this value. |
 
@@ -351,6 +351,29 @@ and the palette sets the colors. The punk style keeps the palette and
 changes the shapes: cut corners, diagonal accents, inverted headers,
 slanted tab cards, a two-layer selection band and drop shadows under
 popups. To try it, start chaoshub with `--theme punk`.
+
+The transitions are short, and a key press during a transition
+retargets it, so nothing blocks typing:
+
+- The popup, the output and the help slide in from the right and out
+  again (`animation_ms`, 120 ms by default). The confirm and the prompt
+  slide in from the bottom in 100 ms, the picker in `animation_ms`. In
+  the punk style, the drop shadow slides with the popup.
+- A tab switch: the highlight of the active tab glides along the tab
+  bar in 120 ms. The list changes at once.
+- A pane switch in the pull request detail: the same glide on the pane
+  tabs, in 120 ms. The pane changes at once.
+- A scroll: the rows move to the new offset (`animation_ms`).
+- A cursor move in the list, a pane table or the picker: the selection
+  band wipes onto the new row from the left in 60 ms.
+- A successful action: the row of the pull request flashes in the
+  primary color and fades back in 200 ms.
+- A sync or a CI poll that changes the checks or the reviews of a
+  visible row: the row glows grey and fades back in 250 ms.
+- An expanded folder, file or thread in the pull request detail: the new
+  rows unfold from top to bottom in 80 ms. Collapsing is instant.
+- A new status message slides in from the left in 80 ms. An expired
+  message fades out in 300 ms.
 
 If 5 of the last 10 drawn frames take longer than 12 ms to draw,
 chaoshub turns the transitions off until it quits, and writes a line in
