@@ -23,6 +23,9 @@ fragment PrFields on PullRequest {
   headRefName
   headRefOid
   baseRefName
+  additions
+  deletions
+  changedFiles
   mergeable
   mergeStateStatus
   reviewDecision

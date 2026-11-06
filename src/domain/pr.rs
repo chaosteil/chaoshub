@@ -32,6 +32,9 @@ pub(crate) struct PrHead {
     pub head_ref: String,
     pub head_oid: String,
     pub base_ref: String,
+    pub additions: u32,
+    pub deletions: u32,
+    pub changed_files: u32,
     /// `None` when the repo requires no review decision.
     pub review_decision: Option<ReviewDecision>,
     /// True when the review of the user or of one of the user's teams is
@@ -137,6 +140,9 @@ mod tests {
                 head_ref: "chaosteil/kxyzkxyzkxyz".into(),
                 head_oid: "abc123".into(),
                 base_ref: "main".into(),
+                additions: 10,
+                deletions: 2,
+                changed_files: 3,
                 review_decision: Some(ReviewDecision::ReviewRequired),
                 review_requested: true,
                 reviewers: vec!["colleague".into()],
