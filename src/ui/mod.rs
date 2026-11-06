@@ -83,9 +83,10 @@ pub(crate) fn overlay_area(overlay: &OverlayModel, areas: &Areas) -> Rect {
     }
 }
 
-/// Draws one frame: the tab bar, the list, the key hint bar, the status
-/// bar and the overlay stack. `hits` gets the targets of the frame, in
-/// draw order, so an overlay covers the targets below it.
+/// Draws one frame: the tab bar, the list, the overlay stack, the key
+/// hint bar and the status bar. The two bars come last, so the drop
+/// shadow of an overlay does not cover them. `hits` gets the targets of
+/// the frame, in draw order, so an overlay covers the targets below it.
 pub(crate) fn view(
     frame: &mut Frame<'_>,
     model: &FrameModel,
@@ -105,13 +106,13 @@ pub(crate) fn view(
         filter::render(line, line_area, buf, theme);
     }
     list::render(&model.list, list_area, buf, theme, hits);
+    for overlay in &model.overlays {
+        render_overlay(overlay, areas, buf, theme, hits);
+    }
     if let Some(model) = &model.hints {
         hints::render(model, rect(areas.hints), buf, theme, hits);
     }
     status::render(&model.status, rect(areas.status), buf, theme);
-    for overlay in &model.overlays {
-        render_overlay(overlay, areas, buf, theme, hits);
-    }
 }
 
 /// Draws one overlay into its area.
@@ -566,6 +567,46 @@ mod tests {
     #[test]
     fn punk_help() {
         punk_snapshots("help", &help());
+    }
+
+    /// Checks that the key hint bar stays visible over an overlay in the
+    /// punk theme at 100 by 30.
+    fn assert_punk_hints_over(model: FrameModel) {
+        let model = FrameModel {
+            hints: Some(testdata::hints()),
+            ..model
+        };
+        let theme = testdata::punk();
+        let areas = testdata::areas(100, 30);
+        let mut terminal = testdata::terminal(100, 30);
+        let mut hits = HitMap::default();
+        terminal
+            .draw(|frame| view(frame, &model, &areas, &theme, &mut hits))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let y = areas.hints.y;
+        let row: String = (0..100).map(|x| buf[(x, y)].symbol()).collect();
+        assert!(row.contains("j/k move"), "{row}");
+        for x in 0..100 {
+            assert_eq!(buf[(x, y)].bg, theme.palette.bg, "x = {x}");
+            assert_ne!(buf[(x, y)].bg, theme.palette.primary, "x = {x}");
+        }
+        let x = row[..row.find("j/k").unwrap()].chars().count();
+        let x = u16::try_from(x).unwrap();
+        assert!(
+            matches!(hits.at(x, y), Some(crate::bus::Hit::Key(_))),
+            "the hint is a key"
+        );
+    }
+
+    #[test]
+    fn punk_popup_shadow_keeps_the_hints() {
+        assert_punk_hints_over(popup());
+    }
+
+    #[test]
+    fn punk_help_shadow_keeps_the_hints() {
+        assert_punk_hints_over(help());
     }
 
     #[test]
