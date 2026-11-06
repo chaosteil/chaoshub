@@ -4,8 +4,10 @@ chaoshub is a terminal app that tracks your GitHub pull requests. The
 Mine tab lists your own pull requests as stacks, and only pull requests.
 A local jj change without a pull request gets no row. The change id,
 commit and workspace columns of each pull request come from the jj scan
-of your local checkout. chaoshub also shows the pull requests of your
-colleagues that are ready for review. From the list, you can review a
+of your local checkout. The Review tab shows the pull requests of your
+colleagues that request your review. The Team tab shows the other pull
+requests of your colleagues. By default, these two tabs show only the
+pull requests that are ready for review. From the list, you can review a
 pull request in codeview, merge it, approve it, and do other actions.
 
 chaoshub keeps a local cache. It shows the cached lists at once when it
@@ -291,8 +293,8 @@ for `[keys]`.
 | `confirm` | `y` | Confirms in a confirm popup. `enter` also confirms. |
 | `cancel` | `n` | Cancels a confirm popup. |
 | `filter` | `/` | Types a fuzzy filter for the active tab. |
-| `authors` | `a` | Opens the author picker of the Team tab. |
-| `toggle_all` | `t` | On the Team tab, shows every open pull request, not only the ready ones. |
+| `authors` | `a` | Opens the author picker of the Review or the Team tab. |
+| `toggle_all` | `t` | On the Review and the Team tab, shows every open pull request, not only the ready ones. |
 | `refresh` | `r` | Syncs both lists now. In the pull request detail, syncs the pull request and its stack, and scans its repo. |
 | `help` | `?` | Shows the help overlay with every binding. |
 | `quit` | `q`, `esc`, `ctrl-c` | Quits. When the sidebar or an overlay is open, `esc` and `q` close it first. While you type a filter, `esc` clears the filter. `ctrl-c` quits from everywhere. |
@@ -476,11 +478,12 @@ Other messages show for 5 or 10 seconds and then fade out.
 
 The right part of the status bar shows the work that runs, after a
 spinner. For example, `⠹ syncing team · prefetch 2` tells you that the
-sync of the Team tab runs, and that the prefetch has 2 pull requests
-left. The right part shows these items:
+sync of the pull requests of your colleagues runs, and that the prefetch
+has 2 pull requests left. The right part shows these items:
 
 - `syncing mine`, `syncing team`: a sync of the pull requests, also a
-  timed sync in the background.
+  timed sync in the background. `syncing team` is the sync of the pull
+  requests of your colleagues. It feeds the Review and the Team tab.
 - `prefetch N`: the prefetch of pull request refs.
 - `loading N conversations`: the comments, reviews and threads of N
   pull requests load from GitHub.
@@ -527,17 +530,24 @@ request again and scans the repo again, for every action.
 
 ### Add a tab
 
-1. Make a module in `src/app/tabs/`, for example `src/app/tabs/review.rs`.
+1. Make a module in `src/app/tabs/`, for example `src/app/tabs/starred.rs`.
 2. Implement the `Tab` trait of `src/app/tabs/mod.rs`: `id`, `title`,
    `scope` (the sync scope that feeds the tab), `wants_local`,
    `init_state`, `model` (the `ListModel` of the tab), `interest`,
    `rescore` (the fuzzy filter), `authors` (the author picker),
    `handle_key` and `help`.
-3. In `src/app/tabs/mod.rs`, add `mod review;` and add the tab to
+3. In `src/app/tabs/mod.rs`, add `mod starred;` and add the tab to
    `TABS`:
 
    ```rust
-   LazyLock::new(|| vec![Box::new(mine::Mine), Box::new(team::Team), Box::new(review::Review)])
+   LazyLock::new(|| {
+       vec![
+           Box::new(mine::Mine),
+           Box::new(team::Team::Review),
+           Box::new(team::Team::Rest),
+           Box::new(starred::Starred),
+       ]
+   })
    ```
 
 The order of `TABS` is the order of the tab bar and of the keys `1` to
