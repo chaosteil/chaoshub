@@ -136,14 +136,15 @@ pub(crate) struct PrefetchBatch {
 }
 
 impl AppData {
-    /// True while a sync, a prefetch batch, a conversation load or a files
-    /// load runs. The status bar then shows a spinner.
+    /// True while a sync, a prefetch batch, a conversation load, a files
+    /// load or a pr-agent run runs. The status bar then shows a spinner.
     pub(crate) fn busy(&self) -> bool {
         !self.sync.pending.is_empty()
             || !self.sync.running.is_empty()
             || self.prefetch.is_some()
             || !self.details_loading.is_empty()
             || !self.files_loading.is_empty()
+            || !self.agent_jobs.is_empty()
     }
 
     /// True while a pane of any action is open for `key`.
