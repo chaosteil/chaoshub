@@ -4,7 +4,8 @@ chaoshub is a terminal app that tracks your GitHub pull requests. The
 Mine tab lists your own pull requests as stacks, and only pull requests.
 A local jj change without a pull request gets no row. The change id,
 commit and workspace columns of each pull request come from the jj scan
-of your local checkout. The Review tab shows the pull requests of your
+of your local checkout. A header row above the list names the columns;
+`H` shows or hides it. The Review tab shows the pull requests of your
 colleagues that request your review. The Team tab shows the other pull
 requests of your colleagues. By default, these two tabs show only the
 pull requests that are ready for review. From the list, you can review a
@@ -343,6 +344,7 @@ command = [
 | `animations` | `true` | Turns the transitions on: tab slides (the active tab glides in the tab bar), popup slides, scrolls and the status message fade. |
 | `animation_ms` | `160` | The duration of one transition, in milliseconds. The confirm and prompt popups always take 100 ms, the tab glide takes 120 ms, and the status fade takes 300 ms. |
 | `key_hints` | `true` | Shows the key hint bar above the status bar. |
+| `column_headers` | `true` | Shows the header row with the column names above the list. The `H` key turns it on or off for the session and saves the choice in the cache. A saved choice wins over this value. |
 
 The style and the palette are two switches. The style sets the shapes,
 and the palette sets the colors. The punk style keeps the palette and
@@ -421,6 +423,7 @@ for `[keys]`.
 | `authors` | `a` | Opens the author picker of the Review or the Team tab. |
 | `toggle_all` | `t` | On the Review and the Team tab, shows every open pull request, not only the ready ones. |
 | `refresh` | `r` | Syncs both lists now. In the pull request detail, syncs the pull request and its stack, and scans its repo. |
+| `column_headers` | `H` | Shows or hides the header row with the column names. chaoshub saves the choice in the cache. |
 | `help` | `?` | Shows the help overlay with every binding. |
 | `quit` | `q`, `esc`, `ctrl-c` | Quits. When the sidebar or an overlay is open, `esc` and `q` close it first. While you type a filter, `esc` clears the filter. `ctrl-c` quits from everywhere. |
 

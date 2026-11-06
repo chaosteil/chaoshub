@@ -196,6 +196,36 @@ fn render_row(frame: &Frame<'_>, row: &Row, y: u16, selected: bool, buf: &mut Bu
     }
 }
 
+/// Draws the header row of `columns` into the first row of `area`: the
+/// column titles in uppercase, dim and bold in every skin, aligned like
+/// the cells. The list and the pane tables share it.
+pub(crate) fn render_header(columns: &[Column], area: Rect, buf: &mut Buffer, theme: &Theme) {
+    let area = area.intersection(buf.area);
+    if area.is_empty() {
+        return;
+    }
+    let p = &theme.palette;
+    let style = Style::new()
+        .bg(p.bg)
+        .fg(p.fg_mute)
+        .add_modifier(Modifier::BOLD);
+    buf.set_style(Rect::new(area.x, area.y, area.width, 1), style);
+    for x in area.left()..area.right() {
+        buf[(x, area.y)].set_symbol(" ");
+    }
+    let widths = column_widths(columns, content_width(area.width, theme));
+    let mut x = columns_x(area);
+    for (column, &w) in columns.iter().zip(&widths) {
+        if x >= area.right() {
+            break;
+        }
+        let w = w.min(area.right() - x);
+        let title = text::fit(&column.title.to_uppercase(), usize::from(w), column.align);
+        buf.set_stringn(x, area.y, title, usize::from(w), style);
+        x = x.saturating_add(w + GAP);
+    }
+}
+
 /// Draws a list model into an area, from the scroll offset down. Each
 /// drawn row is a `Hit::Row` with its index in the model.
 pub(crate) fn render(
@@ -457,6 +487,40 @@ mod tests {
         // Other rows keep the tail cells and the shift cell free.
         for x in 97..100 {
             assert_eq!(buf[(x, 4)].symbol(), " ", "x {x}");
+        }
+    }
+
+    #[test]
+    fn the_header_row_names_the_columns_dim_and_bold() {
+        for theme in [testdata::pierre(), testdata::punk()] {
+            let area = Rect::new(0, 0, 100, 1);
+            let mut buf = Buffer::empty(area);
+            let model = testdata::mine_list();
+            render_header(&model.columns, area, &mut buf, &theme);
+            let text: String = (0..100).map(|x| buf[(x, 0)].symbol()).collect();
+            let words: Vec<&str> = text.split_whitespace().collect();
+            let widths = column_widths(&model.columns, content_width(100, &theme));
+            // A title that is wider than its column is cut like a cell.
+            let titles: Vec<String> = model
+                .columns
+                .iter()
+                .zip(&widths)
+                .map(|(c, &w)| {
+                    text::fit(&c.title.to_uppercase(), usize::from(w), c.align)
+                        .trim()
+                        .to_owned()
+                })
+                .collect();
+            assert_eq!(words, titles);
+            assert_eq!(words[..3], ["TITLE", "#", "CHANGE"]);
+            let title_x = u16::try_from(text.find("TITLE").unwrap()).unwrap();
+            assert_eq!(title_x, GUTTER, "the titles start after the gutter");
+            let p = theme.palette;
+            for x in 0..100 {
+                assert_eq!(buf[(x, 0)].fg, p.fg_mute, "x {x}");
+                assert_eq!(buf[(x, 0)].bg, p.bg, "x {x}");
+                assert!(buf[(x, 0)].modifier.contains(Modifier::BOLD), "x {x}");
+            }
         }
     }
 

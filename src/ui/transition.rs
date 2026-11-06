@@ -27,7 +27,7 @@ use crate::app::models::{FrameModel, TabBarModel};
 use crate::bus::{Hit, OverlayKind, UiEvent};
 use crate::theme::{Theme, ThemeKind};
 use crate::ui::hits::HitMap;
-use crate::ui::{list, overlay_area, rect, tabbar};
+use crate::ui::{list, list_areas, overlay_area, rect, tabbar};
 
 /// The duration of the confirm and prompt slides, in milliseconds.
 const DIALOG_MS: u64 = 100;
@@ -310,7 +310,7 @@ impl Transitions {
         if !self.enabled {
             return;
         }
-        let list_area = rect(areas.list);
+        let list_area = list_areas(model, areas).body;
         self.list.set(list_area);
         for overlay in &model.overlays {
             self.overlays[slot(overlay.kind)].set(overlay_area(overlay, areas));

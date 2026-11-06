@@ -124,6 +124,7 @@ pub(crate) fn frame_model_full<'s>(
             term: term_status(state),
             filter: filter_model(state),
             hints,
+            column_headers: column_headers(state),
         };
         state.cache.frame = frame;
         state.cache.frame_generation = Some(state.generation);
@@ -325,6 +326,7 @@ fn list_hints(
         app_hint(keymap, &["refresh"], "refresh", false),
         app_hint(keymap, &["help"], "help", false),
         app_hint(keymap, &["quit"], "quit", false),
+        app_hint(keymap, &["column_headers"], "headers", false),
     ]
     .into_iter()
     .flatten()
@@ -583,14 +585,21 @@ pub(crate) fn areas(state: &AppState) -> Areas {
 }
 
 /// The size of the list area that the tab models fill: the list area
-/// without the filter line when it shows.
+/// without the header row and the filter line when they show.
 pub(crate) fn list_size(state: &AppState) -> Size {
     let areas = areas(state);
     let filter = u16::from(filter_model(state).is_some());
+    let header = u16::from(column_headers(state));
     Size {
         width: areas.list.width,
-        height: areas.list.height.saturating_sub(filter),
+        height: areas.list.height.saturating_sub(filter + header),
     }
+}
+
+/// True when the list shows the header row: the switch is on and the
+/// app is not pinned (the pinned mode has no list).
+fn column_headers(state: &AppState) -> bool {
+    state.ui.column_headers && state.ui.pinned.is_none()
 }
 
 /// The filter line of the active tab: while the user edits the filter, or
@@ -812,6 +821,7 @@ fn empty_frame() -> FrameModel {
         },
         filter: None,
         hints: None,
+        column_headers: false,
     }
 }
 

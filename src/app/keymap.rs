@@ -42,6 +42,7 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("authors", &["a"]),
     ("toggle_all", &["t"]),
     ("refresh", &["r"]),
+    ("column_headers", &["H"]),
     ("help", &["?"]),
     ("quit", &["q", "esc", "ctrl-c"]),
 ];

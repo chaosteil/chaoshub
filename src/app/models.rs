@@ -18,6 +18,9 @@ pub(crate) struct FrameModel {
     pub filter: Option<FilterModel>,
     /// The key hint bar. `None` when `[theme] key_hints = false`.
     pub hints: Option<KeyHintsModel>,
+    /// True when the list has a header row with the column titles. It
+    /// takes the first row of the list area.
+    pub column_headers: bool,
 }
 
 /// The text before the first key hint: the stencil marker of the
