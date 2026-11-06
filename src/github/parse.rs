@@ -208,6 +208,26 @@ macro_rules! pr_fields_parser {
             }
         }
 
+        /// The latest opinionated reviews that approve and that request
+        /// changes.
+        fn review_counts(reviews: Option<q::PrFieldsLatestOpinionatedReviews>) -> (u32, u32) {
+            let mut approvals = 0;
+            let mut changes_requested = 0;
+            for node in reviews
+                .and_then(|reviews| reviews.nodes)
+                .unwrap_or_default()
+                .into_iter()
+                .flatten()
+            {
+                match node.state {
+                    q::PullRequestReviewState::APPROVED => approvals += 1,
+                    q::PullRequestReviewState::CHANGES_REQUESTED => changes_requested += 1,
+                    _ => {}
+                }
+            }
+            (approvals, changes_requested)
+        }
+
         /// A pull request from the `PrFields` fragment. Every field group
         /// carries `observed_at`, the start time of the request.
         pub(super) fn pull_request(
@@ -240,6 +260,7 @@ macro_rules! pr_fields_parser {
                     _ => {}
                 }
             }
+            let (approvals, changes_requested) = review_counts(fields.latest_opinionated_reviews);
             let stack = match (fields.stack, fields.stack_entry) {
                 (Some(stack), Some(entry)) => Some(StackRef {
                     id: stack.id,
@@ -280,6 +301,8 @@ macro_rules! pr_fields_parser {
                 }),
                 review_requested: requested_me || fields.viewer_latest_review_request.is_some(),
                 reviewers,
+                approvals,
+                changes_requested,
                 stack,
                 auto_merge: fields.auto_merge_request.is_some(),
                 in_merge_queue: fields.merge_queue_entry.is_some(),
@@ -722,6 +745,38 @@ mod tests {
                 .iter()
                 .any(|check| check.conclusion == Some(CheckConclusion::Failure))
         );
+    }
+
+    #[test]
+    fn list_page_counts_the_latest_opinionated_reviews() {
+        assert_eq!(page1()[0].head.value.approvals, 1);
+        assert_eq!(page1()[0].head.value.changes_requested, 0);
+        let mut json: serde_json::Value =
+            serde_json::from_str(include_str!("testdata/list_prs_page1.json")).unwrap();
+        let review = |state: &str| {
+            serde_json::json!({
+                "author": { "__typename": "User", "login": "colleague" },
+                "state": state,
+            })
+        };
+        json["data"]["search"]["nodes"][0]["latestOpinionatedReviews"]["nodes"] =
+            serde_json::json!([
+                review("APPROVED"),
+                review("CHANGES_REQUESTED"),
+                review("APPROVED"),
+                review("COMMENTED"),
+                review("DISMISSED"),
+                review("CHANGES_REQUESTED"),
+                review("APPROVED"),
+            ]);
+        let data = fixture(&json.to_string());
+        let (prs, _) = list_prs::page(data, &ME, test_time()).unwrap();
+        let head = &prs[0].head.value;
+        assert_eq!((head.approvals, head.changes_requested), (3, 2));
+        let data = fixture(include_str!("testdata/list_prs_team.json"));
+        let (prs, _) = list_prs::page(data, &ME, test_time()).unwrap();
+        let head = &prs[0].head.value;
+        assert_eq!((head.approvals, head.changes_requested), (0, 0));
     }
 
     #[test]

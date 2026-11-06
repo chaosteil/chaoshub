@@ -71,6 +71,7 @@ fragment PrFields on PullRequest {
         __typename
         login
       }
+      state
     }
   }
   statusCheckRollup {

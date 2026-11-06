@@ -35,7 +35,8 @@
               "author": {
                 "__typename": "User",
                 "login": "colleague-1"
-              }
+              },
+              "state": "APPROVED"
             }
           ]
         },

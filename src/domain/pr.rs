@@ -42,6 +42,12 @@ pub(crate) struct PrHead {
     pub review_requested: bool,
     /// The logins of the requested reviewers.
     pub reviewers: Vec<String>,
+    /// The latest opinionated reviews that approve.
+    #[serde(default)]
+    pub approvals: u32,
+    /// The latest opinionated reviews that request changes.
+    #[serde(default)]
+    pub changes_requested: u32,
     /// `None` when the pull request is not in a stack.
     pub stack: Option<StackRef>,
     pub auto_merge: bool,
@@ -120,9 +126,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn pull_request_round_trip() {
-        assert_round_trip(&PullRequest {
+    /// A pull request with every field set.
+    fn pull_request() -> PullRequest {
+        PullRequest {
             key: PrKey {
                 repo: RepoKey {
                     owner: "chaosteil".into(),
@@ -146,6 +152,8 @@ mod tests {
                 review_decision: Some(ReviewDecision::ReviewRequired),
                 review_requested: true,
                 reviewers: vec!["colleague".into()],
+                approvals: 1,
+                changes_requested: 2,
                 stack: Some(StackRef {
                     id: "PRS_1".into(),
                     number: 7,
@@ -180,6 +188,23 @@ mod tests {
                 run_id: None,
                 suite_id: None,
             }]),
-        });
+        }
+    }
+
+    #[test]
+    fn pull_request_round_trip() {
+        assert_round_trip(&pull_request());
+    }
+
+    #[test]
+    fn an_old_cache_without_review_counts_loads_with_zero() {
+        let mut json = serde_json::to_value(pull_request()).unwrap();
+        let head = json["head"]["value"].as_object_mut().unwrap();
+        assert!(head.remove("approvals").is_some());
+        assert!(head.remove("changes_requested").is_some());
+        let pr: PullRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(pr.head.value.approvals, 0);
+        assert_eq!(pr.head.value.changes_requested, 0);
+        assert_eq!(pr.head.value.reviewers, ["colleague"]);
     }
 }
