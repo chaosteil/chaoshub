@@ -8,14 +8,15 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Widget};
 
-use crate::app::models::{PaneModel, PaneTab};
+use crate::app::models::{PANE_TAB_GAP, PaneModel, PaneTab, pane_tab_rows};
 use crate::bus::Hit;
 use crate::theme::Theme;
 use crate::theme::ThemeBlock;
 use crate::ui::hits::HitMap;
 use crate::ui::{pane, text};
 
-/// The rows above the pane: title, subtitle, pane tabs and a rule.
+/// The rows above the pane with one row of pane tabs: title, subtitle,
+/// pane tabs and a rule. Each more row of pane tabs adds one.
 const HEADER_ROWS: u16 = 4;
 
 /// The content of the popup, borrowed from the overlay model.
@@ -29,14 +30,13 @@ pub(crate) struct Popup<'a> {
     pub scroll: usize,
 }
 
-/// The space between two pane tabs.
-const TAB_GAP: &str = "  ";
-
-/// The pane tabs: `1 Description  2 Checks  3 Conversation  4 Stack`, with
-/// the active tab marked. Each tab label in `area` is a `Hit::PaneTab`
-/// with its index in `tabs`.
+/// One row of pane tabs: `1 Description  2 Checks  3 Conversation`, with
+/// the active tab marked. `first` is the index of the first tab of the
+/// row in all the tabs. Each tab label in `area` is a `Hit::PaneTab`
+/// with its index in all the tabs.
 fn tabs_line(
     tabs: &[PaneTab],
+    first: usize,
     active: usize,
     theme: &Theme,
     area: Rect,
@@ -45,14 +45,18 @@ fn tabs_line(
     let mut spans = Vec::new();
     let mut x = area.x;
     for (i, tab) in tabs.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw(TAB_GAP));
-            x = x.saturating_add(u16::try_from(TAB_GAP.len()).unwrap_or(u16::MAX));
+        let i = first + i;
+        if i > first {
+            spans.push(Span::raw(PANE_TAB_GAP));
+            x = x.saturating_add(u16::try_from(PANE_TAB_GAP.len()).unwrap_or(u16::MAX));
         }
-        let label = format!(" {} {} ", tab.key, tab.title);
-        let tab = theme.tab(&label, i == active);
-        let width = tab.iter().map(Span::width).sum::<usize>();
-        let width = u16::try_from(width).unwrap_or(u16::MAX);
+        let cells = tab.cells();
+        let mut tab = theme.tab(&tab.label(), i == active);
+        // The skins draw one or two edge cells. Spaces fill the tab to
+        // its width, so that each skin gives the rows of `pane_tab_rows`.
+        let drawn = tab.iter().map(Span::width).sum::<usize>();
+        tab.push(Span::raw(" ".repeat(cells.saturating_sub(drawn))));
+        let width = u16::try_from(cells.max(drawn)).unwrap_or(u16::MAX);
         hits.push(
             Rect::new(x, area.y, width, 1).intersection(area),
             Hit::PaneTab(i),
@@ -84,7 +88,10 @@ pub(crate) fn render(
         inner.width.saturating_sub(2),
         inner.height,
     );
-    if inner.height < HEADER_ROWS || inner.width == 0 {
+    let rows = pane_tab_rows(popup.tabs, inner.width);
+    let tab_rows = u16::try_from(rows.len()).unwrap_or(u16::MAX);
+    let header = HEADER_ROWS.saturating_add(tab_rows - 1);
+    if inner.height < header || inner.width == 0 {
         return;
     }
     let width = usize::from(inner.width);
@@ -100,19 +107,30 @@ pub(crate) fn render(
         text::truncate(popup.subtitle, width),
         Style::new().fg(p.fg_mute),
     );
-    let tabs_area = Rect::new(inner.x, inner.y + 2, inner.width, 1);
-    tabs_line(popup.tabs, popup.active, theme, tabs_area, hits).render(tabs_area, buf);
+    for (row, range) in (0..).zip(rows) {
+        let tabs_area = Rect::new(inner.x, inner.y + 2 + row, inner.width, 1);
+        let first = range.start;
+        tabs_line(
+            &popup.tabs[range],
+            first,
+            popup.active,
+            theme,
+            tabs_area,
+            hits,
+        )
+        .render(tabs_area, buf);
+    }
     buf.set_span(
         inner.x,
-        inner.y + 3,
+        inner.y + header - 1,
         &theme.separator(width, Style::new().fg(p.fg_mute)),
         inner.width,
     );
     let body = Rect::new(
         inner.x,
-        inner.y + HEADER_ROWS,
+        inner.y + header,
         inner.width,
-        inner.height - HEADER_ROWS,
+        inner.height - header,
     );
     pane::render(
         popup.pane,
@@ -140,6 +158,69 @@ mod tests {
         let line = row(buf, y);
         let at = line.find(text).unwrap();
         u16::try_from(line[..at].chars().count()).unwrap()
+    }
+
+    #[test]
+    fn pane_tabs_wrap_to_rows_that_fit() {
+        let tab = |key, title| PaneTab { key, title };
+        let tabs = [
+            tab('1', "Description"),
+            tab('2', "Checks"),
+            tab('3', "Conversation"),
+        ];
+        // With the edges, the tabs take 17, 12 and 18 cells. Two tabs on
+        // one row have a gap of 1 cell.
+        assert_eq!(pane_tab_rows(&tabs, 49), vec![0..3]);
+        assert_eq!(pane_tab_rows(&tabs, 48), vec![0..2, 2..3]);
+        assert_eq!(pane_tab_rows(&tabs, 30), vec![0..2, 2..3]);
+        assert_eq!(pane_tab_rows(&tabs, 29), vec![0..1, 1..2, 2..3]);
+        assert_eq!(pane_tab_rows(&tabs, 5), vec![0..1, 1..2, 2..3]);
+        assert_eq!(pane_tab_rows(&[], 10), vec![0..0]);
+    }
+
+    #[test]
+    fn a_second_row_of_pane_tabs_moves_the_pane_down() {
+        let tabs: Vec<PaneTab> = [
+            ('1', "Description"),
+            ('2', "Checks"),
+            ('3', "Conversation"),
+            ('4', "Stack"),
+            ('5', "Files"),
+            ('6', "Agent"),
+        ]
+        .into_iter()
+        .map(|(key, title)| PaneTab { key, title })
+        .collect();
+        let pane = PaneModel::Lines {
+            lines: vec![vec![crate::app::models::Cell {
+                text: "first line".to_owned(),
+                style: crate::app::models::CellStyle::Normal,
+            }]],
+            wrap: false,
+        };
+        let popup = Popup {
+            title: "#7 title",
+            subtitle: "subtitle",
+            tabs: &tabs,
+            active: 5,
+            pane: &pane,
+            cursor: 0,
+            scroll: 0,
+        };
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        let mut hits = HitMap::default();
+        render(&popup, area, &mut buf, &testdata::pierre(), &mut hits);
+        let inner_width = 60 - 4;
+        assert_eq!(pane_tab_rows(&tabs, inner_width).len(), 2);
+        let first = row(&buf, 3);
+        let second = row(&buf, 4);
+        assert!(first.contains("1 Description") && first.contains("3 Conversation"));
+        assert!(second.contains("4 Stack") && second.contains("6 Agent"));
+        let agent = find(&buf, 4, "Agent");
+        assert_eq!(hits.at(agent, 4), Some(Hit::PaneTab(5)));
+        assert!(row(&buf, 5).contains('─'), "the rule is under the tabs");
+        assert!(row(&buf, 6).contains("first line"));
     }
 
     #[test]
