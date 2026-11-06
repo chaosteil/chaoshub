@@ -84,6 +84,28 @@ pub(crate) fn separator(width: usize) -> String {
     format!("{}{SLASH}", HORIZONTAL.repeat(width - 1))
 }
 
+/// Moves the symbol and the style of each cell in `area` to the right by
+/// `cells`. The cells that go past the right edge of `area` are dropped.
+/// The free cells on the left get a space in the `fill` style.
+pub(crate) fn shift_right(buf: &mut Buffer, area: Rect, cells: u16, fill: Style) {
+    let area = area.intersection(buf.area);
+    if cells == 0 || area.is_empty() {
+        return;
+    }
+    let free = area.left().saturating_add(cells);
+    for y in area.top()..area.bottom() {
+        for x in (area.left()..area.right()).rev() {
+            if x >= free {
+                let moved = buf[(x - cells, y)].clone();
+                buf[(x, y)] = moved;
+            } else {
+                buf[(x, y)].reset();
+                buf[(x, y)].set_symbol(" ").set_style(fill);
+            }
+        }
+    }
+}
+
 /// A block with the punk frame: a thick left edge, a heavy top line with
 /// cut corners and a diagonal accent at the top right, and a heavy
 /// bottom line. The inside is plain.
@@ -265,6 +287,24 @@ mod tests {
                 assert_eq!(span.style, styles[0]);
             }
         }
+    }
+
+    #[test]
+    fn shift_right_moves_the_cells() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 8, 1));
+        buf.set_string(0, 0, "abcdefgh", Style::new().fg(Color::Red));
+        let fill = Style::new().bg(Color::Blue);
+        shift_right(&mut buf, Rect::new(1, 0, 5, 1), 2, fill);
+        assert_eq!(text(&buf), "a  bcdgh");
+        assert_eq!(buf[(1, 0)].bg, Color::Blue);
+        assert_eq!(buf[(2, 0)].bg, Color::Blue);
+        assert_eq!(buf[(3, 0)].fg, Color::Red);
+        assert_eq!(buf[(3, 0)].bg, Color::Reset);
+        // A shift wider than the area fills it, and outside the buffer
+        // it does nothing.
+        shift_right(&mut buf, Rect::new(6, 0, 2, 1), 5, fill);
+        assert_eq!(text(&buf), "a  bcd  ");
+        shift_right(&mut buf, Rect::new(20, 0, 2, 1), 1, fill);
     }
 
     #[test]

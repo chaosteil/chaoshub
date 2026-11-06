@@ -9,7 +9,7 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::models::{Cell, CellStyle, Column, PaneModel, Row, TreeNode};
 use crate::bus::Hit;
-use crate::theme::{Palette, Theme};
+use crate::theme::{Palette, Theme, punk};
 use crate::ui::hits::HitMap;
 use crate::ui::list::{self, Window};
 use crate::ui::{markdown, style, text};
@@ -149,8 +149,11 @@ fn render_tree(
 ) {
     let p = &theme.palette;
     buf.set_style(area, Style::new().bg(p.bg).fg(p.fg));
-    let text_width = area.width.saturating_sub(list::GUTTER);
     let selection = theme.selected_row();
+    let text_width = area
+        .width
+        .saturating_sub(list::GUTTER)
+        .saturating_sub(selection.shift);
     let mut y = area.y;
     for (index, node) in nodes.iter().enumerate().skip(scroll) {
         if y >= area.bottom() {
@@ -177,7 +180,9 @@ fn render_tree(
             }
             buf.set_style(Rect::new(area.x, y, area.width, 1), base);
             if selected {
-                buf.set_string(area.x, y, selection.marker, base.fg(selection.marker_fg));
+                let marker = base.fg(selection.marker_fg);
+                let marker = selection.marker_bg.map_or(marker, |bg| marker.bg(bg));
+                buf.set_string(area.x, y, selection.marker, marker);
             }
             let lead = if row == 0 {
                 prefix.clone()
@@ -194,6 +199,12 @@ fn render_tree(
             }));
             let rect = Rect::new(list::columns_x(area), y, text_width, 1);
             Line::from(spans).render(rect, buf);
+            if selected {
+                // The band jumps out: its text moves into the free cells.
+                let width = (text_width + selection.shift).min(area.right().saturating_sub(rect.x));
+                let content = Rect::new(rect.x, y, width, 1);
+                punk::shift_right(buf, content, selection.shift, base);
+            }
             y += 1;
         }
         hits.push(

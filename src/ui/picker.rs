@@ -9,6 +9,7 @@ use ratatui::widgets::{Clear, Widget};
 use crate::bus::Hit;
 use crate::theme::Theme;
 use crate::theme::ThemeBlock;
+use crate::theme::punk;
 use crate::ui::hits::HitMap;
 use crate::ui::text;
 
@@ -39,17 +40,20 @@ pub(crate) fn render(
     let rows = usize::from(inner.height);
     let offset = cursor.saturating_sub(rows - 1);
     let selection = theme.selected_row();
-    let tail = u16::from(selection.tail.is_some());
-    let width = usize::from(inner.width.saturating_sub(2 + tail));
+    let tail = if selection.tail.is_some() { 2 } else { 0 };
+    let width = usize::from(inner.width.saturating_sub(2 + tail + selection.shift));
     for (y, (index, item)) in (inner.y..).zip(items.iter().enumerate().skip(offset).take(rows)) {
         let line = Rect::new(inner.x, y, inner.width, 1);
         hits.push(line, Hit::Item(index));
         if index == cursor {
             let style = Style::new().fg(p.fg).patch(selection.patch);
             buf.set_style(line, style);
-            buf.set_string(inner.x, y, selection.marker, style.fg(selection.marker_fg));
-            if let Some((glyph, tail)) = selection.tail {
-                buf.set_string(line.right() - 1, y, glyph, tail);
+            let marker = style.fg(selection.marker_fg);
+            let marker = selection.marker_bg.map_or(marker, |bg| marker.bg(bg));
+            buf.set_string(inner.x, y, selection.marker, marker);
+            if let Some([(first, first_style), (second, second_style)]) = selection.tail {
+                buf.set_string(line.right() - 2, y, first, first_style);
+                buf.set_string(line.right() - 1, y, second, second_style);
             }
             buf.set_string(
                 inner.x + 2,
@@ -57,6 +61,9 @@ pub(crate) fn render(
                 text::truncate(item, width),
                 style.add_modifier(Modifier::BOLD),
             );
+            // The band jumps out: its text moves into the free cells.
+            let content = Rect::new(inner.x + 1, y, inner.width.saturating_sub(1 + tail), 1);
+            punk::shift_right(buf, content, selection.shift, style);
         } else {
             buf.set_string(
                 inner.x + 2,
