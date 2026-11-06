@@ -709,8 +709,8 @@ fn spinner(now: DateTime<Utc>) -> &'static str {
 }
 
 /// The work that runs, for example `syncing team · prefetch 2`: the
-/// syncs, the pull requests that the prefetch batch has left, and the
-/// conversation loads. `None` when no work runs.
+/// syncs, the pull requests that the prefetch batch has left, the
+/// conversation loads and the files loads. `None` when no work runs.
 fn activity(data: &AppData) -> Option<String> {
     let mut parts = Vec::new();
     let scopes: Vec<&str> = [(Scope::Mine, "mine"), (Scope::Team, "team")]
@@ -728,6 +728,11 @@ fn activity(data: &AppData) -> Option<String> {
         0 => {}
         1 => parts.push("loading 1 conversation".to_owned()),
         n => parts.push(format!("loading {n} conversations")),
+    }
+    match data.files_loading.len() {
+        0 => {}
+        1 => parts.push("loading 1 diff".to_owned()),
+        n => parts.push(format!("loading {n} diffs")),
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
@@ -950,6 +955,14 @@ mod tests {
         assert_eq!(right(&state)[1], " loading 1 conversation   ");
         state.data.details_loading.insert(key(2));
         assert_eq!(right(&state)[1], " loading 2 conversations   ");
+        state.data.files_loading.insert(key(1));
+        assert_eq!(
+            right(&state)[1],
+            " loading 2 conversations · loading 1 diff   "
+        );
+        state.data.details_loading.clear();
+        state.data.files_loading.insert(key(2));
+        assert_eq!(right(&state)[1], " loading 2 diffs   ");
     }
 
     #[test]
