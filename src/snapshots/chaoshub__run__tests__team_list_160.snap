@@ -3,7 +3,7 @@ source: src/run.rs
 expression: "screen(&mut team_app(160, 12))"
 ---
 "  1 M I N E   2 R E V I E W ▌ 3 T E A M                ˙                            ˙                           ·     ░  ˙   ░˙˙  ░░               ˙   chaoshub "
-" TITLE                                                                                                     # REPO         AUTHOR       UPDAT… CHECKS  REVI… FLA…"
+" TITLE                                                                                                     # REPO         AUTHOR          UPD CHECKS   REV  FLG "
 " ready for review · 2 · t shows all open                                                                                                                        "
 "▌perf(store): batch inserts                                                                              #87 chaoshub     bob              3h    ·      ○       "
 " perf(ui): cache the texture                                                                             #86 codeview     bob              2d    ·     ✓1       "

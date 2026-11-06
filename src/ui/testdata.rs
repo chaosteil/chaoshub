@@ -87,7 +87,7 @@ fn mine_columns() -> Vec<Column> {
         column("workspace", ColumnWidth::Fixed(10), Align::Left),
         column("ci", ColumnWidth::Fixed(3), Align::Center),
         column("rv", ColumnWidth::Fixed(3), Align::Center),
-        column("flags", ColumnWidth::Fixed(4), Align::Left),
+        column("flg", ColumnWidth::Fixed(4), Align::Left),
     ]
 }
 

@@ -168,10 +168,10 @@ fn columns() -> Vec<Column> {
         column("#", ColumnWidth::Fixed(6), Align::Right),
         column("repo", ColumnWidth::Fixed(12), Align::Left),
         column("author", ColumnWidth::Fixed(12), Align::Left),
-        column("updated", ColumnWidth::Fixed(6), Align::Right),
+        column("upd", ColumnWidth::Fixed(6), Align::Right),
         column("checks", ColumnWidth::Fixed(7), Align::Center),
-        column("reviews", ColumnWidth::Fixed(5), Align::Center),
-        column("flags", ColumnWidth::Fixed(4), Align::Left),
+        column("rev", ColumnWidth::Fixed(5), Align::Center),
+        column("flg", ColumnWidth::Fixed(4), Align::Left),
     ]
 }
 

@@ -3,7 +3,7 @@ source: src/run.rs
 expression: screen(&mut app)
 ---
 "▌ 1 M I N E   2 R E V I E W   3 T E A M                ˙                            ˙      chaoshub "
-" TITLE                                             # CHANGE   COMMIT   WORKSPACE  CHECKS  REVI… FLA…"
+" TITLE                                             # CHANGE   COMMIT   WORKSPACE  CHECKS   REV  FLG "
 "▌─ fix(store): reopen the connection after a…    #99                                 ·      ·       "
 " stack #12 -> main · 3 PRs                                                                          "
 " ┌ feat(ui): popup frame with pane tabs         #103 wqnvzxop oid103   default       ·      ○   D   "

@@ -165,8 +165,8 @@ fn columns(set: Columns) -> Vec<Column> {
     }
     columns.extend([
         column("checks", ColumnWidth::Fixed(7), Align::Center),
-        column("reviews", ColumnWidth::Fixed(5), Align::Center),
-        column("flags", ColumnWidth::Fixed(4), Align::Left),
+        column("rev", ColumnWidth::Fixed(5), Align::Center),
+        column("flg", ColumnWidth::Fixed(4), Align::Left),
     ]);
     columns
 }
