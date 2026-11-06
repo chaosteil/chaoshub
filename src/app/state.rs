@@ -604,8 +604,8 @@ mod tests {
         state.load(snapshot, Vec::new());
         assert_eq!(state.ui.tabs[0].filter, "pane");
         assert_eq!(state.ui.tabs[0].author, None);
-        assert_eq!(state.ui.tabs[1].filter, "");
-        assert_eq!(state.ui.tabs[1].author.as_deref(), Some("bob"));
+        assert_eq!(state.ui.tabs[2].filter, "");
+        assert_eq!(state.ui.tabs[2].author.as_deref(), Some("bob"));
     }
 
     #[test]

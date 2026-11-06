@@ -2,7 +2,7 @@
 source: src/run.rs
 expression: "screen_in(&mut mine_app(160), ThemeKind::Ansi16)"
 ---
-"▌ 1 M I N E   2 T E A M                                                                                                                                chaoshub "
+"▌ 1 M I N E   2 R E V I E W   3 T E A M                                                                                                                chaoshub "
 "▌─ fix(store): reopen the connection after an error                                                            #99                                   ·   ·      "
 " stack #12 -> main · 3 PRs                                                                                                                                      "
 " ┌ feat(ui): popup frame with pane tabs                                                                       #103 wqnvzxopwqnv oid103   default     ●   ○  D   "
@@ -14,5 +14,5 @@ expression: "screen_in(&mut mine_app(160), ThemeKind::Ansi16)"
 "                                                                                                                                                                "
 "                                                                                                                                                                "
 "                                                                                                                                                                "
-"▌ j/k move  Enter open  m merge  A approve  / filter  1/2/Tab tabs  r refresh  ? help  q quit  R request changes  d draft  X close  o browser  y copy url       "
+"▌ j/k move  Enter open  m merge  A approve  / filter  1/2/3/Tab tabs  r refresh  ? help  q quit  R request changes  d draft  X close  o browser  y copy url     "
 " [MINE] 0 repos · cache from 5m ago                                                                                                                      ? help "

@@ -603,7 +603,7 @@ mod tests {
     fn the_frame_shows_the_mine_tab() {
         let mut state = seeded();
         let frame = crate::app::frame::frame_model(&mut state);
-        assert_eq!(frame.tab_bar.titles, vec!["Mine", "Team"]);
+        assert_eq!(frame.tab_bar.titles, vec!["Mine", "Review", "Team"]);
         assert_eq!(frame.list.rows.len(), 5);
     }
 }

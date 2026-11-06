@@ -2,7 +2,7 @@
 source: src/run.rs
 expression: "screen(&mut files_app(100, 30))"
 ---
-"▌ 1 M I N E   2 T E A M     ░         ˙                ˙                            ˙      chaoshub "
+"▌ 1 M I N E   2 R E V I E W   3 T E A M                ˙                            ˙      chaoshub "
 " ─ fix(store): reope▛▀▀▀▓▀▀▀▀▀▀▀▀▀▀▒▀▒▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▓▀▀▀░▀▀▀▀▀▀▒▓▒▀▒▀░▀▀▀▀▓▀▀▀▀▀▀▀▀▀░▀▀▀▀▀▀▓▀▓▀▀▀▜"
 " stack #12 -> main ·▌ #101 feat(app): Pane trait, registry and overlay stack                       ▐"
 " ┌ feat(ui): popup f▌ chaosteil · chaosteil/101 -> main · open                                     ▐"

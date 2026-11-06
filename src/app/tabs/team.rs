@@ -1,8 +1,10 @@
-//! The Team tab: the open pull requests of colleagues.
+//! The Review tab and the Team tab: the open pull requests of colleagues.
 //!
-//! By default it shows the ready pull requests (`domain::team::is_ready`).
-//! The `toggle_all` key (`t`) shows every open pull request. Pull requests
-//! that request the review of the user come first, marked with `★`.
+//! The Review tab shows the pull requests that request the review of the
+//! user. The Team tab shows the other pull requests of colleagues. By
+//! default, each tab shows the ready pull requests
+//! (`domain::team::is_ready`). The `toggle_all` key (`t`) shows every open
+//! pull request.
 
 use crate::app::age::age;
 use crate::app::filter::{Filter, ItemKey, pr_candidate};
@@ -19,10 +21,15 @@ use crate::domain::team::{is_ready, team_order};
 /// The minimum width of the title column.
 const TITLE_MIN_WIDTH: u16 = 20;
 
-/// The Team tab.
-pub(crate) struct Team;
+/// A tab of the open pull requests of colleagues.
+pub(crate) enum Team {
+    /// The pull requests that request the review of the user.
+    Review,
+    /// The other pull requests of colleagues.
+    Rest,
+}
 
-/// The own state of the Team tab.
+/// The own state of the Review tab and of the Team tab.
 #[derive(Debug, Default)]
 pub(crate) struct TeamState {
     pub filter: Filter,
@@ -33,11 +40,17 @@ pub(crate) struct TeamState {
 
 impl Tab for Team {
     fn id(&self) -> &'static str {
-        "team"
+        match self {
+            Self::Review => "review",
+            Self::Rest => "team",
+        }
     }
 
     fn title(&self) -> &'static str {
-        "Team"
+        match self {
+            Self::Review => "Review",
+            Self::Rest => "Team",
+        }
     }
 
     fn scope(&self) -> Option<Scope> {
@@ -58,14 +71,19 @@ impl Tab for Team {
     fn model(&self, cx: &KeyCx<'_>, ts: &TabState, size: Size) -> ListModel {
         let ext = ts.ext.downcast_ref::<TeamState>();
         let all_open = ext.is_some_and(|ext| ext.all_open);
-        let mut prs = team_prs(cx, all_open);
+        let mut prs = self.team_prs(cx, all_open);
         if let Some(author) = &ts.author {
             prs.retain(|pr| pr.head.value.author == *author);
         }
         if let Some(ext) = ext {
             prs.retain(|pr| ext.filter.keeps(&ItemKey::Pr(pr.key.clone())));
         }
-        let mut rows = vec![mode_row(all_open, ts.author.as_deref(), prs.len())];
+        let mut rows = vec![mode_row(
+            self.id(),
+            all_open,
+            ts.author.as_deref(),
+            prs.len(),
+        )];
         rows.extend(prs.into_iter().map(|pr| pr_row(pr, cx)));
         let (cursor, scroll) = place(
             &rows,
@@ -95,12 +113,17 @@ impl Tab for Team {
         let Some(ext) = ts.ext.downcast_mut::<TeamState>() else {
             return;
         };
-        let candidates: Vec<_> = team_prs(cx, true).into_iter().map(pr_candidate).collect();
+        let candidates: Vec<_> = self
+            .team_prs(cx, true)
+            .into_iter()
+            .map(pr_candidate)
+            .collect();
         ext.filter.rescore(&ts.filter, cx.data.revision, candidates);
     }
 
     fn authors(&self, cx: &KeyCx<'_>) -> Vec<String> {
-        let mut authors: Vec<String> = team_prs(cx, true)
+        let mut authors: Vec<String> = self
+            .team_prs(cx, true)
             .into_iter()
             .map(|pr| pr.head.value.author.clone())
             .collect();
@@ -126,8 +149,8 @@ impl Tab for Team {
     }
 }
 
-/// The columns: requested marker, title, number, repo, author, updated,
-/// CI, review and flags.
+/// The columns: title, number, repo, author, updated, CI, review and
+/// flags.
 fn columns() -> Vec<Column> {
     let column = |title: &str, width, align| Column {
         title: title.into(),
@@ -135,7 +158,6 @@ fn columns() -> Vec<Column> {
         align,
     };
     vec![
-        column("", ColumnWidth::Fixed(2), Align::Left),
         column(
             "title",
             ColumnWidth::Fill {
@@ -153,24 +175,28 @@ fn columns() -> Vec<Column> {
     ]
 }
 
-/// The open pull requests of the Team scope in team order, only the
-/// ready ones unless `all_open`.
-fn team_prs<'a>(cx: &KeyCx<'a>, all_open: bool) -> Vec<&'a PullRequest> {
-    let data = cx.data;
-    let mut prs: Vec<&PullRequest> = data
-        .prs
-        .values()
-        .filter(|pr| data.scopes.get(&pr.key) == Some(&Scope::Team))
-        .filter(|pr| pr.head.value.state == PrState::Open)
-        .filter(|pr| all_open || is_ready(pr))
-        .collect();
-    prs.sort_by(|a, b| team_order(a, b));
-    prs
+impl Team {
+    /// The open pull requests of the Team scope that belong to this tab,
+    /// in team order. Only the ready ones unless `all_open`.
+    fn team_prs<'a>(&self, cx: &KeyCx<'a>, all_open: bool) -> Vec<&'a PullRequest> {
+        let requested = matches!(self, Self::Review);
+        let data = cx.data;
+        let mut prs: Vec<&PullRequest> = data
+            .prs
+            .values()
+            .filter(|pr| data.scopes.get(&pr.key) == Some(&Scope::Team))
+            .filter(|pr| pr.head.value.state == PrState::Open)
+            .filter(|pr| pr.head.value.review_requested == requested)
+            .filter(|pr| all_open || is_ready(pr))
+            .collect();
+        prs.sort_by(|a, b| team_order(a, b));
+        prs
+    }
 }
 
 /// The header row that names the mode, the author filter and the key
 /// that changes the mode.
-fn mode_row(all_open: bool, author: Option<&str>, count: usize) -> Row {
+fn mode_row(stack_id: &str, all_open: bool, author: Option<&str>, count: usize) -> Row {
     let by = author.map(|a| format!(" · by {a}")).unwrap_or_default();
     let text = if all_open {
         format!("all open · {count}{by} · t shows ready only")
@@ -179,7 +205,7 @@ fn mode_row(all_open: bool, author: Option<&str>, count: usize) -> Row {
     };
     Row {
         item: RowItem::StackHeader {
-            stack_id: "team".into(),
+            stack_id: stack_id.into(),
         },
         cells: vec![cell(text, CellStyle::Dim)],
         depth: 0,
@@ -191,9 +217,7 @@ fn mode_row(all_open: bool, author: Option<&str>, count: usize) -> Row {
 /// The row of one pull request.
 fn pr_row(pr: &PullRequest, cx: &KeyCx<'_>) -> Row {
     let head = &pr.head.value;
-    let star = if head.review_requested { "★" } else { "" };
     let cells: Vec<Cell> = vec![
-        cell(star, CellStyle::Warn),
         cell(head.title.clone(), CellStyle::Normal),
         cell(format!("#{}", pr.key.number), CellStyle::Dim),
         cell(pr.key.repo.name.clone(), CellStyle::Dim),
@@ -245,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_prs_with_requests_first_and_t_shows_all() {
+    fn ready_prs_and_t_shows_all() {
         let state = seeded();
         let areas = layout(SIZE);
         let keys = Keymap::default();
@@ -255,32 +279,50 @@ mod tests {
             areas: &areas,
             keys: &keys,
         };
-        let mut ts = Team.init_state();
-        let model = Team.model(&cx, &ts, SIZE);
-        assert_eq!(numbers(&model), [88, 87, 86]);
-        assert_eq!(
-            model.rows[0].cells[0].text,
-            "ready for review · 3 · t shows all open"
-        );
-        assert_eq!(model.cursor, 1, "the cursor skips the mode row");
         let t = KeyChord {
             code: KeyCode::Char('t'),
             mods: KeyModifiers::NONE,
         };
+
+        let mut ts = Team::Rest.init_state();
+        let model = Team::Rest.model(&cx, &ts, SIZE);
+        assert_eq!(numbers(&model), [87, 86]);
         assert_eq!(
-            Team.handle_key(t, &cx, &mut ts),
+            model.rows[0].cells[0].text,
+            "ready for review · 2 · t shows all open"
+        );
+        assert_eq!(model.cursor, 1, "the cursor skips the mode row");
+        assert_eq!(
+            Team::Rest.handle_key(t, &cx, &mut ts),
             Some(Handled {
                 changed: true,
                 ..Handled::default()
             })
         );
-        let model = Team.model(&cx, &ts, SIZE);
-        assert_eq!(numbers(&model), [85, 88, 87, 84, 86]);
+        let model = Team::Rest.model(&cx, &ts, SIZE);
+        assert_eq!(numbers(&model), [87, 84, 86]);
         let x = KeyChord {
             code: KeyCode::Char('x'),
             mods: KeyModifiers::NONE,
         };
-        assert_eq!(Team.handle_key(x, &cx, &mut ts), None);
+        assert_eq!(Team::Rest.handle_key(x, &cx, &mut ts), None);
+
+        let mut ts = Team::Review.init_state();
+        let model = Team::Review.model(&cx, &ts, SIZE);
+        assert_eq!(numbers(&model), [88]);
+        assert_eq!(
+            model.rows[0].cells[0].text,
+            "ready for review · 1 · t shows all open"
+        );
+        assert_eq!(
+            Team::Review.handle_key(t, &cx, &mut ts),
+            Some(Handled {
+                changed: true,
+                ..Handled::default()
+            })
+        );
+        let model = Team::Review.model(&cx, &ts, SIZE);
+        assert_eq!(numbers(&model), [85, 88]);
     }
 
     #[test]
@@ -293,12 +335,13 @@ mod tests {
             areas: &areas,
             keys: &crate::app::keymap::DEFAULT,
         };
-        assert_eq!(Team.authors(&cx), ["alice", "bob", "carol", "dave"]);
+        assert_eq!(Team::Rest.authors(&cx), ["bob", "dave"]);
+        assert_eq!(Team::Review.authors(&cx), ["alice", "carol"]);
         let ts = TabState {
             author: Some("bob".into()),
-            ..Team.init_state()
+            ..Team::Rest.init_state()
         };
-        let model = Team.model(&cx, &ts, SIZE);
+        let model = Team::Rest.model(&cx, &ts, SIZE);
         assert_eq!(numbers(&model), [87, 86]);
         assert_eq!(
             model.rows[0].cells[0].text,
@@ -316,13 +359,12 @@ mod tests {
             areas: &areas,
             keys: &crate::app::keymap::DEFAULT,
         };
-        let model = Team.model(&cx, &Team.init_state(), SIZE);
-        assert_eq!(model.columns.len(), 9);
+        let model = Team::Review.model(&cx, &Team::Review.init_state(), SIZE);
+        assert_eq!(model.columns.len(), 8);
         let first = &model.rows[1];
         assert_eq!(
             first.cells,
             vec![
-                cell("★", CellStyle::Warn),
                 cell("docs(readme): keymap table", CellStyle::Normal),
                 cell("#88", CellStyle::Dim),
                 cell("chaoshub", CellStyle::Dim),
@@ -333,9 +375,18 @@ mod tests {
                 cell("", CellStyle::Warn),
             ]
         );
-        let interest = Team.interest(&cx, &Team.init_state());
+        let interest = Team::Review.interest(&cx, &Team::Review.init_state());
         assert_eq!(interest.scope, Some(Scope::Team));
         assert!(!interest.wants_local);
         assert_eq!(interest.selected.map(|pr| pr.key.number), Some(88));
+        let rest = Team::Rest.interest(&cx, &Team::Rest.init_state());
+        assert_eq!(
+            (
+                interest.tab,
+                rest.tab,
+                rest.selected.map(|pr| pr.key.number)
+            ),
+            ("review", "team", Some(87))
+        );
     }
 }
