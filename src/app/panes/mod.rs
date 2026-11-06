@@ -7,6 +7,7 @@
 mod checks;
 pub(crate) mod conversation;
 mod description;
+mod files;
 mod stack;
 
 use std::any::Any;
@@ -61,6 +62,7 @@ pub(crate) static PANES: LazyLock<Vec<Box<dyn Pane>>> = LazyLock::new(|| {
         Box::new(checks::Checks),
         Box::new(conversation::Conversation),
         Box::new(stack::StackPane),
+        Box::new(files::FilesPane),
     ]
 });
 
@@ -215,6 +217,7 @@ mod tests {
                 ('2', "checks"),
                 ('3', "conversation"),
                 ('4', "stack"),
+                ('5', "files"),
             ]
         );
     }

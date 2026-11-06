@@ -330,3 +330,58 @@ pub(crate) fn detail() -> crate::domain::detail::PrDetail {
         head_oid: "oid7".into(),
     }
 }
+
+/// The changed files at head `oid7`: an added file, a removed file, a
+/// modified file in a nested directory, a renamed file and a binary file
+/// without a patch.
+pub(crate) fn files() -> crate::domain::files::PrFiles {
+    use crate::domain::files::{ChangedFile, FileStatus, PrFiles};
+
+    let file = |path: &str, status, additions, deletions, patch: Option<&str>| ChangedFile {
+        path: path.into(),
+        previous_path: None,
+        status,
+        additions,
+        deletions,
+        patch: patch.map(Into::into),
+    };
+    let mut renamed = file(
+        "src/main.rs",
+        FileStatus::Renamed,
+        1,
+        1,
+        Some("@@ -1 +1 @@\n-fn old() {}\n+fn new() {}"),
+    );
+    renamed.previous_path = Some("src/start.rs".into());
+    PrFiles {
+        files: vec![
+            file(
+                "docs/usage.md",
+                FileStatus::Added,
+                3,
+                0,
+                Some("@@ -0,0 +1,3 @@\n+# Usage\n+\n+Run the tool."),
+            ),
+            file(
+                "old.txt",
+                FileStatus::Removed,
+                0,
+                2,
+                Some("@@ -1,2 +0,0 @@\n-first\n-second"),
+            ),
+            file(
+                "src/app/panes/files.rs",
+                FileStatus::Modified,
+                2,
+                1,
+                Some(
+                    "@@ -1,3 +1,4 @@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new\");\n+    println!(\"more\");\n }\n\\ No newline at end of file",
+                ),
+            ),
+            renamed,
+            file("assets/logo.png", FileStatus::Modified, 0, 0, None),
+        ],
+        truncated: false,
+        head_oid: "oid7".into(),
+    }
+}
