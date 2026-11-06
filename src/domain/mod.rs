@@ -6,6 +6,7 @@
 
 pub(crate) mod agent;
 pub(crate) mod check;
+pub(crate) mod codeview;
 pub(crate) mod detail;
 pub(crate) mod files;
 pub(crate) mod keys;

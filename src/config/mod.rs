@@ -141,6 +141,9 @@ impl Config {
             }
         }
         self.workspaces.root = paths::expand_tilde(&self.workspaces.root, home);
+        if let Some(dir) = &self.codeview.comments_dir {
+            self.codeview.comments_dir = Some(paths::expand_tilde(dir, home));
+        }
     }
 }
 
