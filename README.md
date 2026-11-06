@@ -293,7 +293,7 @@ for `[keys]`.
 | `confirm` | `y` | Confirms in a confirm popup. `enter` also confirms. |
 | `cancel` | `n` | Cancels a confirm popup. |
 | `filter` | `/` | Types a fuzzy filter for the active tab. |
-| `authors` | `a` | Opens the author picker of the Review or the Team tab. |
+| `authors` | `a` | Opens the author picker of the Review or the Team tab. On a tab without an author picker, `a` goes to the `agent` action. |
 | `toggle_all` | `t` | On the Review and the Team tab, shows every open pull request, not only the ready ones. |
 | `refresh` | `r` | Syncs both lists now. In the pull request detail, syncs the pull request and its stack, and scans its repo. |
 | `help` | `?` | Shows the help overlay with every binding. |
@@ -319,7 +319,7 @@ right and covers 80% of the width, over the list rows. The tab bar, the
 key hint bar and the status bar stay visible. `esc` or `q` closes the
 sidebar.
 
-The detail has four panes. The number keys select a pane, and `tab`
+The detail has five panes. The number keys select a pane, and `tab`
 selects the next pane:
 
 | Key | Pane | What it shows |
@@ -328,6 +328,7 @@ selects the next pane:
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order. |
 | `4` | Stack | The entries of the stack. Only for a stacked pull request. |
+| `5` | Agent | The pr-agent results: one section per tool. Only for a repo with a `path`. |
 
 `j`, `k` and the other motion keys move the cursor of the pane. In the
 description pane and the stack pane, they scroll the text.
@@ -338,6 +339,10 @@ confirm popup on top of the detail. The pane keys, the motion keys and
 the keys of the active pane come first: in the checks pane, `o` opens
 the selected check, not the pull request. The key hint bar shows the
 action keys that work for the pull request.
+
+The pane keys win over the action keys. In the Agent pane, `r`, `i`,
+`d` and `a` start pr-agent, so `d` (draft) does not work while the Agent
+pane is selected.
 
 ### Actions
 
@@ -357,6 +362,7 @@ says why.
 | `browser` | `o` | Opens the pull request in the browser. |
 | `copy_url` | `y` | Copies the pull request URL. |
 | `copy_change_id` | `Y` | Copies the jj change id of the local change that matches the pull request. Hidden when no local change matches. |
+| `agent` | `a` | Opens the detail on the Agent pane. Needs a repo with a `path`. On the Team tab, `a` opens the author picker, so use `a` in the detail there. |
 
 A merge of a stacked pull request includes every entry up to it. The
 `[merge] stack` key sets how chaoshub sends the merge. In `auto` mode,

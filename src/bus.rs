@@ -15,6 +15,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 pub(crate) use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::domain::agent::{AgentResults, Record, Tool, ToolKind};
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;
 use crate::domain::files::PrFiles;
@@ -239,6 +240,17 @@ pub(crate) struct LaunchRequest {
     pub ratio: Option<u8>,
 }
 
+/// A run of pr-agent: one tool on one pull request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AgentJob {
+    pub key: PrKey,
+    /// The head commit of the pull request when the run starts.
+    pub head_sha: String,
+    /// The local checkout of the repo. pr-agent runs in it.
+    pub repo_path: PathBuf,
+    pub tool: Tool,
+}
+
 /// A sync failure, mapped from the adapter errors by the workers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SyncError {
@@ -411,6 +423,23 @@ pub(crate) enum Msg {
         id: &'static str,
         key: TargetKey,
     },
+    /// The runtime started the pr-agent run of `kind` on `key`.
+    AgentStarted {
+        key: PrKey,
+        kind: ToolKind,
+    },
+    /// The pr-agent run of `kind` on `key` ended: the new record, or the
+    /// error.
+    AgentFinished {
+        key: PrKey,
+        kind: ToolKind,
+        result: Result<Record, String>,
+    },
+    /// The result files of `key`, read from disk.
+    AgentLoaded {
+        key: PrKey,
+        results: AgentResults,
+    },
     PaneEnded {
         id: &'static str,
         key: TargetKey,
@@ -449,6 +478,11 @@ pub(crate) enum Cmd {
         id: &'static str,
         key: TargetKey,
     },
+    /// Runs pr-agent. An `Ask` with an empty question never leaves `app`:
+    /// a pane sends it to open the question prompt.
+    RunAgent(AgentJob),
+    /// Reads the result files of a pull request.
+    LoadAgent(PrKey),
     Persist(Persist),
     Copy(String),
     OpenUrl(String),

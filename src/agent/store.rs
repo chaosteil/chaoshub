@@ -10,7 +10,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::domain::agent::{Record, ToolKind, VERSION};
+use crate::domain::agent::{AgentResults, Record, ToolKind, VERSION};
 use crate::domain::keys::PrKey;
 
 /// The name of the ask script in the state directory.
@@ -80,6 +80,25 @@ impl Store {
             ));
         }
         Ok(Some(record))
+    }
+
+    /// The results of every tool of a pull request. A file that cannot be
+    /// read gives an error for its tool.
+    pub(crate) fn load(&self, key: &PrKey) -> AgentResults {
+        let mut results = AgentResults::default();
+        for kind in ToolKind::ALL {
+            match self.read(key, kind) {
+                Ok(Some(record)) => {
+                    results.records.insert(kind, record);
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    let text = format!("cannot read {}.json: {err}", kind.name());
+                    results.errors.insert(kind, text);
+                }
+            }
+        }
+        results
     }
 
     /// Writes the result of one tool: first a temporary file, then a
@@ -232,6 +251,24 @@ mod tests {
         store.write(&key(), ToolKind::Review, &other).unwrap();
         let err = store.read(&key(), ToolKind::Review).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn load_reads_every_tool_and_reports_a_bad_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().to_path_buf());
+        assert_eq!(store.load(&key()), AgentResults::default());
+        store
+            .write(&key(), ToolKind::Review, &record("3a1f2c0"))
+            .unwrap();
+        std::fs::write(store.path(&key(), ToolKind::Ask), "not json").unwrap();
+        let results = store.load(&key());
+        assert_eq!(
+            results.records.keys().collect::<Vec<_>>(),
+            [&ToolKind::Review]
+        );
+        let error = &results.errors[&ToolKind::Ask];
+        assert!(error.starts_with("cannot read ask.json: "), "{error}");
     }
 
     #[test]

@@ -6,7 +6,6 @@
 //! files. pr-agent runs with `publish_output=false`, so it writes nothing
 //! to the pull request. The tools and the file content are plain data in
 //! `domain::agent`.
-#![allow(dead_code, reason = "the app starts the runs in a later step")]
 
 pub(crate) mod run;
 pub(crate) mod store;

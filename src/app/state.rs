@@ -21,6 +21,7 @@ use crate::bus::{
     ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, Scope, Selection, Session, Size,
     SyncError, TargetKey, UiEvent,
 };
+use crate::domain::agent::{AgentResults, ToolKind};
 use crate::domain::detail::PrDetail;
 use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
@@ -95,6 +96,10 @@ pub(crate) struct AppData {
     pub prefetch: Option<PrefetchBatch>,
     /// The command of the detail pane. `None` opens the sidebar.
     pub detail: Option<DetailPane>,
+    /// The pr-agent results of each pull request, from the result files.
+    pub agent: BTreeMap<PrKey, AgentResults>,
+    /// The pr-agent runs that run now. One run per tool per pull request.
+    pub agent_jobs: BTreeSet<(PrKey, ToolKind)>,
 }
 
 /// The command of the detail pane, as plain data from `run`: `app`
@@ -433,6 +438,8 @@ impl AppState {
                 merge: None,
                 prefetch: None,
                 detail: None,
+                agent: BTreeMap::new(),
+                agent_jobs: BTreeSet::new(),
             },
             ui: UiState {
                 active: 0,
