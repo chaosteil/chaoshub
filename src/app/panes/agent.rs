@@ -3,8 +3,10 @@
 //! commit.
 //!
 //! The keys `r`, `i`, `d` and `a` start review, improve, describe and
-//! ask. `a` asks for the question first. The pane keys win over the
-//! action keys, so `d` (draft) does not work while the pane is selected.
+//! ask. `a` asks for the question first. `p` opens a confirm popup with
+//! the line diff of the describe result, and `y` there sets the title and
+//! the body of the pull request. The pane keys win over the action keys,
+//! so `d` (draft) does not work while the pane is selected.
 
 use crate::app::age::age;
 use crate::app::frame::spinner;
@@ -13,10 +15,10 @@ use crate::app::panes::{Pane, PaneState};
 use crate::app::state::AppData;
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx};
-use crate::bus::{AgentJob, Cmd, KeyChord, KeyCode, Size, Target};
+use crate::bus::{AgentJob, Cmd, ConfirmSpec, KeyChord, KeyCode, Size, Target};
 use crate::domain::agent::{
-    AgentResults, Record, Tool, ToolKind, describe_body, describe_title, review_markdown,
-    suggestions,
+    AgentResults, Record, Tool, ToolKind, describe_body, describe_title, line_diff,
+    review_markdown, suggestions,
 };
 use crate::domain::pr::PullRequest;
 
@@ -70,6 +72,9 @@ impl Pane for AgentPane {
         if !key.mods.is_empty() {
             return None;
         }
+        if key.code == KeyCode::Char('p') {
+            return apply_confirm(cx);
+        }
         let tool = match key.code {
             KeyCode::Char('r') => Tool::Review,
             KeyCode::Char('i') => Tool::Improve,
@@ -92,6 +97,40 @@ impl Pane for AgentPane {
         })
     }
 }
+
+/// The confirm popup of the describe result: the line diff of the old
+/// and the new title and body. `None` without a describe result.
+fn apply_confirm(cx: &KeyCx<'_>) -> Option<Handled> {
+    let Some(Target::Pr { pr, .. }) = cx.target else {
+        return None;
+    };
+    let record = cx
+        .data
+        .agent
+        .get(&pr.key)?
+        .records
+        .get(&ToolKind::Describe)?;
+    let title = describe_title(&record.data)?;
+    let body = describe_body(&record.data);
+    let old_body = pr.head.value.body.replace("\r\n", "\n");
+    let mut lines = vec!["title".to_owned()];
+    lines.extend(line_diff(&pr.head.value.title, &title));
+    lines.push(String::new());
+    lines.push("body".to_owned());
+    lines.extend(line_diff(old_body.trim(), body.trim()));
+    let spec = ConfirmSpec {
+        title: format!("apply the pr-agent description to #{}?", pr.key.number),
+        lines,
+        danger: false,
+    };
+    Some(Handled {
+        confirm: Some((AGENT_ACTION, spec)),
+        ..Handled::default()
+    })
+}
+
+/// The id of the agent action. Its confirm applies the describe result.
+const AGENT_ACTION: &str = "agent";
 
 /// The head commit of the pull request: from the loaded conversation
 /// (`PrDetail.head_oid`), else from the pull request.
@@ -398,5 +437,58 @@ mod tests {
         assert_eq!(press('d'), Some(job(Tool::Describe)));
         assert_eq!(press('a'), Some(job(Tool::Ask(String::new()))));
         assert_eq!(press('x'), None);
+        assert_eq!(press('p'), None, "no describe result");
+    }
+
+    #[test]
+    fn p_opens_a_confirm_with_the_line_diff_of_the_describe_result() {
+        let mut state = state();
+        let key = testdata::pr_key("chaoshub", 7);
+        state.data.prs.get_mut(&key).unwrap().head.value.body = "- Old line\r\n- Kept".into();
+        let describe = serde_json::json!({"title": "Add a greeting",
+            "description": "- New line\n- Kept", "pr_files": []});
+        state.data.agent.insert(
+            key.clone(),
+            AgentResults {
+                records: [(
+                    ToolKind::Describe,
+                    record(ToolKind::Describe, "oid7", describe),
+                )]
+                .into(),
+                errors: std::collections::BTreeMap::new(),
+            },
+        );
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let chord = KeyChord {
+            code: KeyCode::Char('p'),
+            mods: KeyModifiers::NONE,
+        };
+        let handled = AgentPane
+            .handle_key(chord, &cx, &mut PaneState::default())
+            .unwrap();
+        let (id, spec) = handled.confirm.unwrap();
+        assert_eq!(id, "agent");
+        assert_eq!(spec.title, "apply the pr-agent description to #7?");
+        assert_eq!(
+            spec.lines,
+            [
+                "title",
+                "- Seven",
+                "+ Add a greeting",
+                "",
+                "body",
+                "- - Old line",
+                "+ - New line",
+                "  - Kept",
+            ]
+        );
+        assert!(!spec.danger);
     }
 }

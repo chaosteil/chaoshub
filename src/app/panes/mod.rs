@@ -193,6 +193,7 @@ pub(crate) mod fake {
                 cmds: vec![Cmd::OpenUrl(format!("{} {}", self.id, ps.cursor))],
                 events: Vec::new(),
                 changed: false,
+                confirm: None,
             })
         }
     }

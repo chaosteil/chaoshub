@@ -19,7 +19,7 @@ use crate::app::keymap::Keymap;
 use crate::app::layout::Areas;
 use crate::app::models::{ListModel, RowItem};
 use crate::app::state::AppData;
-use crate::bus::{Cmd, Interest, KeyChord, PrRef, Scope, Size, Target, UiEvent};
+use crate::bus::{Cmd, ConfirmSpec, Interest, KeyChord, PrRef, Scope, Size, Target, UiEvent};
 use crate::domain::pr::PullRequest;
 
 /// The state of one tab. `update` owns one per tab, made by
@@ -73,6 +73,10 @@ pub(crate) struct Handled {
     pub events: Vec<UiEvent>,
     /// True when the key changed something visible.
     pub changed: bool,
+    /// A confirm popup to open: the id of the action that the confirm
+    /// runs, and the content. The target is the pull request of the
+    /// popup.
+    pub confirm: Option<(&'static str, ConfirmSpec)>,
 }
 
 /// One tab of the main screen.

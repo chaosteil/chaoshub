@@ -1,0 +1,8 @@
+mutation UpdatePr($id: ID!, $title: String!, $body: String!) {
+  updatePullRequest(input: { pullRequestId: $id, title: $title, body: $body }) {
+    pullRequest {
+      id
+      title
+    }
+  }
+}

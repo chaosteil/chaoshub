@@ -268,6 +268,42 @@ pub(crate) fn describe_body(data: &serde_json::Value) -> String {
     body
 }
 
+/// A line diff of `old` and `new`: `  ` before a line in both, `- `
+/// before a line of `old` only, `+ ` before a line of `new` only.
+pub(crate) fn line_diff(old: &str, new: &str) -> Vec<String> {
+    let old: Vec<&str> = old.lines().collect();
+    let new: Vec<&str> = new.lines().collect();
+    // common[i][j]: the longest common line sequence of old[i..] and new[j..].
+    let mut common = vec![vec![0usize; new.len() + 1]; old.len() + 1];
+    for i in (0..old.len()).rev() {
+        for j in (0..new.len()).rev() {
+            common[i][j] = if old[i] == new[j] {
+                common[i + 1][j + 1] + 1
+            } else {
+                common[i + 1][j].max(common[i][j + 1])
+            };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    let mut lines = Vec::new();
+    while i < old.len() && j < new.len() {
+        if old[i] == new[j] {
+            lines.push(format!("  {}", old[i]));
+            i += 1;
+            j += 1;
+        } else if common[i + 1][j] >= common[i][j + 1] {
+            lines.push(format!("- {}", old[i]));
+            i += 1;
+        } else {
+            lines.push(format!("+ {}", new[j]));
+            j += 1;
+        }
+    }
+    lines.extend(old[i..].iter().map(|line| format!("- {line}")));
+    lines.extend(new[j..].iter().map(|line| format!("+ {line}")));
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,6 +394,17 @@ mod tests {
         );
         assert_eq!(describe_title(&serde_json::json!({"title": " "})), None);
         assert_eq!(describe_body(&serde_json::json!({})), "");
+    }
+
+    #[test]
+    fn line_diff_marks_the_kept_the_old_and_the_new_lines() {
+        assert_eq!(
+            line_diff("a\nb\nc", "a\nx\nc\nd"),
+            ["  a", "- b", "+ x", "  c", "+ d"]
+        );
+        assert_eq!(line_diff("", "new"), ["+ new"]);
+        assert_eq!(line_diff("old", ""), ["- old"]);
+        assert_eq!(line_diff("same", "same"), ["  same"]);
     }
 
     #[test]
