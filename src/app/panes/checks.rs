@@ -91,6 +91,18 @@ impl Pane for Checks {
     }
 }
 
+/// True when a conclusion counts as a failed check.
+pub(crate) fn failed(conclusion: CheckConclusion) -> bool {
+    matches!(
+        conclusion,
+        CheckConclusion::Failure
+            | CheckConclusion::TimedOut
+            | CheckConclusion::StartupFailure
+            | CheckConclusion::ActionRequired
+            | CheckConclusion::Cancelled
+    )
+}
+
 /// The state text and style of a check.
 fn state(check: &Check) -> (&'static str, CellStyle) {
     match (check.status, check.conclusion) {
