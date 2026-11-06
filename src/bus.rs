@@ -335,6 +335,8 @@ pub(crate) enum UiEvent {
         from: usize,
         to: usize,
     },
+    /// An action on the pull request ended with success.
+    RowFlash(PrKey),
 }
 
 /// An event from a running action.

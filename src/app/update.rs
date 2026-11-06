@@ -1934,6 +1934,11 @@ fn action_event(
             Vec::new()
         }
         ActionEvent::Done(result) => {
+            if result.is_ok() {
+                let TargetKey::Pr(pr) = &key;
+                state.ui.ui_events.push(UiEvent::RowFlash(pr.clone()));
+                state.bump();
+            }
             match result {
                 Ok(text) if text.is_empty() => {}
                 Ok(text) => state.message(text, CellStyle::Success, INFO_TTL),
@@ -4617,6 +4622,26 @@ mod tests {
         let quiet = event("rerun_checks", 102, ActionEvent::Done(Ok(String::new())));
         assert_eq!(run_msg(&mut state, &actions, quiet), follow);
         assert_eq!(status(&state), None, "an empty result says nothing");
+    }
+
+    #[test]
+    fn a_successful_action_flashes_its_row() {
+        let mut state = action_state(&pr_row(102));
+        let actions = fake(FakeAction::new("rerun_checks", 'x'));
+        let key = testdata::pr_key("chaoshub", 102);
+        state.ui.ui_events.clear();
+        let err = event(
+            "rerun_checks",
+            102,
+            ActionEvent::Done(Err("offline".into())),
+        );
+        run_msg(&mut state, &actions, err);
+        assert_eq!(state.ui.ui_events, vec![], "a failure does not flash");
+        let generation = state.generation;
+        let quiet = event("rerun_checks", 102, ActionEvent::Done(Ok(String::new())));
+        run_msg(&mut state, &actions, quiet);
+        assert_eq!(state.ui.ui_events, vec![UiEvent::RowFlash(key)]);
+        assert!(state.generation > generation, "the flash needs a frame");
     }
 
     #[test]
