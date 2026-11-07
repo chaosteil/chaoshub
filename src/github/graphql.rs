@@ -1,7 +1,9 @@
 //! Runs GraphQL queries and reads the rate limit info.
 
+use std::time::Instant;
+
 use chrono::{DateTime, Utc};
-use graphql_client::GraphQLQuery;
+use graphql_client::{GraphQLQuery, QueryBody};
 use serde::Deserialize;
 
 use crate::bus::RateInfo;
@@ -37,14 +39,41 @@ impl GithubClient {
     /// data and the rate limit info. The info comes from the `rateLimit`
     /// field of the query, else from the `x-ratelimit-*` headers with a
     /// cost of 0 (mutations cannot select `rateLimit`).
+    ///
+    /// It logs the time from the send to the end of the parse, as
+    /// `elapsed_ms`.
     pub(crate) async fn run<Q: GraphQLQuery>(
         &self,
         vars: Q::Variables,
     ) -> Result<(Q::ResponseData, RateInfo), GithubError> {
         let body = Q::build_query(vars);
         let operation = body.operation_name;
+        let start = Instant::now();
+        let result = self.exchange::<Q>(&body).await;
+        let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match &result {
+            Ok((_, rate)) => tracing::info!(
+                operation,
+                cost = rate.last_cost,
+                remaining = rate.remaining,
+                reset_at = %rate.reset_at,
+                elapsed_ms,
+                "graphql"
+            ),
+            Err(err) => tracing::warn!(operation, elapsed_ms, %err, "graphql failed"),
+        }
+        result
+    }
+
+    /// Sends the query `body`, then reads the typed data and the rate
+    /// limit info of the response.
+    async fn exchange<Q: GraphQLQuery>(
+        &self,
+        body: &QueryBody<Q::Variables>,
+    ) -> Result<(Q::ResponseData, RateInfo), GithubError> {
+        let operation = body.operation_name;
         let url = self.url("/graphql");
-        let response = self.send(|http| http.post(&url).json(&body)).await?;
+        let response = self.send(|http| http.post(&url).json(body)).await?;
         let headers = response.headers().clone();
         let text = response.text().await?;
         let parsed: ResponseJson = serde_json::from_str(&text)
@@ -84,14 +113,6 @@ impl GithubClient {
             _ => header_rate(&headers)
                 .ok_or_else(|| GithubError::Parse(format!("{operation}: no rate limit info")))?,
         };
-        tracing::info!(
-            operation,
-            cost = rate.last_cost,
-            remaining = rate.remaining,
-            reset_at = %rate.reset_at,
-            "graphql"
-        );
-
         let data = serde_json::from_value(data)
             .map_err(|err| GithubError::Parse(format!("{operation}: {err}")))?;
         Ok((data, rate))
@@ -109,7 +130,6 @@ fn header_rate(headers: &reqwest::header::HeaderMap) -> Option<RateInfo> {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use graphql_client::QueryBody;
     use serde_json::{Value, json};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
