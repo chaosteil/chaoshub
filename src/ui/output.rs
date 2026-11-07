@@ -46,6 +46,7 @@ pub(crate) fn render(
         return;
     }
     let body = Rect::new(inner.x + 1, inner.y, inner.width - 2, inner.height - 1);
+    hits.push_text(body);
     let rows = usize::from(body.height);
     let skip = output.scroll.min(lines.len().saturating_sub(rows));
     let width = usize::from(body.width);
