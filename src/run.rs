@@ -539,7 +539,8 @@ fn pinned_key(repo: &str, number: u64) -> anyhow::Result<PrKey> {
 /// The `[actions.<id>]` tables for the selections. The table of the
 /// review action gets `zoom` from `[codeview] zoom` when it has no
 /// `zoom` of its own. The table of the codeview send gets the comment
-/// directory of `[codeview] comments_dir`.
+/// directory of `[codeview] comments_dir`. The table of the stack merge
+/// is a copy of the merge table.
 fn action_tables(config: &Config) -> std::collections::BTreeMap<String, toml::Table> {
     let mut tables = config.actions.clone();
     tables
@@ -554,6 +555,9 @@ fn action_tables(config: &Config) -> std::collections::BTreeMap<String, toml::Ta
             .or_default()
             .entry("comments_dir")
             .or_insert(toml::Value::String(dir.to_string_lossy().into_owned()));
+    }
+    if let Some(merge) = tables.get("merge").cloned() {
+        tables.insert("merge_stack".to_owned(), merge);
     }
     tables
 }
@@ -1652,6 +1656,20 @@ mod tests {
         assert_eq!(zoom(&off), Some(toml::Value::Boolean(false)));
         let own = parse("[codeview]\nzoom = false\n[actions.review]\nzoom = true\n");
         assert_eq!(zoom(&own), Some(toml::Value::Boolean(true)));
+    }
+
+    #[test]
+    fn the_merge_stack_table_is_the_merge_table() {
+        let parse = |text: &str| Config::parse(text, None).unwrap();
+        assert!(!action_tables(&parse("")).contains_key("merge_stack"));
+        let config =
+            parse("[merge]\nmethod = \"rebase\"\n[actions.merge_stack]\nmethod = \"merge\"\n");
+        let tables = action_tables(&config);
+        assert_eq!(tables["merge_stack"], tables["merge"]);
+        assert_eq!(
+            tables["merge_stack"].get("method"),
+            Some(&toml::Value::String("rebase".into()))
+        );
     }
 
     #[test]
