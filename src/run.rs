@@ -26,6 +26,7 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::layout::Position;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use tokio::runtime::Handle;
@@ -55,6 +56,7 @@ use crate::store::{Snapshot, Store};
 use crate::theme::{Theme, ThemeKind};
 use crate::ui;
 use crate::ui::hits::HitMap;
+use crate::ui::select::{self, TextSelection};
 use crate::ui::transition::Transitions;
 use crate::vcs::lock::RepoLocks;
 use crate::workers::ctx::{WorkerCtx, WorkerMode};
@@ -201,6 +203,8 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         slow: SlowFrames::default(),
         hits: HitMap::default(),
         overlay_drawn: false,
+        selection: None,
+        selection_text: String::new(),
     };
     // The first frame comes before any subprocess: the workers start
     // after it.
@@ -629,6 +633,11 @@ struct EventLoop {
     hits: HitMap,
     /// True when the last draw had an overlay.
     overlay_drawn: bool,
+    /// The text selection of a mouse drag, from the press until the next
+    /// press, key, wheel step or resize.
+    selection: Option<TextSelection>,
+    /// The text of the marked cells of the last draw.
+    selection_text: String,
 }
 
 /// The number of the last drawn frames that the slow frame latch looks
@@ -683,6 +692,8 @@ impl EventLoop {
             &self.theme,
             Duration::ZERO,
             &mut self.hits,
+            None,
+            &mut self.selection_text,
         )?;
         self.overlay_drawn = !self.app.frame().overlays.is_empty();
         self.frame_done(render);
@@ -714,9 +725,12 @@ impl EventLoop {
                     &self.theme,
                     elapsed,
                     &mut self.hits,
+                    self.selection.as_ref(),
+                    &mut self.selection_text,
                 )?;
                 self.overlay_drawn = !self.app.frame().overlays.is_empty();
                 self.frame_done(render_time);
+                self.drop_lost_selection();
                 if let Some(started) = self.started.take() {
                     tracing::info!(ms = started.elapsed().as_millis(), "startup: first frame");
                 }
@@ -736,8 +750,10 @@ impl EventLoop {
             let wait = async { timeout(deadline, rx.recv()).await };
             match self.handle.block_on(wait) {
                 Ok(Some(msg)) => {
-                    let msg = with_hit(msg, &self.hits, self.overlay_drawn);
-                    self.update(msg);
+                    if let Some(msg) = self.select(msg) {
+                        let msg = with_hit(msg, &self.hits, self.overlay_drawn);
+                        self.update(msg);
+                    }
                 }
                 Ok(None) => break,
                 Err(_) => self.update(Msg::Tick),
@@ -746,6 +762,80 @@ impl EventLoop {
             self.run_editor(terminal, reader)?;
         }
         Ok(())
+    }
+
+    /// The text selection of the mouse messages. A press in a text area
+    /// starts a selection, a drag moves its end, and a release copies the
+    /// marked text when the mouse moved. A key, a wheel step or a resize
+    /// clears the selection. Returns the message for `app`: `None` for a
+    /// drag and a release.
+    fn select(&mut self, msg: Msg) -> Option<Msg> {
+        match msg {
+            Msg::Mouse {
+                kind: MouseKind::Click,
+                x,
+                y,
+                ..
+            } => {
+                self.clear_selection();
+                self.selection = self
+                    .hits
+                    .text_at(x, y)
+                    .map(|area| TextSelection::new(area, Position { x, y }));
+                Some(msg)
+            }
+            Msg::Mouse {
+                kind: MouseKind::Drag,
+                x,
+                y,
+                ..
+            } => {
+                if let Some(selection) = &mut self.selection {
+                    selection.extend(Position { x, y });
+                    self.drawn = None;
+                }
+                None
+            }
+            Msg::Mouse {
+                kind: MouseKind::Release,
+                ..
+            } => {
+                if self.selection.is_some_and(|selection| selection.moved())
+                    && !self.selection_text.is_empty()
+                {
+                    self.update(Msg::CopyText(self.selection_text.clone()));
+                }
+                None
+            }
+            Msg::Key(_)
+            | Msg::Resize(_)
+            | Msg::Mouse {
+                kind: MouseKind::ScrollUp | MouseKind::ScrollDown,
+                ..
+            } => {
+                self.clear_selection();
+                Some(msg)
+            }
+            msg => Some(msg),
+        }
+    }
+
+    /// Clears the text selection. The next frame draws without its mark.
+    fn clear_selection(&mut self) {
+        if self.selection.take().is_some() {
+            self.selection_text.clear();
+            self.drawn = None;
+        }
+    }
+
+    /// Clears the text selection when its text area is gone from the last
+    /// draw, for example after its overlay closed.
+    fn drop_lost_selection(&mut self) {
+        if let Some(selection) = self.selection
+            && self.hits.text_at(selection.start.x, selection.start.y) != Some(selection.area)
+        {
+            self.clear_selection();
+        }
     }
 
     /// Records the render time of a frame. 5 slow frames of the last 10
@@ -962,7 +1052,13 @@ fn frame_elapsed(last_draw: Option<Instant>, now: Instant, was_active: bool) -> 
 }
 
 /// Draws one frame: the frame model, the transitions and the view.
-/// Returns the render time.
+/// When `selection` moved, the frame shows its cells reversed, and
+/// `selection_text` gets their text. ratatui resets the buffer after the
+/// draw, so the text is read during the draw. Returns the render time.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the event loop and the tests pass the parts of the frame one by one"
+)]
 fn draw<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -970,15 +1066,22 @@ fn draw<B: Backend>(
     theme: &Theme,
     elapsed: Duration,
     hits: &mut HitMap,
+    selection: Option<&TextSelection>,
+    selection_text: &mut String,
 ) -> Result<Duration, B::Error> {
     let started = Instant::now();
     transitions.apply(app.take_ui_events());
     let areas = app.areas();
     let model = app.frame();
     transitions.prepare(model, &areas);
+    selection_text.clear();
     terminal.draw(|frame| {
         ui::view(frame, model, &areas, theme, hits);
         transitions.process(frame, elapsed);
+        if let Some(selection) = selection.filter(|selection| selection.moved()) {
+            *selection_text = select::text(frame.buffer_mut(), selection);
+            select::highlight(frame.buffer_mut(), selection);
+        }
     })?;
     let render = started.elapsed();
     tracing::trace!(render_us = render.as_micros(), "frame");
@@ -1258,12 +1361,15 @@ fn read_loop(
     }
 }
 
-/// The message of a mouse event: a left button press is a click, and
-/// the wheel scrolls. The hit is not known here. `None` for the other
-/// mouse events.
+/// The message of a mouse event: a left button press is a click, a move
+/// with the left button down is a drag, a release of the left button is
+/// a release, and the wheel scrolls. The hit is not known here. `None`
+/// for the other mouse events.
 fn mouse_msg(event: MouseEvent) -> Option<Msg> {
     let kind = match event.kind {
         MouseEventKind::Down(MouseButton::Left) => MouseKind::Click,
+        MouseEventKind::Drag(MouseButton::Left) => MouseKind::Drag,
+        MouseEventKind::Up(MouseButton::Left) => MouseKind::Release,
         MouseEventKind::ScrollDown => MouseKind::ScrollDown,
         MouseEventKind::ScrollUp => MouseKind::ScrollUp,
         _ => return None,
@@ -1751,6 +1857,8 @@ mod tests {
             &theme,
             Duration::ZERO,
             &mut HitMap::default(),
+            None,
+            &mut String::new(),
         )
         .unwrap();
         terminal.backend().to_string()
@@ -1770,6 +1878,8 @@ mod tests {
             &theme,
             Duration::ZERO,
             &mut HitMap::default(),
+            None,
+            &mut String::new(),
         )
         .unwrap();
         terminal.backend().to_string()
@@ -2401,6 +2511,8 @@ mod tests {
                 &theme,
                 Duration::from_millis(ms),
                 &mut HitMap::default(),
+                None,
+                &mut String::new(),
             )
             .unwrap();
             terminal.backend().to_string()
@@ -2455,6 +2567,8 @@ mod tests {
                     &theme,
                     Duration::from_millis(16),
                     &mut HitMap::default(),
+                    None,
+                    &mut String::new(),
                 )
                 .unwrap();
                 screen = Some(terminal.backend().to_string());
@@ -2559,9 +2673,11 @@ mod tests {
     }
 
     #[test]
-    fn the_reader_sends_clicks_and_the_wheel_without_a_hit() {
+    fn the_reader_sends_clicks_drags_and_the_wheel_without_a_hit() {
         let cases = [
             (MouseEventKind::Down(MouseButton::Left), MouseKind::Click),
+            (MouseEventKind::Drag(MouseButton::Left), MouseKind::Drag),
+            (MouseEventKind::Up(MouseButton::Left), MouseKind::Release),
             (MouseEventKind::ScrollDown, MouseKind::ScrollDown),
             (MouseEventKind::ScrollUp, MouseKind::ScrollUp),
         ];
@@ -2584,8 +2700,8 @@ mod tests {
         for event in [
             MouseEventKind::Moved,
             MouseEventKind::Down(MouseButton::Right),
-            MouseEventKind::Up(MouseButton::Left),
-            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Right),
+            MouseEventKind::Drag(MouseButton::Right),
         ] {
             assert_eq!(first_message(mouse(event, 3, 4)), None, "{event:?}");
         }
@@ -2622,6 +2738,8 @@ mod tests {
             &theme,
             Duration::ZERO,
             &mut hits,
+            None,
+            &mut String::new(),
         )
         .unwrap();
         hits
@@ -2735,6 +2853,8 @@ mod tests {
             &theme,
             Duration::ZERO,
             &mut HitMap::default(),
+            None,
+            &mut String::new(),
         )
         .unwrap();
         insta::assert_snapshot!(terminal.backend());

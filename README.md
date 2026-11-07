@@ -414,7 +414,7 @@ mouse (see "Mouse").
 |---|---|---|
 | `program_status` | detected | Writes OSC 7501, the program status. |
 | `progress` | detected | Writes OSC 9;4, the progress bar. |
-| `mouse` | `true` | Reads the mouse. `false` leaves the mouse to the terminal, so a drag selects text again. |
+| `mouse` | `true` | Reads the mouse. `false` leaves the mouse to the terminal, so the terminal selects the text. chaoshub selects text itself (see "Mouse"), so `false` is only necessary to select across panes. |
 
 When `program_status` or `progress` is not set, chaoshub writes the
 sequence only inside Rex (`REX_BLOCK` is set) and Ghostty
@@ -598,9 +598,9 @@ chaoshub merges.
 ### Mouse
 
 chaoshub reads the mouse. Set `[terminal] mouse = false` to give the
-mouse back to the terminal, for example to select text. While a command
-runs in the foreground (for example codeview without Rex), chaoshub
-does not read the mouse.
+mouse back to the terminal, for example to select text across panes.
+While a command runs in the foreground (for example codeview without
+Rex), chaoshub does not read the mouse.
 
 The wheel moves three rows per step:
 
@@ -621,6 +621,35 @@ A click acts on what it hits:
 | An author in the author picker | Picks the author. |
 | An action in the actions menu | Runs the action. |
 | A cell outside of the sidebar or the overlay | Closes it. For a confirm popup, this cancels the action. |
+
+A drag with the left button selects text. The text areas are the body
+of the sidebar and the detail (all panes), the body of the help overlay
+and the body of the output popup:
+
+1. Press the left button in a text area. The press is also a click.
+2. Drag. The selection goes in reading order, as in a terminal: from
+   the start cell to the end of its row, then full rows, then to the end
+   cell. The marked cells show reversed.
+3. Release the button. chaoshub copies the marked text to the
+   clipboard, and the status line says `copied N lines`.
+
+The mark stays on the screen until the next press, key, wheel step or
+resize. A press and a release without a drag is a click only, and
+copies nothing.
+
+The selection has these limits:
+
+- It stays inside the text area where it started. A drag out of the
+  area stops at the edge of the area.
+- It does not scroll the area. To copy more text than the area shows,
+  copy it in parts.
+- The copy comes from the drawn cells. Thus it has no borders and no
+  text of the panes beside it. A row that the pane wrapped stays as two
+  lines. In the conversation pane, the tree marks and the indent are in
+  the copy.
+
+With `[terminal] mouse = false`, chaoshub does not select text. The
+terminal selects the text.
 
 ## pr-agent
 

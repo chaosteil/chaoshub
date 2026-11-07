@@ -170,6 +170,7 @@ pub(crate) fn update_full(
             text_edited(state, result);
             Vec::new()
         }
+        Msg::CopyText(text) => copy_text(state, text),
         Msg::PaneStarted { id, key } => {
             state.data.panes.insert((id, key), PaneHandleState::Running);
             state.bump();
@@ -1423,11 +1424,21 @@ fn scroll_text(overlay: &mut OverlayState, motion: Motion) -> bool {
     true
 }
 
+/// The text of a mouse drag: it goes to the clipboard, and the status
+/// line says how many lines it has.
+fn copy_text(state: &mut AppState, text: String) -> Vec<Cmd> {
+    let count = text.lines().count();
+    let noun = if count == 1 { "line" } else { "lines" };
+    state.message(format!("copied {count} {noun}"), CellStyle::Dim, INFO_TTL);
+    vec![Cmd::Copy(text)]
+}
+
 /// The rows that one wheel step moves.
 const WHEEL_ROWS: usize = 3;
 
 /// A mouse event: the wheel moves the top overlay, or the list when no
-/// overlay is open, by `WHEEL_ROWS`. A click acts on its hit.
+/// overlay is open, by `WHEEL_ROWS`. A click acts on its hit. A drag and
+/// a release do nothing here: `run` uses them for the text selection.
 fn mouse(
     state: &mut AppState,
     keymap: &Keymap,
@@ -1441,7 +1452,7 @@ fn mouse(
         (MouseKind::ScrollDown, _) => wheel(state, keymap, tabs, panes, Motion::Down),
         (MouseKind::ScrollUp, _) => wheel(state, keymap, tabs, panes, Motion::Up),
         (MouseKind::Click, Some(hit)) => click(state, keymap, tabs, panes, actions, hit),
-        (MouseKind::Click, None) => Vec::new(),
+        (MouseKind::Click, None) | (MouseKind::Drag | MouseKind::Release, _) => Vec::new(),
     }
 }
 
@@ -5381,6 +5392,38 @@ mod tests {
     /// default keys.
     fn send_with(state: &mut AppState, panes: &[Box<dyn Pane>], msg: Msg) -> Vec<Cmd> {
         update_full(state, &Keymap::default(), &TABS, panes, &REGISTRY, msg)
+    }
+
+    #[test]
+    fn copy_text_copies_and_counts_the_lines() {
+        let mut state = mine_state(10);
+        assert_eq!(
+            update(
+                &mut state,
+                &Keymap::default(),
+                Msg::CopyText("one\ntwo".into())
+            ),
+            vec![Cmd::Copy("one\ntwo".into())]
+        );
+        assert_eq!(
+            state
+                .ui
+                .status
+                .as_ref()
+                .map(|msg| (msg.text.as_str(), msg.style)),
+            Some(("copied 2 lines", CellStyle::Dim))
+        );
+    }
+
+    #[test]
+    fn a_drag_and_a_release_do_nothing_in_the_app() {
+        let mut state = mine_state(10);
+        let generation = state.generation;
+        for kind in [MouseKind::Drag, MouseKind::Release] {
+            let msg = mouse_on(kind, Some(Hit::Row(3)));
+            assert_eq!(update(&mut state, &Keymap::default(), msg), vec![]);
+        }
+        assert_eq!(state.generation, generation);
     }
 
     #[test]
