@@ -82,6 +82,9 @@ impl StoreThread {
                 let _ = reply
                     .send(self.transact(|tx| rows::put_sync_state(tx, scope, &repo_set, &state)));
             }
+            StoreOp::PrVersions { scope, reply } => {
+                let _ = reply.send(self.transact(|tx| rows::pr_versions(tx, scope)));
+            }
             StoreOp::PutDetail { key, detail, reply } => {
                 let _ = reply.send(self.transact(|tx| rows::put_detail(tx, &key, &detail)));
             }
