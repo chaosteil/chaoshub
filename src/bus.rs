@@ -45,6 +45,10 @@ pub(crate) struct KeyChord {
 pub(crate) enum MouseKind {
     /// A press of the left button.
     Click,
+    /// A move of the mouse while the left button is down.
+    Drag,
+    /// A release of the left button.
+    Release,
     ScrollUp,
     ScrollDown,
 }
@@ -503,6 +507,9 @@ pub(crate) enum Msg {
     },
     /// The editor of `Cmd::EditText` ended: the new text, or the error.
     TextEdited(Result<String, String>),
+    /// A mouse drag selected this text in a text area, and the left
+    /// button went up. `run` sends it, and `app` copies the text.
+    CopyText(String),
     PaneEnded {
         id: &'static str,
         key: TargetKey,
