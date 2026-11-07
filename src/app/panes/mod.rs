@@ -52,6 +52,9 @@ pub(crate) trait Pane: Send + Sync {
     fn key(&self) -> char;
     fn applies(&self, target: &Target) -> bool;
     fn init_state(&self) -> PaneState;
+    /// Sets the start of a new state for `target`, for example the cursor
+    /// on the current entry. The default does nothing.
+    fn place(&self, _target: &Target, _ps: &mut PaneState) {}
     fn model(&self, cx: &KeyCx<'_>, ps: &PaneState, size: Size) -> PaneModel;
     /// `None` when the pane does not handle the key.
     fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled>;
@@ -68,6 +71,21 @@ pub(crate) static PANES: LazyLock<Vec<Box<dyn Pane>>> = LazyLock::new(|| {
         Box::new(agent::AgentPane),
     ]
 });
+
+/// One new state per pane of `panes`, in registry order. When `target`
+/// is known, each pane places its state on it.
+pub(crate) fn init_states(panes: &[Box<dyn Pane>], target: Option<&Target>) -> Vec<PaneState> {
+    panes
+        .iter()
+        .map(|pane| {
+            let mut ps = pane.init_state();
+            if let Some(target) = target {
+                pane.place(target, &mut ps);
+            }
+            ps
+        })
+        .collect()
+}
 
 /// The registry indexes of the panes that apply to `target`.
 pub(crate) fn applicable(panes: &[Box<dyn Pane>], target: &Target) -> Vec<usize> {
@@ -192,6 +210,7 @@ pub(crate) mod fake {
                 events: Vec::new(),
                 changed: false,
                 confirm: None,
+                open_pr: None,
             })
         }
     }

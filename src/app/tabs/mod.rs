@@ -20,6 +20,7 @@ use crate::app::layout::Areas;
 use crate::app::models::{ListModel, RowItem};
 use crate::app::state::AppData;
 use crate::bus::{Cmd, ConfirmSpec, Interest, KeyChord, PrRef, Scope, Size, Target, UiEvent};
+use crate::domain::keys::PrKey;
 use crate::domain::pr::PullRequest;
 
 /// The state of one tab. `update` owns one per tab, made by
@@ -96,6 +97,9 @@ pub(crate) struct Handled {
     /// runs, and the content. The target is the pull request of the
     /// popup.
     pub confirm: Option<(&'static str, ConfirmSpec)>,
+    /// A pull request to open in a new popup on top of the overlays. Only
+    /// a pane sets it.
+    pub open_pr: Option<PrKey>,
 }
 
 /// One tab of the main screen.

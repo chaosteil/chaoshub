@@ -482,12 +482,12 @@ selects the next pane:
 | `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. Below the block, the section `Codeview comments (N unsent)` lists the codeview comments of the head that did not go to GitHub yet (see "Codeview comments" below). Only for a repo with a `path`. |
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order. |
-| `4` | Stack | The entries of the stack. Only for a stacked pull request. |
+| `4` | Stack | The entries of the stack. Only for a stacked pull request. The cursor starts on the pull request of the detail. Enter opens the detail of the entry under the cursor on top, and `esc` goes back. `o` opens the page of that entry. |
 | `5` | Files | The changed files as a tree, with the diff of each file inline. |
 | `6` | Agent | The pr-agent results: one section per tool. Only for a repo with a `path`. |
 
 `j`, `k` and the other motion keys move the cursor of the pane. In the
-description pane and the stack pane, they scroll the text.
+description pane, they scroll the text.
 
 The action keys also work in the detail, on the pull request of the
 detail. For example, `v` opens codeview, and `m` opens the merge
@@ -605,8 +605,8 @@ Rex), chaoshub does not read the mouse.
 The wheel moves three rows per step:
 
 - On the list, it moves the cursor.
-- In the sidebar, it scrolls the description pane and the stack pane,
-  and moves the cursor of the checks pane and the conversation pane.
+- In the sidebar, it scrolls the description pane, and moves the
+  cursor of the other panes.
 - In the help overlay and the output popup, it scrolls the text.
 
 A click acts on what it hits:
@@ -617,7 +617,7 @@ A click acts on what it hits:
 | A list row | Selects the row. A click on the selected row opens the sidebar. |
 | A key hint | Presses the key. For example, `Space actions` in the list opens the actions menu, and `v review` in the sidebar opens codeview. |
 | A pane tab in the sidebar | Selects the pane. |
-| A row in a pane | Moves the cursor of the pane to the row. In the conversation pane, a click on the selected thread expands it or collapses it. |
+| A row in a pane | Moves the cursor of the pane to the row. In the conversation pane, a click on the selected thread expands it or collapses it. In the stack pane, a click on the selected entry opens its detail. |
 | An author in the author picker | Picks the author. |
 | An action in the actions menu | Runs the action. |
 | A cell outside of the sidebar or the overlay | Closes it. For a confirm popup, this cancels the action. |
