@@ -34,3 +34,70 @@ impl From<reqwest::Error> for GithubError {
         }
     }
 }
+
+impl GithubError {
+    /// True when GitHub stopped the request because it took too long: a
+    /// 502 or a 504, or a GraphQL error that names a timeout. GitHub
+    /// sometimes sends a timeout as a 200 with a GraphQL error.
+    pub(crate) fn is_timeout(&self) -> bool {
+        match self {
+            Self::Http {
+                status: Some(502 | 504),
+                ..
+            } => true,
+            Self::Graphql(messages) => messages
+                .iter()
+                .any(|message| message.to_lowercase().contains("timeout")),
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn http(status: Option<u16>) -> GithubError {
+        GithubError::Http {
+            status,
+            message: "failed".into(),
+        }
+    }
+
+    #[test]
+    fn is_timeout_cases() {
+        let cases = [
+            ("502 is a timeout", http(Some(502)), true),
+            ("504 is a timeout", http(Some(504)), true),
+            ("500 is no timeout", http(Some(500)), false),
+            ("no response is no timeout", http(None), false),
+            (
+                "a GraphQL timeout message is a timeout",
+                GithubError::Graphql(vec![
+                    "Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug.".into(),
+                ]),
+                true,
+            ),
+            (
+                "the case of the message does not matter",
+                GithubError::Graphql(vec!["Timeout".into()]),
+                true,
+            ),
+            (
+                "another GraphQL error is no timeout",
+                GithubError::Graphql(vec!["Field 'x' doesn't exist".into()]),
+                false,
+            ),
+            ("auth is no timeout", GithubError::Auth, false),
+            (
+                "a rate limit is no timeout",
+                GithubError::RateLimited { until: Utc::now() },
+                false,
+            ),
+            ("a parse error is no timeout", GithubError::Parse("x".into()), false),
+        ];
+        for (name, err, timeout) in cases {
+            assert_eq!(err.is_timeout(), timeout, "{name}");
+        }
+    }
+}
