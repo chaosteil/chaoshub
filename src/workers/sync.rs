@@ -27,6 +27,12 @@
 //! rows from the cache: the open pull requests that the worker saw before
 //! and that the result does not hold. The worker sends the `Msg` first
 //! and writes the store second.
+//!
+//! When the first page fails, the worker sends only `SyncFailed`. When a
+//! later page fails, the sync is incomplete: the worker sends the end of
+//! the sync, writes the sync state, and then sends `SyncFailed`. A full
+//! sync sets `last_delta` when it has none, also when the sync is
+//! incomplete. Only a complete full sync sets `last_full`.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -271,7 +277,7 @@ impl Syncer {
         };
         let query = search(scope, &login, &repos, None);
         let first = page_size(self.state(scope).full_count);
-        let pages = match self.pages(scope, &query, first, &login).await {
+        let mut pages = match self.pages(scope, &query, first, &login).await {
             Ok(Some(pages)) => pages,
             Ok(None) => return false,
             Err(err) => return self.failed(scope, &repos, &err).await,
@@ -282,7 +288,7 @@ impl Syncer {
             complete = pages.complete,
             "full sync"
         );
-        let keys: HashSet<PrKey> = pages.prs.iter().map(|pr| pr.key.clone()).collect();
+        let keys: HashSet<PrKey> = pages.keys.iter().cloned().collect();
         let state = self.state(scope);
         state.full_count = pages.prs.len();
         let gone = pages.complete.then(|| {
@@ -305,7 +311,10 @@ impl Syncer {
             return false;
         }
         self.persist_full(scope, &repos, gone, started_at).await;
-        true
+        match pages.failure.take() {
+            Some(err) => self.failed(scope, &repos, &err).await,
+            None => true,
+        }
     }
 
     /// Runs a delta sync of `scope` from `last_delta` of the sync state.
@@ -329,7 +338,7 @@ impl Syncer {
         };
         let query = search(scope, &login, &repos, Some(last_delta - DELTA_OVERLAP));
         let first = page_size(self.state(scope).delta_count);
-        let pages = match self.pages(scope, &query, first, &login).await {
+        let mut pages = match self.pages(scope, &query, first, &login).await {
             Ok(Some(pages)) => pages,
             Ok(None) => return false,
             Err(err) => return self.failed(scope, &repos, &err).await,
@@ -346,6 +355,9 @@ impl Syncer {
         if !self.end(scope, None, pages.started_at).await {
             return false;
         }
+        if let Some(err) = pages.failure.take() {
+            return self.failed(scope, &repos, &err).await;
+        }
         if pages.complete {
             state.last_delta = Some(pages.started_at);
             state.last_error = None;
@@ -359,7 +371,9 @@ impl Syncer {
     /// Reads at most `MAX_PAGES` pages of the search `query`, `first`
     /// results per page. It sends `SyncStarted` first. It sends each page in a `PrsSynced` when the page
     /// arrives, and then writes the page into the cache. `Ok(None)` when
-    /// `app` is gone.
+    /// `app` is gone. An error of the first page is `Err`. An error of a
+    /// later page stops the search: the result is incomplete and holds
+    /// the error in `failure`.
     async fn pages(
         &mut self,
         scope: Scope,
@@ -378,6 +392,9 @@ impl Syncer {
         let mut page = self.ctx.client.list_prs(query, first, None, &me).await?;
         let started_at = page.started_at;
         let mut prs = Vec::new();
+        let mut keys = Vec::new();
+        let mut complete = true;
+        let mut failure = None;
         let mut count = 1;
         loop {
             if !self.rate(page.rate.clone()).await {
@@ -396,28 +413,36 @@ impl Syncer {
             if let Err(err) = self.ctx.store.put_prs(scope, page.prs.clone()).await {
                 tracing::warn!(?scope, %err, "cannot cache the pull requests");
             }
+            keys.extend(page.prs.iter().map(|pr| pr.key.clone()));
             prs.append(&mut page.prs);
             let Some(after) = page.next.take() else {
                 break;
             };
             if count >= MAX_PAGES {
-                return Ok(Some(Pages {
-                    prs,
-                    complete: false,
-                    started_at,
-                }));
+                complete = false;
+                break;
             }
-            page = self
+            page = match self
                 .ctx
                 .client
                 .list_prs(query, first, Some(&after), &me)
-                .await?;
+                .await
+            {
+                Ok(page) => page,
+                Err(err) => {
+                    complete = false;
+                    failure = Some(err);
+                    break;
+                }
+            };
             count += 1;
         }
         Ok(Some(Pages {
             prs,
-            complete: true,
+            keys,
+            complete,
             started_at,
+            failure,
         }))
     }
 
@@ -545,8 +570,9 @@ impl Syncer {
         }
     }
 
-    /// Writes the result of a full sync: the deleted gone candidates and
-    /// the sync state. The pull requests are in the cache already.
+    /// Writes the result of a full sync: the sync state, and after a
+    /// complete sync (`gone` is set) the deleted gone candidates. The pull
+    /// requests are in the cache already.
     async fn persist_full(
         &self,
         scope: Scope,
@@ -555,12 +581,6 @@ impl Syncer {
         started_at: DateTime<Utc>,
     ) {
         let store = &self.ctx.store;
-        let Some(gone) = gone else {
-            return;
-        };
-        if let Err(err) = store.drop_gone(gone, started_at).await {
-            tracing::warn!(?scope, %err, "cannot drop the gone pull requests");
-        }
         let repo_set = repo_set_hash(repos);
         let mut state = match store.sync_state(scope, repo_set.clone()).await {
             Ok(state) => state.unwrap_or_default(),
@@ -569,10 +589,16 @@ impl Syncer {
                 return;
             }
         };
-        state.last_full = Some(started_at);
-        // The next delta starts at the first full sync.
+        // The next delta starts at the first full sync, also when that
+        // sync is incomplete.
         state.last_delta = state.last_delta.or(Some(started_at));
-        state.last_error = None;
+        if let Some(gone) = gone {
+            if let Err(err) = store.drop_gone(gone, started_at).await {
+                tracing::warn!(?scope, %err, "cannot drop the gone pull requests");
+            }
+            state.last_full = Some(started_at);
+            state.last_error = None;
+        }
         if let Err(err) = store.put_sync_state(scope, repo_set, state).await {
             tracing::warn!(?scope, %err, "cannot write the sync state");
         }
@@ -615,11 +641,16 @@ impl Syncer {
 struct Pages {
     /// The pull requests of every page.
     prs: Vec<PullRequest>,
+    /// The keys of every pull request of the search.
+    keys: Vec<PrKey>,
     /// True when the worker read the last page, false when `MAX_PAGES`
-    /// stopped it.
+    /// or a failure stopped it.
     complete: bool,
     /// The start time of the first page.
     started_at: DateTime<Utc>,
+    /// The error of the request that stopped the search after one or more
+    /// pages.
+    failure: Option<GithubError>,
 }
 
 /// The `owner/name` of every repo, sorted and without duplicates.
@@ -840,6 +871,7 @@ mod tests {
         let server = MockServer::start().await;
         serve_pages(&server, false).await;
         let (ctx, mut harness) = logged_in(&server);
+        let store = ctx.store.clone();
         let mut syncer = Syncer::new(ctx);
         syncer.team.known.insert(key(1));
 
@@ -850,8 +882,57 @@ mod tests {
         assert_eq!(pages.concat().len(), 15);
         assert_eq!(seen, None);
         assert_eq!(server.received_requests().await.unwrap().len(), MAX_PAGES);
-        assert!(syncer.team.known.contains(&key(1)));
+        assert!(syncer.team.known.contains(&key(1)), "#1 is not dropped");
         assert!(searches(&server).await[0].0.contains(" -author:chaosteil "));
+
+        let state = store
+            .sync_state(Scope::Team, repo_set_hash(&["acme/deploy".to_owned()]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(state.last_delta.is_some());
+        assert_eq!(state.last_full, None);
+    }
+
+    #[tokio::test]
+    async fn a_failed_second_page_ends_the_sync_and_then_fails() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("\"after\":\""))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("\"after\":null"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(PAGE1.as_bytes(), "application/json"),
+            )
+            .mount(&server)
+            .await;
+        let (ctx, mut harness) = logged_in(&server);
+        let store = ctx.store.clone();
+        let mut syncer = Syncer::new(ctx);
+
+        assert!(syncer.full(Scope::Team).await);
+        assert_eq!(
+            sync_pages(&mut harness).await,
+            (Scope::Team, vec![vec![1589, 1587, 1586]], None)
+        );
+        match harness.recv().await {
+            Msg::SyncFailed {
+                scope: Some(Scope::Team),
+                ..
+            } => {}
+            other => panic!("{other:?}"),
+        }
+        let state = store
+            .sync_state(Scope::Team, repo_set_hash(&["acme/deploy".to_owned()]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(state.last_delta.is_some());
+        assert_eq!(state.last_full, None);
+        assert!(state.last_error.is_some());
     }
 
     #[tokio::test]
