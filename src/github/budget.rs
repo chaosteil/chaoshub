@@ -10,12 +10,6 @@ use chrono::{DateTime, Utc};
 
 use crate::bus::RateInfo;
 
-/// The smallest page of a search.
-const MIN_PAGE: usize = 20;
-/// The largest page that GitHub permits.
-const MAX_PAGE: usize = 100;
-/// The extra results of the next page over the last count.
-const PAGE_MARGIN: usize = 10;
 /// The most doublings of the base interval.
 const MAX_DOUBLINGS: u32 = 16;
 
@@ -79,15 +73,6 @@ fn next_interval_at(base: Duration, rate: &RateInfo, now: DateTime<Utc>) -> Dura
     interval
 }
 
-/// The page size of the next search: the last result count plus 10,
-/// between 20 and 100.
-pub(crate) fn page_size(last_count: usize) -> u32 {
-    let size = last_count
-        .saturating_add(PAGE_MARGIN)
-        .clamp(MIN_PAGE, MAX_PAGE);
-    u32::try_from(size).unwrap_or(100)
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::TimeDelta;
@@ -149,21 +134,5 @@ mod tests {
         assert!(budget.is_slowing(base));
         assert!(budget.interval(base) > base);
         assert_eq!(budget.last().map(|rate| rate.remaining), Some(1));
-    }
-
-    #[test]
-    fn page_size_cases() {
-        let cases = [
-            (0, 20),
-            (5, 20),
-            (10, 20),
-            (11, 21),
-            (50, 60),
-            (90, 100),
-            (500, 100),
-        ];
-        for (last_count, size) in cases {
-            assert_eq!(page_size(last_count), size, "last count {last_count}");
-        }
     }
 }
