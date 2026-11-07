@@ -13,13 +13,15 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 
-use crate::app::frame::ModelCache;
+use crate::actions::{Action, Applicability};
+use crate::app::frame::{self, ModelCache};
+use crate::app::keymap::Keymap;
 use crate::app::models::{CellStyle, HelpModel};
 use crate::app::panes::PaneState;
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{
     ChooseSpec, ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReviewKind, Scope,
-    Selection, Session, Size, SyncError, TargetKey, UiEvent,
+    Selection, Session, Size, SyncError, Target, TargetKey, UiEvent,
 };
 use crate::domain::agent::{AgentResults, ToolKind};
 use crate::domain::codeview::Comments;
@@ -336,6 +338,8 @@ pub(crate) enum OverlayState {
     Popup(PopupState),
     /// The author picker of a tab.
     Authors(AuthorPicker),
+    /// The actions menu of a list row.
+    Actions(ActionMenu),
     /// The confirm popup of an action: `y` or Enter runs it.
     Confirm {
         action: ActionDialog,
@@ -430,6 +434,53 @@ impl AuthorPicker {
         self.cursor
             .checked_sub(1)
             .and_then(|i| self.authors.get(i).cloned())
+    }
+}
+
+/// The actions menu of a list row: one item for each action that is not
+/// hidden for the row.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ActionMenu {
+    /// The row that the actions run on.
+    pub target: Box<Target>,
+    /// The ids of the actions, in display order.
+    pub ids: Vec<&'static str>,
+    /// The index of the cursor item.
+    pub cursor: usize,
+}
+
+impl ActionMenu {
+    /// The items of the menu: the key and the label of each action of
+    /// `actions` in `ids`. A disabled action also shows its reason in
+    /// parentheses. An action without a key shows only its label.
+    pub(crate) fn items(
+        &self,
+        data: &AppData,
+        keymap: &Keymap,
+        actions: &[Box<dyn Action>],
+    ) -> Vec<String> {
+        let states = frame::applicability(data, actions, (*self.target).clone());
+        self.ids
+            .iter()
+            .map(|&id| {
+                let Some((action, state)) = actions
+                    .iter()
+                    .zip(&states)
+                    .find(|(action, _)| action.id() == id)
+                else {
+                    return id.replace('_', " ");
+                };
+                let label = action.label();
+                let text = match keymap.chords(id).first() {
+                    Some(&chord) => format!("{}  {label}", frame::key_text(chord)),
+                    None => label.to_owned(),
+                };
+                match state {
+                    Applicability::Disabled(reason) => format!("{text} ({reason})"),
+                    Applicability::Enabled | Applicability::Hidden => text,
+                }
+            })
+            .collect()
     }
 }
 
