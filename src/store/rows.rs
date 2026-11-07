@@ -13,7 +13,7 @@ use crate::domain::observed::Observed;
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::repo::RepoSettings;
 use crate::store::error::StoreError;
-use crate::store::{Snapshot, SyncState};
+use crate::store::{PrVersion, Snapshot, SyncState};
 
 /// Closed and merged pull requests stay this long after their last sync.
 const SWEEP_AFTER_DAYS: i64 = 30;
@@ -194,6 +194,34 @@ pub(crate) fn put_sync_state(
         ],
     )?;
     Ok(())
+}
+
+/// The versions of the open pull requests of `scope`. A row that does not
+/// parse is skipped and logged.
+pub(crate) fn pr_versions(
+    conn: &Connection,
+    scope: Scope,
+) -> Result<Vec<(PrKey, PrVersion)>, StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT json FROM pull_requests WHERE state = 'OPEN' AND scope = ?1 \
+         ORDER BY owner, name, number",
+    )?;
+    let rows = stmt.query_map(params![scope_text(scope)], |row| row.get::<_, Vec<u8>>(0))?;
+    let mut versions = Vec::new();
+    for row in rows {
+        match serde_json::from_slice::<PullRequest>(&row?) {
+            Ok(pr) => versions.push((
+                pr.key,
+                PrVersion {
+                    updated_at: pr.head.value.updated_at,
+                    head_oid: pr.head.value.head_oid,
+                    observed_at: pr.head.observed_at,
+                },
+            )),
+            Err(err) => tracing::warn!(%err, "cached pull request does not parse, skipped"),
+        }
+    }
+    Ok(versions)
 }
 
 /// Writes the conversation of a pull request. `fetched_at` is the time

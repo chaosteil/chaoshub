@@ -70,6 +70,16 @@ pub(crate) struct SyncState {
     pub last_error: Option<String>,
 }
 
+/// The version of a pull request that the sync worker knows. A search
+/// result with another `updated_at` or `head_oid` is a change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PrVersion {
+    pub updated_at: DateTime<Utc>,
+    pub head_oid: String,
+    /// The time when the head was observed.
+    pub observed_at: DateTime<Utc>,
+}
+
 impl Store {
     /// Opens the cache at `path`, reads the snapshot directly, then moves
     /// the connection to the store thread.
@@ -456,6 +466,40 @@ mod tests {
         .unwrap();
         let snapshot = rows::load_snapshot(&conn).unwrap();
         assert_eq!(snapshot.prs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pr_versions_reads_the_open_rows_of_the_scope() {
+        let (_, handle) = Store::open(Path::new(":memory:")).unwrap();
+        let t = test_time();
+        let open = sample_pr(1, PrState::Open, t);
+        let merged = sample_pr(2, PrState::Merged, t);
+        let team = sample_pr(3, PrState::Open, t);
+        handle
+            .put_prs(Scope::Mine, vec![open.clone(), merged])
+            .await
+            .unwrap();
+        handle.put_prs(Scope::Team, vec![team]).await.unwrap();
+        handle
+            .exec(
+                "INSERT INTO pull_requests(owner, name, number, scope, state, synced_at, json) \
+                 VALUES ('o', 'r', 4, 'mine', 'OPEN', '2026-10-30T12:00:00Z', x'00')",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle.pr_versions(Scope::Mine).await.unwrap(),
+            [(
+                open.key,
+                PrVersion {
+                    updated_at: t,
+                    head_oid: "oid1".into(),
+                    observed_at: t,
+                }
+            )]
+        );
+        assert_eq!(handle.pr_versions(Scope::Team).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
