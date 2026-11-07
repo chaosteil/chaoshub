@@ -132,6 +132,7 @@ pub(crate) fn render(
         inner.width,
         inner.height - header,
     );
+    hits.push_text(body);
     pane::render(
         popup.pane,
         popup.cursor,

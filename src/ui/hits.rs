@@ -1,15 +1,18 @@
 //! The hit map: the targets that `ui` drew, and the cells of each one.
 //! `run` keeps the map of the last frame and finds the target under the
-//! mouse with it.
+//! mouse with it. The map also keeps the text areas, where a mouse drag
+//! selects text.
 
 use ratatui::layout::{Position, Rect};
 
 use crate::bus::Hit;
 
-/// The regions of the drawn targets, in draw order.
+/// The regions of the drawn targets and the drawn text areas, in draw
+/// order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct HitMap {
     regions: Vec<(Rect, Hit)>,
+    text: Vec<Rect>,
 }
 
 impl HitMap {
@@ -41,9 +44,27 @@ impl HitMap {
             .map(|&(rect, _)| rect)
     }
 
-    /// Removes every region.
+    /// Adds a text area. A later area covers the areas before it.
+    pub(crate) fn push_text(&mut self, rect: Rect) {
+        if !rect.is_empty() {
+            self.text.push(rect);
+        }
+    }
+
+    /// The text area at the cell `x`, `y`: the last area that contains
+    /// the cell. `None` when no area contains it.
+    pub(crate) fn text_at(&self, x: u16, y: u16) -> Option<Rect> {
+        self.text
+            .iter()
+            .rev()
+            .find(|rect| rect.contains(Position { x, y }))
+            .copied()
+    }
+
+    /// Removes every region and every text area.
     pub(crate) fn clear(&mut self) {
         self.regions.clear();
+        self.text.clear();
     }
 }
 
@@ -67,5 +88,21 @@ mod tests {
         assert_eq!(hits.at(20, 20), None);
         hits.clear();
         assert_eq!(hits.at(1, 1), None);
+    }
+
+    #[test]
+    fn the_last_text_area_wins() {
+        let mut hits = HitMap::default();
+        let below = Rect::new(0, 0, 10, 10);
+        let above = Rect::new(5, 5, 10, 10);
+        hits.push_text(below);
+        hits.push_text(above);
+        hits.push_text(Rect::new(1, 1, 0, 3));
+        assert_eq!(hits.text_at(1, 1), Some(below), "an empty rect is no area");
+        assert_eq!(hits.text_at(6, 6), Some(above));
+        assert_eq!(hits.text_at(20, 20), None);
+        assert_eq!(hits.at(6, 6), None, "a text area is no hit");
+        hits.clear();
+        assert_eq!(hits.text_at(6, 6), None);
     }
 }

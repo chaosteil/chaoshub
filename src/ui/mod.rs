@@ -15,6 +15,7 @@ mod picker;
 mod popup;
 mod prompt;
 mod review;
+pub(crate) mod select;
 mod status;
 mod style;
 mod tabbar;

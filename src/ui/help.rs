@@ -80,6 +80,7 @@ pub(crate) fn render(
         inner.width.saturating_sub(2),
         inner.height.saturating_sub(1),
     );
+    hits.push_text(inner);
     let width = usize::from(inner.width);
     let lines = help_lines(model);
     let rows = usize::from(inner.height);
