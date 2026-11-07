@@ -23,11 +23,11 @@
 //!
 //! A sync has two phases. Phase 1 reads the stubs of the search: the
 //! light data of each pull request (`id`, `number`, repo, `state`,
-//! `updatedAt`, `headRefOid`), 100 per page, until no page is left or the
-//! stubs reach 500. The worker compares each stub with the version that
-//! it knows of the pull request (`updated_at`, `head_oid`, `observed_at`).
-//! Phase 2 reads the full fields of the new and the changed pull requests
-//! by node id, 20 per request. A full sync also reads again at most 40
+//! `updatedAt`, `headRefOid`), at most 100 per page, until no page is
+//! left or the stubs reach 500. The worker compares each stub with the
+//! version that it knows of the pull request (`updated_at`, `head_oid`,
+//! `observed_at`). Phase 2 reads the full fields of the new and the
+//! changed pull requests by node id, at most 10 per request. A full sync also reads again at most 40
 //! pull requests whose known version is older than 1 h, oldest first, so
 //! the merge state and old cache rows stay up to date. At its first sync
 //! of a scope, the worker loads the known versions from the cache.
@@ -39,6 +39,13 @@
 //! also deletes the `gone` rows from the cache: the open pull requests
 //! that the worker knows and that the result does not hold. The worker
 //! sends the `Msg` first and writes the store second.
+//!
+//! GitHub stops a GraphQL request after about 10 s, with a 502 or a 504.
+//! After such a timeout, the worker halves the page size of phase 1 (to
+//! at least 10) or the batch size of phase 2 (to at least 5), and sends
+//! the same request again. A timeout at the smallest size stops the sync
+//! with that error. The smaller size stays for the next syncs of the
+//! scope until the worker restarts.
 //!
 //! When the first page fails, the worker sends only `SyncFailed`. When a
 //! later request fails, the sync is incomplete: the worker sends the end
@@ -60,6 +67,7 @@ use crate::domain::keys::PrKey;
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::repo::Repo;
 use crate::github::GithubError;
+use crate::github::PrStubPage;
 use crate::github::budget::RateBudget;
 use crate::github::parse::Me;
 use crate::store::PrVersion;
@@ -76,11 +84,18 @@ pub(crate) const WORKER: Worker = Worker {
 /// The most stubs of one search.
 const MAX_RESULTS: usize = 500;
 
-/// The stubs per page of phase 1.
-const PAGE_SIZE: u32 = 100;
+/// The stubs per page of phase 1 at the start.
+const PAGE_CAP: u32 = 100;
 
-/// The pull requests per request of phase 2.
-const BATCH_SIZE: usize = 20;
+/// The smallest page size of phase 1 after timeouts.
+const MIN_PAGE_CAP: u32 = 10;
+
+/// The pull requests per request of phase 2 at the start. 20 took more
+/// than 5 s for `rust-lang/rust`; 10 took less than 5 s.
+const BATCH_CAP: usize = 10;
+
+/// The smallest batch size of phase 2 after timeouts.
+const MIN_BATCH_CAP: usize = 5;
 
 /// The age of a known version after which a full sync reads the pull
 /// request again, so the merge state and old cache rows stay up to date.
@@ -219,13 +234,28 @@ async fn run_pinned(
 }
 
 /// What the worker remembers of one scope.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ScopeState {
     /// The versions of the open pull requests that the worker knows in
     /// this scope.
     known: HashMap<PrKey, PrVersion>,
     /// True after the worker loaded the cached versions into `known`.
     seeded: bool,
+    /// The page size of phase 1. A timeout halves it.
+    page_cap: u32,
+    /// The batch size of phase 2. A timeout halves it.
+    batch_cap: usize,
+}
+
+impl Default for ScopeState {
+    fn default() -> Self {
+        Self {
+            known: HashMap::new(),
+            seeded: false,
+            page_cap: PAGE_CAP,
+            batch_cap: BATCH_CAP,
+        }
+    }
 }
 
 impl ScopeState {
@@ -419,7 +449,7 @@ impl Syncer {
     }
 
     /// Runs the two phases of the search `query`. Phase 1 reads the stubs,
-    /// `PAGE_SIZE` per page, until no page is left or the stubs reach
+    /// `page_cap` per page, until no page is left or the stubs reach
     /// `MAX_RESULTS`. After each page, phase 2 reads the new and the
     /// changed pull requests of the page. In a full sync (`refetch`),
     /// phase 2 at the end also reads the unchanged pull requests whose
@@ -444,7 +474,7 @@ impl Syncer {
         if self.ctx.tx.send(Msg::SyncStarted { scope }).await.is_err() {
             return Ok(None);
         }
-        let mut page = self.ctx.client.list_prs(query, PAGE_SIZE, None).await?;
+        let mut page = self.list_page(scope, query, None).await?;
         let started_at = page.started_at;
         let mut pages = Pages {
             prs: Vec::new(),
@@ -489,12 +519,7 @@ impl Syncer {
                 pages.complete = false;
                 break;
             }
-            page = match self
-                .ctx
-                .client
-                .list_prs(query, PAGE_SIZE, Some(&after))
-                .await
-            {
+            page = match self.list_page(scope, query, Some(after.as_str())).await {
                 Ok(page) => page,
                 Err(err) => return Ok(Some(pages.failed(err))),
             };
@@ -512,10 +537,35 @@ impl Syncer {
         }
     }
 
-    /// Phase 2: reads the pull requests `ids` by node id, `BATCH_SIZE` per
-    /// request. After each batch, it sends `Rate` and a `PrsSynced` with
-    /// the pull requests, writes them into the cache, records their
-    /// versions, and adds them to `pages`. `Ok(false)` when `app` is gone.
+    /// Phase 1: reads one page of the search `query` after the cursor
+    /// `after`, `page_cap` stubs per page. After a timeout, it halves
+    /// `page_cap` and sends the same request again. A timeout at
+    /// `MIN_PAGE_CAP` is an error.
+    async fn list_page(
+        &mut self,
+        scope: Scope,
+        query: &str,
+        after: Option<&str>,
+    ) -> Result<PrStubPage, GithubError> {
+        loop {
+            let cap = self.state(scope).page_cap;
+            match self.ctx.client.list_prs(query, cap, after).await {
+                Err(err) if err.is_timeout() && cap > MIN_PAGE_CAP => {
+                    let cap = (cap / 2).max(MIN_PAGE_CAP);
+                    self.state(scope).page_cap = cap;
+                    tracing::warn!(?scope, page_cap = cap, %err, "GraphQL timeout, smaller pages");
+                }
+                result => return result,
+            }
+        }
+    }
+
+    /// Phase 2: reads the pull requests `ids` by node id, `batch_cap` per
+    /// request. After a timeout, it halves `batch_cap` and sends the same
+    /// ids again. A timeout at `MIN_BATCH_CAP` is an error. After each
+    /// batch, it sends `Rate` and a `PrsSynced` with the pull requests,
+    /// writes them into the cache, records their versions, and adds them
+    /// to `pages`. `Ok(false)` when `app` is gone.
     async fn fetch(
         &mut self,
         scope: Scope,
@@ -523,8 +573,21 @@ impl Syncer {
         me: &Me<'_>,
         pages: &mut Pages,
     ) -> Result<bool, GithubError> {
-        for batch in ids.chunks(BATCH_SIZE) {
-            let (prs, rate) = self.ctx.client.pr_by_ids(batch, me).await?;
+        let mut rest = ids;
+        while !rest.is_empty() {
+            let cap = self.state(scope).batch_cap;
+            let (batch, after) = rest.split_at(cap.min(rest.len()));
+            let (prs, rate) = match self.ctx.client.pr_by_ids(batch, me).await {
+                Ok(ok) => ok,
+                Err(err) if err.is_timeout() && cap > MIN_BATCH_CAP => {
+                    let cap = (cap / 2).max(MIN_BATCH_CAP);
+                    self.state(scope).batch_cap = cap;
+                    tracing::warn!(?scope, batch_cap = cap, %err, "GraphQL timeout, smaller batches");
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+            rest = after;
             if !self.rate(rate).await {
                 return Ok(false);
             }
@@ -1300,6 +1363,107 @@ mod tests {
         assert!(syncer.mine.seeded);
         assert!(syncer.mine.known.contains_key(&key(1589)));
         assert_eq!(by_ids(&server).await, [[ID_1587, ID_1586]]);
+    }
+
+    #[tokio::test]
+    async fn a_timeout_halves_the_page_size_for_this_and_the_next_syncs() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("\"after\":null"))
+            .respond_with(ResponseTemplate::new(502))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        serve_page1(&server).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let mut syncer = Syncer::new(ctx);
+
+        assert!(syncer.full(Scope::Mine).await);
+        assert_eq!(synced(&mut harness).await.1, [1589, 1587, 1586]);
+        assert!(syncer.full(Scope::Mine).await);
+        synced(&mut harness).await;
+        let firsts: Vec<u64> = searches(&server)
+            .await
+            .into_iter()
+            .map(|(_, first)| first)
+            .collect();
+        assert_eq!(firsts, [100, 50, 50]);
+        assert_eq!(syncer.mine.page_cap, 50);
+    }
+
+    #[tokio::test]
+    async fn a_timeout_of_a_batch_sends_the_same_ids_again_in_two_halves() {
+        let server = MockServer::start().await;
+        serve_searches(&server, stub_page(10, false), stub_page(10, false)).await;
+        let page1: Value = serde_json::from_str(PAGE1).unwrap();
+        let template = &page1["data"]["search"]["nodes"][0];
+        let nodes: Vec<Value> = (1000..1010)
+            .map(|number| {
+                let mut node = template.clone();
+                node["id"] = json!(format!("PR_{number}"));
+                node["number"] = json!(number);
+                node["state"] = json!("OPEN");
+                node
+            })
+            .collect();
+        Mock::given(method("POST"))
+            .and(body_string_contains("query PrByIds"))
+            .respond_with(ResponseTemplate::new(504))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        serve_by_ids(&server, nodes).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let mut syncer = Syncer::new(ctx);
+
+        assert!(syncer.full(Scope::Team).await);
+        assert_eq!(
+            sync_pages(&mut harness).await.1,
+            [
+                vec![1000, 1001, 1002, 1003, 1004],
+                vec![1005, 1006, 1007, 1008, 1009]
+            ]
+        );
+        let ids: Vec<String> = (1000..1010).map(|number| format!("PR_{number}")).collect();
+        assert_eq!(
+            by_ids(&server).await,
+            [ids.clone(), ids[..5].to_vec(), ids[5..].to_vec()]
+        );
+        assert_eq!(syncer.team.batch_cap, MIN_BATCH_CAP);
+    }
+
+    #[tokio::test]
+    async fn a_timeout_at_the_smallest_page_size_fails_the_sync() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(502))
+            .mount(&server)
+            .await;
+        let (ctx, mut harness) = logged_in(&server);
+        let mut syncer = Syncer::new(ctx);
+        syncer.mine.page_cap = MIN_PAGE_CAP;
+
+        assert!(syncer.full(Scope::Mine).await);
+        assert_eq!(
+            harness.recv().await,
+            Msg::SyncStarted { scope: Scope::Mine }
+        );
+        match harness.recv().await {
+            Msg::SyncFailed {
+                scope: Some(Scope::Mine),
+                ..
+            } => {}
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            searches(&server).await,
+            [(
+                "is:pr is:open author:chaosteil repo:acme/deploy".to_owned(),
+                u64::from(MIN_PAGE_CAP)
+            )]
+        );
     }
 
     #[tokio::test]

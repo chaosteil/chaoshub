@@ -16,7 +16,7 @@ use reqwest::header::HeaderMap;
 use reqwest::{RequestBuilder, Response, StatusCode};
 
 pub(crate) use crate::github::error::GithubError;
-pub(crate) use crate::github::queries::ReviewEvent;
+pub(crate) use crate::github::queries::{PrStubPage, ReviewEvent};
 pub(crate) use crate::github::token::TokenSource;
 
 /// The API root of github.com.
