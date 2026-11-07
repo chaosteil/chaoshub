@@ -15,7 +15,7 @@ use crate::app::keymap::{self, Keymap};
 use crate::app::layout::Areas;
 use crate::app::models::{Cell, CellStyle, PaneModel, RowItem};
 use crate::app::nav::{self, Motion};
-use crate::app::panes::{PANES, Pane, PaneState, applicable, display_rows, items};
+use crate::app::panes::{PANES, Pane, PaneState, applicable, display_rows, init_states, items};
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
@@ -591,6 +591,16 @@ fn open_selected(state: &mut AppState, tabs: &[Box<dyn Tab>], panes: &[Box<dyn P
     open_popup(state, panes, &target, None)
 }
 
+/// Opens the popup of the pull request `key` that a pane asked for, on
+/// top of the overlays. Nothing opens when `key` is `None` or the pull
+/// request is not loaded.
+fn open_pr(state: &mut AppState, panes: &[Box<dyn Pane>], key: Option<&PrKey>) -> Vec<Cmd> {
+    let Some(target) = key.and_then(|key| pr_target(&state.data, key)) else {
+        return Vec::new();
+    };
+    open_popup(state, panes, &target, None)
+}
+
 /// Opens `chaoshub pr OWNER/NAME NUMBER` for `target` in the detail
 /// pane. A second open of the same pull request focuses its pane. One
 /// detail pane is open at a time, so the pane of another pull request
@@ -679,7 +689,7 @@ fn open_popup(
             OverlayState::Popup(PopupState {
                 key: pr.key.clone(),
                 active,
-                panes: panes.iter().map(|pane| pane.init_state()).collect(),
+                panes: init_states(panes, Some(target)),
             }),
         ),
     }
@@ -1322,7 +1332,9 @@ fn overlay_key(
             if let Some((id, spec)) = handled.confirm {
                 open_confirm(state, &key, id, spec);
             }
-            pane_cmds(state, handled.cmds)
+            let mut cmds = pane_cmds(state, handled.cmds);
+            cmds.extend(open_pr(state, panes, handled.open_pr.as_ref()));
+            cmds
         }
         OverlayState::Authors(picker) => {
             if let Some(motion) = motion(keymap, chord) {
@@ -1639,7 +1651,9 @@ fn click_pane_row(
         state.bump();
     }
     state.ui.ui_events.extend(handled.events);
-    handled.cmds
+    let mut cmds = handled.cmds;
+    cmds.extend(open_pr(state, panes, handled.open_pr.as_ref()));
+    cmds
 }
 
 /// A click on the item at `index` of the actions menu: it runs that
@@ -1778,13 +1792,14 @@ pub(crate) fn start(state: &mut AppState) {
 /// pinned pull request.
 pub(crate) fn pin(state: &mut AppState, key: PrKey) {
     state.ui.pinned = Some(key.clone());
+    let panes = init_states(&PANES, pr_target(&state.data, &key).as_ref());
     state.ui.overlays.push(Overlay {
         kind: OverlayKind::Popup,
         closing: false,
         state: OverlayState::Popup(PopupState {
             key,
             active: 0,
-            panes: PANES.iter().map(|pane| pane.init_state()).collect(),
+            panes,
         }),
     });
     state.bump();
@@ -2851,6 +2866,7 @@ mod tests {
             events: vec![UiEvent::StatusExpired],
             changed: true,
             confirm: None,
+            open_pr: None,
         };
         let (tabs, mut state) = setup(Some(handled));
         let j = press(KeyCode::Char('z'), KeyModifiers::NONE);
@@ -5392,6 +5408,70 @@ mod tests {
     /// default keys.
     fn send_with(state: &mut AppState, panes: &[Box<dyn Pane>], msg: Msg) -> Vec<Cmd> {
         update_full(state, &Keymap::default(), &TABS, panes, &REGISTRY, msg)
+    }
+
+    /// The key of each popup of the overlays that is not closing, from
+    /// the bottom.
+    fn popup_keys(state: &AppState) -> Vec<u64> {
+        state
+            .ui
+            .overlays
+            .iter()
+            .filter(|o| !o.closing)
+            .filter_map(|o| match &o.state {
+                OverlayState::Popup(popup) => Some(popup.key.number),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn enter_in_the_stack_pane_opens_the_entry_on_top() {
+        let mut state = AppState::new(SIZE);
+        state.load(testdata::mine_snapshot(), Vec::new());
+        let target = pr_target(&state.data, &testdata::pr_key("chaoshub", 102)).unwrap();
+        open_popup(&mut state, &PANES, &target, Some("stack"));
+        let Some(Overlay {
+            state: OverlayState::Popup(popup),
+            ..
+        }) = state.ui.overlays.last()
+        else {
+            panic!("no popup");
+        };
+        assert_eq!(
+            popup.panes[popup.active].cursor, 2,
+            "the cursor starts on #102"
+        );
+        let enter = press(KeyCode::Enter, KeyModifiers::NONE);
+        send_with(
+            &mut state,
+            &PANES,
+            press(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        send_with(&mut state, &PANES, enter.clone());
+        assert_eq!(popup_keys(&state), [102, 103]);
+        let Some(Overlay {
+            state: OverlayState::Popup(popup),
+            ..
+        }) = state.ui.overlays.last()
+        else {
+            panic!("no popup");
+        };
+        assert_eq!(PANES[popup.active].id(), "description");
+        send_with(&mut state, &PANES, press(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(popup_keys(&state), [102], "esc goes back to #102");
+    }
+
+    #[test]
+    fn the_pinned_popup_starts_the_stack_cursor_on_its_entry() {
+        let mut state = AppState::new(SIZE);
+        state.load(testdata::mine_snapshot(), Vec::new());
+        pin(&mut state, testdata::pr_key("chaoshub", 103));
+        let stack = PANES.iter().position(|pane| pane.id() == "stack").unwrap();
+        let Some(OverlayState::Popup(popup)) = state.ui.overlays.first().map(|o| &o.state) else {
+            panic!("no popup");
+        };
+        assert_eq!(popup.panes[stack].cursor, 3);
     }
 
     #[test]
