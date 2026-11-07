@@ -177,7 +177,8 @@ ratio = 50
 
 ### `[merge]`
 
-The settings of the merge action (`m`).
+The settings of the merge action (`m`). The `merge_stack` action (`M`)
+uses the same settings.
 
 ```toml
 [merge]
@@ -389,7 +390,7 @@ every default chord of that binding. An empty value removes the binding.
 
 ```toml
 [keys]
-merge = "M"
+merge = "ctrl-m"
 refresh = "ctrl-r F5"
 toggle_all = ""
 ```
@@ -575,6 +576,7 @@ detail.
 |---|---|---|
 | `review` | `v` | Reviews the pull request in codeview. Needs a repo with a `path`. A second press focuses the open pane. |
 | `merge` | `m` | Merges the pull request after a confirm popup. For a stacked pull request, see the stack merge paragraph below. |
+| `merge_stack` | `M` | Merges the whole stack of the pull request after a confirm popup, from any entry of the stack. It is the same merge as `merge` on the top entry. Hidden for a pull request without a stack. |
 | `approve` | `A` | Approves the pull request. Not for your own pull request. |
 | `request_changes` | `R` | Asks for a message, then requests changes. Not for your own pull request. The message must not be empty. |
 | `rerun_checks` | `x` | Runs the failed checks again. |
@@ -586,7 +588,8 @@ detail.
 | `agent` | `P` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
 | `codeview_send` | none | Sends the chosen codeview comments as one review. The `S` key of the Description pane starts it (see "Codeview comments"). A key that you bind to it opens the Description pane. |
 
-A merge of a stacked pull request includes every entry up to it. The
+A merge of a stacked pull request includes every entry up to it. To
+merge every entry, use `merge_stack` (`M`) from any entry. The
 `[merge] stack` key sets how chaoshub sends the merge. In `auto` mode,
 chaoshub reads the squash defaults of the repo. When they are the PR
 title and the PR body, or when the method is `merge` or `rebase`,
