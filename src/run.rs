@@ -1781,7 +1781,9 @@ mod tests {
     /// The seeded mine app with the close confirm open on the first row.
     fn confirm_app(width: u16, height: u16) -> App {
         let mut app = seeded_app(width, height, crate::app::testdata::mine_snapshot());
+        press(&mut app, ' ');
         press(&mut app, 'X');
+        app.update(Msg::TransitionsDone);
         app
     }
 
@@ -2015,14 +2017,18 @@ mod tests {
     #[test]
     fn close_confirm_100() {
         let mut app = seeded_app(100, 30, crate::app::testdata::mine_snapshot());
+        press(&mut app, ' ');
         press(&mut app, 'X');
+        app.update(Msg::TransitionsDone);
         insta::assert_snapshot!(screen(&mut app));
     }
 
     #[test]
     fn request_changes_prompt_100() {
         let mut app = seeded_app(100, 30, crate::app::testdata::mine_snapshot());
+        press(&mut app, ' ');
         press(&mut app, 'R');
+        app.update(Msg::TransitionsDone);
         for c in "split it".chars() {
             press(&mut app, c);
         }
@@ -2050,7 +2056,9 @@ mod tests {
         for _ in 0..3 {
             press(&mut app, 'j');
         }
+        press(&mut app, ' ');
         press(&mut app, 'P');
+        app.update(Msg::TransitionsDone);
         let key = crate::app::testdata::pr_key("chaoshub", 101);
         let record = |kind: ToolKind, head: &str, data: serde_json::Value| Record {
             version: VERSION,

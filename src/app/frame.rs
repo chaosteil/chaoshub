@@ -120,7 +120,7 @@ pub(crate) fn frame_model_full<'s>(
             },
             list,
             status: status_model(state, tabs),
-            overlays: overlay_models(state, panes),
+            overlays: overlay_models(state, panes, &REGISTRY),
             term: term_status(state),
             filter: filter_model(state),
             hints,
@@ -132,8 +132,13 @@ pub(crate) fn frame_model_full<'s>(
     &state.cache.frame
 }
 
-/// The models of the overlay stack, bottom first.
-fn overlay_models(state: &AppState, panes: &[Box<dyn Pane>]) -> Vec<OverlayModel> {
+/// The models of the overlay stack, bottom first. The actions menu shows
+/// the actions of `actions`.
+fn overlay_models(
+    state: &AppState,
+    panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
+) -> Vec<OverlayModel> {
     let areas = areas(state);
     let pinned = state.ui.pinned.is_some();
     state
@@ -152,6 +157,14 @@ fn overlay_models(state: &AppState, panes: &[Box<dyn Pane>]) -> Vec<OverlayModel
                     items: picker.items(),
                     cursor: picker.cursor,
                 },
+                OverlayState::Actions(menu) => {
+                    let Target::Pr { pr, .. } = &*menu.target;
+                    OverlayContent::Picker {
+                        title: format!("actions for #{}", pr.key.number),
+                        items: menu.items(&state.data, &state.cache.keymap, actions),
+                        cursor: menu.cursor,
+                    }
+                }
                 OverlayState::Confirm { spec, .. } => OverlayContent::Confirm(spec.clone()),
                 OverlayState::Prompt { spec, text, .. } => OverlayContent::Prompt {
                     spec: spec.clone(),
@@ -305,7 +318,7 @@ fn hints_model(
     let hints = match state.ui.overlays.iter().rev().find(|o| !o.closing) {
         Some(overlay) => overlay_hints(&state.data, keymap, panes, actions, &overlay.state),
         None if state.ui.filter_edit => filter_hints(),
-        None => list_hints(state, keymap, tabs, actions, list),
+        None => list_hints(state, keymap, tabs, list),
     };
     Some(KeyHintsModel {
         hints: fit(hints, usize::from(state.data.size.width)),
@@ -313,13 +326,12 @@ fn hints_model(
 }
 
 /// The hints of the list: the app keys, the keys of the active tab and
-/// the actions that are enabled for the cursor row. The primary hints
+/// the `actions` key when the cursor row has a target. The primary hints
 /// come first.
 fn list_hints(
     state: &AppState,
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
-    actions: &[Box<dyn Action>],
     list: &ListModel,
 ) -> Vec<KeyHint> {
     let tab_names: Vec<String> = (1..=tabs.len().min(9))
@@ -348,12 +360,13 @@ fn list_hints(
             chord: Some(chord),
         }));
     }
-    if let Some(target) = list
+    if list
         .rows
         .get(list.cursor)
         .and_then(|row| row_target(&state.data, &row.item))
+        .is_some()
     {
-        hints.extend(action_hints(&state.data, keymap, actions, target));
+        hints.extend(app_hint(keymap, &["actions"], "actions", true));
     }
     hints.sort_by_key(|hint| !hint.primary);
     hints
@@ -368,13 +381,9 @@ fn action_hints(
     actions: &[Box<dyn Action>],
     target: Target,
 ) -> Vec<KeyHint> {
-    let mut selection = Selection {
-        target,
-        me: data.session.login.clone().unwrap_or_default(),
-        action_config: None,
-    };
+    let states = applicability(data, actions, target);
     let mut hints = Vec::new();
-    for action in actions {
+    for (action, state) in actions.iter().zip(states) {
         let primary = match action.hint() {
             Hint::Primary => true,
             Hint::Secondary => false,
@@ -383,8 +392,7 @@ fn action_hints(
         let Some(&chord) = keymap.chords(action.id()).first() else {
             continue;
         };
-        selection.action_config = data.action_config.get(action.id()).cloned();
-        if action.applies(&selection) == Applicability::Enabled {
+        if state == Applicability::Enabled {
             hints.push(KeyHint {
                 key: key_text(chord),
                 label: action.id().replace('_', " "),
@@ -394,6 +402,27 @@ fn action_hints(
         }
     }
     hints
+}
+
+/// Whether each action of `actions` applies to `target`, in registry
+/// order.
+pub(crate) fn applicability(
+    data: &AppData,
+    actions: &[Box<dyn Action>],
+    target: Target,
+) -> Vec<Applicability> {
+    let mut selection = Selection {
+        target,
+        me: data.session.login.clone().unwrap_or_default(),
+        action_config: None,
+    };
+    actions
+        .iter()
+        .map(|action| {
+            selection.action_config = data.action_config.get(action.id()).cloned();
+            action.applies(&selection)
+        })
+        .collect()
 }
 
 /// The hints while the user types the filter: Enter keeps the filter,
@@ -494,6 +523,11 @@ fn overlay_hints(
             app_hint(keymap, &["open"], "select", true),
             app_hint(keymap, &["close_overlay"], "close", true),
         ],
+        OverlayState::Actions(_) => vec![
+            app_hint(keymap, &["down", "up"], "move", true),
+            app_hint(keymap, &["open"], "run", true),
+            app_hint(keymap, &["close_overlay"], "close", true),
+        ],
         OverlayState::Output { .. } | OverlayState::Help { .. } => {
             vec![app_hint(keymap, &["close_overlay"], "close", true)]
         }
@@ -545,7 +579,7 @@ fn keys_text(chords: &[KeyChord]) -> String {
 /// The text of a chord in a hint: the text of the key map, with a
 /// capital first letter when it is longer than one character, for
 /// example `Enter` or `Ctrl-d`.
-fn key_text(chord: KeyChord) -> String {
+pub(crate) fn key_text(chord: KeyChord) -> String {
     let text = keymap::chord_text(chord);
     let mut chars = text.chars();
     match chars.next() {
@@ -1044,6 +1078,35 @@ mod tests {
             right(&state)[1],
             " agent review #7 · agent ask #7 · agent improve #9   "
         );
+    }
+
+    #[test]
+    fn the_list_hints_have_the_actions_key_and_no_action_keys() {
+        let mut state = AppState::new(SIZE);
+        state.load(crate::app::testdata::mine_snapshot(), Vec::new());
+        state.data.session.login = Some("chaosteil".into());
+        let list = active_list(&mut state, &TABS);
+        assert!(
+            row_target(&state.data, &list.rows[list.cursor].item).is_some(),
+            "the cursor row has a target"
+        );
+        let keymap = Keymap::default();
+        let hints = list_hints(&state, &keymap, &TABS, &list);
+        let actions = hints.iter().find(|hint| hint.label == "actions");
+        assert_eq!(
+            actions.map(|hint| (hint.key.as_str(), hint.primary)),
+            Some(("Space", true))
+        );
+        for action in REGISTRY.iter() {
+            let chords = keymap.chords(action.id());
+            assert!(
+                !hints
+                    .iter()
+                    .any(|hint| hint.chord.is_some_and(|chord| chords.contains(&chord))),
+                "no hint of the action {}",
+                action.id()
+            );
+        }
     }
 
     #[test]

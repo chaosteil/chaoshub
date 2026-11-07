@@ -35,6 +35,7 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("page_up", &["ctrl-u"]),
     ("open", &["enter"]),
     ("open_url", &["o"]),
+    ("actions", &["space"]),
     ("close_overlay", &["esc", "q"]),
     ("confirm", &["y"]),
     ("cancel", &["n"]),

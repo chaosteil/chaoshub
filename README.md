@@ -442,6 +442,7 @@ for `[keys]`.
 | `page_down`, `page_up` | `ctrl-d`, `ctrl-u` | Moves one page. |
 | `open` | `enter` | Opens the pull request detail: a Rex pane inside Rex, else the sidebar (see `[detail]`). A second `enter` on the same pull request focuses its pane. In the conversation pane, expands a thread. |
 | `open_url` | `o` | In the checks pane, opens the selected check in the browser. |
+| `actions` | `space` | In the list, opens the actions menu of the selected row (see "Actions"). |
 | `close_overlay` | `esc`, `q` | Closes the sidebar or the overlay. When nothing is open, these keys quit (see `quit`). In the Rex pane of the detail, they quit the pane. |
 | `confirm` | `y` | Confirms in a confirm popup. `enter` also confirms. |
 | `cancel` | `n` | Cancels a confirm popup. |
@@ -556,6 +557,20 @@ The actions work on the pull request of the selected row, or on the
 pull request of the sidebar. When an action cannot run, the status line
 says why.
 
+In the list, the action keys do nothing. Thus a wrong key cannot send a
+review. The `actions` key (`space`) opens the actions menu of the
+selected row. The menu shows each action for the row, with its key. A
+disabled action shows the reason in parentheses. In the menu:
+
+- `j` and `k` move the cursor.
+- `enter` runs the action of the cursor.
+- The key of an action runs that action. For example, `space` then `A`
+  approves the pull request.
+- `esc` or `q` closes the menu.
+
+The action keys work in the actions menu, in the sidebar and in the
+detail.
+
 | Binding | Key | What it does |
 |---|---|---|
 | `review` | `v` | Reviews the pull request in codeview. Needs a repo with a `path`. A second press focuses the open pane. |
@@ -600,10 +615,11 @@ A click acts on what it hits:
 |---|---|
 | A tab in the tab bar | Selects the tab. |
 | A list row | Selects the row. A click on the selected row opens the sidebar. |
-| A key hint | Presses the key. Every action with a hint is clickable, for example `v review`. |
+| A key hint | Presses the key. For example, `Space actions` in the list opens the actions menu, and `v review` in the sidebar opens codeview. |
 | A pane tab in the sidebar | Selects the pane. |
 | A row in a pane | Moves the cursor of the pane to the row. In the conversation pane, a click on the selected thread expands it or collapses it. |
 | An author in the author picker | Picks the author. |
+| An action in the actions menu | Runs the action. |
 | A cell outside of the sidebar or the overlay | Closes it. For a confirm popup, this cancels the action. |
 
 ## pr-agent

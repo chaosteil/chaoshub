@@ -19,6 +19,7 @@ const APP_KEYS: &[(&[&str], &str)] = &[
     (&["top", "bottom"], "top, bottom"),
     (&["page_down", "page_up"], "page down, page up"),
     (&["open"], "open the popup"),
+    (&["actions"], "open the actions menu"),
     (&["close_overlay"], "close the popup"),
     (&["filter"], "filter"),
     (&["authors"], "pick an author"),
@@ -28,8 +29,12 @@ const APP_KEYS: &[(&[&str], &str)] = &[
     (&["quit"], "quit"),
 ];
 
+/// The title of the actions section of the help.
+const ACTIONS_TITLE: &str = "actions (in the sidebar, the detail and the actions menu)";
+
 /// The help model: the app keys, the keys of each tab that has its own,
 /// and the actions. A binding without a chord is not in the app keys.
+/// The title of the actions section tells where the action keys work.
 pub(crate) fn help_model(
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
@@ -49,7 +54,9 @@ pub(crate) fn help_model(
             });
         }
     }
-    sections.push(keymap::action_help(keymap, actions));
+    let mut action_section = keymap::action_help(keymap, actions);
+    ACTIONS_TITLE.clone_into(&mut action_section.title);
+    sections.push(action_section);
     HelpModel { sections }
 }
 
@@ -109,7 +116,7 @@ mod tests {
         let keymap = Keymap::with_actions(&actions, &overrides).unwrap();
         let model = help_model(&keymap, &tabs, &actions);
         let titles: Vec<&str> = model.sections.iter().map(|s| s.title.as_str()).collect();
-        assert_eq!(titles, ["keys", "actions"]);
+        assert_eq!(titles, ["keys", ACTIONS_TITLE]);
         let keys = &model.sections[0].entries;
         assert_eq!(keys[0], entry("1", "tab one"));
         assert_eq!(keys[1], entry("tab", "next tab"));
@@ -140,7 +147,7 @@ mod tests {
         }
         assert_eq!(
             model.sections.last().map(|s| s.title.as_str()),
-            Some("actions")
+            Some(ACTIONS_TITLE)
         );
     }
 }

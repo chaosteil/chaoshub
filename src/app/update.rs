@@ -19,9 +19,9 @@ use crate::app::panes::{PANES, Pane, PaneState, applicable, display_rows, items}
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
-    AUTHOR_KEY, ActionDialog, AppData, AppState, AuthorPicker, COLUMN_HEADERS_KEY, Condition,
-    FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaneHandleState, PopupState,
-    error_text, ui_key,
+    AUTHOR_KEY, ActionDialog, ActionMenu, AppData, AppState, AuthorPicker, COLUMN_HEADERS_KEY,
+    Condition, FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaneHandleState,
+    PopupState, error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, cells, pr_ref};
 use crate::app::target::{pr_target, row_target};
@@ -208,8 +208,8 @@ fn prefetch_batch(state: &mut AppState, done: usize, total: usize) {
     }
 }
 
-/// A key press: the quit keys quit, the app keys and the action keys
-/// act, every other key goes to the active tab. After a handled key, the
+/// A key press: the quit keys quit, the app keys act, every other key
+/// goes to the active tab. After a handled key, the
 /// generation moves when the tab says so, the UI events queue up, and a
 /// changed `Interest` goes to the workers.
 fn key(
@@ -287,8 +287,9 @@ fn key(
         );
         return Vec::new();
     }
-    if let Some(cmds) = action_key(state, keymap, tabs, panes, actions, chord) {
-        return cmds;
+    if keymap.matches("actions", chord) {
+        open_actions(state, tabs, actions);
+        return Vec::new();
     }
     let index = state.ui.active;
     let areas = frame::areas(state);
@@ -313,28 +314,90 @@ fn key(
     cmds
 }
 
-/// An action key on the cursor row. `None` when no action has the key,
-/// when the row has no target, or when the action is hidden for it; the
-/// key then goes to the tab.
-fn action_key(
+/// Opens the actions menu of the cursor row: one item for each action
+/// that is not hidden for its target, in registry order. A row without a
+/// target opens nothing.
+fn open_actions(state: &mut AppState, tabs: &[Box<dyn Tab>], actions: &[Box<dyn Action>]) {
+    let model = frame::active_list(state, tabs);
+    let Some(target) = model
+        .rows
+        .get(model.cursor)
+        .and_then(|row| row_target(&state.data, &row.item))
+    else {
+        return;
+    };
+    let ids = actions
+        .iter()
+        .zip(frame::applicability(&state.data, actions, target.clone()))
+        .filter(|(_, applies)| *applies != Applicability::Hidden)
+        .map(|(action, _)| action.id())
+        .collect();
+    open_overlay(
+        state,
+        OverlayKind::Picker,
+        OverlayState::Actions(ActionMenu {
+            target: Box::new(target),
+            ids,
+            cursor: 0,
+        }),
+    );
+}
+
+/// A key for the actions menu on top of the overlay stack: the motion
+/// keys move the cursor, `open` runs the action of the cursor, and the
+/// key of an action in the menu runs that action.
+fn action_menu_key(
     state: &mut AppState,
     keymap: &Keymap,
-    tabs: &[Box<dyn Tab>],
     panes: &[Box<dyn Pane>],
     actions: &[Box<dyn Action>],
     chord: KeyChord,
-) -> Option<Vec<Cmd>> {
-    actions
-        .iter()
-        .find(|action| keymap.matches(action.id(), chord))?;
-    let model = frame::active_list(state, tabs);
-    let item = &model.rows.get(model.cursor)?.item;
-    let target = row_target(&state.data, item)?;
-    run_action_key(state, keymap, panes, actions, target, chord)
+) -> Vec<Cmd> {
+    let Some(Overlay {
+        state: OverlayState::Actions(menu),
+        ..
+    }) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing)
+    else {
+        return Vec::new();
+    };
+    if let Some(motion) = motion(keymap, chord) {
+        menu.cursor = move_in(menu.cursor, menu.ids.len(), motion);
+        state.bump();
+        return Vec::new();
+    }
+    let id = if keymap.matches("open", chord) {
+        menu.ids.get(menu.cursor).copied()
+    } else {
+        menu.ids
+            .iter()
+            .copied()
+            .find(|id| keymap.matches(id, chord))
+    };
+    let Some(id) = id else {
+        return Vec::new();
+    };
+    let target = (*menu.target).clone();
+    run_menu_action(state, panes, actions, id, target)
 }
 
-/// An action key on `target`: `applies`, then `prepare`, then the route
-/// of the preparation. `None` when no action has the key, or when the
+/// Closes the actions menu and runs the action `id` on `target`.
+fn run_menu_action(
+    state: &mut AppState,
+    panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
+    id: &'static str,
+    target: Target,
+) -> Vec<Cmd> {
+    close_overlay(state);
+    actions
+        .iter()
+        .find(|action| action.id() == id)
+        .and_then(|action| run_action(state, panes, action.as_ref(), target))
+        .unwrap_or_default()
+}
+
+/// An action key on `target`: the action of the key runs as
+/// `run_action` runs it. `None` when no action has the key, or when the
 /// action is hidden for the target.
 fn run_action_key(
     state: &mut AppState,
@@ -347,6 +410,18 @@ fn run_action_key(
     let action = actions
         .iter()
         .find(|action| keymap.matches(action.id(), chord))?;
+    run_action(state, panes, action.as_ref(), target)
+}
+
+/// The action `action` on `target`: `applies`, then `prepare`, then the
+/// route of the preparation. `None` when the action is hidden for the
+/// target.
+fn run_action(
+    state: &mut AppState,
+    panes: &[Box<dyn Pane>],
+    action: &dyn Action,
+    target: Target,
+) -> Option<Vec<Cmd>> {
     let id = action.id();
     let selection = Selection {
         target,
@@ -1260,6 +1335,7 @@ fn overlay_key(
             let (tab, author) = (picker.tab, picker.chosen());
             pick_author(state, tabs, tab, author)
         }
+        OverlayState::Actions(_) => action_menu_key(state, keymap, panes, actions, chord),
         OverlayState::Confirm { action, .. } => {
             if keymap.matches("cancel", chord) {
                 close_overlay(state);
@@ -1338,6 +1414,7 @@ fn scroll_text(overlay: &mut OverlayState, motion: Motion) -> bool {
         }
         OverlayState::Popup(_)
         | OverlayState::Authors(_)
+        | OverlayState::Actions(_)
         | OverlayState::Confirm { .. }
         | OverlayState::Prompt { .. }
         | OverlayState::Choose { .. }
@@ -1432,7 +1509,8 @@ fn click(
             Vec::new()
         }
         Hit::PaneRow(index) => click_pane_row(state, keymap, panes, index),
-        Hit::Item(index) => click_item(state, tabs, index),
+        Hit::Item(index) => click_action(state, panes, actions, index)
+            .unwrap_or_else(|| click_item(state, tabs, index)),
         Hit::Outside => {
             if !pinned_on_top(state) {
                 close_overlay(state);
@@ -1551,6 +1629,30 @@ fn click_pane_row(
     }
     state.ui.ui_events.extend(handled.events);
     handled.cmds
+}
+
+/// A click on the item at `index` of the actions menu: it runs that
+/// item, as Enter does on the cursor item. `None` when the top overlay is
+/// not the actions menu.
+fn click_action(
+    state: &mut AppState,
+    panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
+    index: usize,
+) -> Option<Vec<Cmd>> {
+    let Some(Overlay {
+        state: OverlayState::Actions(menu),
+        ..
+    }) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing)
+    else {
+        return None;
+    };
+    let Some(&id) = menu.ids.get(index) else {
+        return Some(Vec::new());
+    };
+    menu.cursor = index;
+    let target = (*menu.target).clone();
+    Some(run_menu_action(state, panes, actions, id, target))
 }
 
 /// A click on the item at `index` of the author picker: it picks that
@@ -3850,6 +3952,7 @@ mod tests {
             .and_then(|o| match &o.state {
                 OverlayState::Authors(picker) => Some(picker),
                 OverlayState::Popup(_)
+                | OverlayState::Actions(_)
                 | OverlayState::Confirm { .. }
                 | OverlayState::Prompt { .. }
                 | OverlayState::Choose { .. }
@@ -4459,6 +4562,13 @@ mod tests {
         act_with(state, actions, &keymap, code)
     }
 
+    /// `space`, then a key press: the action of the key from the actions
+    /// menu of the cursor row.
+    fn act_menu(state: &mut AppState, actions: &[Box<dyn Action>], code: KeyCode) -> Vec<Cmd> {
+        assert_eq!(act(state, actions, KeyCode::Char(' ')), vec![]);
+        act(state, actions, code)
+    }
+
     fn act_with(
         state: &mut AppState,
         actions: &[Box<dyn Action>],
@@ -4501,14 +4611,14 @@ mod tests {
         let mut selection = pr_selection(&state, 102);
         selection.action_config = Some(table);
         assert_eq!(
-            act(&mut state, &actions, KeyCode::Char('A')),
+            act_menu(&mut state, &actions, KeyCode::Char('A')),
             vec![Cmd::RunAction {
                 id: "approve",
                 selection,
                 input: ActionInput::None,
             }]
         );
-        assert!(state.ui.overlays.is_empty());
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
     }
 
     #[test]
@@ -4530,7 +4640,7 @@ mod tests {
         browser.prepare = Prepare::Command(Cmd::OpenUrl("https://example.com".into()));
         let actions: Vec<Box<dyn Action>> = vec![Box::new(review), Box::new(browser)];
         assert_eq!(
-            act(&mut state, &actions, KeyCode::Char('v')),
+            act_menu(&mut state, &actions, KeyCode::Char('v')),
             vec![Cmd::RunTerminal {
                 id: "review",
                 key: TargetKey::Pr(testdata::pr_key("chaoshub", 99)),
@@ -4538,7 +4648,7 @@ mod tests {
             }]
         );
         assert_eq!(
-            act(&mut state, &actions, KeyCode::Char('o')),
+            act_menu(&mut state, &actions, KeyCode::Char('o')),
             vec![Cmd::OpenUrl("https://example.com".into())]
         );
     }
@@ -4551,13 +4661,13 @@ mod tests {
         let mut hidden = FakeAction::new("hidden", 'h');
         hidden.applies = Applicability::Hidden;
         let actions: Vec<Box<dyn Action>> = vec![Box::new(merge), Box::new(hidden)];
-        assert_eq!(act(&mut state, &actions, KeyCode::Char('m')), vec![]);
+        assert_eq!(act_menu(&mut state, &actions, KeyCode::Char('m')), vec![]);
         assert_eq!(
             state.ui.status.as_ref().map(|msg| msg.text.as_str()),
             Some("stack not loaded")
         );
         state.ui.status = None;
-        assert_eq!(act(&mut state, &actions, KeyCode::Char('h')), vec![]);
+        assert_eq!(act_menu(&mut state, &actions, KeyCode::Char('h')), vec![]);
         assert_eq!(state.ui.status, None, "a hidden action says nothing");
     }
 
@@ -4576,6 +4686,146 @@ mod tests {
         assert_eq!(act(&mut state, &actions, KeyCode::Char('A')), vec![]);
     }
 
+    /// The actions menu on top of the overlay stack, when it is not
+    /// closing.
+    fn action_menu(state: &AppState) -> Option<&ActionMenu> {
+        match state.ui.overlays.iter().rev().find(|o| !o.closing) {
+            Some(Overlay {
+                state: OverlayState::Actions(menu),
+                ..
+            }) => Some(menu),
+            _ => None,
+        }
+    }
+
+    /// An enabled `approve` on `A`, a disabled `merge` on `m` and a hidden
+    /// `hidden` on `h`.
+    fn menu_actions() -> Vec<Box<dyn Action>> {
+        let mut merge = FakeAction::new("merge", 'm');
+        merge.applies = Applicability::Disabled("stack not loaded");
+        let mut hidden = FakeAction::new("hidden", 'h');
+        hidden.applies = Applicability::Hidden;
+        vec![
+            Box::new(FakeAction::new("approve", 'A')),
+            Box::new(merge),
+            Box::new(hidden),
+        ]
+    }
+
+    #[test]
+    fn an_action_key_on_a_list_row_does_nothing() {
+        let mut state = action_state(&pr_row(102));
+        let actions = fake(FakeAction::new("approve", 'A'));
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('A')), vec![]);
+        assert!(state.ui.overlays.is_empty());
+    }
+
+    #[test]
+    fn space_opens_the_menu_without_the_hidden_actions() {
+        let mut state = action_state(&pr_row(102));
+        let actions = menu_actions();
+        state.ui.ui_events.clear();
+        assert_eq!(act(&mut state, &actions, KeyCode::Char(' ')), vec![]);
+        assert_eq!(
+            state.ui.ui_events,
+            vec![UiEvent::OverlayOpened(OverlayKind::Picker)]
+        );
+        let Some(menu) = action_menu(&state) else {
+            panic!("the actions menu opens");
+        };
+        assert_eq!(menu.ids, ["approve", "merge"]);
+        assert_eq!(menu.cursor, 0);
+        let keymap = Keymap::with_actions(&actions, &std::collections::BTreeMap::new()).unwrap();
+        assert_eq!(
+            menu.items(&state.data, &keymap, &actions),
+            ["A  approve", "m  merge (stack not loaded)"]
+        );
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('h')), vec![]);
+        assert!(action_menu(&state).is_some(), "a hidden key does nothing");
+    }
+
+    #[test]
+    fn space_then_a_key_runs_the_action_as_the_sidebar_does() {
+        let actions = fake(FakeAction::new("approve", 'A'));
+        let mut state = sidebar_state(102, &actions);
+        let from_sidebar = act(&mut state, &actions, KeyCode::Char('A'));
+        let mut state = action_state(&pr_row(102));
+        let from_menu = act_menu(&mut state, &actions, KeyCode::Char('A'));
+        assert!(matches!(
+            from_menu.as_slice(),
+            [Cmd::RunAction { id: "approve", .. }]
+        ));
+        assert_eq!(from_menu, from_sidebar);
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
+    }
+
+    #[test]
+    fn enter_runs_the_cursor_item_and_esc_closes_the_menu() {
+        let mut state = action_state(&pr_row(102));
+        let actions: Vec<Box<dyn Action>> = vec![
+            Box::new(FakeAction::new("approve", 'A')),
+            Box::new(FakeAction::new("draft", 'd')),
+        ];
+        assert_eq!(act(&mut state, &actions, KeyCode::Char(' ')), vec![]);
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('j')), vec![]);
+        assert_eq!(action_menu(&state).map(|menu| menu.cursor), Some(1));
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Enter),
+            vec![Cmd::RunAction {
+                id: "draft",
+                selection: pr_selection(&state, 102),
+                input: ActionInput::None,
+            }]
+        );
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
+        run_msg(&mut state, &actions, Msg::TransitionsDone);
+        assert_eq!(act(&mut state, &actions, KeyCode::Char(' ')), vec![]);
+        assert!(action_menu(&state).is_some());
+        assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
+    }
+
+    #[test]
+    fn a_click_on_a_menu_item_runs_it() {
+        let mut state = action_state(&pr_row(102));
+        let actions: Vec<Box<dyn Action>> = vec![
+            Box::new(FakeAction::new("approve", 'A')),
+            Box::new(FakeAction::new("draft", 'd')),
+        ];
+        let keymap = Keymap::with_actions(&actions, &std::collections::BTreeMap::new()).unwrap();
+        assert_eq!(act(&mut state, &actions, KeyCode::Char(' ')), vec![]);
+        let cmds = update_full(
+            &mut state,
+            &keymap,
+            &TABS,
+            &PANES,
+            &actions,
+            click_on(Hit::Item(1)),
+        );
+        assert_eq!(
+            cmds,
+            vec![Cmd::RunAction {
+                id: "draft",
+                selection: pr_selection(&state, 102),
+                input: ActionInput::None,
+            }]
+        );
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
+    }
+
+    #[test]
+    fn space_on_a_row_without_a_target_does_nothing() {
+        let mut state = action_state(&|_| RowItem::StackHeader {
+            stack_id: "S_1".into(),
+        });
+        state.ui.tabs[0].cursor = 0;
+        let actions = fake(FakeAction::new("approve", 'A'));
+        let generation = state.generation;
+        assert_eq!(act(&mut state, &actions, KeyCode::Char(' ')), vec![]);
+        assert!(state.ui.overlays.is_empty());
+        assert_eq!(state.generation, generation);
+    }
+
     #[test]
     fn a_confirm_opens_the_popup_and_y_or_enter_runs() {
         let mut state = action_state(&pr_row(102));
@@ -4588,7 +4838,7 @@ mod tests {
         merge.prepare = Prepare::Confirm(spec.clone());
         let actions = fake(merge);
         for confirm in [KeyCode::Char('y'), KeyCode::Enter] {
-            assert_eq!(act(&mut state, &actions, KeyCode::Char('m')), vec![]);
+            assert_eq!(act_menu(&mut state, &actions, KeyCode::Char('m')), vec![]);
             let overlays = &frame::frame_model(&mut state).overlays;
             assert_eq!(
                 overlays.last().map(|o| &o.content),
@@ -4606,7 +4856,7 @@ mod tests {
             assert!(state.ui.overlays.iter().all(|o| o.closing));
             run_msg(&mut state, &actions, Msg::TransitionsDone);
         }
-        act(&mut state, &actions, KeyCode::Char('m'));
+        act_menu(&mut state, &actions, KeyCode::Char('m'));
         assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
         assert!(state.ui.overlays.iter().all(|o| o.closing));
     }
@@ -4745,7 +4995,7 @@ mod tests {
             danger: true,
         });
         let actions = fake(close);
-        assert_eq!(act(&mut state, &actions, KeyCode::Char('X')), vec![]);
+        assert_eq!(act_menu(&mut state, &actions, KeyCode::Char('X')), vec![]);
         assert!(state.ui.overlays.iter().any(|o| !o.closing));
         assert_eq!(act(&mut state, &actions, KeyCode::Char('n')), vec![]);
         assert!(state.ui.overlays.iter().all(|o| o.closing));
@@ -4761,7 +5011,7 @@ mod tests {
         let mut request = FakeAction::new("request_changes", 'R');
         request.prepare = Prepare::Prompt(spec.clone());
         let actions = fake(request);
-        act(&mut state, &actions, KeyCode::Char('R'));
+        act_menu(&mut state, &actions, KeyCode::Char('R'));
         assert_eq!(act(&mut state, &actions, KeyCode::Char('n')), vec![]);
         let overlays = &frame::frame_model(&mut state).overlays;
         assert_eq!(
@@ -4789,7 +5039,7 @@ mod tests {
         let mut request = FakeAction::new("request_changes", 'R');
         request.prepare = Prepare::Prompt(spec.clone());
         let actions = fake(request);
-        assert_eq!(act(&mut state, &actions, KeyCode::Char('R')), vec![]);
+        assert_eq!(act_menu(&mut state, &actions, KeyCode::Char('R')), vec![]);
         for c in "fix qx".chars() {
             assert_eq!(act(&mut state, &actions, KeyCode::Char(c)), vec![]);
         }
@@ -4811,7 +5061,7 @@ mod tests {
             }]
         );
         run_msg(&mut state, &actions, Msg::TransitionsDone);
-        act(&mut state, &actions, KeyCode::Char('R'));
+        act_menu(&mut state, &actions, KeyCode::Char('R'));
         assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
         assert!(state.ui.overlays.iter().all(|o| o.closing));
     }
@@ -4823,6 +5073,10 @@ mod tests {
         let overrides =
             std::collections::BTreeMap::from([("approve".to_owned(), "ctrl-a".to_owned())]);
         let keymap = Keymap::with_actions(&actions, &overrides).unwrap();
+        assert_eq!(
+            act_with(&mut state, &actions, &keymap, KeyCode::Char(' ')),
+            vec![]
+        );
         assert_eq!(
             act_with(&mut state, &actions, &keymap, KeyCode::Char('A')),
             vec![]
@@ -4869,7 +5123,7 @@ mod tests {
             request,
         };
         assert_eq!(
-            act(&mut state, &actions, KeyCode::Char('v')),
+            act_menu(&mut state, &actions, KeyCode::Char('v')),
             vec![run_terminal.clone()]
         );
         let pane = ("review", key.clone());
@@ -4883,7 +5137,7 @@ mod tests {
             key: key.clone(),
         };
         assert_eq!(
-            act(&mut state, &actions, KeyCode::Char('v')),
+            act_menu(&mut state, &actions, KeyCode::Char('v')),
             vec![focus.clone()]
         );
         let started = Msg::PaneStarted {
@@ -4892,7 +5146,10 @@ mod tests {
         };
         assert_eq!(run_msg(&mut state, &actions, started), vec![]);
         assert_eq!(state.data.panes.get(&pane), Some(&PaneHandleState::Running));
-        assert_eq!(act(&mut state, &actions, KeyCode::Char('v')), vec![focus]);
+        assert_eq!(
+            act_menu(&mut state, &actions, KeyCode::Char('v')),
+            vec![focus]
+        );
         let ended = Msg::PaneEnded {
             id: "review",
             key: key.clone(),
@@ -4909,7 +5166,7 @@ mod tests {
         assert!(state.data.panes.is_empty());
         assert_eq!(flags_of(&mut state, 99), "");
         assert_eq!(
-            act(&mut state, &actions, KeyCode::Char('v')),
+            act_menu(&mut state, &actions, KeyCode::Char('v')),
             vec![run_terminal]
         );
     }
@@ -5308,6 +5565,11 @@ mod tests {
             code,
             mods: KeyModifiers::NONE,
         };
+        let msg = click_on(Hit::Key(chord(KeyCode::Char(' '))));
+        assert_eq!(
+            update_full(&mut state, &keymap, &TABS, &PANES, &actions, msg),
+            vec![]
+        );
         let msg = click_on(Hit::Key(chord(KeyCode::Char('A'))));
         let cmds = update_full(&mut state, &keymap, &TABS, &PANES, &actions, msg);
         assert_eq!(
@@ -5982,10 +6244,12 @@ mod tests {
     #[test]
     fn shift_p_opens_the_popup_on_the_agent_pane_and_loads_the_results() {
         let (mut state, pr) = agent_state();
+        assert_eq!(key(&mut state, ' '), vec![]);
         assert_eq!(
             key(&mut state, 'P'),
             vec![Cmd::LoadAgent(pr.clone()), Cmd::LoadCodeview(pr.clone())]
         );
+        update(&mut state, &Keymap::default(), Msg::TransitionsDone);
         let Some(Overlay {
             state: OverlayState::Popup(popup),
             ..
@@ -6007,6 +6271,7 @@ mod tests {
     #[test]
     fn a_tool_key_starts_one_run_per_tool_and_pull_request() {
         let (mut state, pr) = agent_state();
+        key(&mut state, ' ');
         key(&mut state, 'P');
         let review = agent_job(&state, &pr, Tool::Review);
         assert_eq!(key(&mut state, 'r'), vec![Cmd::RunAgent(review)]);
@@ -6027,6 +6292,7 @@ mod tests {
     #[test]
     fn the_end_of_a_run_stores_the_result_and_frees_the_tool() {
         let (mut state, pr) = agent_state();
+        key(&mut state, ' ');
         key(&mut state, 'P');
         key(&mut state, 'r');
         key(&mut state, 'i');
@@ -6077,6 +6343,7 @@ mod tests {
     #[test]
     fn ask_opens_a_prompt_and_runs_with_the_question() {
         let (mut state, pr) = agent_state();
+        key(&mut state, ' ');
         key(&mut state, 'P');
         assert_eq!(key(&mut state, 'a'), Vec::new());
         assert!(matches!(
@@ -6098,6 +6365,7 @@ mod tests {
     #[test]
     fn p_then_y_runs_the_agent_action_with_the_confirm() {
         let (mut state, pr) = agent_state();
+        key(&mut state, ' ');
         key(&mut state, 'P');
         let describe = Record {
             tool: "describe".into(),
