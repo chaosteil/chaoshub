@@ -921,9 +921,10 @@ has 2 pull requests left. The right part shows these items:
 - `agent review #7`: a pr-agent run of one tool on one pull request.
   Each run has its own item.
 
-When no work runs, the spinner and the items go away. A sync reads the
-pull requests in pages, and the rows of each page show in the list when
-the page arrives.
+When no work runs, the spinner and the items go away. A sync first
+reads a light list of the pull requests in pages. Then it reads the full
+data of only the new and the changed pull requests, in batches. The rows
+of each batch show in the list when the batch arrives.
 
 ## How to extend
 

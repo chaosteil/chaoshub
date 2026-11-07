@@ -55,6 +55,16 @@ pub(crate) struct CiPollResult {
     pub selected: Option<(CiStatus, Observed<Vec<Check>>)>,
 }
 
+/// The light data of one pull request from a search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PrStub {
+    pub key: PrKey,
+    pub node_id: String,
+    pub state: PrState,
+    pub updated_at: DateTime<Utc>,
+    pub head_oid: String,
+}
+
 /// Converts a GraphQL `Int` to an unsigned domain number.
 fn uint<T: TryFrom<i64>>(value: i64, field: &str) -> Result<T, GithubError> {
     T::try_from(value).map_err(|_| GithubError::Parse(format!("{field} out of range: {value}")))
@@ -346,41 +356,47 @@ macro_rules! pr_fields_parser {
 
 /// Conversions for the `ListPrs` query.
 pub(crate) mod list_prs {
-    #[allow(
-        clippy::wildcard_imports,
-        reason = "the macro bodies use the imports of the parent module"
-    )]
-    use super::*;
+    use super::{GithubError, PrKey, PrState, PrStub, repo_key, uint};
     use crate::github::queries::list_prs as q;
 
-    rollup_parser!();
-    pr_fields_parser!();
-
-    /// The pull requests of one search page, and the cursor of the next
-    /// page when there is one.
+    /// The stubs of one search page, and the cursor of the next page when
+    /// there is one.
     pub(crate) fn page(
         data: q::ResponseData,
-        me: &Me<'_>,
-        observed_at: DateTime<Utc>,
-    ) -> Result<(Vec<PullRequest>, Option<String>), GithubError> {
+    ) -> Result<(Vec<PrStub>, Option<String>), GithubError> {
         let next = data
             .search
             .page_info
             .end_cursor
             .filter(|_| data.search.page_info.has_next_page);
-        let prs = data
+        let stubs = data
             .search
             .nodes
             .unwrap_or_default()
             .into_iter()
             .flatten()
             .filter_map(|node| match node {
-                q::ListPrsSearchNodes::PullRequest(fields) => Some(fields),
+                q::ListPrsSearchNodes::PullRequest(pr) => Some(pr),
                 _ => None,
             })
-            .map(|fields| pull_request(fields, me, observed_at))
-            .collect::<Result<_, _>>()?;
-        Ok((prs, next))
+            .map(|pr| {
+                Ok(PrStub {
+                    key: PrKey {
+                        repo: repo_key(&pr.repository.name_with_owner)?,
+                        number: uint(pr.number, "number")?,
+                    },
+                    node_id: pr.id,
+                    state: match pr.state {
+                        q::PullRequestState::OPEN | q::PullRequestState::Other(_) => PrState::Open,
+                        q::PullRequestState::CLOSED => PrState::Closed,
+                        q::PullRequestState::MERGED => PrState::Merged,
+                    },
+                    updated_at: pr.updated_at,
+                    head_oid: pr.head_ref_oid,
+                })
+            })
+            .collect::<Result<_, GithubError>>()?;
+        Ok((stubs, next))
     }
 }
 
@@ -646,15 +662,56 @@ mod tests {
         teams: &[],
     };
 
+    /// The `PrByIds` fixture with the nodes of `list_prs_page1.json` and
+    /// then of `list_prs_team.json`.
+    const LISTS: &str = include_str!("testdata/pr_by_ids_lists.json");
+
+    /// The pull requests of the nodes of `list_prs_page1.json`.
     fn page1() -> Vec<PullRequest> {
-        let data = fixture(include_str!("testdata/list_prs_page1.json"));
-        let (prs, next) = list_prs::page(data, &ME, test_time()).unwrap();
-        assert_eq!(next.as_deref(), Some("Y3Vyc29yOjM="));
+        let mut prs = pr_by_ids::prs(fixture(LISTS), &ME, test_time()).unwrap();
+        prs.truncate(3);
         prs
     }
 
+    /// The pull requests of the nodes of `list_prs_team.json`.
+    fn team() -> Vec<PullRequest> {
+        pr_by_ids::prs(fixture(LISTS), &ME, test_time())
+            .unwrap()
+            .split_off(3)
+    }
+
     #[test]
-    fn list_page_parses_every_pull_request() {
+    fn list_page_parses_the_stubs() {
+        let data = fixture(include_str!("testdata/list_prs_page1.json"));
+        let (stubs, next) = list_prs::page(data).unwrap();
+        assert_eq!(next.as_deref(), Some("Y3Vyc29yOjM="));
+        let numbers: Vec<u64> = stubs.iter().map(|stub| stub.key.number).collect();
+        assert_eq!(numbers, [1589, 1587, 1586]);
+        assert_eq!(
+            stubs[0],
+            PrStub {
+                key: PrKey {
+                    repo: RepoKey {
+                        owner: "acme".into(),
+                        name: "deploy".into()
+                    },
+                    number: 1589,
+                },
+                node_id: "PR_kwDOAAAABc8AAAAAAAAA08".into(),
+                state: PrState::Merged,
+                updated_at: "2026-10-31T02:20:36Z".parse().unwrap(),
+                head_oid: "00000000000000000000000000000000c0de0006".into(),
+            }
+        );
+        let data = fixture(include_str!("testdata/list_prs_team.json"));
+        let (stubs, next) = list_prs::page(data).unwrap();
+        assert_eq!(next.as_deref(), Some("Y3Vyc29yOjI="));
+        assert_eq!(stubs[0].state, PrState::Open);
+        assert_eq!(stubs[0].key.repo.name, "monorepo");
+    }
+
+    #[test]
+    fn by_ids_parses_every_pull_request() {
         let prs = page1();
         let numbers: Vec<u64> = prs.iter().map(|pr| pr.key.number).collect();
         assert_eq!(numbers, [1589, 1587, 1586]);
@@ -673,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn list_page_maps_the_head_fields() {
+    fn by_ids_maps_the_head_fields() {
         let pr = page1().remove(2);
         assert!(pr.node_id.starts_with("PR_"));
         let head = &pr.head.value;
@@ -703,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn list_page_maps_checks_with_run_and_suite_ids() {
+    fn by_ids_maps_checks_with_run_and_suite_ids() {
         let pr = page1().remove(0);
         assert_eq!(pr.ci_state.value, CiState::Success);
         let checks = &pr.checks.value;
@@ -726,9 +783,8 @@ mod tests {
     }
 
     #[test]
-    fn team_page_maps_review_requests() {
-        let data = fixture(include_str!("testdata/list_prs_team.json"));
-        let (prs, _) = list_prs::page(data, &ME, test_time()).unwrap();
+    fn by_ids_maps_review_requests() {
+        let prs = team();
         let draft = &prs[0].head.value;
         assert!(draft.is_draft);
         assert_eq!(draft.state, PrState::Open);
@@ -755,34 +811,30 @@ mod tests {
     }
 
     #[test]
-    fn list_page_counts_the_latest_opinionated_reviews() {
+    fn by_ids_counts_the_latest_opinionated_reviews() {
         assert_eq!(page1()[0].head.value.approvals, 1);
         assert_eq!(page1()[0].head.value.changes_requested, 0);
-        let mut json: serde_json::Value =
-            serde_json::from_str(include_str!("testdata/list_prs_page1.json")).unwrap();
+        let mut json: serde_json::Value = serde_json::from_str(LISTS).unwrap();
         let review = |state: &str| {
             serde_json::json!({
                 "author": { "__typename": "User", "login": "colleague" },
                 "state": state,
             })
         };
-        json["data"]["search"]["nodes"][0]["latestOpinionatedReviews"]["nodes"] =
-            serde_json::json!([
-                review("APPROVED"),
-                review("CHANGES_REQUESTED"),
-                review("APPROVED"),
-                review("COMMENTED"),
-                review("DISMISSED"),
-                review("CHANGES_REQUESTED"),
-                review("APPROVED"),
-            ]);
+        json["data"]["nodes"][0]["latestOpinionatedReviews"]["nodes"] = serde_json::json!([
+            review("APPROVED"),
+            review("CHANGES_REQUESTED"),
+            review("APPROVED"),
+            review("COMMENTED"),
+            review("DISMISSED"),
+            review("CHANGES_REQUESTED"),
+            review("APPROVED"),
+        ]);
         let data = fixture(&json.to_string());
-        let (prs, _) = list_prs::page(data, &ME, test_time()).unwrap();
+        let prs = pr_by_ids::prs(data, &ME, test_time()).unwrap();
         let head = &prs[0].head.value;
         assert_eq!((head.approvals, head.changes_requested), (3, 2));
-        let data = fixture(include_str!("testdata/list_prs_team.json"));
-        let (prs, _) = list_prs::page(data, &ME, test_time()).unwrap();
-        let head = &prs[0].head.value;
+        let head = &team()[0].head.value;
         assert_eq!((head.approvals, head.changes_requested), (0, 0));
     }
 
@@ -969,7 +1021,7 @@ mod tests {
 
     #[test]
     fn rollup_without_data_is_none() {
-        assert_eq!(list_prs::rollup(None), (CiState::None, Vec::new()));
+        assert_eq!(pr_by_ids::rollup(None), (CiState::None, Vec::new()));
     }
 
     #[test]

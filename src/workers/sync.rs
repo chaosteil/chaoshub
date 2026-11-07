@@ -16,25 +16,37 @@
 //! not loaded yet. It writes no pull request rows, because the list
 //! process owns the rows of the cache.
 //!
-//! A full sync searches the open pull requests of the repo set, at most 5
-//! pages. A delta searches all states, updated since `last_delta` minus
-//! 2 min, so merges and closes arrive. `last_delta` advances to the start
-//! of the delta only after its last page. The page size is the last result count plus 10, between 20 and
-//! 100. The worker sends `SyncStarted` before the first page of a sync.
-//! It sends each page in a `PrsSynced` when the page arrives,
-//! and one more `PrsSynced` with `last` at the end of the sync. Only a
-//! full sync that read the last page sends `seen`, and deletes the `gone`
-//! rows from the cache: the open pull requests that the worker saw before
-//! and that the result does not hold. The worker sends the `Msg` first
-//! and writes the store second.
+//! A full sync searches the open pull requests of the repo set. A delta
+//! searches all states, updated since `last_delta` minus 2 min, so merges
+//! and closes arrive. `last_delta` advances to the start of the delta only
+//! after its last page.
+//!
+//! A sync has two phases. Phase 1 reads the stubs of the search: the
+//! light data of each pull request (`id`, `number`, repo, `state`,
+//! `updatedAt`, `headRefOid`), 100 per page, until no page is left or the
+//! stubs reach 500. The worker compares each stub with the version that
+//! it knows of the pull request (`updated_at`, `head_oid`, `observed_at`).
+//! Phase 2 reads the full fields of the new and the changed pull requests
+//! by node id, 20 per request. A full sync also reads again at most 40
+//! pull requests whose known version is older than 1 h, oldest first, so
+//! the merge state and old cache rows stay up to date. At its first sync
+//! of a scope, the worker loads the known versions from the cache.
+//!
+//! The worker sends `SyncStarted` before the first page of a sync. It
+//! sends each phase 2 batch in a `PrsSynced` when the batch arrives, and
+//! one more `PrsSynced` with `last` at the end of the sync. Only a full
+//! sync that read the last page sends `seen`: the keys of every stub. It
+//! also deletes the `gone` rows from the cache: the open pull requests
+//! that the worker knows and that the result does not hold. The worker
+//! sends the `Msg` first and writes the store second.
 //!
 //! When the first page fails, the worker sends only `SyncFailed`. When a
-//! later page fails, the sync is incomplete: the worker sends the end of
-//! the sync, writes the sync state, and then sends `SyncFailed`. A full
+//! later request fails, the sync is incomplete: the worker sends the end
+//! of the sync, writes the sync state, and then sends `SyncFailed`. A full
 //! sync sets `last_delta` when it has none, also when the sync is
 //! incomplete. Only a complete full sync sets `last_full`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,8 +60,9 @@ use crate::domain::keys::PrKey;
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::repo::Repo;
 use crate::github::GithubError;
-use crate::github::budget::{RateBudget, page_size};
+use crate::github::budget::RateBudget;
 use crate::github::parse::Me;
+use crate::store::PrVersion;
 use crate::workers::ctx::{WorkerCtx, WorkerMode};
 use crate::workers::supervisor::Worker;
 use crate::workers::{sync_error, wait_for_login};
@@ -60,8 +73,22 @@ pub(crate) const WORKER: Worker = Worker {
     run: |ctx| run(ctx).boxed(),
 };
 
-/// The most pages of one search.
-const MAX_PAGES: usize = 5;
+/// The most stubs of one search.
+const MAX_RESULTS: usize = 500;
+
+/// The stubs per page of phase 1.
+const PAGE_SIZE: u32 = 100;
+
+/// The pull requests per request of phase 2.
+const BATCH_SIZE: usize = 20;
+
+/// The age of a known version after which a full sync reads the pull
+/// request again, so the merge state and old cache rows stay up to date.
+const REFETCH_AFTER: TimeDelta = TimeDelta::hours(1);
+
+/// The most pull requests that one full sync reads again because of their
+/// age.
+const REFETCH_PER_SYNC: usize = 40;
 
 /// The overlap of a delta with the previous one, because the search index
 /// lags.
@@ -194,21 +221,25 @@ async fn run_pinned(
 /// What the worker remembers of one scope.
 #[derive(Debug, Default)]
 struct ScopeState {
-    /// The open pull requests that the worker saw in this scope.
-    known: HashSet<PrKey>,
-    /// The result count of the last full sync.
-    full_count: usize,
-    /// The result count of the last delta sync.
-    delta_count: usize,
+    /// The versions of the open pull requests that the worker knows in
+    /// this scope.
+    known: HashMap<PrKey, PrVersion>,
+    /// True after the worker loaded the cached versions into `known`.
+    seeded: bool,
 }
 
 impl ScopeState {
-    /// Records the pull requests of a delta or a refresh: open ones are
-    /// known, others are not.
+    /// Records the pull requests of a sync or a refresh: the versions of
+    /// open ones are known, others are not.
     fn note(&mut self, prs: &[PullRequest]) {
         for pr in prs {
             if pr.head.value.state == PrState::Open {
-                self.known.insert(pr.key.clone());
+                let version = PrVersion {
+                    updated_at: pr.head.value.updated_at,
+                    head_oid: pr.head.value.head_oid.clone(),
+                    observed_at: pr.head.observed_at,
+                };
+                self.known.insert(pr.key.clone(), version);
             } else {
                 self.known.remove(&pr.key);
             }
@@ -260,6 +291,24 @@ impl Syncer {
         }
     }
 
+    /// Loads the cached versions of `scope` into `known` before the first
+    /// sync of the scope. A version that the worker knows already stays.
+    async fn seed(&mut self, scope: Scope) {
+        if self.state(scope).seeded {
+            return;
+        }
+        match self.ctx.store.pr_versions(scope).await {
+            Ok(versions) => {
+                let state = self.state(scope);
+                for (key, version) in versions {
+                    state.known.entry(key).or_insert(version);
+                }
+                state.seeded = true;
+            }
+            Err(err) => tracing::warn!(?scope, %err, "cannot read the cached versions"),
+        }
+    }
+
     /// The login and the sorted repo names of the session. `None` without
     /// a login or without repos.
     fn target(&self) -> Option<(String, Vec<String>)> {
@@ -275,24 +324,29 @@ impl Syncer {
             tracing::debug!(?scope, "full sync skipped: no login or no repos");
             return true;
         };
+        self.seed(scope).await;
         let query = search(scope, &login, &repos, None);
-        let first = page_size(self.state(scope).full_count);
-        let mut pages = match self.pages(scope, &query, first, &login).await {
+        let mut pages = match self.pages(scope, &query, &login, true).await {
             Ok(Some(pages)) => pages,
             Ok(None) => return false,
             Err(err) => return self.failed(scope, &repos, &err).await,
         };
         tracing::info!(
             ?scope,
-            count = pages.prs.len(),
+            count = pages.keys.len(),
+            fetched = pages.prs.len(),
             complete = pages.complete,
             "full sync"
         );
         let keys: HashSet<PrKey> = pages.keys.iter().cloned().collect();
         let state = self.state(scope);
-        state.full_count = pages.prs.len();
         let gone = pages.complete.then(|| {
-            let mut gone: Vec<PrKey> = state.known.difference(&keys).cloned().collect();
+            let mut gone: Vec<PrKey> = state
+                .known
+                .keys()
+                .filter(|key| !keys.contains(*key))
+                .cloned()
+                .collect();
             gone.sort();
             gone
         });
@@ -302,9 +356,7 @@ impl Syncer {
             seen
         });
         if pages.complete {
-            state.known = keys;
-        } else {
-            state.known.extend(keys);
+            state.known.retain(|key, _| keys.contains(key));
         }
         let started_at = pages.started_at;
         if !self.end(scope, seen, started_at).await {
@@ -336,22 +388,20 @@ impl Syncer {
             tracing::debug!(?scope, "delta skipped: no full sync yet");
             return true;
         };
+        self.seed(scope).await;
         let query = search(scope, &login, &repos, Some(last_delta - DELTA_OVERLAP));
-        let first = page_size(self.state(scope).delta_count);
-        let mut pages = match self.pages(scope, &query, first, &login).await {
+        let mut pages = match self.pages(scope, &query, &login, false).await {
             Ok(Some(pages)) => pages,
             Ok(None) => return false,
             Err(err) => return self.failed(scope, &repos, &err).await,
         };
         tracing::debug!(
             ?scope,
-            count = pages.prs.len(),
+            count = pages.keys.len(),
+            fetched = pages.prs.len(),
             complete = pages.complete,
             "delta sync"
         );
-        let scope_state = self.state(scope);
-        scope_state.delta_count = pages.prs.len();
-        scope_state.note(&pages.prs);
         if !self.end(scope, None, pages.started_at).await {
             return false;
         }
@@ -368,18 +418,23 @@ impl Syncer {
         true
     }
 
-    /// Reads at most `MAX_PAGES` pages of the search `query`, `first`
-    /// results per page. It sends `SyncStarted` first. It sends each page in a `PrsSynced` when the page
-    /// arrives, and then writes the page into the cache. `Ok(None)` when
-    /// `app` is gone. An error of the first page is `Err`. An error of a
-    /// later page stops the search: the result is incomplete and holds
-    /// the error in `failure`.
+    /// Runs the two phases of the search `query`. Phase 1 reads the stubs,
+    /// `PAGE_SIZE` per page, until no page is left or the stubs reach
+    /// `MAX_RESULTS`. After each page, phase 2 reads the new and the
+    /// changed pull requests of the page. In a full sync (`refetch`),
+    /// phase 2 at the end also reads the unchanged pull requests whose
+    /// known version is older than `REFETCH_AFTER`: at most
+    /// `REFETCH_PER_SYNC`, oldest first.
+    ///
+    /// It sends `SyncStarted` first. `Ok(None)` when `app` is gone. An
+    /// error of the first page is `Err`. A later error stops the search:
+    /// the result is incomplete and holds the error in `failure`.
     async fn pages(
         &mut self,
         scope: Scope,
         query: &str,
-        first: u32,
         login: &str,
+        refetch: bool,
     ) -> Result<Option<Pages>, GithubError> {
         let teams = self.ctx.config.teams.clone();
         let me = Me {
@@ -389,61 +444,107 @@ impl Syncer {
         if self.ctx.tx.send(Msg::SyncStarted { scope }).await.is_err() {
             return Ok(None);
         }
-        let mut page = self.ctx.client.list_prs(query, first, None, &me).await?;
+        let mut page = self.ctx.client.list_prs(query, PAGE_SIZE, None).await?;
         let started_at = page.started_at;
-        let mut prs = Vec::new();
-        let mut keys = Vec::new();
-        let mut complete = true;
-        let mut failure = None;
-        let mut count = 1;
+        let mut pages = Pages {
+            prs: Vec::new(),
+            keys: Vec::new(),
+            complete: true,
+            started_at,
+            failure: None,
+        };
+        let stale_before = started_at - REFETCH_AFTER;
+        let mut stale: Vec<(DateTime<Utc>, String)> = Vec::new();
         loop {
             if !self.rate(page.rate.clone()).await {
                 return Ok(None);
             }
-            let msg = Msg::PrsSynced {
-                scope,
-                prs: page.prs.clone(),
-                seen: None,
-                started_at,
-                last: false,
-            };
-            if self.ctx.tx.send(msg).await.is_err() {
-                return Ok(None);
+            let known = &self.state(scope).known;
+            let mut changed = Vec::new();
+            for stub in &page.stubs {
+                match known.get(&stub.key) {
+                    Some(version)
+                        if version.updated_at == stub.updated_at
+                            && version.head_oid == stub.head_oid =>
+                    {
+                        if refetch && version.observed_at < stale_before {
+                            stale.push((version.observed_at, stub.node_id.clone()));
+                        }
+                    }
+                    _ => changed.push(stub.node_id.clone()),
+                }
             }
-            if let Err(err) = self.ctx.store.put_prs(scope, page.prs.clone()).await {
-                tracing::warn!(?scope, %err, "cannot cache the pull requests");
+            pages
+                .keys
+                .extend(page.stubs.iter().map(|stub| stub.key.clone()));
+            match self.fetch(scope, &changed, &me, &mut pages).await {
+                Ok(true) => {}
+                Ok(false) => return Ok(None),
+                Err(err) => return Ok(Some(pages.failed(err))),
             }
-            keys.extend(page.prs.iter().map(|pr| pr.key.clone()));
-            prs.append(&mut page.prs);
             let Some(after) = page.next.take() else {
                 break;
             };
-            if count >= MAX_PAGES {
-                complete = false;
+            if pages.keys.len() >= MAX_RESULTS {
+                pages.complete = false;
                 break;
             }
             page = match self
                 .ctx
                 .client
-                .list_prs(query, first, Some(&after), &me)
+                .list_prs(query, PAGE_SIZE, Some(&after))
                 .await
             {
                 Ok(page) => page,
-                Err(err) => {
-                    complete = false;
-                    failure = Some(err);
-                    break;
-                }
+                Err(err) => return Ok(Some(pages.failed(err))),
             };
-            count += 1;
         }
-        Ok(Some(Pages {
-            prs,
-            keys,
-            complete,
-            started_at,
-            failure,
-        }))
+        stale.sort();
+        let stale: Vec<String> = stale
+            .into_iter()
+            .take(REFETCH_PER_SYNC)
+            .map(|(_, id)| id)
+            .collect();
+        match self.fetch(scope, &stale, &me, &mut pages).await {
+            Ok(true) => Ok(Some(pages)),
+            Ok(false) => Ok(None),
+            Err(err) => Ok(Some(pages.failed(err))),
+        }
+    }
+
+    /// Phase 2: reads the pull requests `ids` by node id, `BATCH_SIZE` per
+    /// request. After each batch, it sends `Rate` and a `PrsSynced` with
+    /// the pull requests, writes them into the cache, records their
+    /// versions, and adds them to `pages`. `Ok(false)` when `app` is gone.
+    async fn fetch(
+        &mut self,
+        scope: Scope,
+        ids: &[String],
+        me: &Me<'_>,
+        pages: &mut Pages,
+    ) -> Result<bool, GithubError> {
+        for batch in ids.chunks(BATCH_SIZE) {
+            let (prs, rate) = self.ctx.client.pr_by_ids(batch, me).await?;
+            if !self.rate(rate).await {
+                return Ok(false);
+            }
+            let msg = Msg::PrsSynced {
+                scope,
+                prs: prs.clone(),
+                seen: None,
+                started_at: pages.started_at,
+                last: false,
+            };
+            if self.ctx.tx.send(msg).await.is_err() {
+                return Ok(false);
+            }
+            if let Err(err) = self.ctx.store.put_prs(scope, prs.clone()).await {
+                tracing::warn!(?scope, %err, "cannot cache the pull requests");
+            }
+            self.state(scope).note(&prs);
+            pages.prs.extend(prs);
+        }
+        Ok(true)
     }
 
     /// Sends the `PrsSynced` that ends the sync of `scope`. False when
@@ -636,14 +737,14 @@ impl Syncer {
     }
 }
 
-/// The pages of one search.
+/// The result of one search.
 #[derive(Debug)]
 struct Pages {
-    /// The pull requests of every page.
+    /// The pull requests that phase 2 read.
     prs: Vec<PullRequest>,
-    /// The keys of every pull request of the search.
+    /// The keys of every stub of the search.
     keys: Vec<PrKey>,
-    /// True when the worker read the last page, false when `MAX_PAGES`
+    /// True when the worker read the last page, false when `MAX_RESULTS`
     /// or a failure stopped it.
     complete: bool,
     /// The start time of the first page.
@@ -651,6 +752,15 @@ struct Pages {
     /// The error of the request that stopped the search after one or more
     /// pages.
     failure: Option<GithubError>,
+}
+
+impl Pages {
+    /// The incomplete result after the error `err`.
+    fn failed(mut self, err: GithubError) -> Self {
+        self.complete = false;
+        self.failure = Some(err);
+        self
+    }
 }
 
 /// The `owner/name` of every repo, sorted and without duplicates.
@@ -705,7 +815,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::{Value, json};
     use wiremock::matchers::{body_string_contains, method};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
     use super::*;
     use crate::bus::{Session, SyncError};
@@ -715,23 +825,139 @@ mod tests {
     const PAGE1: &str = include_str!("../github/testdata/list_prs_page1.json");
     const PAGE2: &str = include_str!("../github/testdata/list_prs_page2.json");
 
-    /// Serves page 1 for the first request and page 2 for every cursor.
-    /// `last` makes page 2 the last page.
-    async fn serve_pages(server: &MockServer, last: bool) {
-        let mut page2: Value = serde_json::from_str(PAGE2).unwrap();
-        page2["data"]["search"]["pageInfo"]["hasNextPage"] = json!(!last);
+    /// The node ids, the `updatedAt` and the `headRefOid` of the stubs of
+    /// page 1.
+    const ID_1589: &str = "PR_kwDOAAAABc8AAAAAAAAA08";
+    const ID_1587: &str = "PR_kwDOAAAABc8AAAAAAAAA07";
+    const ID_1586: &str = "PR_kwDOAAAABc8AAAAAAAAA06";
+    const UPDATED_1589: &str = "2026-10-31T02:20:36Z";
+    const OID_1589: &str = "00000000000000000000000000000000c0de0006";
+    const UPDATED_1587: &str = "2026-10-30T23:09:37Z";
+
+    /// A `rateLimit` value for the test responses.
+    fn rate_json() -> Value {
+        json!({ "cost": 1, "remaining": 4990, "resetAt": "2026-10-31T05:50:43Z" })
+    }
+
+    /// Answers a `PrByIds` request: the nodes whose `id` is in the `ids`
+    /// variable, in the order of the ids. An unknown id gets a null node.
+    struct ByIds(Vec<Value>);
+
+    impl Respond for ByIds {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            let nodes: Vec<Value> = body["variables"]["ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|id| {
+                    self.0
+                        .iter()
+                        .find(|node| node["id"] == *id)
+                        .cloned()
+                        .unwrap_or(Value::Null)
+                })
+                .collect();
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "data": { "nodes": nodes, "rateLimit": rate_json() } }))
+        }
+    }
+
+    /// The nodes of the page fixtures.
+    fn page_nodes() -> Vec<Value> {
+        [PAGE1, PAGE2]
+            .iter()
+            .flat_map(|page| {
+                let page: Value = serde_json::from_str(page).unwrap();
+                page["data"]["search"]["nodes"].as_array().unwrap().clone()
+            })
+            .collect()
+    }
+
+    /// Answers the `PrByIds` requests with `nodes`.
+    async fn serve_by_ids(server: &MockServer, nodes: Vec<Value>) {
+        Mock::given(method("POST"))
+            .and(body_string_contains("query PrByIds"))
+            .respond_with(ByIds(nodes))
+            .mount(server)
+            .await;
+    }
+
+    /// Serves `first` for the first search request and `next` for every
+    /// cursor.
+    async fn serve_searches(server: &MockServer, first: Value, next: Value) {
         Mock::given(method("POST"))
             .and(body_string_contains("\"after\":\""))
-            .respond_with(ResponseTemplate::new(200).set_body_json(page2))
+            .respond_with(ResponseTemplate::new(200).set_body_json(next))
             .mount(server)
             .await;
         Mock::given(method("POST"))
             .and(body_string_contains("\"after\":null"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_raw(PAGE1.as_bytes(), "application/json"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(first))
             .mount(server)
             .await;
+    }
+
+    /// Serves page 1 for the first request and page 2 for every cursor,
+    /// and the nodes of both pages to `PrByIds`. `last` makes page 2 the
+    /// last page.
+    async fn serve_pages(server: &MockServer, last: bool) {
+        let mut page2: Value = serde_json::from_str(PAGE2).unwrap();
+        page2["data"]["search"]["pageInfo"]["hasNextPage"] = json!(!last);
+        serve_searches(server, serde_json::from_str(PAGE1).unwrap(), page2).await;
+        serve_by_ids(server, page_nodes()).await;
+    }
+
+    /// Serves page 1 as the only page, and its nodes to `PrByIds`.
+    async fn serve_page1(server: &MockServer) {
+        let mut page1: Value = serde_json::from_str(PAGE1).unwrap();
+        page1["data"]["search"]["pageInfo"]["hasNextPage"] = json!(false);
+        serve_searches(server, page1.clone(), page1).await;
+        serve_by_ids(server, page_nodes()).await;
+    }
+
+    /// The `updatedAt` and the `headRefOid` of the stubs of `stub_page`.
+    const STUB_UPDATED: &str = "2026-10-30T00:00:00Z";
+    const STUB_OID: &str = "oid";
+
+    /// A search page with `count` open stubs of `acme/deploy`, numbers
+    /// 1000 and up. `next` gives it a next page.
+    fn stub_page(count: u64, next: bool) -> Value {
+        let nodes: Vec<Value> = (1000..1000 + count)
+            .map(|number| {
+                json!({
+                    "__typename": "PullRequest",
+                    "id": format!("PR_{number}"),
+                    "number": number,
+                    "repository": { "nameWithOwner": "acme/deploy" },
+                    "state": "OPEN",
+                    "updatedAt": STUB_UPDATED,
+                    "headRefOid": STUB_OID,
+                })
+            })
+            .collect();
+        json!({
+            "data": {
+                "search": {
+                    "pageInfo": {
+                        "hasNextPage": next,
+                        "endCursor": if next { json!("next") } else { Value::Null },
+                    },
+                    "nodes": nodes,
+                },
+                "rateLimit": rate_json(),
+            }
+        })
+    }
+
+    /// Records the versions of the stubs of `stub_page(count, _)` in
+    /// `state`, observed now, so phase 2 reads none of them.
+    fn know_stubs(state: &mut ScopeState, count: u64) {
+        for number in 1000..1000 + count {
+            state
+                .known
+                .insert(key(number), version(STUB_UPDATED, STUB_OID, Utc::now()));
+        }
     }
 
     /// A context whose session has a login and the repo `acme/deploy`.
@@ -755,22 +981,20 @@ mod tests {
     }
 
     /// The messages of the next sync until its end: `SyncStarted`, the
-    /// numbers of each page after its `Rate`, then the scope and the
-    /// `seen` numbers of the end.
+    /// `Rate` of each response, the numbers of each phase 2 batch, then
+    /// the scope and the `seen` numbers of the end.
     async fn sync_pages(harness: &mut Harness) -> (Scope, Vec<Vec<u64>>, Option<Vec<u64>>) {
         let started = match harness.recv().await {
             Msg::SyncStarted { scope } => scope,
             other => panic!("{other:?}"),
         };
-        let mut pages = Vec::new();
+        let mut batches = Vec::new();
         loop {
             match harness.recv().await {
-                Msg::Rate(_) => match harness.recv().await {
-                    Msg::PrsSynced {
-                        prs, last: false, ..
-                    } => pages.push(prs.iter().map(|pr| pr.key.number).collect()),
-                    other => panic!("{other:?}"),
-                },
+                Msg::Rate(_) => {}
+                Msg::PrsSynced {
+                    prs, last: false, ..
+                } => batches.push(prs.iter().map(|pr| pr.key.number).collect()),
                 Msg::PrsSynced {
                     scope,
                     prs,
@@ -781,14 +1005,14 @@ mod tests {
                     assert_eq!(prs, Vec::new(), "the end has no pull requests");
                     assert_eq!(scope, started);
                     let seen = seen.map(|keys| keys.iter().map(|key| key.number).collect());
-                    return (scope, pages, seen);
+                    return (scope, batches, seen);
                 }
                 other => panic!("{other:?}"),
             }
         }
     }
 
-    /// The scope, the numbers of every page and the `seen` numbers of the
+    /// The scope, the numbers of every batch and the `seen` numbers of the
     /// next sync.
     async fn synced(harness: &mut Harness) -> (Scope, Vec<u64>, Option<Vec<u64>>) {
         let (scope, pages, seen) = sync_pages(harness).await;
@@ -810,6 +1034,25 @@ mod tests {
             .collect()
     }
 
+    /// The `ids` variable of each `PrByIds` request to `server`.
+    async fn by_ids(server: &MockServer) -> Vec<Vec<String>> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter_map(|request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                let ids = body["variables"]["ids"].as_array()?;
+                Some(
+                    ids.iter()
+                        .map(|id| id.as_str().unwrap().to_owned())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
     fn key(number: u64) -> PrKey {
         PrKey {
             repo: RepoKey {
@@ -820,15 +1063,41 @@ mod tests {
         }
     }
 
+    fn version(updated_at: &str, head_oid: &str, observed_at: DateTime<Utc>) -> PrVersion {
+        PrVersion {
+            updated_at: updated_at.parse().unwrap(),
+            head_oid: head_oid.to_owned(),
+            observed_at,
+        }
+    }
+
+    /// The sync state of `scope` for the repo `acme/deploy`.
+    async fn sync_state(
+        store: &crate::store::handle::StoreHandle,
+        scope: Scope,
+    ) -> crate::store::SyncState {
+        store
+            .sync_state(scope, repo_set_hash(&["acme/deploy".to_owned()]))
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
     #[tokio::test]
-    async fn a_full_sync_sends_each_page_and_then_the_seen_keys() {
+    async fn a_full_sync_sends_each_batch_and_then_the_seen_keys() {
         let server = MockServer::start().await;
         serve_pages(&server, true).await;
         let (ctx, mut harness) = logged_in(&server);
         let store = ctx.store.clone();
         let mut syncer = Syncer::new(ctx);
-        syncer.mine.known.insert(key(1));
-        syncer.mine.known.insert(key(1589));
+        syncer
+            .mine
+            .known
+            .insert(key(1), version(UPDATED_1589, OID_1589, Utc::now()));
+        syncer
+            .mine
+            .known
+            .insert(key(1589), version(UPDATED_1589, "old", Utc::now()));
 
         assert!(syncer.full(Scope::Mine).await);
         assert_eq!(
@@ -839,57 +1108,56 @@ mod tests {
                 Some(vec![1572, 1573, 1574, 1586, 1587, 1589])
             )
         );
-        assert!(!syncer.mine.known.contains(&key(1)), "#1 is gone");
+        assert!(
+            syncer.mine.known.is_empty(),
+            "#1 is gone, and merged pull requests are not known"
+        );
         assert_eq!(
             searches(&server).await,
             [
                 (
                     "is:pr is:open author:chaosteil repo:acme/deploy".to_owned(),
-                    20
+                    100
                 ),
                 (
                     "is:pr is:open author:chaosteil repo:acme/deploy".to_owned(),
-                    20
+                    100
                 ),
             ]
         );
-        assert_eq!(syncer.mine.known.len(), 6);
-        assert_eq!(syncer.mine.full_count, 6);
+        assert_eq!(by_ids(&server).await.len(), 2);
 
-        let state = store
-            .sync_state(Scope::Mine, repo_set_hash(&["acme/deploy".to_owned()]))
-            .await
-            .unwrap()
-            .unwrap();
+        let state = sync_state(&store, Scope::Mine).await;
         assert!(state.last_full.is_some());
         assert_eq!(state.last_delta, state.last_full);
         assert_eq!(state.last_error, None);
     }
 
     #[tokio::test]
-    async fn a_full_sync_cut_at_five_pages_sends_no_seen_keys() {
+    async fn a_full_sync_cut_at_max_results_sets_only_last_delta() {
         let server = MockServer::start().await;
-        serve_pages(&server, false).await;
+        serve_searches(&server, stub_page(100, true), stub_page(100, true)).await;
+        serve_by_ids(&server, Vec::new()).await;
         let (ctx, mut harness) = logged_in(&server);
         let store = ctx.store.clone();
         let mut syncer = Syncer::new(ctx);
-        syncer.team.known.insert(key(1));
+        know_stubs(&mut syncer.team, 100);
+        syncer
+            .team
+            .known
+            .insert(key(1), version(STUB_UPDATED, STUB_OID, Utc::now()));
 
         assert!(syncer.full(Scope::Team).await);
-        let (scope, pages, seen) = sync_pages(&mut harness).await;
+        let (scope, batches, seen) = sync_pages(&mut harness).await;
         assert_eq!(scope, Scope::Team);
-        assert_eq!(pages.len(), MAX_PAGES);
-        assert_eq!(pages.concat().len(), 15);
+        assert_eq!(batches, Vec::<Vec<u64>>::new());
         assert_eq!(seen, None);
-        assert_eq!(server.received_requests().await.unwrap().len(), MAX_PAGES);
-        assert!(syncer.team.known.contains(&key(1)), "#1 is not dropped");
+        assert_eq!(searches(&server).await.len(), MAX_RESULTS / 100);
+        assert_eq!(by_ids(&server).await, Vec::<Vec<String>>::new());
+        assert!(syncer.team.known.contains_key(&key(1)), "#1 is not dropped");
         assert!(searches(&server).await[0].0.contains(" -author:chaosteil "));
 
-        let state = store
-            .sync_state(Scope::Team, repo_set_hash(&["acme/deploy".to_owned()]))
-            .await
-            .unwrap()
-            .unwrap();
+        let state = sync_state(&store, Scope::Team).await;
         assert!(state.last_delta.is_some());
         assert_eq!(state.last_full, None);
     }
@@ -909,6 +1177,7 @@ mod tests {
             )
             .mount(&server)
             .await;
+        serve_by_ids(&server, page_nodes()).await;
         let (ctx, mut harness) = logged_in(&server);
         let store = ctx.store.clone();
         let mut syncer = Syncer::new(ctx);
@@ -925,14 +1194,112 @@ mod tests {
             } => {}
             other => panic!("{other:?}"),
         }
-        let state = store
-            .sync_state(Scope::Team, repo_set_hash(&["acme/deploy".to_owned()]))
-            .await
-            .unwrap()
-            .unwrap();
+        let state = sync_state(&store, Scope::Team).await;
         assert!(state.last_delta.is_some());
         assert_eq!(state.last_full, None);
         assert!(state.last_error.is_some());
+    }
+
+    #[tokio::test]
+    async fn phase_2_reads_only_the_new_and_the_changed_pull_requests() {
+        let server = MockServer::start().await;
+        serve_page1(&server).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let mut syncer = Syncer::new(ctx);
+        let unchanged = version(UPDATED_1589, OID_1589, Utc::now());
+        syncer.mine.known.insert(key(1589), unchanged.clone());
+        syncer
+            .mine
+            .known
+            .insert(key(1587), version(UPDATED_1587, "old", Utc::now()));
+
+        assert!(syncer.full(Scope::Mine).await);
+        assert_eq!(
+            sync_pages(&mut harness).await,
+            (
+                Scope::Mine,
+                vec![vec![1587, 1586]],
+                Some(vec![1586, 1587, 1589])
+            )
+        );
+        assert_eq!(by_ids(&server).await, [[ID_1587, ID_1586]]);
+        assert_eq!(syncer.mine.known.get(&key(1589)), Some(&unchanged));
+    }
+
+    #[tokio::test]
+    async fn a_full_sync_reads_an_old_version_again_and_a_delta_does_not() {
+        let old = Utc::now() - REFETCH_AFTER - TimeDelta::minutes(5);
+        let server = MockServer::start().await;
+        serve_page1(&server).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let mut syncer = Syncer::new(ctx);
+        syncer
+            .mine
+            .known
+            .insert(key(1589), version(UPDATED_1589, OID_1589, old));
+        assert!(syncer.full(Scope::Mine).await);
+        assert_eq!(
+            synced(&mut harness).await.1,
+            [1587, 1586, 1589],
+            "the old version comes last"
+        );
+        assert_eq!(
+            by_ids(&server).await,
+            [vec![ID_1587, ID_1586], vec![ID_1589]]
+        );
+
+        let server = MockServer::start().await;
+        serve_page1(&server).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let last = "2026-10-30T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        ctx.store
+            .put_sync_state(
+                Scope::Mine,
+                repo_set_hash(&["acme/deploy".to_owned()]),
+                crate::store::SyncState {
+                    last_full: Some(last),
+                    last_delta: Some(last),
+                    last_error: None,
+                },
+            )
+            .await
+            .unwrap();
+        let mut syncer = Syncer::new(ctx);
+        syncer
+            .mine
+            .known
+            .insert(key(1589), version(UPDATED_1589, OID_1589, old));
+        assert!(syncer.delta(Scope::Mine).await);
+        assert_eq!(synced(&mut harness).await.1, [1587, 1586]);
+        assert_eq!(by_ids(&server).await, [[ID_1587, ID_1586]]);
+    }
+
+    #[tokio::test]
+    async fn the_first_sync_loads_the_known_versions_from_the_cache() {
+        let server = MockServer::start().await;
+        serve_page1(&server).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let me = Me {
+            login: "chaosteil",
+            teams: &[],
+        };
+        let mut cached = crate::github::parse::pr_by_ids::prs(
+            crate::github::parse::fixture(include_str!("../github/testdata/pr_by_ids_lists.json")),
+            &me,
+            Utc::now(),
+        )
+        .unwrap()
+        .remove(0);
+        assert_eq!(cached.key, key(1589));
+        cached.head.value.state = PrState::Open;
+        ctx.store.put_prs(Scope::Mine, vec![cached]).await.unwrap();
+        let mut syncer = Syncer::new(ctx);
+
+        assert!(syncer.full(Scope::Mine).await);
+        assert_eq!(synced(&mut harness).await.1, [1587, 1586]);
+        assert!(syncer.mine.seeded);
+        assert!(syncer.mine.known.contains_key(&key(1589)));
+        assert_eq!(by_ids(&server).await, [[ID_1587, ID_1586]]);
     }
 
     #[tokio::test]
@@ -990,6 +1357,20 @@ mod tests {
 
     const BY_IDS: &str = include_str!("../github/testdata/pr_by_ids.json");
 
+    /// Serves the `pr_by_ids.json` fixture to the `PrByIds` requests for
+    /// the ids `PR_1` and `PR_2` of the refresh tests.
+    async fn serve_refresh(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(body_string_contains("query PrByIds"))
+            .and(body_string_contains("\"PR_1\""))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(BY_IDS.as_bytes(), "application/json"),
+            )
+            .with_priority(1)
+            .mount(server)
+            .await;
+    }
+
     #[tokio::test]
     async fn a_delta_searches_since_last_delta_and_advances_it() {
         let server = MockServer::start().await;
@@ -1011,7 +1392,10 @@ mod tests {
             .await
             .unwrap();
         let mut syncer = Syncer::new(ctx);
-        syncer.mine.known.insert(key(1589));
+        syncer
+            .mine
+            .known
+            .insert(key(1589), version(UPDATED_1589, "old", Utc::now()));
 
         assert!(syncer.delta(Scope::Mine).await);
         assert_eq!(
@@ -1022,14 +1406,13 @@ mod tests {
             searches(&server).await[0],
             (
                 "is:pr author:chaosteil repo:acme/deploy updated:>=2026-10-30T11:58:00Z".to_owned(),
-                20
+                100
             )
         );
         assert!(
             syncer.mine.known.is_empty(),
             "merged pull requests are not known"
         );
-        assert_eq!(syncer.mine.delta_count, 6);
         let state = store
             .sync_state(Scope::Mine, repo_set)
             .await
@@ -1040,9 +1423,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_delta_cut_at_five_pages_keeps_last_delta() {
+    async fn a_delta_cut_at_max_results_keeps_last_delta() {
         let server = MockServer::start().await;
-        serve_pages(&server, false).await;
+        serve_searches(&server, stub_page(100, true), stub_page(100, true)).await;
+        serve_by_ids(&server, Vec::new()).await;
         let (ctx, mut harness) = logged_in(&server);
         let store = ctx.store.clone();
         let repo_set = repo_set_hash(&["acme/deploy".to_owned()]);
@@ -1057,8 +1441,10 @@ mod tests {
             .await
             .unwrap();
         let mut syncer = Syncer::new(ctx);
+        know_stubs(&mut syncer.team, 100);
         assert!(syncer.delta(Scope::Team).await);
         assert_eq!(synced(&mut harness).await.2, None);
+        assert_eq!(searches(&server).await.len(), MAX_RESULTS / 100);
         assert_eq!(
             store.sync_state(Scope::Team, repo_set).await.unwrap(),
             Some(state)
@@ -1078,13 +1464,7 @@ mod tests {
     #[tokio::test]
     async fn the_worker_serves_refresh_requests_and_runs_deltas() {
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(body_string_contains("query PrByIds"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_raw(BY_IDS.as_bytes(), "application/json"),
-            )
-            .mount(&server)
-            .await;
+        serve_refresh(&server).await;
         serve_pages(&server, true).await;
         let mut config = crate::config::Config::default();
         config.refresh.mine_secs = 1;
@@ -1189,7 +1569,7 @@ mod tests {
             Msg::PrRefreshed(pr) => assert_eq!(pr.key, key(1550)),
             other => panic!("{other:?}"),
         }
-        assert!(syncer.mine.known.contains(&key(1550)));
+        assert!(syncer.mine.known.contains_key(&key(1550)));
         assert_eq!(cached(&path), [1550]);
     }
 
@@ -1239,13 +1619,7 @@ mod tests {
     async fn the_pinned_worker_loads_then_refreshes_and_writes_no_rows() {
         let server = MockServer::start().await;
         serve_by_number(&server, BY_NUMBER).await;
-        Mock::given(method("POST"))
-            .and(body_string_contains("query PrByIds"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_raw(BY_IDS.as_bytes(), "application/json"),
-            )
-            .mount(&server)
-            .await;
+        serve_refresh(&server).await;
         serve_pages(&server, true).await;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cache.db");

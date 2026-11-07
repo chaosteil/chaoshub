@@ -7,7 +7,14 @@ query ListPrs($search: String!, $first: Int!, $after: String) {
     nodes {
       __typename
       ... on PullRequest {
-        ...PrFields
+        id
+        number
+        repository {
+          nameWithOwner
+        }
+        state
+        updatedAt
+        headRefOid
       }
     }
   }
@@ -15,112 +22,5 @@ query ListPrs($search: String!, $first: Int!, $after: String) {
     cost
     remaining
     resetAt
-  }
-}
-
-fragment PrFields on PullRequest {
-  id
-  number
-  title
-  body
-  bodyHTML
-  url
-  isDraft
-  state
-  updatedAt
-  headRefName
-  headRefOid
-  baseRefName
-  additions
-  deletions
-  changedFiles
-  mergeable
-  mergeStateStatus
-  reviewDecision
-  author {
-    __typename
-    login
-  }
-  autoMergeRequest {
-    enabledAt
-  }
-  mergeQueueEntry {
-    id
-  }
-  viewerLatestReviewRequest {
-    id
-  }
-  reviewRequests(first: 10) {
-    nodes {
-      requestedReviewer {
-        __typename
-        ... on User {
-          login
-        }
-        ... on Team {
-          slug
-          organization {
-            login
-          }
-        }
-      }
-    }
-  }
-  latestOpinionatedReviews(first: 10) {
-    nodes {
-      author {
-        __typename
-        login
-      }
-      state
-    }
-  }
-  statusCheckRollup {
-    ...RollupFields
-  }
-  stack {
-    id
-    number
-    size
-    baseRefName
-  }
-  stackEntry {
-    position
-  }
-  repository {
-    nameWithOwner
-    squashMergeAllowed
-    mergeCommitAllowed
-    rebaseMergeAllowed
-    squashMergeCommitTitle
-    squashMergeCommitMessage
-  }
-}
-
-fragment RollupFields on StatusCheckRollup {
-  state
-  contexts(first: 30) {
-    nodes {
-      __typename
-      ... on CheckRun {
-        name
-        status
-        conclusion
-        startedAt
-        completedAt
-        detailsUrl
-        checkSuite {
-          databaseId
-          workflowRun {
-            databaseId
-          }
-        }
-      }
-      ... on StatusContext {
-        context
-        state
-        targetUrl
-      }
-    }
   }
 }

@@ -13,7 +13,7 @@ use crate::domain::keys::PrKey;
 use crate::domain::observed::Observed;
 use crate::domain::pr::PullRequest;
 use crate::domain::stack::Stack;
-use crate::github::parse::{self, CiPollResult, Me};
+use crate::github::parse::{self, CiPollResult, Me, PrStub};
 use crate::github::{GithubClient, GithubError};
 
 /// The GraphQL `DateTime` scalar: an ISO 8601 time.
@@ -42,7 +42,7 @@ type HTML = String;
 )]
 pub(crate) struct Viewer;
 
-/// One page of a pull request search.
+/// One page of a pull request search: the light stub fields only.
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "src/github/schema.docs.graphql",
@@ -161,15 +161,14 @@ impl GithubClient {
         Ok((data.viewer.login, rate))
     }
 
-    /// One page of the pull request search `search`, with `first` results
+    /// One page of the pull request search `search`, with `first` stubs
     /// after the cursor `after`.
     pub(crate) async fn list_prs(
         &self,
         search: &str,
         first: u32,
         after: Option<&str>,
-        me: &Me<'_>,
-    ) -> Result<PrPage, GithubError> {
+    ) -> Result<PrStubPage, GithubError> {
         let started_at = Utc::now();
         let vars = list_prs::Variables {
             search: search.to_owned(),
@@ -177,9 +176,9 @@ impl GithubClient {
             after: after.map(str::to_owned),
         };
         let (data, rate) = self.run::<ListPrs>(vars).await?;
-        let (prs, next) = parse::list_prs::page(data, me, started_at)?;
-        Ok(PrPage {
-            prs,
+        let (stubs, next) = parse::list_prs::page(data)?;
+        Ok(PrStubPage {
+            stubs,
             next,
             rate,
             started_at,
@@ -341,8 +340,8 @@ impl GithubClient {
 
 /// One page of a pull request search.
 #[derive(Debug)]
-pub(crate) struct PrPage {
-    pub prs: Vec<PullRequest>,
+pub(crate) struct PrStubPage {
+    pub stubs: Vec<PrStub>,
     /// The cursor of the next page. `None` on the last page.
     pub next: Option<String>,
     pub rate: RateInfo,
@@ -417,7 +416,7 @@ mod tests {
         let server = MockServer::start().await;
         pages(&server, true).await;
         let page = client(&server)
-            .list_prs("is:pr author:chaosteil", 3, None, &ME)
+            .list_prs("is:pr author:chaosteil", 3, None)
             .await
             .unwrap();
         assert_eq!(page.next.as_deref(), Some("Y3Vyc29yOjM="));

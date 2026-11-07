@@ -421,20 +421,24 @@ pub(crate) enum Msg {
         login: String,
         cwd_repo: Option<Repo>,
     },
-    /// A sync of `scope` starts: a requested one or a timed one. Its pages
-    /// and its end follow in `PrsSynced`, or a `SyncFailed` ends it.
+    /// A sync of `scope` starts: a requested one or a timed one. Its
+    /// batches and its end follow in `PrsSynced`, or a `SyncFailed` ends
+    /// it.
     SyncStarted {
         scope: Scope,
     },
-    /// One page of a sync, or the end of a sync. The pages of a sync
-    /// arrive one by one, so the list fills while the sync runs.
+    /// One batch of a sync, or the end of a sync. The batches of a sync
+    /// arrive one by one, so the list fills while the sync runs. A batch
+    /// holds only the new and the changed pull requests of the search,
+    /// and the old ones that a full sync reads again.
     PrsSynced {
         scope: Scope,
-        /// The pull requests of one page. The message that ends the sync
+        /// The pull requests of one batch. The message that ends the sync
         /// has none.
         prs: Vec<PullRequest>,
-        /// Every pull request of the sync. Only the end of a full sync
-        /// that read every page has it.
+        /// Every pull request of the search, also the unchanged ones that
+        /// no batch holds. Only the end of a full sync that read every page
+        /// has it.
         seen: Option<Vec<PrKey>>,
         /// The start time of the first page of the sync.
         started_at: DateTime<Utc>,
