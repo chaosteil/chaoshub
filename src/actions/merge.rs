@@ -39,6 +39,9 @@ use super::{Action, Applicability, Prepare, Services};
 /// The id of the merge action.
 pub(crate) const ID: &str = "merge";
 
+/// The id of the stack merge action.
+pub(crate) const STACK_ID: &str = "merge_stack";
+
 /// The merge action.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MergeAction;
@@ -112,7 +115,97 @@ impl Action for MergeAction {
         _input: ActionInput,
         svc: Services,
     ) -> BoxFuture<'static, Result<String, String>> {
-        Box::pin(merge(sel, svc, SCHEDULE, RETARGET))
+        let key = sel.target.key();
+        Box::pin(merge(sel, key, ID, svc, SCHEDULE, RETARGET))
+    }
+}
+
+/// The stack merge action. It merges the whole stack of the selected pull
+/// request: it is the merge action on the top entry of the stack.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct MergeStackAction;
+
+/// The top entry of the stack of a selection.
+enum Top {
+    /// The pull request has no stack.
+    NoStack,
+    /// The top entry is not in the loaded stack entries.
+    NotLoaded,
+    /// The selection with the top entry as the pull request.
+    Loaded(Box<Selection>),
+}
+
+/// The selection of the top entry of the stack of `sel`. The stack, the
+/// local match, the repo, the user and the configuration table do not
+/// change.
+fn top_selection(sel: &Selection) -> Top {
+    let Target::Pr { pr, stack, .. } = &sel.target;
+    let Some(stack_ref) = &pr.head.value.stack else {
+        return Top::NoStack;
+    };
+    let Some(top) = stack
+        .iter()
+        .find(|entry| position(entry) == Some(stack_ref.size))
+    else {
+        return Top::NotLoaded;
+    };
+    let mut top_sel = sel.clone();
+    let Target::Pr { pr, .. } = &mut top_sel.target;
+    *pr = top.clone();
+    Top::Loaded(Box::new(top_sel))
+}
+
+impl Action for MergeStackAction {
+    fn id(&self) -> &'static str {
+        STACK_ID
+    }
+
+    fn label(&self) -> &'static str {
+        "Merge stack"
+    }
+
+    fn default_key(&self) -> Option<KeyChord> {
+        Some(KeyChord {
+            code: KeyCode::Char('M'),
+            mods: KeyModifiers::NONE,
+        })
+    }
+
+    fn applies(&self, sel: &Selection) -> Applicability {
+        match top_selection(sel) {
+            Top::NoStack => Applicability::Hidden,
+            Top::NotLoaded => Applicability::Disabled("stack not loaded"),
+            Top::Loaded(top) => MergeAction::applies(&top),
+        }
+    }
+
+    fn prepare(&self, sel: &Selection) -> Prepare {
+        let Top::Loaded(top) = top_selection(sel) else {
+            return MergeAction::prepare(sel);
+        };
+        match MergeAction::prepare(&top) {
+            Prepare::Confirm(spec) => {
+                let Target::Pr { pr, .. } = &top.target;
+                Prepare::Confirm(ConfirmSpec {
+                    title: format!("merge the stack up to #{}?", pr.key.number),
+                    ..spec
+                })
+            }
+            other => other,
+        }
+    }
+
+    fn execute(
+        &self,
+        sel: Selection,
+        _input: ActionInput,
+        svc: Services,
+    ) -> BoxFuture<'static, Result<String, String>> {
+        let key = sel.target.key();
+        let Top::Loaded(top) = top_selection(&sel) else {
+            return Box::pin(async { Err("stack not loaded".to_owned()) });
+        };
+        Box::pin(merge(*top, key, STACK_ID, svc, SCHEDULE, RETARGET))
     }
 }
 
@@ -174,11 +267,13 @@ enum Final {
     Enqueued,
 }
 
-/// One run of the merge action: the services, the key of its events and
-/// the settings that every merge request of the run shares.
+/// One run of the merge action: the services, the key and the action id
+/// of its events and the settings that every merge request of the run
+/// shares.
 struct Run<'a> {
     svc: &'a Services,
     key: TargetKey,
+    id: &'static str,
     method: MergeMethod,
     bypass_rules: bool,
     schedule: Schedule,
@@ -188,10 +283,12 @@ struct Run<'a> {
 /// Merges the target, and runs `jj git fetch` after a merge. A stack with
 /// more than one merged entry and the `Sequential` strategy merges one
 /// entry after the other. Every state goes to `app` as
-/// `ActionEvent::MergeStatus`. A cancel stops the poll, not the merge on
-/// GitHub.
+/// `ActionEvent::MergeStatus`, with the action `id` and the row `key`. A
+/// cancel stops the poll, not the merge on GitHub.
 async fn merge(
     sel: Selection,
+    key: TargetKey,
+    id: &'static str,
     svc: Services,
     schedule: Schedule,
     retarget: Retarget,
@@ -202,7 +299,8 @@ async fn merge(
     let settings = repo_merge(&sel)?;
     let run = Run {
         svc: &svc,
-        key: sel.target.key(),
+        key,
+        id,
         method: method(repo, &settings),
         bypass_rules: settings.bypass_rules,
         schedule,
@@ -389,7 +487,7 @@ impl Run<'_> {
     /// that `app` is gone, so the event has no reader.
     async fn send(&self, event: ActionEvent) {
         let msg = Msg::ActionEvent {
-            id: ID,
+            id: self.id,
             key: self.key.clone(),
             event,
         };
@@ -862,6 +960,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn merge_stack_merges_up_to_the_top_entry() {
+        let sel = select(entry(1, 1), stack3(), None);
+        assert_eq!(MergeStackAction.applies(&sel), Applicability::Enabled);
+        assert_eq!(
+            MergeStackAction.prepare(&sel),
+            confirm(
+                "merge the stack up to #3?",
+                &[
+                    "merges 3 pull requests one by one, bottom first, each with its own message:",
+                    "  1 #1 Change 1  CI passed, approved",
+                    "  2 #2 Change 2  CI passed, approved",
+                    "  3 #3 Change 3  CI passed, approved",
+                    "method: squash",
+                ],
+            )
+        );
+    }
+
+    #[test]
+    fn merge_stack_is_hidden_or_disabled() {
+        let mut draft_top = stack3();
+        draft_top[2].head.value.is_draft = true;
+        let draft_sel = select(entry(1, 1), draft_top, None);
+        assert_eq!(MergeAction::applies(&draft_sel), Applicability::Enabled);
+        let cases = [
+            (
+                "no stack",
+                select(entry(7, 0), Vec::new(), None),
+                Applicability::Hidden,
+            ),
+            (
+                "top entry not loaded",
+                select(entry(1, 1), vec![entry(1, 1), entry(2, 2)], None),
+                Applicability::Disabled("stack not loaded"),
+            ),
+            (
+                "draft at the top",
+                draft_sel,
+                Applicability::Disabled("a pull request of the stack is a draft"),
+            ),
+        ];
+        for (name, sel, applies) in cases {
+            assert_eq!(MergeStackAction.applies(&sel), applies, "{name}");
+        }
+    }
+
     /// A schedule in milliseconds, so the poll tests run fast.
     const FAST: Schedule = Schedule {
         fast: Duration::from_millis(5),
@@ -929,7 +1074,7 @@ mod tests {
             tx,
         };
         let target = sel.target.key();
-        let result = merge(sel, svc, FAST, FAST_RETARGET).await;
+        let result = merge(sel, target.clone(), ID, svc, FAST, FAST_RETARGET).await;
         let mut events = Vec::new();
         while let Ok(msg) = rx.try_recv() {
             let Msg::ActionEvent { id, key, event } = msg else {
@@ -1258,6 +1403,65 @@ mod tests {
                 }),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn merge_stack_from_the_bottom_merges_every_entry() {
+        let server = wiremock::MockServer::start().await;
+        let merged =
+            |sha: &str| serde_json::json!({ "status": "merged", "details": { "sha": sha } });
+        mount_merge(&server, 1, 200, merged("sha1"), 1).await;
+        mount_by_id(&server, 2, "main", None).await;
+        mount_merge(&server, 2, 200, merged("sha2"), 1).await;
+        let mut sel = sequential_stack(2);
+        let Target::Pr { pr, stack, .. } = &mut sel.target;
+        for entry in stack.iter_mut() {
+            entry.head.value.stack.as_mut().unwrap().size = 2;
+        }
+        *pr = stack[0].clone();
+        let bottom = sel.target.key();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let client = crate::github::GithubClient::new(
+            crate::github::TokenSource::command("echo", &["tok"]),
+            &server.uri(),
+        )
+        .unwrap();
+        let svc = Services {
+            client: std::sync::Arc::new(client),
+            locks: crate::vcs::lock::RepoLocks::default(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            tx,
+        };
+
+        let result = MergeStackAction
+            .execute(sel, ActionInput::Confirmed, svc)
+            .await;
+
+        assert_eq!(result, Ok("merged #1, #2".to_owned()));
+        let mut events = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            let Msg::ActionEvent { id, key, event } = msg else {
+                panic!("unexpected message {msg:?}");
+            };
+            assert_eq!(id, STACK_ID);
+            assert_eq!(key, bottom);
+            events.push(event);
+        }
+        assert_eq!(
+            events,
+            [
+                ActionEvent::MergeStatus(MergeProgress::Merged { sha: "sha1".into() }),
+                ActionEvent::Progress("merged #1 (1 of 2)".into()),
+                ActionEvent::MergeStatus(MergeProgress::Merged { sha: "sha2".into() }),
+                ActionEvent::Progress("merged #2 (2 of 2)".into()),
+            ]
+        );
+        let titles: Vec<_> = merge_bodies(&server)
+            .await
+            .iter()
+            .map(|body| body["commit_title"].clone())
+            .collect();
+        assert_eq!(titles, ["Change 1 (#1)", "Fresh 2 (#2)"]);
     }
 
     #[tokio::test]
