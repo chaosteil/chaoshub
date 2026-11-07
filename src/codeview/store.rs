@@ -32,6 +32,7 @@ const FIELDS: &[&str] = &[
     "created_at",
     "updated_at",
     "remote_id",
+    "reply_to",
 ];
 
 /// The directory of the comment files: `config` when it is set, else
@@ -389,6 +390,18 @@ mod tests {
         let places: Vec<_> = current.iter().map(Comment::place).collect();
         assert_eq!(places, ["src/lib.rs:L12-14 (new)", "PR", "commit message"]);
         assert_eq!(current[0].summary(), "Trim the name.");
+    }
+
+    #[test]
+    fn the_reply_to_field_does_not_go_into_the_body() {
+        let text = "---\nversion: 1\nrepo: /repo\nrange: pr-14-h1\n---\n\n\
+                    ## codeview-comment c1\n\n- file: src/a.rs\n- start_line: 2\n\
+                    - end_line: 2\n- side: new\n- synced_at:\n- reply_to: 123\n\nA reply\n";
+        let file = parse(text).unwrap();
+        assert_eq!(
+            file.comments[0].comment,
+            comment("c1", "src/a.rs", (2, 2), "new", "A reply")
+        );
     }
 
     #[test]

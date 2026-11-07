@@ -318,7 +318,7 @@ mod tests {
         format!(
             "---\nversion: 1\nrepo: {}\nrange: pr-14-h1\n---\n\n\
              ## codeview-comment c1\n\n- file: src/a.rs\n- start_line: 2\n- end_line: 2\n\
-             - side: new\n- synced_at:\n\nFirst note\n\n\
+             - side: new\n- synced_at:\n- reply_to: 123\n\nFirst note\n\n\
              ## codeview-comment c2\n\n- file: src/b.rs\n- start_line: 5\n- end_line: 5\n\
              - side: new\n- synced_at: 2026-01-01T00:00:00Z\n\nSecond note\n",
             repo.display()
