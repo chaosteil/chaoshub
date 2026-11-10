@@ -1,0 +1,20 @@
+---
+source: src/ui/popup.rs
+expression: "rows(&draw_pane(&numbered_lines(3), 0, &testdata::pierre()))"
+---
+▛▀▀▀▓▀▀▀▀▀▀▀▀▀▀▒▀▒▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▓▀▀▀░▜
+▌ #7 title                             ▐
+▌ subtitle                             ▐
+░ ▌ 1 Description                      ▐
+▌ ──────────────────────────────────── ▐
+▌ line 0                               ▐
+▌ line 1                               ▒
+▌ line 2                               ▐
+▌                                      ▐
+▌                                      ▒
+▌                                      ▐
+▌                                      ▐
+▌                                      ▐
+▌                                      ▐
+▌                                      ▐
+▙▓▄▒▄▄▄▄▄▄▄░▄▄▒▄▄▄▄▄▄▄▄▄▄▄░▄░▄▄▄▄▄▄▒▄▒░▟
