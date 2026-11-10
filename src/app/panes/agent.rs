@@ -3,11 +3,14 @@
 //! commit.
 //!
 //! The pane has no direct keys. Its own actions are in the actions menu
-//! (`space`): `r`, `i`, `d` and `a` start review, improve, describe and
+//! (`space`): `R`, `I`, `D` and `a` start review, improve, describe and
 //! ask. `a` asks for the question first. `p` opens a confirm popup with
 //! the line diff of the describe result, and `y` there sets the title and
-//! the body of the pull request. In the menu, the pane keys win over the
-//! action keys, so `d` there starts describe, not draft.
+//! the body of the pull request. In the menu, the action keys win over the
+//! pane keys, so the pane keys are uppercase where an action key uses the
+//! lowercase letter: `r` there opens the Review popup, and `R` starts the
+//! pr-agent review. The menu of this pane does not show the agent action,
+//! so `p` is free for apply.
 
 use crate::app::age::age;
 use crate::app::frame::spinner;
@@ -96,9 +99,9 @@ impl Pane for AgentPane {
             return apply_confirm(cx);
         }
         let tool = match key.code {
-            KeyCode::Char('r') => Tool::Review,
-            KeyCode::Char('i') => Tool::Improve,
-            KeyCode::Char('d') => Tool::Describe,
+            KeyCode::Char('R') => Tool::Review,
+            KeyCode::Char('I') => Tool::Improve,
+            KeyCode::Char('D') => Tool::Describe,
             KeyCode::Char('a') => Tool::Ask(String::new()),
             _ => return None,
         };
@@ -179,9 +182,9 @@ fn label(kind: ToolKind) -> &'static str {
 /// The title and the key of a tool.
 fn title(kind: ToolKind) -> (&'static str, char) {
     match kind {
-        ToolKind::Review => ("Review", 'r'),
-        ToolKind::Improve => ("Improve", 'i'),
-        ToolKind::Describe => ("Describe", 'd'),
+        ToolKind::Review => ("Review", 'R'),
+        ToolKind::Improve => ("Improve", 'I'),
+        ToolKind::Describe => ("Describe", 'D'),
         ToolKind::Ask => ("Ask", 'a'),
     }
 }
@@ -373,11 +376,11 @@ mod tests {
         assert_eq!(
             texts(&state()),
             [
-                "Review [space r] · never",
+                "Review [space R] · never",
                 "",
-                "Improve [space i] · never",
+                "Improve [space I] · never",
                 "",
-                "Describe [space d] · never",
+                "Describe [space D] · never",
                 "",
                 "Ask [space a] · never",
             ]
@@ -419,15 +422,15 @@ mod tests {
         assert_eq!(
             lines[..3],
             [
-                "Review [space r] · done 5m ago · anthropic/claude-sonnet-5-5 · head 3a1f2c0",
+                "Review [space R] · done 5m ago · anthropic/claude-sonnet-5-5 · head 3a1f2c0",
                 "outdated: for 3a1f2c0, the head is now oid7",
                 "**Key issues**\n\n- **Possible Bug** `src/lib.rs:3-5`: It breaks.",
             ]
         );
-        assert!(lines[4].starts_with("Improve [space i] · "), "{}", lines[4]);
+        assert!(lines[4].starts_with("Improve [space I] · "), "{}", lines[4]);
         assert!(lines[4].contains(" running · "), "{}", lines[4]);
         assert_eq!(lines[5], "possible issue · src/lib.rs:4 · Trim the name");
-        assert_eq!(lines[7], "Describe [space d] · failed");
+        assert_eq!(lines[7], "Describe [space D] · failed");
         assert_eq!(lines[8], "pr-agent failed: no key");
         assert_eq!(lines[11], "5m ago · head oid7");
         assert_eq!(lines[12], "**Q:** Why?\n\nBecause.");
@@ -462,9 +465,9 @@ mod tests {
                 tool,
             })]
         };
-        assert_eq!(press('r'), Some(job(Tool::Review)));
-        assert_eq!(press('i'), Some(job(Tool::Improve)));
-        assert_eq!(press('d'), Some(job(Tool::Describe)));
+        assert_eq!(press('R'), Some(job(Tool::Review)));
+        assert_eq!(press('I'), Some(job(Tool::Improve)));
+        assert_eq!(press('D'), Some(job(Tool::Describe)));
         assert_eq!(press('a'), Some(job(Tool::Ask(String::new()))));
         assert_eq!(press('x'), None);
         assert_eq!(press('p'), None, "no describe result");
