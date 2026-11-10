@@ -30,6 +30,12 @@ impl Pane for StackPane {
         matches!(target, Target::Pr { pr, .. } if pr.head.value.stack.is_some())
     }
 
+    /// The pane numbers are fixed, so the tab `4` also shows, dim, for a
+    /// pull request without a stack.
+    fn keeps_tab(&self) -> bool {
+        true
+    }
+
     fn init_state(&self) -> PaneState {
         PaneState::default()
     }

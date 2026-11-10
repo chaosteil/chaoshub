@@ -197,14 +197,20 @@ fn overlay_models(
         .collect()
 }
 
-/// The pane tabs of the panes at the registry indexes `order`.
-pub(crate) fn pane_tabs(panes: &[Box<dyn Pane>], order: &[usize]) -> Vec<PaneTab> {
-    order
+/// The pane tabs for `target`, in registry order: the panes that apply,
+/// and the dim tabs of the panes that keep their tab.
+pub(crate) fn pane_tabs(panes: &[Box<dyn Pane>], target: &Target) -> Vec<PaneTab> {
+    panes
         .iter()
-        .map(|&i| PaneTab {
-            key: panes[i].key(),
-            title: panes[i].title(),
-            pane: i,
+        .enumerate()
+        .filter_map(|(i, pane)| {
+            let applies = pane.applies(target);
+            (applies || pane.keeps_tab()).then(|| PaneTab {
+                key: pane.key(),
+                title: pane.title(),
+                pane: i,
+                dim: !applies,
+            })
         })
         .collect()
 }
@@ -266,7 +272,7 @@ fn popup_content(
         .is_some_and(|detail| is_stale(&detail.value, pr));
     let tag = if old_detail { " · stale" } else { "" };
     let order = applicable(panes, &target);
-    let tabs = pane_tabs(panes, &order);
+    let tabs = pane_tabs(panes, &target);
     let cx = KeyCx {
         data,
         target: Some(&target),
@@ -274,6 +280,10 @@ fn popup_content(
         keys: &keymap::DEFAULT,
     };
     let size = pane_size(areas, &tabs);
+    let active = tabs
+        .iter()
+        .position(|tab| tab.pane == popup.active && !tab.dim)
+        .unwrap_or(0);
     let (pane, cursor, scroll) = match (panes.get(popup.active), popup.panes.get(popup.active)) {
         (Some(pane), Some(ps)) if order.contains(&popup.active) => {
             (pane.model(&cx, ps, size), ps.cursor, ps.scroll)
@@ -294,7 +304,7 @@ fn popup_content(
             head.author, head.head_ref, head.base_ref
         ),
         tabs,
-        active: order.iter().position(|&i| i == popup.active).unwrap_or(0),
+        active,
         pane,
         cursor,
         scroll,

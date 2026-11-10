@@ -1,8 +1,10 @@
 //! The `Pane` trait and the pane registry.
 //!
 //! A pane is one sub-view of the pull request popup. The popup shows the
-//! panes whose `applies` is true, in registry order. A new pane is one
-//! module plus one line in `PANES`.
+//! panes whose `applies` is true, in registry order. A pane whose
+//! `keeps_tab` is true also shows when it does not apply: then its tab
+//! is dim, and it cannot be selected. A new pane is one module plus one
+//! line in `PANES`.
 
 pub(crate) mod agent;
 mod checks;
@@ -52,6 +54,12 @@ pub(crate) trait Pane: Send + Sync {
     /// The key that selects the pane in the popup, for example `1`.
     fn key(&self) -> char;
     fn applies(&self, target: &Target) -> bool;
+    /// True when the popup shows the tab of the pane also when the pane
+    /// does not apply. Then the tab is dim, and it cannot be selected.
+    /// The default is false: the popup shows no tab.
+    fn keeps_tab(&self) -> bool {
+        false
+    }
     fn init_state(&self) -> PaneState;
     /// Sets the start of a new state for `target`, for example the cursor
     /// on the current entry. The default does nothing.

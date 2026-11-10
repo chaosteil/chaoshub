@@ -225,7 +225,8 @@ pub(crate) enum OverlayContent {
     Popup {
         title: String,
         subtitle: String,
-        /// The panes that apply, in registry order.
+        /// The panes that apply and the panes that keep their tab, in
+        /// registry order.
         tabs: Vec<PaneTab>,
         active: usize,
         pane: PaneModel,
@@ -272,6 +273,9 @@ pub(crate) struct PaneTab {
     pub title: &'static str,
     /// The index of the pane in the pane registry.
     pub pane: usize,
+    /// True when the pane does not apply: the tab is dim, and it cannot
+    /// be selected.
+    pub dim: bool,
 }
 
 /// The space between two pane tabs on one row. With the edge space of a

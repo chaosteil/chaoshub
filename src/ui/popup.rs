@@ -51,7 +51,11 @@ fn tabs_line(
             x = x.saturating_add(u16::try_from(PANE_TAB_GAP.len()).unwrap_or(u16::MAX));
         }
         let cells = tab.cells();
-        let mut tab = theme.tab(&tab.label(), i == active);
+        let mut tab = if tab.dim {
+            theme.dim_tab(&tab.label())
+        } else {
+            theme.tab(&tab.label(), i == active)
+        };
         // The skins draw one or two edge cells. Spaces fill the tab to
         // its width, so that each skin gives the rows of `pane_tab_rows`.
         let drawn = tab.iter().map(Span::width).sum::<usize>();
@@ -183,6 +187,7 @@ mod tests {
             key,
             title,
             pane: 0,
+            dim: false,
         };
         let tabs = [
             tab('1', "Description"),
@@ -211,7 +216,12 @@ mod tests {
         ]
         .into_iter()
         .enumerate()
-        .map(|(pane, (key, title))| PaneTab { key, title, pane })
+        .map(|(pane, (key, title))| PaneTab {
+            key,
+            title,
+            pane,
+            dim: false,
+        })
         .collect();
         let pane = PaneModel::Lines {
             lines: vec![vec![crate::app::models::Cell {
@@ -245,6 +255,66 @@ mod tests {
         assert!(row(&buf, 6).contains("first line"));
     }
 
+    #[test]
+    fn a_dim_tab_has_the_muted_color_in_every_theme() {
+        use crate::theme::{PaletteChoice, ThemeKind, ThemeStyle};
+
+        let tabs: Vec<PaneTab> = [
+            ('3', "Conversation", false),
+            ('4', "Stack", true),
+            ('5', "Files", false),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(pane, (key, title, dim))| PaneTab {
+            key,
+            title,
+            pane,
+            dim,
+        })
+        .collect();
+        let pane = PaneModel::Lines {
+            lines: Vec::new(),
+            wrap: false,
+        };
+        let plain = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Plain,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
+        let themes = [
+            testdata::pierre(),
+            testdata::ansi16(),
+            testdata::punk(),
+            testdata::punk_ansi16(),
+            plain,
+        ];
+        for theme in themes {
+            let popup = Popup {
+                title: "#7 title",
+                subtitle: "subtitle",
+                tabs: &tabs,
+                active: 0,
+                pane: &pane,
+                cursor: 0,
+                scroll: 0,
+            };
+            let area = Rect::new(0, 0, 60, 10);
+            let mut buf = Buffer::empty(area);
+            let mut hits = HitMap::default();
+            render(&popup, area, &mut buf, &theme, &mut hits);
+            let skin = theme.skin;
+            let stack = &buf[(find(&buf, 3, "Stack"), 3)];
+            assert_eq!(stack.fg, theme.palette.fg_mute, "{skin:?}");
+            assert_eq!(stack.bg, theme.palette.bg, "{skin:?}");
+            assert!(stack.modifier.contains(Modifier::DIM), "{skin:?}");
+            let files = &buf[(find(&buf, 3, "Files"), 3)];
+            assert!(!files.modifier.contains(Modifier::DIM), "{skin:?}");
+        }
+    }
+
     /// A pane of `count` numbered lines.
     fn numbered_lines(count: usize) -> PaneModel {
         PaneModel::Lines {
@@ -267,6 +337,7 @@ mod tests {
             key: '1',
             title: "Description",
             pane: 0,
+            dim: false,
         }];
         let popup = Popup {
             title: "#7 title",

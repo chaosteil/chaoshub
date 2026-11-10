@@ -1528,7 +1528,12 @@ mod tests {
         {
             for &(key, title) in extra {
                 let pane = tabs.len();
-                tabs.push(crate::app::models::PaneTab { key, title, pane });
+                tabs.push(crate::app::models::PaneTab {
+                    key,
+                    title,
+                    pane,
+                    dim: false,
+                });
             }
             *a = active;
         }
@@ -1599,6 +1604,38 @@ mod tests {
         let (l, r) = pane_highlight(&middle, &tabs, y);
         assert!(span(1).0 < l && l < span(2).0, "{l} between the tabs");
         assert!(span(1).1 < r && r < span(2).1, "{r} between the tabs");
+        let end = draw_view(&mut terminal, &mut fx, &model, 60);
+        assert_eq!(pane_highlight(&end, &tabs, y), span(2), "on the new tab");
+        assert!(!fx.active());
+        assert_eq!(end, plain, "the last frame is the real pane tabs");
+    }
+
+    #[test]
+    fn a_pane_tab_slide_passes_over_a_dim_tab() {
+        // The popup fixture with the tab of pane 1 dim, and the tab at
+        // `active` active.
+        let dim = |active: usize| {
+            let mut model = popup_frame(active, &[]);
+            if let OverlayContent::Popup { tabs, .. } = &mut model.overlays[0].content {
+                tabs[1].dim = true;
+            }
+            model
+        };
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let model = dim(2);
+        let tabs = pane_spans(&model);
+        let y = tabs[0].2;
+        let span = |i: usize| (tabs[i].0, tabs[i].1);
+        let plain = draw_view(&mut terminal, &mut Transitions::new(false, 160), &model, 0);
+        let mut fx = new();
+        draw_view(&mut terminal, &mut fx, &dim(0), 0);
+        fx.apply(vec![UiEvent::PaneTabChanged { from: 0, to: 2 }]);
+        let start = draw_view(&mut terminal, &mut fx, &model, 0);
+        assert!(fx.active());
+        assert_eq!(pane_highlight(&start, &tabs, y), span(0), "on the old tab");
+        let middle = draw_view(&mut terminal, &mut fx, &model, 60);
+        let (l, _) = pane_highlight(&middle, &tabs, y);
+        assert!(span(0).0 < l && l < span(2).0, "{l} between the tabs");
         let end = draw_view(&mut terminal, &mut fx, &model, 60);
         assert_eq!(pane_highlight(&end, &tabs, y), span(2), "on the new tab");
         assert!(!fx.active());

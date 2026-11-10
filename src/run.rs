@@ -2595,6 +2595,20 @@ mod tests {
         ));
     }
 
+    /// The popup of #99, the first row. #99 has no stack, so the Stack
+    /// tab is dim, and `4` selects nothing.
+    #[test]
+    fn popup_without_a_stack_100() {
+        let mut app = seeded_app(100, 30, crate::app::testdata::mine_snapshot());
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(enter));
+        press(&mut app, '4');
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
     #[test]
     fn popup_stack_100() {
         let mut app = popup_app(100, 30);
