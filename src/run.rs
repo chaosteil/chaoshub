@@ -2600,6 +2600,8 @@ mod tests {
         let middle = frame(&mut app, &mut transitions, 60);
         let end = frame(&mut app, &mut transitions, 60);
         assert!(!transitions.active());
+        let real = frame(&mut app, &mut Transitions::new(false, 160), 0);
+        assert_eq!(end, real, "the last frame is the real tab bar");
         let below_the_bar = |screen: &str| {
             screen
                 .lines()
