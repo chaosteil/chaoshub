@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-/// A PR tracking TUI for jj, Rex and codeview.
+/// A PR tracking TUI for GitHub, with jj, Rex and codeview support.
 #[derive(Debug, Clone, PartialEq, Eq, Parser)]
 #[command(name = "chaoshub", version, about)]
 pub struct Cli {

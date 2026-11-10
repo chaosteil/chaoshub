@@ -2,9 +2,9 @@
 
 chaoshub is a terminal app that tracks your GitHub pull requests. The
 Mine tab lists your own pull requests as stacks, and only pull requests.
-A local jj change without a pull request gets no row. The change id,
-commit and workspace columns of each pull request come from the jj scan
-of your local checkout. A header row above the list names the columns;
+A local change without a pull request gets no row. The change,
+commit and workspace columns of each pull request come from the scan
+of your local checkout, with jj or with git. A header row above the list names the columns;
 `H` shows or hides it. The Review tab shows the pull requests of your
 colleagues that request your review. The Team tab shows the other pull
 requests of your colleagues. By default, these two tabs show only the
@@ -16,17 +16,47 @@ starts, and then syncs with GitHub in the background.
 
 ## Requirements
 
-- **jj** (Jujutsu) on your `PATH`. chaoshub reads your local changes and
-  workspaces with `jj`.
 - **git** on your `PATH`. chaoshub finds the repo of the current
   directory with `git remote get-url origin`, and prefetches pull request
-  refs with `git fetch`.
+  refs with `git fetch`. In a repo without jj, chaoshub also reads your
+  local branches and worktrees with `git`.
+- **jj** (Jujutsu, recommended, not required) on your `PATH`. In a jj
+  repo, chaoshub reads your local changes and workspaces with `jj`. jj
+  adds these features:
+  - The change column shows the jj change id, not the branch name.
+  - A pull request also matches a local change when the last `/` part
+    of its branch name is a prefix of the change id.
+  - The scan reads the stack of each workspace, not only the branch tips.
+  - `Y` copies the change id.
 - **gh**, the GitHub command line tool, logged in. Run `gh auth login`
   once. chaoshub gets its token from `gh auth token`.
 - **nvim** with the **codeview** plugin, for the review action (`v`).
 - **Rex** (optional). Inside Rex, the review and the pull request
   detail open in Rex panes beside chaoshub. Without Rex, the review runs
   in the same terminal, and chaoshub comes back when nvim quits.
+
+### jj and git
+
+chaoshub selects the tool for each repo. It uses no configuration for
+this:
+
+- A repo with a `.jj` directory uses jj when `jj` is on your `PATH`. A
+  colocated repo (a jj repo that also has `.git`) also uses jj.
+- Every other repo uses git. A colocated repo without `jj` on your `PATH`
+  also uses git.
+
+In a git repo, the Mine tab shows the local branch name in the change
+column, the short commit in the commit column, and the worktree in the
+workspace column. The main worktree is `default`, the same as the
+default jj workspace. Another worktree has the name of its directory. A
+pull request matches a local branch when the branch tip is the head
+commit of the pull request, or when the branch name is its head branch.
+After a merge, chaoshub runs `jj git fetch` in a jj repo and
+`git fetch origin` in a git repo.
+
+chaoshub does not support a jj repo without `.git`. Use a colocated repo
+(`jj git init --colocate`). For a jj repo without `.git`, chaoshub shows
+an error in the status line.
 
 ## Install
 
@@ -76,7 +106,7 @@ chaoshub pr chaosteil/chaoshub-test 7
 
 chaoshub uses these XDG paths on macOS too, not `~/Library`.
 
-The cache holds the last lists, the jj scans and the filters of the
+The cache holds the last lists, the local scans and the filters of the
 tabs. If the cache does not open, chaoshub runs with an empty cache in
 memory. To delete the cache, run:
 
@@ -124,7 +154,7 @@ name = "my-org/deploy"
 | Key | Default | Meaning |
 |---|---|---|
 | `name` | required | The repo in the `owner/name` form. |
-| `path` | none | The local jj checkout. Without a path, chaoshub shows no jj data for the repo, and the review action is disabled. |
+| `path` | none | The local checkout, a jj repo or a git repo. Without a path, chaoshub shows no local data for the repo, and the review action is disabled. |
 
 ### `[refresh]`
 
@@ -136,7 +166,7 @@ The poll intervals, in seconds.
 | `team_secs` | `90` | The sync of the pull requests of your colleagues (only the changes). |
 | `full_secs` | `900` | The full sync of both lists. The prefetch also fetches each base branch once in this period. |
 | `ci_secs` | `45` | The CI poll of the visible pull requests. |
-| `jj_secs` | `30` | The jj scan, while the active tab shows jj data. |
+| `jj_secs` | `30` | The local scan with jj or git, while the active tab shows local data. |
 
 When the GitHub rate budget runs low, the sync intervals double.
 
@@ -630,7 +660,7 @@ default.
 | `close` | `X` | Closes the pull request after a confirm popup. |
 | `browser` | `o` | Opens the pull request in the browser. |
 | `copy_url` | `y` | Copies the pull request URL. |
-| `copy_change_id` | `Y` | Copies the jj change id of the local change that matches the pull request. Hidden when no local change matches. |
+| `copy_change_id` | `Y` | Copies the jj change id of the local change that matches the pull request. In a git repo, it copies the local branch name, and the actions menu shows "copy the branch name". Hidden when no local change matches. |
 | `agent` | `P` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
 | `codeview_send` | `R` | Opens the Review popup. There you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). |
 
@@ -1056,6 +1086,9 @@ The sidebar shows the panes whose `applies` is true, in the order of
 `PANES`.
 
 ## Development
+
+jj is recommended, never required: every feature must work in a git-only
+repo (see [AGENTS.md](AGENTS.md)).
 
 Every change must pass these checks:
 
