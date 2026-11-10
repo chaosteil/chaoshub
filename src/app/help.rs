@@ -34,13 +34,13 @@ const APP_KEYS: &[(&[&str], &str)] = &[
 const ACTIONS_TITLE: &str = "actions (in the actions menu)";
 
 /// The title of the section of the action keys that work directly in the
-/// pull request detail.
-const DETAIL_TITLE: &str = "actions in the detail";
+/// list and in the pull request detail.
+const DETAIL_TITLE: &str = "actions in the list and the detail";
 
 /// The help model: the app keys, the keys of each tab that has its own,
-/// the actions, and the action keys of the pull request detail. A binding
-/// without a chord is not in the help. The titles of the action sections
-/// tell where the action keys work.
+/// the actions, and the direct action keys of the list and the pull
+/// request detail. A binding without a chord is not in the help. The
+/// titles of the action sections tell where the action keys work.
 pub(crate) fn help_model(
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
@@ -159,7 +159,7 @@ mod tests {
         assert_eq!(
             model.sections[2].entries,
             [entry("v", "review")],
-            "only review works directly in the detail"
+            "only review works directly in the list and the detail"
         );
         let overrides = BTreeMap::from([("detail_merge".to_owned(), "m".to_owned())]);
         let keymap = Keymap::with_actions(&actions, &overrides).unwrap();

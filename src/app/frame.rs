@@ -317,20 +317,22 @@ fn hints_model(
     let hints = match state.ui.overlays.iter().rev().find(|o| !o.closing) {
         Some(overlay) => overlay_hints(&state.data, keymap, panes, &overlay.state),
         None if state.ui.filter_edit => filter_hints(),
-        None => list_hints(state, keymap, tabs, list),
+        None => list_hints(state, keymap, tabs, &REGISTRY, list),
     };
     Some(KeyHintsModel {
         hints: fit(hints, usize::from(state.data.size.width)),
     })
 }
 
-/// The hints of the list: the app keys, the keys of the active tab and
-/// the `actions` key when the cursor row has a target. The primary hints
-/// come first.
+/// The hints of the list: the app keys, the keys of the active tab, and
+/// when the cursor row has a target, the `actions` key and the direct
+/// keys of `actions` that are enabled for it. The primary hints come
+/// first.
 fn list_hints(
     state: &AppState,
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
+    actions: &[Box<dyn Action>],
     list: &ListModel,
 ) -> Vec<KeyHint> {
     let tab_names: Vec<String> = (1..=tabs.len().min(9))
@@ -359,16 +361,41 @@ fn list_hints(
             chord: Some(chord),
         }));
     }
-    if list
+    if let Some(target) = list
         .rows
         .get(list.cursor)
         .and_then(|row| row_target(&state.data, &row.item))
-        .is_some()
     {
         hints.extend(app_hint(keymap, &["actions"], "actions", true));
+        hints.extend(direct_hints(&state.data, keymap, actions, target));
     }
     hints.sort_by_key(|hint| !hint.primary);
     hints
+}
+
+/// The secondary hints of the direct action keys (see
+/// `Keymap::detail_chords`) that are enabled for `target`, in registry
+/// order. A hint shows the first chord of its action.
+fn direct_hints(
+    data: &AppData,
+    keymap: &Keymap,
+    actions: &[Box<dyn Action>],
+    target: Target,
+) -> Vec<KeyHint> {
+    actions
+        .iter()
+        .zip(applicability(data, actions, target))
+        .filter(|(_, applies)| *applies == Applicability::Enabled)
+        .filter_map(|(action, _)| {
+            let chord = keymap.detail_chords(action.id()).first().copied()?;
+            Some(KeyHint {
+                key: key_text(chord),
+                label: action.id().replace('_', " "),
+                primary: false,
+                chord: Some(chord),
+            })
+        })
+        .collect()
 }
 
 /// Whether each action of `actions` applies to `target`, in registry
@@ -1037,7 +1064,7 @@ mod tests {
     }
 
     #[test]
-    fn the_list_hints_have_the_actions_key_and_no_action_keys() {
+    fn the_list_hints_have_the_actions_key_and_only_the_direct_keys() {
         let mut state = AppState::new(SIZE);
         state.load(crate::app::testdata::mine_snapshot(), Vec::new());
         state.data.session.login = Some("chaosteil".into());
@@ -1047,13 +1074,22 @@ mod tests {
             "the cursor row has a target"
         );
         let keymap = Keymap::default();
-        let hints = list_hints(&state, &keymap, &TABS, &list);
+        let hints = list_hints(&state, &keymap, &TABS, &REGISTRY, &list);
         let actions = hints.iter().find(|hint| hint.label == "actions");
         assert_eq!(
             actions.map(|hint| (hint.key.as_str(), hint.primary)),
             Some(("Space", true))
         );
+        let browser = hints.iter().find(|hint| hint.label == "browser");
+        assert_eq!(
+            browser.map(|hint| (hint.key.as_str(), hint.primary)),
+            Some(("o", false)),
+            "the direct key of browser is a secondary hint"
+        );
         for action in REGISTRY.iter() {
+            if keymap::DETAIL_ACTIONS.contains(&action.id()) {
+                continue;
+            }
             let chords = keymap.chords(action.id());
             assert!(
                 !hints
