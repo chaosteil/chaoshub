@@ -1,7 +1,9 @@
 //! The codeview send action: sends chosen codeview comments as one review.
 //!
-//! The Send review dialog of the Description pane starts the action with
-//! `ActionInput::Review`. The action has no default key. With comments, it
+//! A key of the action opens the Review popup, and a key of an event there
+//! starts the action with `ActionInput::Review`. The action has no default
+//! key. The popup opens also for a repo without a local path. With
+//! comments, it
 //! does not post to GitHub itself: it runs codeview in a headless nvim,
 //! and codeview maps the comments to the lines of the diff, posts the
 //! review, and marks the comments as sent. So the lock and the sent marks
@@ -65,18 +67,16 @@ impl Action for CodeviewSend {
         None
     }
 
-    /// A pull request of a repo with a local path: codeview runs in it.
-    fn applies(&self, sel: &Selection) -> Applicability {
-        match &sel.target {
-            Target::Pr { repo, .. } if repo.path.is_some() => Applicability::Enabled,
-            Target::Pr { .. } => Applicability::Disabled("the repo has no local path"),
-        }
+    /// Every pull request. Without a local path, the review has no
+    /// codeview comments.
+    fn applies(&self, _sel: &Selection) -> Applicability {
+        Applicability::Enabled
     }
 
-    /// A key of the action opens the Description pane, where you choose
-    /// the comments.
+    /// A key of the action opens the Review popup, where you choose the
+    /// comments and the event.
     fn prepare(&self, _sel: &Selection) -> Prepare {
-        Prepare::OpenPopup("description")
+        Prepare::Review
     }
 
     /// Sends the comments of `ActionInput::Review` with a headless
@@ -91,7 +91,7 @@ impl Action for CodeviewSend {
         Box::pin(async move {
             let Target::Pr { pr, repo, .. } = sel.target;
             let ActionInput::Review { ids, event, body } = input else {
-                return Err("choose the comments in the Description pane".to_owned());
+                return Err("choose the comments in the Review popup".to_owned());
             };
             if ids.is_empty() {
                 return message_review(&svc, &pr, event, &body).await;

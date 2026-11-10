@@ -25,8 +25,8 @@ use crate::app::tabs::{KeyCx, TABS, Tab};
 use crate::app::target::{pr_target, row_target};
 use crate::app::term::term_status;
 use crate::bus::{
-    KeyChord, KeyCode, KeyModifiers, Progress, Scope, Selection, Size, Target, TermState,
-    TermStatus,
+    KeyChord, KeyCode, KeyModifiers, Progress, ReviewKind, Scope, Selection, Size, Target,
+    TermState, TermStatus,
 };
 use crate::domain::keys::PrKey;
 use crate::domain::pr::PrState;
@@ -170,7 +170,7 @@ fn overlay_models(
                     spec: spec.clone(),
                     text: text.clone(),
                 },
-                OverlayState::SendReview(review) => OverlayContent::SendReview(review.spec()),
+                OverlayState::Review(review) => OverlayContent::Review(review.spec(&state.data)),
                 OverlayState::ReviewText {
                     title, text, error, ..
                 } => OverlayContent::ReviewText {
@@ -457,20 +457,18 @@ fn overlay_hints(
             hint(&[plain_key(KeyCode::Enter)], "submit"),
             hint(&[plain_key(KeyCode::Esc)], "cancel"),
         ],
-        OverlayState::SendReview(review) => {
-            let mut hints: Vec<Option<KeyHint>> = review
-                .spec()
-                .buttons
+        OverlayState::Review(_) => {
+            let events: Vec<KeyChord> = ReviewKind::ALL
                 .iter()
-                .map(|button| hint(&[plain_key(KeyCode::Char(button.key))], button.label))
+                .map(|event| plain_key(KeyCode::Char(event.key())))
                 .collect();
-            hints.push(app_hint(
-                keymap,
-                &["cancel", "close_overlay"],
-                "cancel",
-                true,
-            ));
-            hints
+            vec![
+                app_hint(keymap, &["down", "up"], "move", true),
+                app_hint(keymap, &["open"], "mark", true),
+                hint(&[plain_key(KeyCode::Char('m'))], "message"),
+                hint(&events, "send"),
+                app_hint(keymap, &["close_overlay"], "cancel", true),
+            ]
         }
         OverlayState::ReviewText { .. } => vec![
             hint(&[ctrl_key('s')], "done"),

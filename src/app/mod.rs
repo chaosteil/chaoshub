@@ -11,7 +11,7 @@ pub(crate) mod layout;
 pub(crate) mod measure;
 mod merge;
 pub(crate) mod models;
-mod nav;
+pub(crate) mod nav;
 mod panes;
 mod state;
 mod tabs;

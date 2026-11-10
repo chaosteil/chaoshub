@@ -17,14 +17,15 @@ use crate::actions::{Action, Applicability};
 use crate::app::frame::{self, ModelCache};
 use crate::app::keymap::Keymap;
 use crate::app::models::{CellStyle, HelpModel};
+use crate::app::panes::agent::head;
 use crate::app::panes::{PaneAction, PaneState};
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{
-    ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReviewButton, ReviewKind, Scope,
-    Selection, SendReviewSpec, Session, Size, SyncError, Target, TargetKey, UiEvent,
+    ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReviewButton, ReviewKind, ReviewRow,
+    ReviewSpec, Scope, Selection, Session, Size, SyncError, Target, TargetKey, UiEvent,
 };
 use crate::domain::agent::{AgentResults, ToolKind};
-use crate::domain::codeview::Comments;
+use crate::domain::codeview::{Comment, Comments};
 use crate::domain::detail::PrDetail;
 use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
@@ -219,19 +220,6 @@ pub(crate) struct UiState {
     /// The `column_headers` value in the `ui_state` table of the cache,
     /// if any. It wins over `[theme] column_headers`.
     pub saved_column_headers: Option<bool>,
-    /// The codeview send that waits for a new read of the comment files.
-    pub codeview_send: Option<PendingSend>,
-}
-
-/// A codeview send that waits for a new read of the comment files. The
-/// Send review dialog opens after the read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PendingSend {
-    pub key: PrKey,
-    /// The chosen comment ids.
-    pub ids: Vec<String>,
-    /// The event that `enter` sends in the dialog.
-    pub ready: Option<ReviewKind>,
 }
 
 /// The state of the syncs, for the status bar and the terminal status.
@@ -387,12 +375,11 @@ pub(crate) enum OverlayState {
         spec: PromptSpec,
         text: String,
     },
-    /// The Send review dialog of codeview comments: the key of a button
-    /// sends the review with its event.
-    SendReview(SendReview),
-    /// The text box of the message of a review, on top of the Send
-    /// review dialog. `esc` and `ctrl-s` go back to the dialog with the
-    /// text.
+    /// The Review popup of a pull request: the key of an event sends the
+    /// review.
+    Review(ReviewPopup),
+    /// The text box of the message of a review, on top of the Review
+    /// popup. `esc` and `ctrl-s` go back to the popup with the text.
     ReviewText {
         title: String,
         text: String,
@@ -425,43 +412,96 @@ pub(crate) struct ActionDialog {
     pub selection: Box<Selection>,
 }
 
-/// The Send review dialog: the codeview comments of the review, the
-/// message and the event that `enter` sends.
+/// The Review popup of a pull request: the list of its codeview comments
+/// with a cursor, the keys of the events and the message. The comments
+/// and the review draft come from `AppData`, so a new load of the
+/// comment files updates the popup.
 #[derive(Debug)]
-pub(crate) struct SendReview {
+pub(crate) struct ReviewPopup {
     /// The codeview send action and its selection.
     pub action: ActionDialog,
-    /// The ids of the comments of the review. Empty for a review with
-    /// only the message.
-    pub ids: Vec<String>,
-    /// One line per comment of the review, then the notes.
-    pub lines: Vec<String>,
-    /// The message of the review.
-    pub text: String,
-    /// The event that `enter` sends. `A` and `R` set it.
-    pub ready: Option<ReviewKind>,
+    /// The id of the comment of the cursor. `None` puts the cursor on the
+    /// first comment that can go to GitHub.
+    pub cursor: Option<String>,
+    /// The index of the first visible row of the comment list.
+    pub scroll: usize,
 }
 
-/// The most lines of the message that the Send review dialog shows.
-const MESSAGE_LINES: usize = 4;
-
-impl SendReview {
+impl ReviewPopup {
     /// The pull request of the review.
     pub(crate) fn pr(&self) -> &PullRequest {
         let Target::Pr { pr, .. } = &self.action.selection.target;
         pr
     }
 
-    /// The title of the dialog.
+    /// The title of the popup.
     pub(crate) fn title(&self) -> String {
-        format!("send review to #{}", self.pr().key.number)
+        format!("review #{}", self.pr().key.number)
     }
 
-    /// Why the button of `event` cannot send now, or `None`. GitHub takes
-    /// no approval and no change request on a pull request that is not
-    /// open or on your own pull request. A change request needs a
-    /// message, and a comment review needs a message or a comment.
-    pub(crate) fn blocked(&self, event: ReviewKind) -> Option<&'static str> {
+    /// The unsent codeview comments of the head of the pull request, or
+    /// the error of the load. Empty before a load.
+    fn comments<'a>(&self, data: &'a AppData) -> Result<&'a [Comment], &'a str> {
+        let pr = self.pr();
+        match data.codeview.get(&pr.key) {
+            Some(Ok(comments)) => Ok(comments.current(&head(data, pr))),
+            Some(Err(err)) => Err(err),
+            None => Ok(&[]),
+        }
+    }
+
+    /// The comments that can go to GitHub, each with its row index.
+    pub(crate) fn sendable<'a>(&self, data: &'a AppData) -> Vec<(usize, &'a Comment)> {
+        self.comments(data)
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .filter(|(_, comment)| comment.sendable())
+            .collect()
+    }
+
+    /// The index in `sendable` of the comment of the cursor: the comment
+    /// of the cursor id, else the first one. `None` without a comment
+    /// that can go to GitHub.
+    pub(crate) fn cursor_at(&self, sendable: &[(usize, &Comment)]) -> Option<usize> {
+        if sendable.is_empty() {
+            return None;
+        }
+        let at = self
+            .cursor
+            .as_ref()
+            .and_then(|id| sendable.iter().position(|(_, comment)| &comment.id == id));
+        Some(at.unwrap_or(0))
+    }
+
+    /// The review draft of the pull request, if any.
+    fn draft<'a>(&self, data: &'a AppData) -> Option<&'a ReviewDraft> {
+        data.reviews.get(&self.pr().key)
+    }
+
+    /// The message of the review draft.
+    pub(crate) fn message<'a>(&self, data: &'a AppData) -> &'a str {
+        self.draft(data).map_or("", |draft| draft.message.as_str())
+    }
+
+    /// The ids of the marked comments: the comments that can go to
+    /// GitHub, without the deselected ones.
+    pub(crate) fn ids(&self, data: &AppData) -> Vec<String> {
+        let draft = self.draft(data);
+        self.sendable(data)
+            .into_iter()
+            .filter(|(_, comment)| {
+                draft.is_none_or(|draft| !draft.deselected.contains(&comment.id))
+            })
+            .map(|(_, comment)| comment.id.clone())
+            .collect()
+    }
+
+    /// Why the key of `event` cannot send now, or `None`. GitHub takes no
+    /// approval and no change request on a pull request that is not open
+    /// or on your own pull request. A change request needs a message,
+    /// and a comment review needs a message or a marked comment.
+    pub(crate) fn blocked(&self, data: &AppData, event: ReviewKind) -> Option<&'static str> {
         let pr = &self.pr().head.value;
         let verdict = event != ReviewKind::Comment;
         if verdict && pr.state != PrState::Open {
@@ -470,28 +510,68 @@ impl SendReview {
         if verdict && pr.author == self.action.selection.me {
             return Some("your own PR");
         }
-        let empty = self.text.trim().is_empty();
+        let empty = self.message(data).trim().is_empty();
         match event {
             ReviewKind::RequestChanges if empty => Some("needs a message"),
-            ReviewKind::Comment if empty && self.ids.is_empty() => Some("needs a message"),
+            ReviewKind::Comment if empty && self.ids(data).is_empty() => Some("needs a message"),
             _ => None,
         }
     }
 
-    /// The content of the dialog: the comment lines, the first
-    /// `MESSAGE_LINES` lines of the message, and the buttons.
-    pub(crate) fn spec(&self) -> SendReviewSpec {
-        let mut message: Vec<String> = Vec::new();
-        if !self.text.trim().is_empty() {
-            let lines: Vec<&str> = self.text.lines().collect();
-            message.extend(lines.iter().take(MESSAGE_LINES).map(|&l| l.to_owned()));
-            if lines.len() > MESSAGE_LINES {
-                let more = lines.len() - MESSAGE_LINES;
-                let noun = if more == 1 { "line" } else { "lines" };
-                message.push(format!("… {more} more {noun}"));
+    /// The rows of the comment list: one row per unsent comment of the
+    /// head, then the count of the comments on older pushes. A failed
+    /// load has one row with the error. Without comments, one row says
+    /// that the review has only the message.
+    pub(crate) fn rows(&self, data: &AppData) -> Vec<ReviewRow> {
+        let comments = match self.comments(data) {
+            Ok(comments) => comments,
+            Err(err) => {
+                return vec![ReviewRow::Error(format!(
+                    "cannot read the codeview comments: {err}"
+                ))];
             }
+        };
+        let draft = self.draft(data);
+        let mut rows: Vec<ReviewRow> = comments
+            .iter()
+            .map(|comment| {
+                let place = comment.place();
+                let summary = comment.summary().to_owned();
+                if comment.sendable() {
+                    let marked = draft.is_none_or(|draft| !draft.deselected.contains(&comment.id));
+                    ReviewRow::Comment {
+                        marked,
+                        place,
+                        summary,
+                    }
+                } else {
+                    ReviewRow::Fixed { place, summary }
+                }
+            })
+            .collect();
+        let pr = self.pr();
+        let older = match data.codeview.get(&pr.key) {
+            Some(Ok(all)) => all.older(&head(data, pr)),
+            _ => 0,
+        };
+        if older > 0 {
+            let noun = if older == 1 { "comment" } else { "comments" };
+            rows.push(ReviewRow::Note(format!("{older} {noun} on an older push")));
         }
-        let write = if self.text.trim().is_empty() {
+        if rows.is_empty() {
+            rows.push(ReviewRow::Note(
+                "no codeview comments: the review has only the message".to_owned(),
+            ));
+        }
+        rows
+    }
+
+    /// The content of the popup.
+    pub(crate) fn spec(&self, data: &AppData) -> ReviewSpec {
+        let sendable = self.sendable(data);
+        let cursor = self.cursor_at(&sendable).map(|at| sendable[at].0);
+        let message = self.message(data);
+        let write = if message.trim().is_empty() {
             "write message"
         } else {
             "edit message"
@@ -500,18 +580,18 @@ impl SendReview {
             key: 'm',
             label: write,
             blocked: None,
-            ready: false,
         }];
         buttons.extend(ReviewKind::ALL.map(|event| ReviewButton {
             key: event.key(),
             label: event.label(),
-            blocked: self.blocked(event),
-            ready: self.ready == Some(event),
+            blocked: self.blocked(data, event),
         }));
-        SendReviewSpec {
+        ReviewSpec {
             title: self.title(),
-            lines: self.lines.clone(),
-            message,
+            rows: self.rows(data),
+            cursor,
+            scroll: self.scroll,
+            message: message.to_owned(),
             buttons,
         }
     }
@@ -673,7 +753,6 @@ impl AppState {
                 pinned: None,
                 column_headers: true,
                 saved_column_headers: None,
-                codeview_send: None,
             },
             generation: 0,
             cache: ModelCache::default(),

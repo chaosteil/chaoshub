@@ -74,6 +74,9 @@ pub(crate) enum Prepare {
     /// Open the pull request popup of the target on the pane with this
     /// id. `execute` is not called.
     OpenPopup(&'static str),
+    /// Open the Review popup of the target. A key of an event there runs
+    /// `execute` with `ActionInput::Review`.
+    Review,
 }
 
 /// One action of the registry.
