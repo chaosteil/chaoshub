@@ -440,7 +440,8 @@ for `[keys]`.
 | `next_tab` | `tab` | The next tab. In the detail, the next pane. |
 | `down`, `up` | `j`, `k` | Moves the cursor. |
 | `top`, `bottom` | `g`, `G` | Moves to the first or the last row. |
-| `page_down`, `page_up` | `ctrl-d`, `ctrl-u` | Moves one page. |
+| `page_down`, `page_up` | `ctrl-d`, `ctrl-u` | Moves half a page. In the pull request detail, moves half the height of the active pane. |
+| `scroll_down`, `scroll_up` | `D`, `U` | In the pull request detail, scrolls the active pane down or up by half its height. The cursor stays. When the cursor leaves the pane, it moves to the first visible row. |
 | `open` | `enter` | Opens the pull request detail: a Rex pane inside Rex, else the sidebar (see `[detail]`). A second `enter` on the same pull request focuses its pane. In the conversation pane, expands a thread. |
 | `open_url` | `o` | In the checks pane, opens the selected check in the browser. |
 | `actions` | `space` | In the list, opens the actions menu of the selected row (see "Actions"). |
@@ -491,6 +492,9 @@ selects the next pane:
 description pane, they scroll the text. In the conversation pane, the
 view follows the cursor by screen rows. When a comment is taller than
 the pane, `j` and `k` scroll through it before the cursor moves on.
+`D` and `U` scroll the active pane by half its height, apart from the
+cursor. Thus you can read a long comment or a long description. A
+pane scrolls down to its last full page, not further.
 
 The action keys also work in the detail, on the pull request of the
 detail. For example, `v` opens codeview, and `m` opens the merge

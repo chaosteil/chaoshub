@@ -33,6 +33,8 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("bottom", &["G"]),
     ("page_down", &["ctrl-d"]),
     ("page_up", &["ctrl-u"]),
+    ("scroll_down", &["D"]),
+    ("scroll_up", &["U"]),
     ("open", &["enter"]),
     ("open_url", &["o"]),
     ("actions", &["space"]),

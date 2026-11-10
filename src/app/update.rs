@@ -1189,9 +1189,25 @@ fn popup_key(
             move_pane(pane, cx, ps, size, motion);
             return Some(changed);
         }
+        if let Some(down) = scroll_key(keymap, chord) {
+            scroll_pane(pane, cx, ps, size, down);
+            return Some(changed);
+        }
         pane.handle_key(chord, cx, ps)
     })
     .flatten()
+}
+
+/// `Some(true)` for the `scroll_down` key, `Some(false)` for the
+/// `scroll_up` key.
+fn scroll_key(keymap: &Keymap, chord: KeyChord) -> Option<bool> {
+    if keymap.matches("scroll_down", chord) {
+        Some(true)
+    } else if keymap.matches("scroll_up", chord) {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// Calls `f` with the active pane of `popup`, its key context, its state
@@ -1219,27 +1235,88 @@ fn in_pane<R>(
     Some(f(pane.as_ref(), &cx, ps, size))
 }
 
-/// Moves the cursor of a pane one step, or the scroll of a pane of
-/// lines. The scroll of a tree counts screen rows: a move scrolls
-/// through a node that is taller than the pane.
+/// Moves the cursor of a pane, or the scroll of a pane of lines. A page
+/// move is half of the visible rows. The scroll of a pane of lines stops
+/// at the last full page. The scroll of a tree counts screen rows: a
+/// move scrolls through a node that is taller than the pane.
 fn move_pane(pane: &dyn Pane, cx: &KeyCx<'_>, ps: &mut PaneState, size: Size, motion: Motion) {
     let model = pane.model(cx, ps, size);
-    let height = usize::from(size.height);
+    let height = visible_rows(&model, size);
+    let half = (height / 2).max(1);
     match &model {
         PaneModel::Lines { lines, wrap } => {
             let rows = measure::display_rows(lines, *wrap, size.width);
-            ps.scroll = move_in(ps.scroll, rows, motion);
+            ps.scroll = scroll_in(ps.scroll, rows, height, motion, half);
         }
         PaneModel::Tree { nodes } => {
             let rows = tree_rows(cx, nodes, size);
-            (ps.cursor, ps.scroll) = rows.step(ps.cursor, ps.scroll, height, motion, PAGE);
+            (ps.cursor, ps.scroll) = rows.step(ps.cursor, ps.scroll, height, motion, half);
         }
         PaneModel::Table { .. } => {
             let count = items(&model);
-            ps.cursor = move_in(ps.cursor, count, motion);
+            ps.cursor = move_by(ps.cursor, count, motion, half);
             ps.scroll = nav::keep_visible(count, ps.cursor, ps.scroll, height);
         }
     }
+}
+
+/// Scrolls the view of a pane half of its visible rows, down when `down`
+/// is true, apart from the cursor. The scroll stops at the last full
+/// page. When the cursor leaves the view, it moves to the first visible
+/// row or node.
+fn scroll_pane(pane: &dyn Pane, cx: &KeyCx<'_>, ps: &mut PaneState, size: Size, down: bool) {
+    let model = pane.model(cx, ps, size);
+    let height = visible_rows(&model, size);
+    let half = (height / 2).max(1);
+    let motion = if down {
+        Motion::PageDown
+    } else {
+        Motion::PageUp
+    };
+    match &model {
+        PaneModel::Lines { lines, wrap } => {
+            let rows = measure::display_rows(lines, *wrap, size.width);
+            ps.scroll = scroll_in(ps.scroll, rows, height, motion, half);
+        }
+        PaneModel::Tree { nodes } => {
+            let rows = tree_rows(cx, nodes, size);
+            (ps.cursor, ps.scroll) = rows.scroll(ps.cursor, ps.scroll, height, half, down);
+        }
+        PaneModel::Table { .. } => {
+            let count = items(&model);
+            ps.scroll = scroll_in(ps.scroll, count, height, motion, half);
+            if !(ps.scroll..ps.scroll + height).contains(&ps.cursor) {
+                ps.cursor = ps.scroll.min(count.saturating_sub(1));
+            }
+        }
+    }
+}
+
+/// The rows of a pane of `size` that show its content: a table loses
+/// its header row.
+fn visible_rows(model: &PaneModel, size: Size) -> usize {
+    let height = usize::from(size.height);
+    match model {
+        PaneModel::Table { .. } => height.saturating_sub(1),
+        PaneModel::Lines { .. } | PaneModel::Tree { .. } => height,
+    }
+    .max(1)
+}
+
+/// The scroll of `rows` rows in a window of `height` rows after a move.
+/// A page move is `page` rows. The scroll stops at the last full page.
+fn scroll_in(scroll: usize, rows: usize, height: usize, motion: Motion, page: usize) -> usize {
+    let last = rows.saturating_sub(height);
+    let scroll = scroll.min(last);
+    match motion {
+        Motion::Down => scroll + 1,
+        Motion::Up => scroll.saturating_sub(1),
+        Motion::Top => 0,
+        Motion::Bottom => last,
+        Motion::PageDown => scroll + page,
+        Motion::PageUp => scroll.saturating_sub(page),
+    }
+    .min(last)
 }
 
 /// The screen rows of the nodes of a tree pane of `size`.
@@ -1656,7 +1733,7 @@ fn click_pane_row(
                 return pane.handle_key(open, cx, ps);
             }
             ps.cursor = index;
-            let height = usize::from(size.height);
+            let height = visible_rows(&model, size);
             ps.scroll = match &model {
                 PaneModel::Tree { nodes } => {
                     tree_rows(cx, nodes, size).keep_visible(index, ps.scroll, height)
@@ -1724,19 +1801,25 @@ fn click_item(state: &mut AppState, tabs: &[Box<dyn Tab>], index: usize) -> Vec<
     pick_author(state, tabs, tab, author)
 }
 
-/// The items of a page move in a menu, a text overlay or a pane.
+/// The items of a page move in a menu or a text overlay.
 const PAGE: usize = 5;
 
 /// The cursor in a list of `len` items after a move.
 fn move_in(cursor: usize, len: usize, motion: Motion) -> usize {
+    move_by(cursor, len, motion, PAGE)
+}
+
+/// The cursor in a list of `len` items after a move. A page move is
+/// `page` items.
+fn move_by(cursor: usize, len: usize, motion: Motion, page: usize) -> usize {
     let last = len.saturating_sub(1);
     match motion {
         Motion::Down => cursor + 1,
         Motion::Up => cursor.saturating_sub(1),
         Motion::Top => 0,
         Motion::Bottom => last,
-        Motion::PageDown => cursor + PAGE,
-        Motion::PageUp => cursor.saturating_sub(PAGE),
+        Motion::PageDown => cursor + page,
+        Motion::PageUp => cursor.saturating_sub(page),
     }
     .min(last)
 }
@@ -5728,6 +5811,120 @@ mod tests {
         assert_eq!(pane_view(&mut state), (1, 5));
         update(&mut state, &Keymap::default(), wheel_up());
         assert_eq!(pane_view(&mut state), (1, 2));
+    }
+
+    #[test]
+    fn ctrl_d_and_ctrl_u_move_half_a_page_in_a_conversation() {
+        // Nodes of 1 and 5 rows; the pane has 15 rows, so half a page is
+        // 7 rows.
+        let mut state = conversation_sidebar(&vec![paragraphs(3); 6]);
+        ctrl(&mut state, 'd');
+        assert_eq!(pane_view(&mut state), (3, 0), "the node of row 7");
+        ctrl(&mut state, 'd');
+        assert_eq!(pane_view(&mut state), (5, 3), "the node of row 14");
+        ctrl(&mut state, 'u');
+        assert_eq!(pane_view(&mut state), (2, 3), "the node of row 6");
+    }
+
+    #[test]
+    fn d_and_u_scroll_a_conversation_apart_from_the_cursor() {
+        let mut state = conversation_sidebar(&vec![paragraphs(3); 6]);
+        key(&mut state, 'D');
+        assert_eq!(
+            pane_view(&mut state),
+            (3, 7),
+            "the cursor jumps to the top visible node"
+        );
+        key(&mut state, 'D');
+        assert_eq!(pane_view(&mut state), (5, 14));
+        key(&mut state, 'D');
+        assert_eq!(pane_view(&mut state), (7, 21), "the last full page");
+        key(&mut state, 'D');
+        assert_eq!(pane_view(&mut state), (7, 21));
+        key(&mut state, 'U');
+        assert_eq!(pane_view(&mut state), (7, 14), "the cursor still shows");
+        let mut state = conversation_sidebar(&[paragraphs(30)]);
+        key(&mut state, 'j');
+        key(&mut state, 'D');
+        assert_eq!(
+            pane_view(&mut state),
+            (1, 7),
+            "D reads on in a tall comment"
+        );
+    }
+
+    /// The mine state with 20 list rows and the sidebar of #99 open on
+    /// the description pane, with a body of `body`.
+    fn description_sidebar(body: &str) -> AppState {
+        let mut state = mine_state(20);
+        let pr = testdata::pr_key("chaoshub", 99);
+        body.clone_into(&mut state.data.prs.get_mut(&pr).unwrap().head.value.body);
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(
+            sidebar(&state).map(|p| PANES[p.active].id()),
+            Some("description")
+        );
+        state
+    }
+
+    /// The screen rows of the pane of lines of the sidebar at width 76.
+    fn lines_rows(state: &mut AppState) -> usize {
+        match popup_content(state, &PANES) {
+            OverlayContent::Popup {
+                pane: PaneModel::Lines { lines, wrap },
+                ..
+            } => measure::display_rows(&lines, wrap, 76),
+            other => panic!("not a pane of lines: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_description_scrolls_half_a_page_and_stops_at_the_last_page() {
+        let mut state = description_sidebar(&paragraphs(40));
+        let last = lines_rows(&mut state) - 15;
+        ctrl(&mut state, 'd');
+        assert_eq!(pane_view(&mut state), (0, 7));
+        key(&mut state, 'D');
+        assert_eq!(pane_view(&mut state), (0, 14));
+        key(&mut state, 'U');
+        ctrl(&mut state, 'u');
+        assert_eq!(pane_view(&mut state), (0, 0));
+        key(&mut state, 'G');
+        assert_eq!(pane_view(&mut state), (0, last), "the last full page");
+        key(&mut state, 'j');
+        key(&mut state, 'D');
+        ctrl(&mut state, 'd');
+        assert_eq!(pane_view(&mut state), (0, last), "no scroll past it");
+        let mut short = description_sidebar("one line");
+        key(&mut short, 'D');
+        key(&mut short, 'j');
+        assert_eq!(pane_view(&mut short), (0, 0), "a short text does not move");
+    }
+
+    #[test]
+    fn the_scroll_keys_follow_the_key_map() {
+        let overrides = std::collections::BTreeMap::from([
+            ("scroll_down".to_owned(), "ctrl-n".to_owned()),
+            ("scroll_up".to_owned(), String::new()),
+        ]);
+        let keymap = Keymap::new(&overrides).unwrap();
+        let mut state = description_sidebar(&paragraphs(40));
+        update(
+            &mut state,
+            &keymap,
+            press(KeyCode::Char('D'), KeyModifiers::NONE),
+        );
+        assert_eq!(pane_view(&mut state), (0, 0), "D is not bound");
+        update(
+            &mut state,
+            &keymap,
+            press(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(pane_view(&mut state), (0, 7));
     }
 
     #[test]
