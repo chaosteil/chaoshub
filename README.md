@@ -581,6 +581,14 @@ cannot send now shows dim, with the reason:
 With no selected comment, the dialog still works: the review has only
 the message. chaoshub then posts the review itself, as `A` and `R` do.
 
+When unsent codeview comments wait on the head of the pull request, the
+approve action (`A`) and the request changes action (`R`) open the Send
+review dialog too, with the selected comments. Their button is ready:
+it shows the cursor (`>`) and `enter`, and `enter` sends that event. So
+the comments go out with the approval or the change request. For `R`,
+write the message first with `m`. Without such comments, `A` and `R`
+work as before.
+
 The text box of the message can have more than one line, and its line
 breaks go to GitHub:
 
@@ -627,8 +635,8 @@ default.
 | `review` | `v` | Reviews the pull request in codeview. Needs a repo with a `path`. A second press focuses the open pane. |
 | `merge` | `m` | Merges the pull request after a confirm popup. For a stacked pull request, see the stack merge paragraph below. |
 | `merge_stack` | `M` | Merges the whole stack of the pull request after a confirm popup, from any entry of the stack. It is the same merge as `merge` on the top entry. Hidden for a pull request without a stack. |
-| `approve` | `A` | Approves the pull request. Not for your own pull request. |
-| `request_changes` | `R` | Asks for a message, then requests changes. Not for your own pull request. The message must not be empty. |
+| `approve` | `A` | Approves the pull request. Not for your own pull request. When unsent codeview comments wait, it opens the Send review dialog instead (see "Codeview comments"). |
+| `request_changes` | `R` | Asks for a message, then requests changes. Not for your own pull request. The message must not be empty. When unsent codeview comments wait, it opens the Send review dialog instead (see "Codeview comments"). |
 | `rerun_checks` | `x` | Runs the failed checks again. |
 | `draft` | `d` | Changes the pull request from draft to ready, or from ready to draft. |
 | `close` | `X` | Closes the pull request after a confirm popup. |

@@ -516,7 +516,8 @@ fn run_detail_key(
 
 /// The action `action` on `target`: `applies`, then `prepare`, then the
 /// route of the preparation. `None` when the action is hidden for the
-/// target.
+/// target. When codeview comments of the pull request wait, `A` and `R`
+/// open the Send review dialog with their event ready instead.
 fn run_action(
     state: &mut AppState,
     panes: &[Box<dyn Pane>],
@@ -536,6 +537,12 @@ fn run_action(
             state.message(reason, CellStyle::Warn, INFO_TTL);
             return Some(Vec::new());
         }
+    }
+    let Target::Pr { pr, .. } = &selection.target;
+    if let Some(event) = verdict(id)
+        && let Some(ids) = review_ids(state, pr)
+    {
+        return Some(vec![start_send(state, pr.key.clone(), ids, Some(event))]);
     }
     let cmds = match action.prepare(&selection) {
         Prepare::Run => vec![Cmd::RunAction {
@@ -868,6 +875,27 @@ fn pane_cmds(state: &mut AppState, cmds: Vec<Cmd>) -> Vec<Cmd> {
 
 /// The action id of the codeview send.
 const CODEVIEW_SEND_ID: &str = "codeview_send";
+
+/// The event of the review of the actions `approve` (`A`) and
+/// `request_changes` (`R`).
+fn verdict(id: &str) -> Option<ReviewKind> {
+    match id {
+        "approve" => Some(ReviewKind::Approve),
+        "request_changes" => Some(ReviewKind::RequestChanges),
+        _ => None,
+    }
+}
+
+/// The selected codeview comments of `pr` for `A` and `R`. A comment that
+/// you deselected in the open popup of `pr` stays out. `None` when the
+/// head of `pr` has no unsent comment that can go to GitHub: then `A` and
+/// `R` run as plain actions.
+fn review_ids(state: &mut AppState, pr: &PullRequest) -> Option<Vec<String>> {
+    let deselected = codeview_pane(state, &pr.key)
+        .map(|codeview| codeview.deselected.clone())
+        .unwrap_or_default();
+    crate::app::panes::description::selected(&state.data, pr, &deselected)
+}
 
 /// The start of a codeview send of the comments `ids` of `key`: the
 /// comment files load again, and the Send review dialog opens after the
@@ -7542,6 +7570,99 @@ mod tests {
         update(&mut state, &Keymap::default(), done);
         open_dialog(&mut state, &pr);
         assert_eq!(dialog(&state).text, "", "a sent review clears the text");
+    }
+
+    #[test]
+    fn a_opens_the_send_dialog_with_approve_ready_while_comments_wait() {
+        let (mut state, pr) = codeview_state();
+        state.data.session.login = Some("reviewer".into());
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(menu(&mut state, 'A'), vec![Cmd::LoadCodeview(pr.clone())]);
+        let msg = loaded_without(&state, &pr, "none");
+        update(&mut state, &Keymap::default(), msg);
+        let review = dialog(&state);
+        assert_eq!(review.ids, ["c2"], "the deselected c1 stays out");
+        assert_eq!(review.ready, Some(ReviewKind::Approve));
+        let ready: Vec<char> = review
+            .spec()
+            .buttons
+            .iter()
+            .filter(|b| b.ready)
+            .map(|b| b.key)
+            .collect();
+        assert_eq!(ready, ['a']);
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        let [Cmd::RunAction { id, input, .. }] = cmds.as_slice() else {
+            panic!("no send: {cmds:?}");
+        };
+        assert_eq!(*id, "codeview_send");
+        assert_eq!(
+            input,
+            &ActionInput::Review {
+                ids: vec!["c2".into()],
+                event: ReviewKind::Approve,
+                body: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn r_opens_the_send_dialog_with_request_changes_ready_while_comments_wait() {
+        let (mut state, pr) = codeview_state();
+        state.data.session.login = Some("reviewer".into());
+        assert_eq!(menu(&mut state, 'R'), vec![Cmd::LoadCodeview(pr.clone())]);
+        let msg = loaded_without(&state, &pr, "none");
+        update(&mut state, &Keymap::default(), msg);
+        assert_eq!(dialog(&state).ready, Some(ReviewKind::RequestChanges));
+        let enter = press(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(
+            update(&mut state, &Keymap::default(), enter.clone()),
+            vec![]
+        );
+        assert_eq!(
+            status_text(&state),
+            Some("request changes: needs a message")
+        );
+        key(&mut state, 'm');
+        key(&mut state, 'x');
+        ctrl(&mut state, 's');
+        let cmds = update(&mut state, &Keymap::default(), enter);
+        let [Cmd::RunAction { input, .. }] = cmds.as_slice() else {
+            panic!("no send: {cmds:?}");
+        };
+        assert_eq!(
+            input,
+            &ActionInput::Review {
+                ids: vec!["c1".into(), "c2".into()],
+                event: ReviewKind::RequestChanges,
+                body: "x".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_and_r_work_as_before_without_a_comment_that_can_go_out() {
+        let (mut state, pr) = codeview_state();
+        state.data.session.login = Some("reviewer".into());
+        let mut comments = state.data.codeview[&pr].clone().unwrap();
+        comments.pushes[0]
+            .comments
+            .retain(|comment| !comment.sendable());
+        state.data.codeview.insert(pr.clone(), Ok(comments));
+        assert!(matches!(
+            menu(&mut state, 'A').as_slice(),
+            [Cmd::RunAction { id: "approve", .. }]
+        ));
+        menu(&mut state, 'R');
+        assert!(matches!(top(&state), OverlayState::Prompt { .. }));
     }
 
     #[test]

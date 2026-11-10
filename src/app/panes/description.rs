@@ -29,6 +29,7 @@ use crate::app::models::{Cell, CellStyle, PaneModel, Tone};
 use crate::app::panes::agent::head;
 use crate::app::panes::checks::failed;
 use crate::app::panes::{Pane, PaneAction, PaneState};
+use crate::app::state::AppData;
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx};
 use crate::bus::{Cmd, KeyChord, KeyCode, Size, Target};
@@ -166,16 +167,8 @@ impl Pane for DescriptionPane {
         let Some(Target::Pr { pr, .. }) = cx.target else {
             return None;
         };
-        let comments = sendable(cx, pr);
-        if comments.is_empty() {
-            return None;
-        }
         let state = ps.ext.downcast_ref::<CodeviewState>()?;
-        let ids = comments
-            .iter()
-            .filter(|comment| !state.deselected.contains(&comment.id))
-            .map(|comment| comment.id.clone())
-            .collect();
+        let ids = selected(cx.data, pr, &state.deselected)?;
         Some(Handled {
             cmds: vec![Cmd::SendCodeview {
                 key: pr.key.clone(),
@@ -191,19 +184,40 @@ const SEND_KEY: char = 'S';
 
 /// The unsent codeview comments of the head of `pr`. Empty before the
 /// load and after a failed load.
-fn comments<'a>(cx: &KeyCx<'a>, pr: &PullRequest) -> &'a [Comment] {
-    match cx.data.codeview.get(&pr.key) {
-        Some(Ok(comments)) => comments.current(&head(cx.data, pr)),
+fn comments<'a>(data: &'a AppData, pr: &PullRequest) -> &'a [Comment] {
+    match data.codeview.get(&pr.key) {
+        Some(Ok(comments)) => comments.current(&head(data, pr)),
         _ => &[],
     }
 }
 
 /// The unsent comments of the head of `pr` that can go to GitHub.
-pub(crate) fn sendable<'a>(cx: &KeyCx<'a>, pr: &PullRequest) -> Vec<&'a Comment> {
-    comments(cx, pr)
+fn sendable<'a>(cx: &KeyCx<'a>, pr: &PullRequest) -> Vec<&'a Comment> {
+    comments(cx.data, pr)
         .iter()
         .filter(|comment| comment.sendable())
         .collect()
+}
+
+/// The ids of the selected comments of the head of `pr`: the comments
+/// that can go to GitHub, without the ones in `deselected`. `None` when
+/// the head has no comment that can go to GitHub.
+pub(crate) fn selected(
+    data: &AppData,
+    pr: &PullRequest,
+    deselected: &BTreeSet<String>,
+) -> Option<Vec<String>> {
+    let comments: Vec<&Comment> = comments(data, pr)
+        .iter()
+        .filter(|comment| comment.sendable())
+        .collect();
+    (!comments.is_empty()).then(|| {
+        comments
+            .iter()
+            .filter(|comment| !deselected.contains(&comment.id))
+            .map(|comment| comment.id.clone())
+            .collect()
+    })
 }
 
 /// The index of the cursor in `comments`: the comment of the cursor id,

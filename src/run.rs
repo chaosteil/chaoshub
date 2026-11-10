@@ -2453,6 +2453,26 @@ mod tests {
         insta::assert_snapshot!(screen(&mut app));
     }
 
+    /// `space` then `A` with comments: the dialog opens with approve
+    /// ready.
+    #[test]
+    fn send_review_ready_100() {
+        let key = crate::app::testdata::pr_key("chaoshub", 101);
+        let mut app = popup_app(100, 30);
+        app.update(Msg::CodeviewLoaded {
+            key: key.clone(),
+            comments: Ok(codeview_comments()),
+        });
+        press(&mut app, ' ');
+        press(&mut app, 'A');
+        app.update(Msg::TransitionsDone);
+        app.update(Msg::CodeviewLoaded {
+            key,
+            comments: Ok(codeview_comments()),
+        });
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
     /// No selected comment and no message: comment and request changes
     /// show dim.
     #[test]
