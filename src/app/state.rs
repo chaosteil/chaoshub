@@ -681,7 +681,7 @@ impl ActionMenu {
                 else {
                     return id.replace('_', " ");
                 };
-                let label = action.label();
+                let label = action.target_label(&self.target);
                 let text = match keymap.chords(id).first() {
                     Some(&chord) => format!("{}  {label}", frame::key_text(chord)),
                     None => label.to_owned(),
