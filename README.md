@@ -465,6 +465,79 @@ sequence only inside Rex (`REX_BLOCK` is set) and Ghostty
 |---|---|---|
 | `root` | `"~/code/workspaces"` | The directory of the jj workspaces other than `default`: `<root>/<folder>/<workspace name>`, where `<folder>` is the folder name of the repo path. |
 
+## List columns
+
+The list shows the state of each pull request with glyphs and colors.
+The glyphs are the same in every theme. Only the colors change: the
+names below (success, danger, warning, primary, dim) are the colors of
+the palette. Press `?` to see the same legend in the help overlay
+("list symbols"), in the colors of your theme.
+
+### CHECKS
+
+The CI state of the pull request, then the passed checks of all checks.
+A check passed when its conclusion is success, neutral or skipped.
+
+| Symbol | Color | Meaning |
+|---|---|---|
+| `·` | dim | No checks. |
+| `✓ 5/5` | success | CI is green. 5 of 5 checks passed. |
+| `✗ 3/5` | danger | CI failed. 3 of 5 checks passed. |
+| `● 2/5` | warning | CI is pending. 2 of 5 checks passed. |
+
+### REV
+
+The reviews. With approvals or change requests, the column shows their
+counts. Without counts, it shows the review decision.
+
+| Symbol | Color | Meaning |
+|---|---|---|
+| `✓2` | success | 2 approvals. |
+| `✓2 ✗1` | danger | 2 approvals and 1 change request. A change request gives the cell the danger color. |
+| `✓` | success | Approved. |
+| `✗` | danger | Changes requested. |
+| `○` | dim | A review is required. |
+| `·` | dim | No review is needed. |
+
+### FLG
+
+The flags, in this order, in the bold warning color.
+
+| Symbol | Meaning |
+|---|---|
+| `D` | The pull request is a draft. |
+| `C` | The pull request has merge conflicts. |
+| `Q` | The pull request is in the merge queue. |
+| `◆` | A pane of the pull request is open. |
+
+### CHANGE
+
+The Mine tab only. The local change that matches the pull request. In a
+git repo, the change is the branch name.
+
+| Color | Meaning |
+|---|---|
+| Primary | Synced: the local change has the same commit as the pull request head. |
+| Warning | Diverged: the local change has a different commit. The commit column also has the warning color. |
+
+### The stack tree
+
+The Mine tab only. The first column starts with a tree glyph. A stack
+starts with a header row, for example `stack #12 -> main · 3 PRs`.
+
+| Symbol | Meaning |
+|---|---|
+| `─` | A pull request without a stack. |
+| `┌` | The top pull request of a stack. |
+| `├` | A pull request in the middle of a stack. |
+| `└` | The bottom pull request of a stack. |
+
+### Ready for review
+
+By default, the Review and the Team tab show only the pull requests that
+are ready for review: open, not a draft, and CI green. `t` shows all open
+pull requests.
+
 ## Keymap
 
 The default bindings. The name in the first column is the binding name
