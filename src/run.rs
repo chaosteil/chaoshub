@@ -1924,7 +1924,7 @@ mod tests {
     fn confirm_app(width: u16, height: u16) -> App {
         let mut app = seeded_app(width, height, crate::app::testdata::mine_snapshot());
         press(&mut app, ' ');
-        press(&mut app, 'X');
+        press(&mut app, 'c');
         app.update(Msg::TransitionsDone);
         app
     }
@@ -2160,7 +2160,7 @@ mod tests {
     fn close_confirm_100() {
         let mut app = seeded_app(100, 30, crate::app::testdata::mine_snapshot());
         press(&mut app, ' ');
-        press(&mut app, 'X');
+        press(&mut app, 'c');
         app.update(Msg::TransitionsDone);
         insta::assert_snapshot!(screen(&mut app));
     }
@@ -2187,7 +2187,7 @@ mod tests {
             press(&mut app, 'j');
         }
         press(&mut app, ' ');
-        press(&mut app, 'P');
+        press(&mut app, 'p');
         app.update(Msg::TransitionsDone);
         let key = crate::app::testdata::pr_key("chaoshub", 101);
         let record = |kind: ToolKind, head: &str, data: serde_json::Value| Record {
@@ -2346,10 +2346,10 @@ mod tests {
     }
 
     /// Opens the Review popup of the pull request of the popup with
-    /// `space` then `R`.
+    /// `space` then `r`.
     fn open_review(app: &mut App) {
         press(app, ' ');
-        press(app, 'R');
+        press(app, 'r');
         app.update(Msg::TransitionsDone);
     }
 

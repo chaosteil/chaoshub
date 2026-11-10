@@ -162,7 +162,7 @@ impl Action for MergeStackAction {
 
     fn default_key(&self) -> Option<KeyChord> {
         Some(KeyChord {
-            code: KeyCode::Char('M'),
+            code: KeyCode::Char('s'),
             mods: KeyModifiers::NONE,
         })
     }

@@ -27,7 +27,7 @@ starts, and then syncs with GitHub in the background.
   - A pull request also matches a local change when the last `/` part
     of its branch name is a prefix of the change id.
   - The scan reads the stack of each workspace, not only the branch tips.
-  - `Y` copies the change id.
+  - `i` copies the change id.
 - **gh**, the GitHub command line tool, logged in. Run `gh auth login`
   once. chaoshub gets its token from `gh auth token`.
 - **nvim** with the **codeview** plugin, for the review action (`v`).
@@ -207,7 +207,7 @@ ratio = 50
 
 ### `[merge]`
 
-The settings of the merge action (`m`). The `merge_stack` action (`M`)
+The settings of the merge action (`m`). The `merge_stack` action (`s`)
 uses the same settings.
 
 ```toml
@@ -519,7 +519,7 @@ selects the next pane:
 
 | Key | Pane | What it shows |
 |---|---|---|
-| `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the head has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments · space R to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
+| `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the head has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments · space r to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order. |
 | `4` | Stack | The entries of the stack. Only for a stacked pull request. The cursor starts on the pull request of the detail. Enter opens the detail of the entry under the cursor on top, and `esc` goes back. `o` opens the page of that entry. |
@@ -538,9 +538,9 @@ mouse does not use the scrollbar.
 
 In the detail, only the keys that change nothing on GitHub work
 directly: the navigation keys, `r` (refresh), `v` (codeview), `o`
-(browser), `y` and `Y` (copy). The other actions are in the actions
+(browser), `y` and `i` (copy). The other actions are in the actions
 menu. Press `space` to open it on top of the detail, then the key of
-the action. For example, `space` then `R` opens the Review popup,
+the action. For example, `space` then `r` opens the Review popup,
 and `space` then `m` opens the merge confirm popup. `esc` closes the
 menu, and the detail shows again. The pane keys, the motion keys and
 the keys of the active pane come first: in the checks pane, `o` opens
@@ -563,7 +563,7 @@ request, to request changes, and to send codeview comments. chaoshub
 reads the comment files of codeview (`[codeview] comments_dir`) and
 never writes them.
 
-Press `space`, then `R`, to open the Review popup. This works in the
+Press `space`, then `r`, to open the Review popup. This works in the
 list and in the pull request detail. The popup opens at once with the
 comments that chaoshub has, and reads the comment files again. When the
 read ends, the popup shows the new comments. The popup also opens
@@ -633,7 +633,7 @@ says why.
 
 In the list, only the action keys that change nothing on GitHub work
 directly on the selected row: `v` (codeview), `o` (browser), `y` and
-`Y` (copy). The other action keys do nothing in the list. Thus a wrong
+`i` (copy). The other action keys do nothing in the list. Thus a wrong
 key cannot send a review. A row without a pull request, for example a
 stack header, runs no action. The key hint bar shows the direct keys
 that the row can run. The `actions` key (`space`) opens the actions
@@ -643,14 +643,14 @@ menu:
 
 - `j` and `k` move the cursor.
 - `enter` runs the action of the cursor.
-- The key of an action runs that action. For example, `space` then `R`
+- The key of an action runs that action. For example, `space` then `r`
   opens the Review popup.
 - `esc` or `q` closes the menu.
 
 The action keys work in the actions menu. In the pull request detail
 (the sidebar and the Rex pane), `space` opens the same menu for the
 pull request of the detail. There, as in the list, only `v`, `o`, `y`
-and `Y` also work directly. To run another action directly in the list
+and `i` also work directly. To run another action directly in the list
 and in the detail, bind a key to `detail_<id>` in `[keys]`. For
 example, `detail_merge = "m"` makes `m` open the merge confirm popup of
 the selected row or of the detail. These bindings have no default.
@@ -659,18 +659,18 @@ the selected row or of the detail. These bindings have no default.
 |---|---|---|
 | `review` | `v` | Reviews the pull request in codeview. Needs a repo with a `path`. A second press focuses the open pane. |
 | `merge` | `m` | Merges the pull request after a confirm popup. For a stacked pull request, see the stack merge paragraph below. |
-| `merge_stack` | `M` | Merges the whole stack of the pull request after a confirm popup, from any entry of the stack. It is the same merge as `merge` on the top entry. Hidden for a pull request without a stack. |
+| `merge_stack` | `s` | Merges the whole stack of the pull request after a confirm popup, from any entry of the stack. It is the same merge as `merge` on the top entry. Hidden for a pull request without a stack. |
 | `rerun_checks` | `x` | Runs the failed checks again. |
 | `draft` | `d` | Changes the pull request from draft to ready, or from ready to draft. |
-| `close` | `X` | Closes the pull request after a confirm popup. |
+| `close` | `c` | Closes the pull request after a confirm popup. |
 | `browser` | `o` | Opens the pull request in the browser. |
 | `copy_url` | `y` | Copies the pull request URL. |
-| `copy_change_id` | `Y` | Copies the jj change id of the local change that matches the pull request. In a git repo, it copies the local branch name, and the actions menu shows "copy the branch name". Hidden when no local change matches. |
-| `agent` | `P` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
-| `codeview_send` | `R` | Opens the Review popup. There you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). |
+| `copy_change_id` | `i` | Copies the jj change id of the local change that matches the pull request. In a git repo, it copies the local branch name, and the actions menu shows "copy the branch name". Hidden when no local change matches. |
+| `agent` | `p` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
+| `codeview_send` | `r` | Opens the Review popup. There you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). |
 
 A merge of a stacked pull request includes every entry up to it. To
-merge every entry, use `merge_stack` (`M`) from any entry. The
+merge every entry, use `merge_stack` (`s`) from any entry. The
 `[merge] stack` key sets how chaoshub sends the merge. In `auto` mode,
 chaoshub reads the squash defaults of the repo. When they are the PR
 title and the PR body, or when the method is `merge` or `rebase`,
@@ -752,7 +752,7 @@ needs a `path`.
 
 ### The Agent pane
 
-`space` then `P` on a pull request opens the detail on the Agent pane
+`space` then `p` on a pull request opens the detail on the Agent pane
 (`6`). The pane has one section per tool. Each section shows the state (`never`,
 `running` with a spinner, `done 5m ago`, or `failed` with the error), the
 model and the head commit of the result. When the head of the pull

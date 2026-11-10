@@ -4968,7 +4968,7 @@ mod tests {
             ("review", 'v'),
             ("browser", 'o'),
             ("copy_url", 'y'),
-            ("copy_change_id", 'Y'),
+            ("copy_change_id", 'i'),
         ]
         .into_iter()
         .map(|(id, key)| Box::new(FakeAction::new(id, key)) as Box<dyn Action>)
@@ -4982,7 +4982,7 @@ mod tests {
             ("review", 'v'),
             ("browser", 'o'),
             ("copy_url", 'y'),
-            ("copy_change_id", 'Y'),
+            ("copy_change_id", 'i'),
         ] {
             let mut state = action_state(&pr_row(102));
             assert_eq!(
@@ -5002,8 +5002,14 @@ mod tests {
     fn the_state_keys_do_nothing_directly_in_the_list() {
         let actions = state_actions();
         let mut state = action_state(&pr_row(102));
-        for c in ['R', 'd', 'x', 'm', 'M', 'X', 'P'] {
-            assert_eq!(act(&mut state, &actions, KeyCode::Char(c)), vec![], "{c}");
+        // `r` is also the refresh key, so it can send commands, but no
+        // action.
+        for c in ['r', 'd', 'x', 'm', 's', 'c', 'p'] {
+            let cmds = act(&mut state, &actions, KeyCode::Char(c));
+            assert!(
+                !cmds.iter().any(|cmd| matches!(cmd, Cmd::RunAction { .. })),
+                "{c}: {cmds:?}"
+            );
             assert!(state.ui.overlays.is_empty(), "{c} opens nothing");
         }
     }
@@ -5020,7 +5026,7 @@ mod tests {
             model.rows[model.cursor].item,
             RowItem::StackHeader { .. }
         ));
-        for c in ['v', 'o', 'y', 'Y'] {
+        for c in ['v', 'o', 'y', 'i'] {
             assert_eq!(act(&mut state, &actions, KeyCode::Char(c)), vec![], "{c}");
             assert!(state.ui.overlays.is_empty(), "{c} opens nothing");
         }
@@ -5274,13 +5280,13 @@ mod tests {
     /// change the pull request.
     fn state_actions() -> Vec<Box<dyn Action>> {
         [
-            ("codeview_send", 'R'),
+            ("codeview_send", 'r'),
             ("draft", 'd'),
             ("rerun_checks", 'x'),
             ("merge", 'm'),
-            ("merge_stack", 'M'),
-            ("close", 'X'),
-            ("agent", 'P'),
+            ("merge_stack", 's'),
+            ("close", 'c'),
+            ("agent", 'p'),
         ]
         .into_iter()
         .map(|(id, key)| Box::new(FakeAction::new(id, key)) as Box<dyn Action>)
@@ -5291,8 +5297,14 @@ mod tests {
     fn the_state_keys_do_nothing_directly_in_the_sidebar() {
         let actions = state_actions();
         let mut state = sidebar_state(102, &actions);
-        for c in ['R', 'd', 'x', 'm', 'M', 'X', 'P'] {
-            assert_eq!(act(&mut state, &actions, KeyCode::Char(c)), vec![], "{c}");
+        // `r` is also the refresh key, so it can send commands, but no
+        // action.
+        for c in ['r', 'd', 'x', 'm', 's', 'c', 'p'] {
+            let cmds = act(&mut state, &actions, KeyCode::Char(c));
+            assert!(
+                !cmds.iter().any(|cmd| matches!(cmd, Cmd::RunAction { .. })),
+                "{c}: {cmds:?}"
+            );
             assert_eq!(state.ui.overlays.len(), 1, "{c} opens nothing");
         }
         assert!(sidebar(&state).is_some());
@@ -7011,11 +7023,11 @@ mod tests {
     }
 
     #[test]
-    fn shift_p_opens_the_popup_on_the_agent_pane_and_loads_the_results() {
+    fn p_opens_the_popup_on_the_agent_pane_and_loads_the_results() {
         let (mut state, pr) = agent_state();
         assert_eq!(key(&mut state, ' '), vec![]);
         assert_eq!(
-            key(&mut state, 'P'),
+            key(&mut state, 'p'),
             vec![Cmd::LoadAgent(pr.clone()), Cmd::LoadCodeview(pr.clone())]
         );
         update(&mut state, &Keymap::default(), Msg::TransitionsDone);
@@ -7028,12 +7040,12 @@ mod tests {
         };
         assert_eq!(popup.key, pr);
         assert_eq!(PANES[popup.active].id(), "agent");
-        // In another pane, `space` then `P` moves the open popup to the
+        // In another pane, `space` then `p` moves the open popup to the
         // Agent pane.
         key(&mut state, '1');
-        assert_eq!(key(&mut state, 'P'), vec![], "P is in the menu");
+        assert_eq!(key(&mut state, 'p'), vec![], "p is in the menu");
         assert_eq!(
-            menu(&mut state, 'P'),
+            menu(&mut state, 'p'),
             vec![Cmd::LoadAgent(pr.clone()), Cmd::LoadCodeview(pr)]
         );
         update(&mut state, &Keymap::default(), Msg::TransitionsDone);
@@ -7044,7 +7056,7 @@ mod tests {
     fn a_tool_key_starts_one_run_per_tool_and_pull_request() {
         let (mut state, pr) = agent_state();
         key(&mut state, ' ');
-        key(&mut state, 'P');
+        key(&mut state, 'p');
         let review = agent_job(&state, &pr, Tool::Review);
         assert_eq!(menu(&mut state, 'r'), vec![Cmd::RunAgent(review)]);
         assert!(
@@ -7065,7 +7077,7 @@ mod tests {
     fn the_end_of_a_run_stores_the_result_and_frees_the_tool() {
         let (mut state, pr) = agent_state();
         key(&mut state, ' ');
-        key(&mut state, 'P');
+        key(&mut state, 'p');
         menu(&mut state, 'r');
         menu(&mut state, 'i');
         let done = Msg::AgentFinished {
@@ -7116,7 +7128,7 @@ mod tests {
     fn ask_opens_a_prompt_and_runs_with_the_question() {
         let (mut state, pr) = agent_state();
         key(&mut state, ' ');
-        key(&mut state, 'P');
+        key(&mut state, 'p');
         assert_eq!(menu(&mut state, 'a'), Vec::new());
         assert!(matches!(
             state.ui.overlays.last().map(|o| &o.state),
@@ -7138,7 +7150,7 @@ mod tests {
     fn p_then_y_runs_the_agent_action_with_the_confirm() {
         let (mut state, pr) = agent_state();
         key(&mut state, ' ');
-        key(&mut state, 'P');
+        key(&mut state, 'p');
         let describe = Record {
             tool: "describe".into(),
             data: serde_json::json!({"title": "New title", "description": "- New"}),
@@ -7244,10 +7256,10 @@ mod tests {
         )
     }
 
-    /// Opens the Review popup with `space` then `R`, and checks that it
+    /// Opens the Review popup with `space` then `r`, and checks that it
     /// is the popup of `pr`.
     fn open_dialog(state: &mut AppState, pr: &PrKey) -> Vec<Cmd> {
-        let cmds = menu(state, 'R');
+        let cmds = menu(state, 'r');
         assert_eq!(&dialog(state).pr().key, pr);
         cmds
     }
@@ -7445,7 +7457,7 @@ mod tests {
     fn space_then_r_opens_the_review_popup_from_the_list_and_the_popup() {
         let (mut state, pr) = agent_state();
         assert_eq!(
-            menu(&mut state, 'R'),
+            menu(&mut state, 'r'),
             vec![Cmd::LoadCodeview(pr.clone())],
             "from the list"
         );
@@ -7458,7 +7470,7 @@ mod tests {
         assert!(state.ui.overlays.is_empty());
         let (mut state, pr) = codeview_state();
         assert_eq!(
-            menu(&mut state, 'R'),
+            menu(&mut state, 'r'),
             vec![Cmd::LoadCodeview(pr.clone())],
             "from the popup"
         );
