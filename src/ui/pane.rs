@@ -7,16 +7,13 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
-use crate::app::models::{Cell, CellStyle, Column, PaneModel, Row, TreeNode};
+use crate::app::measure;
+use crate::app::models::{Cell, Column, PaneModel, Row, TreeNode};
 use crate::bus::Hit;
-use crate::markup::Source;
 use crate::theme::{Palette, Theme, punk};
 use crate::ui::hits::HitMap;
 use crate::ui::list::{self, Window};
-use crate::ui::{markdown, style, text};
-
-/// The cells of indent per tree depth.
-const INDENT: usize = 2;
+use crate::ui::{markdown, style};
 
 /// Draws a pane model into an area. `cursor` and `scroll` come from the
 /// pane state. Each drawn table row and tree node is a `Hit::PaneRow`
@@ -58,21 +55,13 @@ pub(crate) fn render(
 /// the rendered body, wrapped to the width after the cells before it. The
 /// next rows of the body are indented under it.
 fn expand(cells: &[Cell], width: u16, palette: &Palette) -> Vec<Line<'static>> {
-    let Some(at) = cells
-        .iter()
-        .position(|c| matches!(c.style, CellStyle::Markdown | CellStyle::Html))
-    else {
+    let Some(at) = measure::markup_cell(cells) else {
         return vec![style::line(cells, palette)];
     };
     let mut first = style::line(&cells[..at], palette);
     let indent = first.width();
     let body_width = width.saturating_sub(u16::try_from(indent).unwrap_or(u16::MAX));
-    let text = cells[at].text.as_str();
-    let source = if cells[at].style == CellStyle::Html {
-        Source::Html(text)
-    } else {
-        Source::Markdown(text)
-    };
+    let source = measure::source(&cells[at]);
     let mut body = markdown::render(source, body_width, palette).into_iter();
     if let Some(line) = body.next() {
         first.spans.extend(line.spans);
@@ -135,8 +124,10 @@ pub(crate) fn render_lines(
 }
 
 /// The nodes of a tree with indent and an expand marker, from the scroll
-/// offset (in nodes) down. A node with a markdown body takes one row per
-/// body line. The cursor node gets the `▌` marker.
+/// offset (in rows) down. A node with a markdown body takes one row per
+/// body line, so the first node can start in the middle of its rows. A
+/// scroll past the last full page shows the last full page. The cursor
+/// node gets the `▌` marker.
 fn render_tree(
     nodes: &[TreeNode],
     cursor: usize,
@@ -149,12 +140,14 @@ fn render_tree(
     let p = &theme.palette;
     buf.set_style(area, Style::new().bg(p.bg).fg(p.fg));
     let selection = theme.selected_row();
-    let text_width = area
-        .width
-        .saturating_sub(list::GUTTER)
-        .saturating_sub(selection.shift);
+    let text_width = measure::tree_text_width(area.width, selection.shift);
+    let total: usize = nodes
+        .iter()
+        .map(|node| measure::node_rows(node, text_width))
+        .sum();
+    let mut skip = scroll.min(total.saturating_sub(usize::from(area.height)));
     let mut y = area.y;
-    for (index, node) in nodes.iter().enumerate().skip(scroll) {
+    for (index, node) in nodes.iter().enumerate() {
         if y >= area.bottom() {
             break;
         }
@@ -169,11 +162,20 @@ fn render_tree(
             Some(false) => "▸ ",
             None => "  ",
         };
-        let prefix = format!("{}{marker}", " ".repeat(INDENT * usize::from(node.depth)));
-        let prefix_width = u16::try_from(text::width(&prefix)).unwrap_or(text_width);
+        let indent = " ".repeat(measure::TREE_INDENT * usize::from(node.depth));
+        let prefix = format!("{indent}{marker}");
+        let prefix_width = u16::try_from(measure::node_prefix(node.depth)).unwrap_or(text_width);
         let lines = expand(&node.cells, text_width.saturating_sub(prefix_width), p);
+        if skip >= lines.len() {
+            skip -= lines.len();
+            continue;
+        }
         let top = y;
-        for (row, line) in lines.into_iter().enumerate() {
+        for (row, line) in lines
+            .into_iter()
+            .enumerate()
+            .skip(std::mem::take(&mut skip))
+        {
             if y >= area.bottom() {
                 break;
             }
@@ -216,16 +218,22 @@ fn render_tree(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::models::CellStyle;
     use crate::ui::testdata;
 
     fn draw(model: &PaneModel, cursor: usize, width: u16, height: u16) -> String {
+        draw_at(model, cursor, 0, width, height)
+    }
+
+    /// Draws a pane model at `scroll` and returns the screen rows.
+    fn draw_at(model: &PaneModel, cursor: usize, scroll: usize, width: u16, height: u16) -> String {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         let mut hits = HitMap::default();
         render(
             model,
             cursor,
-            0,
+            scroll,
             area,
             &mut buf,
             &testdata::ansi16(),
@@ -287,6 +295,48 @@ mod tests {
         assert!(second > 1, "the first node takes more than one row");
         assert_eq!(hits.at(29, second), Some(Hit::PaneRow(1)));
         assert_eq!(hits.at(0, second + 1), Some(Hit::PaneRow(2)));
+    }
+
+    /// A tree of a header and a body of five rows, then a second
+    /// header.
+    fn tall_tree() -> PaneModel {
+        let node = |depth, text: &str, style| TreeNode {
+            depth,
+            expanded: None,
+            cells: vec![testdata::cell(text, style)],
+        };
+        PaneModel::Tree {
+            nodes: vec![
+                node(0, "header one", CellStyle::Info),
+                node(1, "a\n\nb\n\nc", CellStyle::Markdown),
+                node(0, "header two", CellStyle::Info),
+            ],
+        }
+    }
+
+    #[test]
+    fn a_tree_scrolls_by_rows_into_a_node() {
+        let rows: Vec<String> = draw_at(&tall_tree(), 1, 3, 20, 3)
+            .lines()
+            .map(|row| row.trim_end().to_owned())
+            .collect();
+        assert_eq!(
+            rows,
+            ["▌    b", "▌", "▌    c"],
+            "rows 3 to 5: the end of the body"
+        );
+        let hits = hits(&tall_tree(), 3, 20, 3);
+        assert_eq!(hits.at(0, 0), Some(Hit::PaneRow(1)));
+        assert_eq!(hits.at(0, 2), Some(Hit::PaneRow(1)));
+    }
+
+    #[test]
+    fn a_tree_scroll_past_the_end_shows_the_last_page() {
+        let rows: Vec<String> = draw_at(&tall_tree(), 0, 99, 20, 3)
+            .lines()
+            .map(|row| row.trim_end().to_owned())
+            .collect();
+        assert_eq!(rows, ["", "     c", "   header two"]);
     }
 
     #[test]

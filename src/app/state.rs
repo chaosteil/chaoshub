@@ -106,6 +106,10 @@ pub(crate) struct AppData {
     /// The unsent codeview comments of each pull request, from the
     /// comment files, or the error of a file.
     pub codeview: BTreeMap<PrKey, Result<Comments, String>>,
+    /// The cells that the theme moves the text of a selected row to the
+    /// right (`Selection::shift`). The tree rows of a pane are measured
+    /// without these cells, as `ui` draws them.
+    pub selection_shift: u16,
 }
 
 /// The command of the detail pane, as plain data from `run`: `app`
@@ -523,6 +527,7 @@ impl AppState {
                 agent: BTreeMap::new(),
                 agent_jobs: BTreeSet::new(),
                 codeview: BTreeMap::new(),
+                selection_shift: 0,
             },
             ui: UiState {
                 active: 0,

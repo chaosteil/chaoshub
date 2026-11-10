@@ -164,7 +164,8 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     )
     .with_action_config(action_tables(&settings.config))
     .with_column_headers(settings.config.theme.column_headers)
-    .with_detail_pane(detail);
+    .with_detail_pane(detail)
+    .with_selection_shift(theme.selected_row().shift);
     // The pinned app comes before the first interest, so the workers
     // start with the pinned interest.
     let app = match &pinned {
