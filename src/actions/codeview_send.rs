@@ -1,6 +1,6 @@
 //! The codeview send action: sends chosen codeview comments as one review.
 //!
-//! The key of the action (`R`, in the actions menu) opens the Review
+//! The key of the action (`r`, in the actions menu) opens the Review
 //! popup, and a key of an event there starts the action with
 //! `ActionInput::Review`. The popup is the only way to approve, to request
 //! changes and to send codeview comments. It opens also for a repo
@@ -64,7 +64,7 @@ impl Action for CodeviewSend {
 
     fn default_key(&self) -> Option<KeyChord> {
         Some(KeyChord {
-            code: KeyCode::Char('R'),
+            code: KeyCode::Char('r'),
             mods: KeyModifiers::NONE,
         })
     }

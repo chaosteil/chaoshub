@@ -27,7 +27,7 @@ expression: screen(&mut app)
 "                                                            ▌  ACTIONS (IN THE ACTIONS MENU) ╱     ┃"
 "                                                            ▌ v      review in codeview            ┃"
 "                                                            ▌ m      Merge                         ┃"
-"                                                            ▌ M      Merge stack                   ┃"
+"                                                            ▌ s      Merge stack                   ┃"
 "                                                            ▌ x      re-run failed checks          ┃"
 "                                                            ◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◣"
 "╱ Esc close                                                                                         "

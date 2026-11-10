@@ -89,7 +89,7 @@ impl Action for CopyChangeId {
     }
 
     fn default_key(&self) -> Option<KeyChord> {
-        Some(key('Y'))
+        Some(key('i'))
     }
 
     /// A pull request with a local change.

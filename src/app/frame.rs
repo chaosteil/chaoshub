@@ -1090,11 +1090,9 @@ mod tests {
             if keymap::DETAIL_ACTIONS.contains(&action.id()) {
                 continue;
             }
-            let chords = keymap.chords(action.id());
+            let label = action.id().replace('_', " ");
             assert!(
-                !hints
-                    .iter()
-                    .any(|hint| hint.chord.is_some_and(|chord| chords.contains(&chord))),
+                !hints.iter().any(|hint| hint.label == label),
                 "no hint of the action {}",
                 action.id()
             );

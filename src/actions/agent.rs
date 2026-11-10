@@ -31,7 +31,7 @@ impl Action for Agent {
 
     fn default_key(&self) -> Option<KeyChord> {
         Some(KeyChord {
-            code: KeyCode::Char('P'),
+            code: KeyCode::Char('p'),
             mods: KeyModifiers::NONE,
         })
     }

@@ -9,7 +9,7 @@
 //!
 //! When the head has codeview comments that went to GitHub not yet, one
 //! dim line between the block and the body counts them, for example
-//! `3 unsent codeview comments · space R to review`. The Review popup
+//! `3 unsent codeview comments · space r to review`. The Review popup
 //! lists and sends them. Without such comments, the pane shows no line.
 
 use chrono::{DateTime, Utc};
@@ -105,7 +105,7 @@ fn codeview_line(cx: &KeyCx<'_>, pr: &PullRequest) -> Option<Vec<Cell>> {
     Some(vec![cell(text, CellStyle::Dim)])
 }
 
-/// The keys that open the Review popup, for example `space R`. `None`
+/// The keys that open the Review popup, for example `space r`. `None`
 /// when the actions menu or the review action has no key.
 fn review_keys(keys: &Keymap) -> Option<String> {
     let menu = keys.chords("actions").first()?;
@@ -1117,7 +1117,7 @@ mod tests {
             codeview_texts(&state, &crate::app::keymap::DEFAULT)[3..],
             [
                 "",
-                "3 unsent codeview comments · space R to review",
+                "3 unsent codeview comments · space r to review",
                 "",
                 "(no description)",
             ]

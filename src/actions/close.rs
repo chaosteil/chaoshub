@@ -21,7 +21,7 @@ impl Action for Close {
 
     fn default_key(&self) -> Option<KeyChord> {
         Some(KeyChord {
-            code: KeyCode::Char('X'),
+            code: KeyCode::Char('c'),
             mods: KeyModifiers::NONE,
         })
     }
