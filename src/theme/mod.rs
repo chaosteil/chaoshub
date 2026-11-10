@@ -122,13 +122,14 @@ pub(crate) struct Selection {
 }
 
 impl Theme {
-    /// Builds the theme for a terminal kind. `grunge` and `textures` come
-    /// from the configuration. Without `grunge`, the skin is plain. A
-    /// 16-color terminal gets the ANSI palette and the plain skin.
+    /// Builds the default theme for a terminal kind: the punk style with
+    /// the Pierre palette. A 16-color terminal gets the ANSI palette.
+    /// `grunge` and `textures` come from the configuration. They apply to
+    /// the grunge style only, so the default theme does not use them.
     pub(crate) const fn new(kind: ThemeKind, grunge: bool, textures: bool) -> Self {
         Self::styled(
             kind,
-            ThemeStyle::Grunge,
+            ThemeStyle::Punk,
             PaletteChoice::Pierre,
             grunge,
             textures,
@@ -406,8 +407,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_default_theme_is_punk() {
+        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        assert_eq!(theme, Theme::punk(ThemeKind::TrueColor));
+        let theme = Theme::new(ThemeKind::Ansi16, false, false);
+        assert_eq!(theme.palette, Palette::ansi16());
+        assert_eq!(theme.skin, Skin::Punk, "also on 16 colors");
+    }
+
+    #[test]
     fn true_color_keeps_the_switches() {
-        let theme = Theme::new(ThemeKind::TrueColor, true, false);
+        let theme = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            false,
+        );
         assert_eq!(theme.palette, Palette::pierre());
         assert_eq!(theme.skin, Skin::Grunge { textures: false });
         assert!(!theme.textures());
@@ -415,14 +431,26 @@ mod tests {
 
     #[test]
     fn no_grunge_is_the_plain_skin() {
-        let theme = Theme::new(ThemeKind::TrueColor, false, true);
+        let theme = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            false,
+            true,
+        );
         assert_eq!(theme.skin, Skin::Plain);
         assert!(!theme.textures());
     }
 
     #[test]
     fn ansi16_turns_grunge_and_textures_off() {
-        let theme = Theme::new(ThemeKind::Ansi16, true, true);
+        let theme = Theme::styled(
+            ThemeKind::Ansi16,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
         assert_eq!(theme.palette, Palette::ansi16());
         assert_eq!(theme.skin, Skin::Plain);
         assert!(!theme.grunge());
@@ -433,10 +461,6 @@ mod tests {
     fn styled_picks_the_skin() {
         let kind = ThemeKind::TrueColor;
         let pierre = PaletteChoice::Pierre;
-        assert_eq!(
-            Theme::styled(kind, ThemeStyle::Grunge, pierre, true, true),
-            Theme::new(kind, true, true)
-        );
         assert_eq!(
             Theme::styled(kind, ThemeStyle::Punk, pierre, true, true),
             Theme::punk(kind)
@@ -562,7 +586,13 @@ mod tests {
 
     #[test]
     fn grunge_tab_strip_is_the_tabs() {
-        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let theme = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
         let labels = vec![" 1 MINE ".to_owned(), " 2 TEAM ".to_owned()];
         assert_eq!(
             theme.tab_strip(&labels, 1),
@@ -574,13 +604,25 @@ mod tests {
     fn hint_prefix_keeps_the_width() {
         let punk = Theme::punk(ThemeKind::TrueColor);
         assert_eq!(punk.hint_prefix("▌ ").content, "╱ ");
-        let grunge = Theme::new(ThemeKind::TrueColor, true, true);
+        let grunge = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
         assert_eq!(grunge.hint_prefix("▌ ").content, "▌ ");
     }
 
     #[test]
     fn grunge_tab_title_spaces_the_letters() {
-        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let theme = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
         assert_eq!(theme.tab_title("mine"), "M I N E");
     }
 }

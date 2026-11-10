@@ -192,7 +192,7 @@ mod tests {
     use ratatui::style::Color;
 
     use super::*;
-    use crate::theme::ThemeKind;
+    use crate::theme::{PaletteChoice, ThemeKind, ThemeStyle};
 
     fn draw(theme: &Theme, seed: u64) -> Buffer {
         let area = Rect::new(0, 0, 24, 6);
@@ -231,25 +231,49 @@ mod tests {
 
     #[test]
     fn grunge_frame() {
-        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let theme = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
         insta::assert_snapshot!(text(&draw(&theme, 1)));
     }
 
     #[test]
     fn grunge_frame_other_seed() {
-        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let theme = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
         insta::assert_snapshot!(text(&draw(&theme, 2)));
     }
 
     #[test]
     fn grunge_frame_does_not_flicker() {
-        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let theme = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
         assert_eq!(draw(&theme, 1), draw(&theme, 1));
     }
 
     #[test]
     fn rounded_frame_without_grunge() {
-        let theme = Theme::new(ThemeKind::Ansi16, true, true);
+        let theme = Theme::styled(
+            ThemeKind::Ansi16,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
         insta::assert_snapshot!(text(&draw(&theme, 1)));
     }
 

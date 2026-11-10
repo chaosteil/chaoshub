@@ -1428,8 +1428,21 @@ mod tests {
         );
         assert_eq!(
             theme_style(None, ThemeStyleSetting::default()),
-            ThemeStyle::Grunge
+            ThemeStyle::Punk
         );
+    }
+
+    #[test]
+    fn the_default_session_theme_is_punk() {
+        let mut config = Config::default();
+        for kind in [ThemeKind::TrueColor, ThemeKind::Ansi16] {
+            assert_eq!(session_theme(kind, None, None, &config), Theme::punk(kind));
+        }
+        // `grunge = false` affects the grunge style only.
+        config.theme.grunge = false;
+        for kind in [ThemeKind::TrueColor, ThemeKind::Ansi16] {
+            assert_eq!(session_theme(kind, None, None, &config), Theme::punk(kind));
+        }
     }
 
     #[test]
@@ -2112,7 +2125,7 @@ mod tests {
         press(&mut app, '/');
         press(&mut app, 'f');
         let screen = screen(&mut app);
-        assert_eq!(hint_row(&screen), "▌ Enter apply  Esc cancel", "{screen}");
+        assert_eq!(hint_row(&screen), "╱ Enter apply  Esc cancel", "{screen}");
         insta::assert_snapshot!(screen);
     }
 
@@ -2120,7 +2133,7 @@ mod tests {
     fn author_picker_hints_close_with_esc() {
         let mut app = team_app(100, 16);
         press(&mut app, 'a');
-        assert_eq!(hint_row(&screen(&mut app)), "▌ Enter select  Esc close");
+        assert_eq!(hint_row(&screen(&mut app)), "╱ Enter select  Esc close");
     }
 
     #[test]

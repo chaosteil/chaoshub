@@ -14,16 +14,29 @@ use crate::bus::{
     TermState, TermStatus,
 };
 use crate::domain::keys::{PrKey, RepoKey};
-use crate::theme::{Theme, ThemeKind};
+use crate::theme::{PaletteChoice, Theme, ThemeKind, ThemeStyle};
 
 /// The Pierre theme with grunge and textures on.
 pub(crate) fn pierre() -> Theme {
-    Theme::new(ThemeKind::TrueColor, true, true)
+    Theme::styled(
+        ThemeKind::TrueColor,
+        ThemeStyle::Grunge,
+        PaletteChoice::Pierre,
+        true,
+        true,
+    )
 }
 
-/// The 16-color theme.
+/// The grunge style on a 16-color terminal: the ANSI palette and the
+/// plain skin.
 pub(crate) fn ansi16() -> Theme {
-    Theme::new(ThemeKind::Ansi16, true, true)
+    Theme::styled(
+        ThemeKind::Ansi16,
+        ThemeStyle::Grunge,
+        PaletteChoice::Pierre,
+        true,
+        true,
+    )
 }
 
 /// The punk theme on a true-color terminal.

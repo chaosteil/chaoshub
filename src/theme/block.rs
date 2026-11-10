@@ -107,7 +107,7 @@ fn shadow(area: Rect, buf: &mut Buffer, color: Color) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::{Palette, ThemeKind};
+    use crate::theme::{Palette, PaletteChoice, ThemeKind, ThemeStyle};
 
     fn draw(theme: &Theme) -> Buffer {
         let area = Rect::new(0, 0, 30, 4);
@@ -173,7 +173,13 @@ mod tests {
 
     #[test]
     fn grunge_block_has_the_grunge_frame() {
-        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let theme = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
         let buf = draw(&theme);
         assert_eq!(buf[(0, 0)].symbol(), "▛");
         assert_eq!(buf[(2, 0)].symbol(), "▌");
