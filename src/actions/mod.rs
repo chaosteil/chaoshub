@@ -108,16 +108,16 @@ pub(crate) trait Action: Send + Sync {
 pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(|| {
     vec![
         Box::new(review::Review),
+        Box::new(codeview_send::CodeviewSend),
+        Box::new(browser::Browser),
+        Box::new(copy::CopyUrl),
+        Box::new(copy::CopyChangeId),
+        Box::new(agent::Agent),
         Box::new(merge::MergeAction),
         Box::new(merge::MergeStackAction),
         Box::new(rerun_checks::RerunChecks),
         Box::new(draft::Draft),
         Box::new(close::Close),
-        Box::new(browser::Browser),
-        Box::new(copy::CopyUrl),
-        Box::new(copy::CopyChangeId),
-        Box::new(agent::Agent),
-        Box::new(codeview_send::CodeviewSend),
     ]
 });
 
