@@ -136,6 +136,35 @@ impl TreeRows {
         to.min(self.max_scroll(height))
     }
 
+    /// The cursor and the scroll after a scroll of `rows` rows of the
+    /// window, down when `down` is true. The scroll stops at the last
+    /// full page. The cursor stays while a part of its node shows. Else
+    /// it moves to the node of the first row of the window.
+    pub(crate) fn scroll(
+        &self,
+        cursor: usize,
+        scroll: usize,
+        height: usize,
+        rows: usize,
+        down: bool,
+    ) -> (usize, usize) {
+        let height = height.max(1);
+        let max = self.max_scroll(height);
+        let scroll = scroll.min(max);
+        let to = if down {
+            (scroll + rows).min(max)
+        } else {
+            scroll.saturating_sub(rows)
+        };
+        let shown = self.top(cursor) < to + height && self.bottom(cursor) > to;
+        let cursor = if shown || self.len() == 0 {
+            cursor
+        } else {
+            self.node_at(to)
+        };
+        (cursor, to)
+    }
+
     /// The cursor and the scroll after a move from `cursor` and `scroll`
     /// in a window of `height` rows. `page` is the rows of a page move.
     /// While the cursor node goes on past an edge of the window, a move
