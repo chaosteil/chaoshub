@@ -6,7 +6,7 @@ expression: screen(&mut app)
 " TITLE                          ◢━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱╱╱━◥"
 " ─ fix(store): reopen the connec▌ #101 feat(app): Pane trait, registry and overlay stack                                                                       ┃"
 " stack #12 -> main · 3 PRs      ▌ chaosteil · chaosteil/101 -> main · open · stale                                                                             ┃"
-" ┌ feat(ui): popup frame with pa▌ ◢ 1 Description ◤ ◢ 2 Checks ◤ ◢ 3 Conversation ◤ ◢ 4 Stack ◤ ◢ 5 Files ◤                                                    ┃"
+" ┌ feat(ui): popup frame with pa▌ ◢ 1 Description ◤ ◢ 2 Checks ◤ ◢ 3 Conversation ◤ ◢ 4 Stack ◤ ◢ 5 Files ◤   6 Agent                                          ┃"
 " ├ feat(app): checks pane       ▌ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱ ┃"
 "▶ └ feat(app): Pane trait, regis▌ ▶   stale: read at an older head, a new load is on its way                                                                   ┃"
 " ─ docs: describe the export fil▌    alice · commented 5m ago                                                                                                  ┃"

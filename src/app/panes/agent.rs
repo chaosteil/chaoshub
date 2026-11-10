@@ -47,6 +47,12 @@ impl Pane for AgentPane {
         matches!(target, Target::Pr { repo, .. } if repo.path.is_some())
     }
 
+    /// The pane numbers are fixed, so the tab `6` also shows, dim, for a
+    /// repo without a local path.
+    fn keeps_tab(&self) -> bool {
+        true
+    }
+
     fn init_state(&self) -> PaneState {
         PaneState::default()
     }
