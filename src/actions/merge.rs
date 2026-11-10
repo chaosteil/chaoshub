@@ -1225,6 +1225,59 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn the_fetch_after_a_merge_runs_git_in_a_git_only_repo() {
+        use crate::vcs::testrepo::{self, git, s};
+
+        if testrepo::git_missing() {
+            eprintln!("skipped: git is missing");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = testrepo::git_only_repo(tmp.path());
+        // A second clone pushes a branch that the repo does not know yet.
+        let other = tmp.path().join("other");
+        git(
+            tmp.path(),
+            &[
+                "clone",
+                "--quiet",
+                s(&tmp.path().join("origin.git")),
+                s(&other),
+            ],
+        );
+        git(
+            &other,
+            &["commit", "--quiet", "--allow-empty", "-m", "third"],
+        );
+        git(
+            &other,
+            &["push", "--quiet", "origin", "HEAD:refs/heads/later"],
+        );
+        let later = git(&other, &["rev-parse", "HEAD"]);
+        let server = wiremock::MockServer::start().await;
+        mount_put(
+            &server,
+            200,
+            serde_json::json!({ "status": "merged", "details": { "sha": "def456" } }),
+        )
+        .await;
+
+        let (result, events) = run_merge(&server, Some(repo.clone())).await;
+
+        assert_eq!(result, Ok("merged #7".to_owned()));
+        assert_eq!(
+            events,
+            [
+                ActionEvent::MergeStatus(MergeProgress::Merged {
+                    sha: "def456".into()
+                }),
+                ActionEvent::Progress("fetched".into()),
+            ]
+        );
+        assert_eq!(git(&repo, &["rev-parse", "origin/later"]), later);
+    }
+
     /// A pull request node of the `PrByIds` query: #`number` of `o/r` at
     /// position `number` of the stack `s`, with the base `base`.
     fn node_json(number: u64, base: &str) -> serde_json::Value {
