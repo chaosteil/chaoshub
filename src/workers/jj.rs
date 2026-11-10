@@ -193,8 +193,10 @@ mod tests {
     use super::*;
     use crate::bus::Session;
     use crate::config::Config;
+    use crate::domain::local::Vcs;
     use crate::domain::repo::Repo;
     use crate::store::Store;
+    use crate::vcs::testrepo;
     use crate::workers::testkit;
 
     /// True when the `jj` binary is not on the path.
@@ -309,6 +311,124 @@ mod tests {
             .send_modify(|interest| interest.wants_local = true);
         assert!(matches!(harness.recv().await, Msg::JjScanned { .. }));
         worker.abort();
+    }
+
+    /// The session of the test repo at `path`.
+    fn session(path: PathBuf) -> Session {
+        Session {
+            login: Some("chaosteil".into()),
+            repos: vec![Repo {
+                key: testkit::repo(),
+                path: Some(path),
+                settings: None,
+            }],
+        }
+    }
+
+    /// The branch, the workspace, the description and the tool of each
+    /// change.
+    fn branches(state: &LocalState) -> Vec<(&str, &str, &str, Vcs)> {
+        state
+            .changes
+            .iter()
+            .map(|change| {
+                (
+                    change.change_id.as_str(),
+                    change.workspace.as_str(),
+                    change.description.as_str(),
+                    change.vcs,
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn scans_a_temporary_git_only_repo() {
+        if testrepo::git_missing() {
+            eprintln!("skipped: git is missing");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let path = testrepo::git_only_repo(tmp.path());
+        let (ctx, mut harness) = testkit::ctx("http://127.0.0.1:1");
+        harness.session.send(session(path.clone())).unwrap();
+        let worker = tokio::spawn(run(ctx));
+
+        harness.jj.send(JjReq::Scan(testkit::repo())).await.unwrap();
+        let Msg::JjScanned { state, .. } = harness.recv().await else {
+            panic!("expected JjScanned");
+        };
+        assert_eq!(names(&state.value), ["default", "feature"]);
+        assert_eq!(
+            branches(&state.value),
+            [
+                ("main", "default", "first", Vcs::Git),
+                ("me/feature", "feature", "second", Vcs::Git),
+            ]
+        );
+        let tip = testrepo::git(&path, &["rev-parse", "me/feature"]);
+        assert_eq!(state.value.changes[1].commit_id, tip);
+        assert_eq!(state.value.changes[1].bookmarks, ["me/feature"]);
+        assert_eq!(state.value.workspaces[1].change_id, "me/feature");
+        worker.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_colocated_repo_without_jj_on_the_path_uses_git() {
+        if testrepo::git_missing() {
+            eprintln!("skipped: git is missing");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let path = testrepo::git_only_repo(tmp.path());
+        std::fs::create_dir_all(path.join(".jj/repo")).unwrap();
+        // A PATH with git and without jj.
+        let real_path = std::env::var_os("PATH").unwrap_or_default();
+        let git_bin = std::env::split_paths(&real_path)
+            .map(|dir| dir.join("git"))
+            .find(|file| file.is_file())
+            .unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::os::unix::fs::symlink(git_bin, bin.join("git")).unwrap();
+        let no_jj = bin.into_os_string();
+        assert!(vcs::on_path("git", Some(&no_jj)));
+        assert!(!vcs::on_path("jj", Some(&no_jj)));
+
+        let tool = vcs::detect(&path, vcs::on_path("jj", Some(&no_jj))).unwrap();
+        assert_eq!(tool, Tool::GitWithoutJj);
+        let state = scan(&path, tool).await.unwrap();
+        assert_eq!(
+            branches(&state),
+            [
+                ("main", "default", "first", Vcs::Git),
+                ("me/feature", "feature", "second", Vcs::Git),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_jj_repo_without_git_sends_one_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".jj/repo")).unwrap();
+        let (ctx, mut harness) = testkit::ctx("http://127.0.0.1:1");
+        harness
+            .session
+            .send(session(tmp.path().to_path_buf()))
+            .unwrap();
+        let mut noted = HashSet::new();
+        assert!(scan_repo(&ctx, &testkit::repo(), &mut noted).await);
+        let Msg::SyncFailed { source, err, .. } = harness.recv().await else {
+            panic!("expected SyncFailed");
+        };
+        assert_eq!(source, "scan");
+        let SyncError::Other(text) = err else {
+            panic!("expected an other error");
+        };
+        assert!(text.contains("jj git init --colocate"), "{text}");
+        assert!(scan_repo(&ctx, &testkit::repo(), &mut noted).await);
+        assert!(harness.quiet_for(Duration::from_millis(50)).await);
     }
 
     #[tokio::test]

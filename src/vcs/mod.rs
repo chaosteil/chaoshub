@@ -12,6 +12,8 @@ pub(crate) mod git;
 pub(crate) mod jj;
 pub(crate) mod lock;
 mod parse;
+#[cfg(test)]
+pub(crate) mod testrepo;
 
 use std::ffi::OsStr;
 use std::path::Path;

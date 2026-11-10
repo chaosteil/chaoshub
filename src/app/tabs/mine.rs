@@ -631,6 +631,66 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn git_columns_of_a_temporary_git_only_repo() {
+        use crate::domain::local::LocalState;
+        use crate::vcs::{git, testrepo};
+
+        if testrepo::git_missing() {
+            eprintln!("skipped: git is missing");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = testrepo::git_only_repo(tmp.path());
+        let workspaces = git::list_worktrees(&repo).await.unwrap();
+        let changes = git::read_branches(&repo, &workspaces).await.unwrap();
+        let tip = testrepo::git(&repo, &["rev-parse", "me/feature"]);
+        let mut state = AppState::new(SIZE);
+        let mut synced = pr("codeview", 3, "Synced by its tip");
+        synced.head.value.head_oid.clone_from(&tip);
+        let mut diverged = pr("codeview", 4, "Diverged by its name");
+        diverged.head.value.head_ref = "main".into();
+        for pr in [synced, diverged] {
+            state.data.scopes.insert(pr.key.clone(), Scope::Mine);
+            state.data.prs.insert(pr.key.clone(), pr);
+        }
+        state.data.local.insert(
+            testdata::repo_key("codeview"),
+            testdata::observed(LocalState {
+                workspaces,
+                changes,
+            }),
+        );
+        let main = testrepo::git(&repo, &["rev-parse", "main"]);
+
+        let model = model(&state, &Mine.init_state());
+        let cells = |title: &str| {
+            model
+                .rows
+                .iter()
+                .find(|row| row.cells[0].text == title)
+                .unwrap()
+                .cells[2..5]
+                .to_vec()
+        };
+        assert_eq!(
+            cells("Synced by its tip"),
+            [
+                cell("me/featu", CellStyle::Primary),
+                cell(&tip[..8], CellStyle::Dim),
+                cell("feature", CellStyle::Dim),
+            ]
+        );
+        assert_eq!(
+            cells("Diverged by its name"),
+            [
+                cell("main", CellStyle::Warn),
+                cell(&main[..8], CellStyle::Warn),
+                cell("default", CellStyle::Dim),
+            ]
+        );
+    }
+
     #[test]
     fn interest_names_the_cursor_row_and_the_visible_rows() {
         let state = seeded();
