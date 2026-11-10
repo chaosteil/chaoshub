@@ -16,7 +16,6 @@ use crate::app::layout::Areas;
 use crate::app::measure;
 use crate::app::models::{Cell, CellStyle, PaneModel, RowItem, TreeNode};
 use crate::app::nav::{self, Motion, TreeRows};
-use crate::app::panes::description::CodeviewState;
 use crate::app::panes::{PANES, Pane, PaneAction, PaneState, applicable, init_states, items};
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
@@ -860,13 +859,18 @@ fn open_confirm(state: &mut AppState, key: &PrKey, id: &'static str, spec: Confi
 const AGENT_ID: &str = crate::agent::ID;
 
 /// The commands of a pane, with each `Cmd::RunAgent` through
-/// `start_agent` and each `Cmd::SendCodeview` through `start_send`.
+/// `start_agent`, each `Cmd::SendCodeview` through `start_send` and each
+/// `Cmd::MarkCodeview` on the review draft.
 fn pane_cmds(state: &mut AppState, cmds: Vec<Cmd>) -> Vec<Cmd> {
     let mut out = Vec::new();
     for cmd in cmds {
         match cmd {
             Cmd::RunAgent(job) => out.extend(start_agent(state, job)),
             Cmd::SendCodeview { key, ids } => out.push(start_send(state, key, ids, None)),
+            Cmd::MarkCodeview { key, id } => {
+                state.data.reviews.entry(key).or_default().toggle(&id);
+                state.bump();
+            }
             cmd => out.push(cmd),
         }
     }
@@ -887,12 +891,15 @@ fn verdict(id: &str) -> Option<ReviewKind> {
 }
 
 /// The selected codeview comments of `pr` for `A` and `R`. A comment that
-/// you deselected in the open popup of `pr` stays out. `None` when the
+/// you deselected in the review draft of `pr` stays out. `None` when the
 /// head of `pr` has no unsent comment that can go to GitHub: then `A` and
 /// `R` run as plain actions.
-fn review_ids(state: &mut AppState, pr: &PullRequest) -> Option<Vec<String>> {
-    let deselected = codeview_pane(state, &pr.key)
-        .map(|codeview| codeview.deselected.clone())
+fn review_ids(state: &AppState, pr: &PullRequest) -> Option<Vec<String>> {
+    let deselected = state
+        .data
+        .reviews
+        .get(&pr.key)
+        .map(|draft| draft.deselected.clone())
         .unwrap_or_default();
     crate::app::panes::description::selected(&state.data, pr, &deselected)
 }
@@ -982,8 +989,11 @@ fn open_send(state: &mut AppState, send: PendingSend) {
         ));
     }
     let ids = chosen.iter().map(|comment| comment.id.clone()).collect();
-    let text = codeview_pane(state, &key)
-        .map(|codeview| codeview.message.clone())
+    let text = state
+        .data
+        .reviews
+        .get(&key)
+        .map(|draft| draft.message.clone())
         .unwrap_or_default();
     let action = ActionDialog {
         id: CODEVIEW_SEND_ID,
@@ -1005,26 +1015,6 @@ fn open_send(state: &mut AppState, send: PendingSend) {
         OverlayKind::Confirm,
         OverlayState::SendReview(review),
     );
-}
-
-/// The own state of the Description pane in the open popup of `key`.
-/// `None` without such a popup.
-fn codeview_pane<'a>(state: &'a mut AppState, key: &PrKey) -> Option<&'a mut CodeviewState> {
-    state.ui.overlays.iter_mut().find_map(|overlay| {
-        if overlay.closing {
-            return None;
-        }
-        let OverlayState::Popup(popup) = &mut overlay.state else {
-            return None;
-        };
-        if popup.key != *key {
-            return None;
-        }
-        popup
-            .panes
-            .iter_mut()
-            .find_map(|ps| ps.ext.downcast_mut::<CodeviewState>())
-    })
 }
 
 /// A key for the Send review dialog on top of the overlay stack: `m`
@@ -1132,8 +1122,8 @@ fn review_text_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
 }
 
 /// The text box of the message closed with `text`: the Send review
-/// dialog under it takes the text, and so does the Description pane of
-/// the popup of its pull request, so the text stays for the next dialog.
+/// dialog under it takes the text, and so does the review draft of its
+/// pull request, so the text stays for the next dialog.
 fn message_back(state: &mut AppState, text: String) {
     let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
         return;
@@ -1143,9 +1133,7 @@ fn message_back(state: &mut AppState, text: String) {
     };
     review.text.clone_from(&text);
     let key = review.pr().key.clone();
-    if let Some(codeview) = codeview_pane(state, &key) {
-        codeview.message = text;
-    }
+    state.data.reviews.entry(key).or_default().message = text;
     state.bump();
 }
 
@@ -2690,9 +2678,9 @@ fn action_event(
                 state.ui.ui_events.push(UiEvent::RowFlash(pr.clone()));
                 // The review went out, so its message is done.
                 if id == CODEVIEW_SEND_ID
-                    && let Some(codeview) = codeview_pane(state, pr)
+                    && let Some(draft) = state.data.reviews.get_mut(pr)
                 {
-                    codeview.message.clear();
+                    draft.message.clear();
                 }
                 state.bump();
             }

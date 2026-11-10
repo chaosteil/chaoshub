@@ -106,10 +106,32 @@ pub(crate) struct AppData {
     /// The unsent codeview comments of each pull request, from the
     /// comment files, or the error of a file.
     pub codeview: BTreeMap<PrKey, Result<Comments, String>>,
+    /// The review draft of each pull request: the deselected codeview
+    /// comments and the message. A draft stays until chaoshub quits.
+    pub reviews: BTreeMap<PrKey, ReviewDraft>,
     /// The cells that the theme moves the text of a selected row to the
     /// right (`Selection::shift`). The tree rows of a pane are measured
     /// without these cells, as `ui` draws them.
     pub selection_shift: u16,
+}
+
+/// The review draft of a pull request. It stays when the popups close.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ReviewDraft {
+    /// The codeview comments that you deselected, by comment id. Every
+    /// other comment is selected, so a new comment starts selected.
+    pub deselected: BTreeSet<String>,
+    /// The message of the review. A sent review clears it.
+    pub message: String,
+}
+
+impl ReviewDraft {
+    /// Deselects the comment `id` when it is selected, else selects it.
+    pub(crate) fn toggle(&mut self, id: &str) {
+        if !self.deselected.remove(id) {
+            self.deselected.insert(id.to_owned());
+        }
+    }
 }
 
 /// The command of the detail pane, as plain data from `run`: `app`
@@ -637,6 +659,7 @@ impl AppState {
                 agent: BTreeMap::new(),
                 agent_jobs: BTreeSet::new(),
                 codeview: BTreeMap::new(),
+                reviews: BTreeMap::new(),
                 selection_shift: 0,
             },
             ui: UiState {

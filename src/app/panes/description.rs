@@ -10,12 +10,13 @@
 //! Between the block and the body, the pane lists the codeview comments of
 //! the head that went to GitHub not yet. Each comment starts selected,
 //! also a comment that a new load adds. `J` and `K` move the comment
-//! cursor, and `enter` selects or deselects the comment of the cursor. A
-//! deselected comment stays deselected while the popup is open. The own
+//! cursor, and `enter` selects or deselects the comment of the cursor. The
+//! selection is in the review draft of the pull request in `AppData`, so a
+//! deselected comment stays deselected until chaoshub quits. The own
 //! action `S` of the pane, in the actions menu (`space`), sends the
 //! selected comments: `app` reads the comment files again and opens the
 //! Send review dialog. With no comment selected, the review has only the
-//! message. The pane keeps the message of the dialog. A comment on a
+//! message. The review draft keeps the message of the dialog. A comment on a
 //! commit message shows dim and cannot be selected: GitHub takes no such
 //! comment. A dim line counts the comments of an older push. Without
 //! comments, the pane shows no section.
@@ -43,19 +44,13 @@ use crate::domain::pr::{
 /// The description pane.
 pub(crate) struct DescriptionPane;
 
-/// The own state of the description pane: the comment cursor and the
-/// deselected comments, by comment id. A load of the comments keeps them.
+/// The own state of the description pane: the comment cursor. A load of
+/// the comments keeps it.
 #[derive(Debug, Default)]
 pub(crate) struct CodeviewState {
     /// The id of the comment of the cursor. `None` puts the cursor on
     /// the first comment that can go to GitHub.
     pub cursor: Option<String>,
-    /// The comments that you deselected. Every other comment is
-    /// selected, so a new comment starts selected.
-    pub deselected: BTreeSet<String>,
-    /// The message of the Send review dialog. It stays while the popup
-    /// is open, also when you cancel the dialog. A sent review clears it.
-    pub message: String,
 }
 
 impl Pane for DescriptionPane {
@@ -103,7 +98,8 @@ impl Pane for DescriptionPane {
         let empty = CodeviewState::default();
         let state = ps.ext.downcast_ref::<CodeviewState>().unwrap_or(&empty);
         let mut lines = readiness(cx, pr);
-        let section = codeview_section(cx, pr, state, usize::from(size.width));
+        let deselected = deselected(cx.data, pr);
+        let section = codeview_section(cx, pr, state, deselected, usize::from(size.width));
         if !section.is_empty() {
             lines.push(Vec::new());
             lines.extend(section);
@@ -127,10 +123,14 @@ impl Pane for DescriptionPane {
         let state = ps.ext.downcast_mut::<CodeviewState>()?;
         let at = cursor_index(state, &comments);
         if cx.keys.matches("open", key) {
-            let id = &comments[at].id;
-            if !state.deselected.remove(id) {
-                state.deselected.insert(id.clone());
-            }
+            return Some(Handled {
+                cmds: vec![Cmd::MarkCodeview {
+                    key: pr.key.clone(),
+                    id: comments[at].id.clone(),
+                }],
+                changed: true,
+                ..Handled::default()
+            });
         } else if !key.mods.is_empty() {
             return None;
         } else if key.code == KeyCode::Char('J') {
@@ -160,15 +160,14 @@ impl Pane for DescriptionPane {
 
     /// `S` sends the selected comments. With no comment selected, the
     /// send has no comments.
-    fn run_action(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
+    fn run_action(&self, key: KeyChord, cx: &KeyCx<'_>, _ps: &mut PaneState) -> Option<Handled> {
         if key != PaneAction::char(SEND_KEY, "").key {
             return None;
         }
         let Some(Target::Pr { pr, .. }) = cx.target else {
             return None;
         };
-        let state = ps.ext.downcast_ref::<CodeviewState>()?;
-        let ids = selected(cx.data, pr, &state.deselected)?;
+        let ids = selected(cx.data, pr, deselected(cx.data, pr))?;
         Some(Handled {
             cmds: vec![Cmd::SendCodeview {
                 key: pr.key.clone(),
@@ -181,6 +180,14 @@ impl Pane for DescriptionPane {
 
 /// The key of the send of the codeview comments in the actions menu.
 const SEND_KEY: char = 'S';
+
+/// The deselected comments of the review draft of `pr`.
+fn deselected<'a>(data: &'a AppData, pr: &PullRequest) -> &'a BTreeSet<String> {
+    static EMPTY: BTreeSet<String> = BTreeSet::new();
+    data.reviews
+        .get(&pr.key)
+        .map_or(&EMPTY, |draft| &draft.deselected)
+}
 
 /// The unsent codeview comments of the head of `pr`. Empty before the
 /// load and after a failed load.
@@ -237,6 +244,7 @@ fn codeview_section(
     cx: &KeyCx<'_>,
     pr: &PullRequest,
     state: &CodeviewState,
+    deselected: &BTreeSet<String>,
     width: usize,
 ) -> Vec<Vec<Cell>> {
     let header = |count: usize| {
@@ -266,7 +274,7 @@ fn codeview_section(
         .map(|comment| comment.id.as_str());
     let mut lines = vec![header(current.len())];
     for comment in current {
-        lines.push(row(comment, cursor, state, width));
+        lines.push(row(comment, cursor, deselected, width));
     }
     if older > 0 {
         let noun = if older == 1 { "comment" } else { "comments" };
@@ -281,7 +289,12 @@ fn codeview_section(
 /// One row of a comment: the cursor, the selection mark, the place and
 /// the first line of the body, cut to `width`. A commit message comment
 /// shows dim.
-fn row(comment: &Comment, cursor: Option<&str>, state: &CodeviewState, width: usize) -> Vec<Cell> {
+fn row(
+    comment: &Comment,
+    cursor: Option<&str>,
+    deselected: &BTreeSet<String>,
+    width: usize,
+) -> Vec<Cell> {
     let pointer = if cursor == Some(comment.id.as_str()) {
         "> "
     } else {
@@ -291,7 +304,7 @@ fn row(comment: &Comment, cursor: Option<&str>, state: &CodeviewState, width: us
         let text = format!("{pointer}[-] {} {}", comment.place(), comment.summary());
         return vec![cell(cut(&text, width), CellStyle::Dim)];
     }
-    let mark = if state.deselected.contains(&comment.id) {
+    let mark = if deselected.contains(&comment.id) {
         "[ ] "
     } else {
         "[x] "
@@ -1344,9 +1357,22 @@ mod tests {
         key_in(state, ps, KeyCode::Char(c), false)
     }
 
-    /// Presses `enter` in the pane.
-    fn enter_in(state: &AppState, ps: &mut PaneState) -> Option<Handled> {
-        key_in(state, ps, KeyCode::Enter, false)
+    /// Presses `enter` in the pane, and marks the comment of its
+    /// `Cmd::MarkCodeview` in the review draft, as `app` does.
+    fn enter_in(state: &mut AppState, ps: &mut PaneState) {
+        let Some(handled) = key_in(state, ps, KeyCode::Enter, false) else {
+            panic!("enter marks nothing");
+        };
+        let [Cmd::MarkCodeview { key, id }] = handled.cmds.as_slice() else {
+            panic!("no mark: {handled:?}");
+        };
+        assert!(handled.changed);
+        state
+            .data
+            .reviews
+            .entry(key.clone())
+            .or_default()
+            .toggle(id);
     }
 
     /// Runs the own action of `c` from the actions menu.
@@ -1414,7 +1440,7 @@ mod tests {
 
     #[test]
     fn the_comment_keys_move_select_and_send() {
-        let state = codeview_state(Some(Ok(codeview_comments())));
+        let mut state = codeview_state(Some(Ok(codeview_comments())));
         let mut ps = DescriptionPane.init_state();
         let changed = Some(Handled {
             changed: true,
@@ -1431,7 +1457,7 @@ mod tests {
             changed,
             "J stays on the last"
         );
-        assert_eq!(enter_in(&state, &mut ps), changed);
+        enter_in(&mut state, &mut ps);
         assert_eq!(
             codeview_texts(&state, &ps, 80)[7],
             "> [ ] PR Looks good overall."
@@ -1466,16 +1492,16 @@ mod tests {
             send(&["c1"]),
             "the selected one"
         );
-        assert_eq!(enter_in(&state, &mut ps), changed);
+        enter_in(&mut state, &mut ps);
         assert_eq!(press_in(&state, &mut ps, 'K'), changed);
-        assert_eq!(enter_in(&state, &mut ps), changed);
+        enter_in(&mut state, &mut ps);
         assert_eq!(
             codeview_texts(&state, &ps, 80)[5],
             "> [ ] src/lib.rs:L12-14 (new) Trim the name."
         );
         assert_eq!(menu_in(&state, &mut ps, 'S'), send(&["c3"]));
         assert_eq!(press_in(&state, &mut ps, 'J'), changed);
-        assert_eq!(enter_in(&state, &mut ps), changed);
+        enter_in(&mut state, &mut ps);
         assert_eq!(
             menu_in(&state, &mut ps, 'S'),
             send(&[]),
@@ -1489,7 +1515,7 @@ mod tests {
     fn a_new_comment_starts_selected_and_a_deselected_one_stays() {
         let mut state = codeview_state(Some(Ok(codeview_comments())));
         let mut ps = DescriptionPane.init_state();
-        enter_in(&state, &mut ps);
+        enter_in(&mut state, &mut ps);
         let mut comments = codeview_comments();
         let mut new = comments.pushes[0].comments[0].clone();
         new.id = "c4".into();
@@ -1518,7 +1544,7 @@ mod tests {
         for c in ['J', 'K'] {
             assert_eq!(press_in(&state, &mut ps, c), None, "{c}");
         }
-        assert_eq!(enter_in(&state, &mut ps), None);
+        assert_eq!(key_in(&state, &mut ps, KeyCode::Enter, false), None);
         assert_eq!(menu_in(&state, &mut ps, 'S'), None);
         assert_eq!(pane_actions(&state, &ps), []);
     }
