@@ -601,6 +601,12 @@ pub(crate) enum Cmd {
         key: PrKey,
         ids: Vec<String>,
     },
+    /// Selects or deselects the codeview comment `id` in the review draft
+    /// of `key`. It never leaves `app`: the description pane sends it.
+    MarkCodeview {
+        key: PrKey,
+        id: String,
+    },
     /// Opens the text in the editor of the user. The event loop runs the
     /// editor in the foreground and sends `Msg::TextEdited`.
     EditText(String),
