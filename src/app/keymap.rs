@@ -56,7 +56,7 @@ const DEFAULTS: &[(&str, &[&str])] = &[
 pub(crate) const DETAIL_ACTIONS: &[&str] = &["review", "browser", "copy_url", "copy_change_id"];
 
 /// The prefix of the binding names that run an action directly in the
-/// pull request detail, for example `detail_approve`. They have no
+/// pull request detail, for example `detail_merge`. They have no
 /// default chord.
 const DETAIL_PREFIX: &str = "detail_";
 

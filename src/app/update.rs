@@ -514,8 +514,7 @@ fn run_detail_key(
 
 /// The action `action` on `target`: `applies`, then `prepare`, then the
 /// route of the preparation. `None` when the action is hidden for the
-/// target. When codeview comments of the pull request wait, `A` and `R`
-/// open the Review popup instead.
+/// target.
 fn run_action(
     state: &mut AppState,
     panes: &[Box<dyn Pane>],
@@ -535,11 +534,6 @@ fn run_action(
             state.message(reason, CellStyle::Warn, INFO_TTL);
             return Some(Vec::new());
         }
-    }
-    let Target::Pr { pr, .. } = &selection.target;
-    if verdict(id).is_some() && review_ids(state, pr).is_some() {
-        let key = pr.key.clone();
-        return Some(open_review_of(state, &key));
     }
     let cmds = match action.prepare(&selection) {
         Prepare::Run => vec![Cmd::RunAction {
@@ -869,30 +863,6 @@ fn pane_cmds(state: &mut AppState, cmds: Vec<Cmd>) -> Vec<Cmd> {
 
 /// The action id of the codeview send.
 const CODEVIEW_SEND_ID: &str = "codeview_send";
-
-/// The event of the review of the actions `approve` (`A`) and
-/// `request_changes` (`R`).
-fn verdict(id: &str) -> Option<ReviewKind> {
-    match id {
-        "approve" => Some(ReviewKind::Approve),
-        "request_changes" => Some(ReviewKind::RequestChanges),
-        _ => None,
-    }
-}
-
-/// The selected codeview comments of `pr` for `A` and `R`. A comment that
-/// you deselected in the review draft of `pr` stays out. `None` when the
-/// head of `pr` has no unsent comment that can go to GitHub: then `A` and
-/// `R` run as plain actions.
-fn review_ids(state: &AppState, pr: &PullRequest) -> Option<Vec<String>> {
-    let deselected = state
-        .data
-        .reviews
-        .get(&pr.key)
-        .map(|draft| draft.deselected.clone())
-        .unwrap_or_default();
-    crate::app::panes::description::selected(&state.data, pr, &deselected)
-}
 
 /// Opens the Review popup of `key` with the codeview send action.
 /// Nothing opens when `key` is not loaded.
@@ -5231,10 +5201,9 @@ mod tests {
     /// change the pull request.
     fn state_actions() -> Vec<Box<dyn Action>> {
         [
-            ("approve", 'A'),
+            ("codeview_send", 'R'),
             ("draft", 'd'),
             ("rerun_checks", 'x'),
-            ("request_changes", 'R'),
             ("merge", 'm'),
             ("merge_stack", 'M'),
             ("close", 'X'),
@@ -5249,7 +5218,7 @@ mod tests {
     fn the_state_keys_do_nothing_directly_in_the_sidebar() {
         let actions = state_actions();
         let mut state = sidebar_state(102, &actions);
-        for c in ['A', 'd', 'x', 'R', 'm', 'M', 'X', 'P'] {
+        for c in ['R', 'd', 'x', 'm', 'M', 'X', 'P'] {
             assert_eq!(act(&mut state, &actions, KeyCode::Char(c)), vec![], "{c}");
             assert_eq!(state.ui.overlays.len(), 1, "{c} opens nothing");
         }
@@ -5274,8 +5243,8 @@ mod tests {
         assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
         assert!(sidebar(&state).is_some(), "esc goes back to the popup");
         assert!(matches!(
-            act_menu(&mut state, &actions, KeyCode::Char('A')).as_slice(),
-            [Cmd::RunAction { id: "approve", selection, .. }]
+            act_menu(&mut state, &actions, KeyCode::Char('d')).as_slice(),
+            [Cmd::RunAction { id: "draft", selection, .. }]
                 if selection.target.key() == TargetKey::Pr(testdata::pr_key("chaoshub", 102))
         ));
     }
@@ -5284,21 +5253,21 @@ mod tests {
     fn a_detail_binding_brings_a_direct_action_key_back() {
         let actions = state_actions();
         let overrides =
-            std::collections::BTreeMap::from([("detail_approve".to_owned(), "A".to_owned())]);
+            std::collections::BTreeMap::from([("detail_draft".to_owned(), "Z".to_owned())]);
         let keymap = Keymap::with_actions(&actions, &overrides).unwrap();
         let mut state = sidebar_state(102, &actions);
         assert_eq!(
-            act_with(&mut state, &actions, &keymap, KeyCode::Char('A')),
+            act_with(&mut state, &actions, &keymap, KeyCode::Char('Z')),
             vec![Cmd::RunAction {
-                id: "approve",
+                id: "draft",
                 selection: pr_selection(&state, 102),
                 input: ActionInput::None,
             }]
         );
         assert_eq!(
-            act_with(&mut state, &actions, &keymap, KeyCode::Char('d')),
+            act_with(&mut state, &actions, &keymap, KeyCode::Char('x')),
             vec![],
-            "draft has no detail binding"
+            "rerun_checks has no detail binding"
         );
     }
 
@@ -7254,16 +7223,11 @@ mod tests {
         )
     }
 
-    /// Opens the Review popup of `pr` with the codeview send action, as
-    /// its key does.
+    /// Opens the Review popup with `space` then `R`, and checks that it
+    /// is the popup of `pr`.
     fn open_dialog(state: &mut AppState, pr: &PrKey) -> Vec<Cmd> {
-        let action = REGISTRY
-            .iter()
-            .find(|action| action.id() == CODEVIEW_SEND_ID)
-            .unwrap();
-        let target = pr_target(&state.data, pr).unwrap();
-        let cmds = run_action(state, &PANES, action.as_ref(), target).unwrap();
-        assert!(matches!(top(state), OverlayState::Review(_)));
+        let cmds = menu(state, 'R');
+        assert_eq!(&dialog(state).pr().key, pr);
         cmds
     }
 
@@ -7457,9 +7421,63 @@ mod tests {
     }
 
     #[test]
+    fn space_then_r_opens_the_review_popup_from_the_list_and_the_popup() {
+        let (mut state, pr) = agent_state();
+        assert_eq!(
+            menu(&mut state, 'R'),
+            vec![Cmd::LoadCodeview(pr.clone())],
+            "from the list"
+        );
+        let kinds: Vec<OverlayKind> = state.ui.overlays.iter().map(|o| o.kind).collect();
+        assert_eq!(kinds, [OverlayKind::Picker, OverlayKind::Confirm]);
+        assert_eq!(dialog(&state).action.id, "codeview_send");
+        assert_eq!(&dialog(&state).pr().key, &pr);
+        esc(&mut state);
+        update(&mut state, &Keymap::default(), Msg::TransitionsDone);
+        assert!(state.ui.overlays.is_empty());
+        let (mut state, pr) = codeview_state();
+        assert_eq!(
+            menu(&mut state, 'R'),
+            vec![Cmd::LoadCodeview(pr.clone())],
+            "from the popup"
+        );
+        assert_eq!(&dialog(&state).pr().key, &pr);
+        esc(&mut state);
+        assert!(matches!(top(&state), OverlayState::Popup(_)));
+    }
+
+    #[test]
+    fn the_review_popup_is_the_only_way_to_approve() {
+        let ids: Vec<&str> = REGISTRY.iter().map(|action| action.id()).collect();
+        assert!(!ids.contains(&"approve"), "{ids:?}");
+        assert!(!ids.contains(&"request_changes"), "{ids:?}");
+        let (mut state, _) = codeview_state();
+        for c in ['A', 'R'] {
+            assert_eq!(key(&mut state, c), vec![], "{c} does nothing directly");
+            assert!(matches!(top(&state), OverlayState::Popup(_)), "{c}");
+        }
+    }
+
+    #[test]
+    fn the_draft_works_from_the_list_and_the_popup() {
+        let (mut state, pr) = codeview_state();
+        open_dialog(&mut state, &pr);
+        enter(&mut state);
+        esc(&mut state);
+        esc(&mut state);
+        update(&mut state, &Keymap::default(), Msg::TransitionsDone);
+        open_dialog(&mut state, &pr);
+        assert_eq!(marks(&state), " x-", "the list sees the marks of the popup");
+    }
+
+    #[test]
     fn the_popup_opens_without_a_repo_path_and_approves_with_the_message() {
         let mut state = mine_state(10);
-        let pr = testdata::pr_key("chaoshub", 102);
+        let model = frame::active_list(&mut state, &TABS);
+        let crate::app::models::RowItem::Pr(row) = &model.rows[model.cursor].item else {
+            panic!("the cursor row is no pull request");
+        };
+        let pr = row.key.clone();
         assert_eq!(
             open_dialog(&mut state, &pr),
             vec![Cmd::LoadCodeview(pr.clone())],
@@ -7742,34 +7760,6 @@ mod tests {
         let (mut state, pr) = codeview_state();
         assert_eq!(menu(&mut state, 'S'), vec![Cmd::LoadCodeview(pr)]);
         assert!(matches!(top(&state), OverlayState::Review(_)));
-    }
-
-    #[test]
-    fn a_and_r_open_the_review_popup_while_comments_wait() {
-        let (mut state, pr) = codeview_state();
-        state.data.session.login = Some("reviewer".into());
-        for c in ['A', 'R'] {
-            assert_eq!(menu(&mut state, c), vec![Cmd::LoadCodeview(pr.clone())]);
-            assert_eq!(dialog(&state).action.id, "codeview_send", "{c}");
-            esc(&mut state);
-        }
-    }
-
-    #[test]
-    fn a_and_r_work_as_before_without_a_comment_that_can_go_out() {
-        let (mut state, pr) = codeview_state();
-        state.data.session.login = Some("reviewer".into());
-        let mut comments = state.data.codeview[&pr].clone().unwrap();
-        comments.pushes[0]
-            .comments
-            .retain(|comment| !comment.sendable());
-        state.data.codeview.insert(pr.clone(), Ok(comments));
-        assert!(matches!(
-            menu(&mut state, 'A').as_slice(),
-            [Cmd::RunAction { id: "approve", .. }]
-        ));
-        menu(&mut state, 'R');
-        assert!(matches!(top(&state), OverlayState::Prompt { .. }));
     }
 
     #[test]

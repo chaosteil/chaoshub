@@ -1,7 +1,7 @@
 //! The `Action` trait, the registry and one module per action.
 //!
-//! An action is one thing that the user can do with a row: merge, review,
-//! approve and so on. `app` finds the action of a key in `REGISTRY`, asks
+//! An action is one thing that the user can do with a row: merge, review
+//! in codeview, send a review and so on. `app` finds the action of a key in `REGISTRY`, asks
 //! `applies` and `prepare` on each key press, and routes the result. A
 //! new action is one module plus one line in `REGISTRY`.
 #![allow(
@@ -10,14 +10,12 @@
 )]
 
 mod agent;
-mod approve;
 mod browser;
 mod close;
 mod codeview_send;
 mod copy;
 mod draft;
 mod merge;
-mod request_changes;
 mod rerun_checks;
 mod review;
 
@@ -107,8 +105,6 @@ pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(|| {
         Box::new(review::Review),
         Box::new(merge::MergeAction),
         Box::new(merge::MergeStackAction),
-        Box::new(approve::Approve),
-        Box::new(request_changes::RequestChanges),
         Box::new(rerun_checks::RerunChecks),
         Box::new(draft::Draft),
         Box::new(close::Close),

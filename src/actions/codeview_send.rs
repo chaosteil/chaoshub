@@ -1,9 +1,10 @@
 //! The codeview send action: sends chosen codeview comments as one review.
 //!
-//! A key of the action opens the Review popup, and a key of an event there
-//! starts the action with `ActionInput::Review`. The action has no default
-//! key. The popup opens also for a repo without a local path. With
-//! comments, it
+//! The key of the action (`R`, in the actions menu) opens the Review
+//! popup, and a key of an event there starts the action with
+//! `ActionInput::Review`. The popup is the only way to approve, to request
+//! changes and to send codeview comments. It opens also for a repo
+//! without a local path. With comments, it
 //! does not post to GitHub itself: it runs codeview in a headless nvim,
 //! and codeview maps the comments to the lines of the diff, posts the
 //! review, and marks the comments as sent. So the lock and the sent marks
@@ -19,8 +20,7 @@
 //! "the review did not go out".
 //!
 //! Without comments, codeview has nothing to post. Then the action posts
-//! a review with only the message, with `addPullRequestReview`, as the
-//! approve and the request changes actions do.
+//! a review with only the message, with `addPullRequestReview`.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::actions::review::{NVIM, agent_env};
 use crate::actions::{Action, Applicability, Prepare, Services};
-use crate::bus::{ActionInput, KeyChord, ReviewKind, Selection, Target};
+use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, ReviewKind, Selection, Target};
 use crate::codeview::store;
 use crate::domain::keys::PrKey;
 use crate::domain::pr::PullRequest;
@@ -59,12 +59,14 @@ impl Action for CodeviewSend {
     }
 
     fn label(&self) -> &'static str {
-        "send review"
+        "review"
     }
 
-    /// The `S` key of the Description pane starts the send.
     fn default_key(&self) -> Option<KeyChord> {
-        None
+        Some(KeyChord {
+            code: KeyCode::Char('R'),
+            mods: KeyModifiers::NONE,
+        })
     }
 
     /// Every pull request. Without a local path, the review has no
