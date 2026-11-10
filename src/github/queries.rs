@@ -145,6 +145,7 @@ pub(crate) struct UpdatePr;
 /// The event of a review that chaoshub submits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReviewEvent {
+    Comment,
     Approve,
     RequestChanges,
 }
@@ -264,7 +265,7 @@ impl GithubClient {
     }
 
     /// Submits a review of the pull request with the node id `id`. A
-    /// request for changes needs a `body`.
+    /// comment and a request for changes need a `body`.
     pub(crate) async fn add_review(
         &self,
         id: &str,
@@ -274,6 +275,7 @@ impl GithubClient {
         let vars = add_review::Variables {
             id: id.to_owned(),
             event: match event {
+                ReviewEvent::Comment => add_review::PullRequestReviewEvent::COMMENT,
                 ReviewEvent::Approve => add_review::PullRequestReviewEvent::APPROVE,
                 ReviewEvent::RequestChanges => add_review::PullRequestReviewEvent::REQUEST_CHANGES,
             },
