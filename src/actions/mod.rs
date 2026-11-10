@@ -54,6 +54,18 @@ pub(crate) enum Applicability {
     Disabled(&'static str),
 }
 
+/// The group of an action. The actions menu shows a gap row between two
+/// groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Group {
+    /// The actions that review the pull request.
+    Review,
+    /// The actions that do not change the pull request.
+    Safe,
+    /// The actions that change the pull request.
+    Change,
+}
+
 /// What happens after a key press, before `execute`.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Prepare {
@@ -90,6 +102,8 @@ pub(crate) trait Action: Send + Sync {
     }
     /// The key of the action when `[keys]` does not bind it.
     fn default_key(&self) -> Option<KeyChord>;
+    /// The group of the action in the actions menu.
+    fn group(&self) -> Group;
     /// Pure, called on each key press.
     fn applies(&self, sel: &Selection) -> Applicability;
     /// Pure, called on each key press after `applies` gave `Enabled`.
@@ -104,7 +118,8 @@ pub(crate) trait Action: Send + Sync {
     ) -> BoxFuture<'static, Result<String, String>>;
 }
 
-/// The action registry, in help order.
+/// The action registry, in help order and in menu order. The actions of
+/// one group are next to each other.
 pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(|| {
     vec![
         Box::new(review::Review),
@@ -189,6 +204,10 @@ pub(crate) mod fake {
 
         fn default_key(&self) -> Option<KeyChord> {
             self.key
+        }
+
+        fn group(&self) -> Group {
+            Group::Change
         }
 
         fn applies(&self, _sel: &Selection) -> Applicability {

@@ -2,7 +2,7 @@
 
 use futures::future::BoxFuture;
 
-use crate::actions::{Action, Applicability, Prepare, Services};
+use crate::actions::{Action, Applicability, Group, Prepare, Services};
 use crate::bus::{ActionInput, Cmd, KeyChord, KeyCode, KeyModifiers, Selection, Target};
 
 /// The action that opens the url of a pull request.
@@ -22,6 +22,10 @@ impl Action for Browser {
             code: KeyCode::Char('o'),
             mods: KeyModifiers::NONE,
         })
+    }
+
+    fn group(&self) -> Group {
+        Group::Safe
     }
 
     /// A pull request.

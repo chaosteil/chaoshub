@@ -162,7 +162,7 @@ fn overlay_models(
                     OverlayContent::Picker {
                         title: format!("actions for #{}", pr.key.number),
                         items: menu.items(&state.data, &state.cache.keymap, actions),
-                        cursor: menu.cursor,
+                        cursor: menu.row(menu.cursor),
                     }
                 }
                 OverlayState::Confirm { spec, .. } => OverlayContent::Confirm(spec.clone()),

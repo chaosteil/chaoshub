@@ -362,7 +362,9 @@ fn open_actions(state: &mut AppState, tabs: &[Box<dyn Tab>], actions: &[Box<dyn 
 /// not hidden for it, in registry order, then one item for each pane
 /// action of `pane`. `active` is the id of the active pane of the popup
 /// under the menu. An action that opens that pane is not in the menu,
-/// because the pane shows already.
+/// because the pane shows already. A gap goes before the first item of
+/// each new action group and before the pane actions, but not before the
+/// first item.
 fn open_menu(
     state: &mut AppState,
     actions: &[Box<dyn Action>],
@@ -370,22 +372,32 @@ fn open_menu(
     pane: Vec<PaneAction>,
     active: Option<&str>,
 ) {
-    let ids = actions
+    let shown: Vec<&dyn Action> = actions
         .iter()
         .zip(frame::applicability(&state.data, actions, target.clone()))
         .filter(|(_, applies)| *applies != Applicability::Hidden)
         .filter(|(action, _)| {
             active.is_none_or(|id| !opens_pane(&state.data, action.as_ref(), &target, id))
         })
-        .map(|(action, _)| action.id())
+        .map(|(action, _)| action.as_ref())
         .collect();
+    let mut gaps: Vec<usize> = shown
+        .windows(2)
+        .enumerate()
+        .filter(|(_, pair)| pair[0].group() != pair[1].group())
+        .map(|(i, _)| i + 1)
+        .collect();
+    if !shown.is_empty() && !pane.is_empty() {
+        gaps.push(shown.len());
+    }
     open_overlay(
         state,
         OverlayKind::Picker,
         OverlayState::Actions(ActionMenu {
             target: Box::new(target),
-            ids,
+            ids: shown.iter().map(|action| action.id()).collect(),
             pane,
+            gaps,
             cursor: 0,
         }),
     );
@@ -1872,9 +1884,9 @@ fn click_pane_row(
     cmds
 }
 
-/// A click on the item at `index` of the actions menu: it runs that
-/// item, as Enter does on the cursor item. `None` when the top overlay is
-/// not the actions menu.
+/// A click on the row at `index` of the actions menu: it runs the item
+/// of that row, as Enter does on the cursor item. A click on a gap row
+/// does nothing. `None` when the top overlay is not the actions menu.
 fn click_action(
     state: &mut AppState,
     keymap: &Keymap,
@@ -1889,11 +1901,11 @@ fn click_action(
     else {
         return None;
     };
-    if index >= menu.len() {
+    let Some(item) = menu.item_at(index) else {
         return Some(Vec::new());
-    }
-    menu.cursor = index;
-    Some(run_menu_item(state, keymap, panes, actions, index))
+    };
+    menu.cursor = item;
+    Some(run_menu_item(state, keymap, panes, actions, item))
 }
 
 /// A click on the row at `index` of the comment list of the Review

@@ -31,7 +31,7 @@ use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 use crate::actions::review::{NVIM, agent_env};
-use crate::actions::{Action, Applicability, Prepare, Services};
+use crate::actions::{Action, Applicability, Group, Prepare, Services};
 use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, ReviewKind, Selection, Target};
 use crate::codeview::store;
 use crate::domain::keys::PrKey;
@@ -67,6 +67,10 @@ impl Action for CodeviewSend {
             code: KeyCode::Char('r'),
             mods: KeyModifiers::NONE,
         })
+    }
+
+    fn group(&self) -> Group {
+        Group::Review
     }
 
     /// Every pull request. Without a local path, the review has no

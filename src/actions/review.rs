@@ -8,7 +8,7 @@
 
 use futures::future::BoxFuture;
 
-use crate::actions::{Action, Applicability, Prepare, Services};
+use crate::actions::{Action, Applicability, Group, Prepare, Services};
 use crate::agent::store::Store;
 use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, LaunchRequest, Selection, Target};
 
@@ -38,6 +38,10 @@ impl Action for Review {
             code: KeyCode::Char('v'),
             mods: KeyModifiers::NONE,
         })
+    }
+
+    fn group(&self) -> Group {
+        Group::Review
     }
 
     /// A pull request of a repo with a local path.

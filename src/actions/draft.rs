@@ -2,7 +2,7 @@
 
 use futures::future::BoxFuture;
 
-use crate::actions::{Action, Applicability, Prepare, Services};
+use crate::actions::{Action, Applicability, Group, Prepare, Services};
 use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, Selection, Target};
 use crate::domain::pr::PrState;
 
@@ -24,6 +24,10 @@ impl Action for Draft {
             code: KeyCode::Char('d'),
             mods: KeyModifiers::NONE,
         })
+    }
+
+    fn group(&self) -> Group {
+        Group::Change
     }
 
     /// An open pull request.
