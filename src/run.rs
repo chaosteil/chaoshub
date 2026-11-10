@@ -2165,18 +2165,6 @@ mod tests {
         insta::assert_snapshot!(screen(&mut app));
     }
 
-    #[test]
-    fn request_changes_prompt_100() {
-        let mut app = seeded_app(100, 30, crate::app::testdata::mine_snapshot());
-        press(&mut app, ' ');
-        press(&mut app, 'R');
-        app.update(Msg::TransitionsDone);
-        for c in "split it".chars() {
-            press(&mut app, c);
-        }
-        insta::assert_snapshot!(screen(&mut app));
-    }
-
     /// The mine app with `chaoshub` at a path, the popup of #101 on the
     /// Agent pane, and results of review (for an old head), improve and
     /// describe. Ask runs.
@@ -2362,10 +2350,11 @@ mod tests {
         }
     }
 
-    /// Opens the Review popup of the pull request of the popup.
+    /// Opens the Review popup of the pull request of the popup with
+    /// `space` then `R`.
     fn open_review(app: &mut App) {
         press(app, ' ');
-        press(app, 'S');
+        press(app, 'R');
         app.update(Msg::TransitionsDone);
     }
 
