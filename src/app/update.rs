@@ -210,8 +210,9 @@ fn prefetch_batch(state: &mut AppState, done: usize, total: usize) {
     }
 }
 
-/// A key press: the quit keys quit, the app keys act, every other key
-/// goes to the active tab. After a handled key, the
+/// A key press: the quit keys quit, the app keys act, the direct action
+/// keys act on the cursor row, every other key goes to the active tab.
+/// After a handled key, the
 /// generation moves when the tab says so, the UI events queue up, and a
 /// changed `Interest` goes to the workers.
 fn key(
@@ -293,6 +294,9 @@ fn key(
         open_actions(state, tabs, actions);
         return Vec::new();
     }
+    if let Some(cmds) = list_action_key(state, keymap, tabs, panes, actions, chord) {
+        return cmds;
+    }
     let index = state.ui.active;
     let areas = frame::areas(state);
     let (Some(tab), Some(ts)) = (tabs.get(index), state.ui.tabs.get_mut(index)) else {
@@ -314,6 +318,30 @@ fn key(
     let mut cmds = handled.cmds;
     cmds.extend(after_change(state, tabs));
     cmds
+}
+
+/// A direct action key on the cursor row of the list: a chord of
+/// `Keymap::detail_chords`, the same keys as in the pull request detail.
+/// `None` when no action has the key, when the row has no target, or
+/// when the action is hidden for it. The key then goes to the tab.
+fn list_action_key(
+    state: &mut AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
+    chord: KeyChord,
+) -> Option<Vec<Cmd>> {
+    if !actions
+        .iter()
+        .any(|action| keymap.detail_chords(action.id()).contains(&chord))
+    {
+        return None;
+    }
+    let model = frame::active_list(state, tabs);
+    let item = &model.rows.get(model.cursor)?.item;
+    let target = row_target(&state.data, item)?;
+    run_detail_key(state, keymap, panes, actions, target, chord)
 }
 
 /// Opens the actions menu of the cursor row. A row without a target
@@ -494,10 +522,10 @@ fn run_menu_action(
         .unwrap_or_default()
 }
 
-/// An action key in the pull request popup on `target`: a chord of
-/// `Keymap::detail_chords`. The action runs as `run_action` runs it.
-/// `None` when no action has the key here, or when the action is hidden
-/// for the target.
+/// An action key on `target`, in the pull request popup or on the cursor
+/// row of the list: a chord of `Keymap::detail_chords`. The action runs
+/// as `run_action` runs it. `None` when no action has the key here, or
+/// when the action is hidden for the target.
 fn run_detail_key(
     state: &mut AppState,
     keymap: &Keymap,
@@ -4931,6 +4959,71 @@ mod tests {
         let actions = fake(FakeAction::new("approve", 'A'));
         assert_eq!(act(&mut state, &actions, KeyCode::Char('A')), vec![]);
         assert!(state.ui.overlays.is_empty());
+    }
+
+    /// Fake actions with the ids and the default keys of the actions that
+    /// also work directly.
+    fn direct_actions() -> Vec<Box<dyn Action>> {
+        [
+            ("review", 'v'),
+            ("browser", 'o'),
+            ("copy_url", 'y'),
+            ("copy_change_id", 'Y'),
+        ]
+        .into_iter()
+        .map(|(id, key)| Box::new(FakeAction::new(id, key)) as Box<dyn Action>)
+        .collect()
+    }
+
+    #[test]
+    fn the_direct_keys_run_on_the_cursor_row_in_the_list() {
+        let actions = direct_actions();
+        for (id, c) in [
+            ("review", 'v'),
+            ("browser", 'o'),
+            ("copy_url", 'y'),
+            ("copy_change_id", 'Y'),
+        ] {
+            let mut state = action_state(&pr_row(102));
+            assert_eq!(
+                act(&mut state, &actions, KeyCode::Char(c)),
+                vec![Cmd::RunAction {
+                    id,
+                    selection: pr_selection(&state, 102),
+                    input: ActionInput::None,
+                }],
+                "{c}"
+            );
+            assert!(state.ui.overlays.is_empty(), "{c} opens no menu");
+        }
+    }
+
+    #[test]
+    fn the_state_keys_do_nothing_directly_in_the_list() {
+        let actions = state_actions();
+        let mut state = action_state(&pr_row(102));
+        for c in ['R', 'd', 'x', 'm', 'M', 'X', 'P'] {
+            assert_eq!(act(&mut state, &actions, KeyCode::Char(c)), vec![], "{c}");
+            assert!(state.ui.overlays.is_empty(), "{c} opens nothing");
+        }
+    }
+
+    #[test]
+    fn a_direct_key_on_a_row_without_a_target_does_nothing() {
+        let mut state = action_state(&|_| RowItem::StackHeader {
+            stack_id: "S_1".into(),
+        });
+        state.ui.tabs[0].cursor = 0;
+        let actions = direct_actions();
+        let model = frame::active_list(&mut state, &TABS);
+        assert!(matches!(
+            model.rows[model.cursor].item,
+            RowItem::StackHeader { .. }
+        ));
+        for c in ['v', 'o', 'y', 'Y'] {
+            assert_eq!(act(&mut state, &actions, KeyCode::Char(c)), vec![], "{c}");
+            assert!(state.ui.overlays.is_empty(), "{c} opens nothing");
+        }
     }
 
     #[test]

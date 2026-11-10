@@ -50,14 +50,14 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("quit", &["q", "esc", "ctrl-c"]),
 ];
 
-/// The actions whose own keys also work directly in the pull request
-/// detail. They change nothing on GitHub. In the detail, the other
+/// The actions whose own keys also work directly in the list and in the
+/// pull request detail. They change nothing on GitHub. There, the other
 /// actions run from the actions menu, or from a `detail_<id>` binding.
 pub(crate) const DETAIL_ACTIONS: &[&str] = &["review", "browser", "copy_url", "copy_change_id"];
 
 /// The prefix of the binding names that run an action directly in the
-/// pull request detail, for example `detail_merge`. They have no
-/// default chord.
+/// list and in the pull request detail, for example `detail_merge`. They
+/// have no default chord.
 const DETAIL_PREFIX: &str = "detail_";
 
 /// The default bindings, for the code that builds models and needs no
@@ -145,9 +145,9 @@ impl Keymap {
         self.bindings.get(name).map_or(&[], Vec::as_slice)
     }
 
-    /// The chords that run the action `id` directly in the pull request
-    /// detail: the chords of `id` for an action of `DETAIL_ACTIONS`, then
-    /// the chords of the binding `detail_<id>`.
+    /// The chords that run the action `id` directly in the list and in
+    /// the pull request detail: the chords of `id` for an action of
+    /// `DETAIL_ACTIONS`, then the chords of the binding `detail_<id>`.
     pub(crate) fn detail_chords(&self, id: &str) -> Vec<KeyChord> {
         let own = if DETAIL_ACTIONS.contains(&id) {
             self.chords(id)

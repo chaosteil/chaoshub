@@ -14,5 +14,5 @@ expression: screen(&mut app)
 "                                                                                                                                                                "
 "                                                                                                                                                                "
 "                                                                                                                                                                "
-"╱ j/k move  Enter open  Space actions  / filter  1/2/3/Tab tabs  r refresh  ? help  q quit  H headers                                                           "
+"╱ j/k move  Enter open  Space actions  / filter  1/2/3/Tab tabs  r refresh  ? help  q quit  H headers  o browser  y copy url                                    "
 " [MINE] 0 repos · cache from 5m ago ◤                                                                                                                    ? help "

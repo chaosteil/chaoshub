@@ -441,8 +441,8 @@ error.
 
 The binding names are the app keys and the action ids in the keymap
 below. A `detail_<id>` binding, for example `detail_merge = "m"`,
-runs the action `<id>` directly in the pull request detail (see
-"Actions").
+runs the action `<id>` directly in the list and in the pull request
+detail (see "Actions").
 
 ### `[terminal]`
 
@@ -631,10 +631,15 @@ The actions work on the pull request of the selected row, or on the
 pull request of the detail. When an action cannot run, the status line
 says why.
 
-In the list, the action keys do nothing. Thus a wrong key cannot send a
-review. The `actions` key (`space`) opens the actions menu of the
-selected row. The menu shows each action for the row, with its key. A
-disabled action shows the reason in parentheses. In the menu:
+In the list, only the action keys that change nothing on GitHub work
+directly on the selected row: `v` (codeview), `o` (browser), `y` and
+`Y` (copy). The other action keys do nothing in the list. Thus a wrong
+key cannot send a review. A row without a pull request, for example a
+stack header, runs no action. The key hint bar shows the direct keys
+that the row can run. The `actions` key (`space`) opens the actions
+menu of the selected row. The menu shows each action for the row, with
+its key. A disabled action shows the reason in parentheses. In the
+menu:
 
 - `j` and `k` move the cursor.
 - `enter` runs the action of the cursor.
@@ -644,11 +649,11 @@ disabled action shows the reason in parentheses. In the menu:
 
 The action keys work in the actions menu. In the pull request detail
 (the sidebar and the Rex pane), `space` opens the same menu for the
-pull request of the detail. There only `v`, `o`, `y` and `Y` also work
-directly. To run another action directly in the detail, bind a key to
-`detail_<id>` in `[keys]`. For example, `detail_merge = "m"` makes
-`m` open the merge confirm popup of the detail. These bindings have no
-default.
+pull request of the detail. There, as in the list, only `v`, `o`, `y`
+and `Y` also work directly. To run another action directly in the list
+and in the detail, bind a key to `detail_<id>` in `[keys]`. For
+example, `detail_merge = "m"` makes `m` open the merge confirm popup of
+the selected row or of the detail. These bindings have no default.
 
 | Binding | Key | What it does |
 |---|---|---|
