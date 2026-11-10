@@ -293,6 +293,20 @@ impl Theme {
         }
     }
 
+    /// A tab that cannot be selected: the label in the muted color and
+    /// faint, on the background, with no card. It has the width of an
+    /// inactive tab of the plain skin.
+    pub(crate) fn dim_tab(&self, label: &str) -> Vec<Span<'static>> {
+        let style = Style::new()
+            .bg(self.palette.bg)
+            .fg(self.palette.fg_mute)
+            .add_modifier(Modifier::DIM);
+        vec![
+            Span::styled(" ", style),
+            Span::styled(label.to_owned(), style),
+        ]
+    }
+
     /// The background and the foreground of the highlight of a tab slide:
     /// black on the primary color for punk, and the surface background
     /// for grunge and plain, as on the active tab. On a 16-color terminal

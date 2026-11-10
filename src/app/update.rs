@@ -1320,7 +1320,7 @@ fn in_pane<R>(
     let target = pr_target(data, &popup.key)?;
     let pane = panes.get(popup.active)?;
     let ps = popup.panes.get_mut(popup.active)?;
-    let tabs = frame::pane_tabs(panes, &applicable(panes, &target));
+    let tabs = frame::pane_tabs(panes, &target);
     let size = frame::pane_size(areas, &tabs);
     let cx = KeyCx {
         data,
@@ -1778,7 +1778,8 @@ fn click_row(
 }
 
 /// A click on the pane tab at `index` of the sidebar tabs: that pane
-/// becomes active. The tabs are the panes that apply, in registry order.
+/// becomes active. A click on a dim tab does nothing. The tabs are the
+/// tabs of `frame::pane_tabs`.
 fn click_pane_tab(state: &mut AppState, panes: &[Box<dyn Pane>], index: usize) {
     let Some(Overlay {
         state: OverlayState::Popup(popup),
@@ -1790,7 +1791,11 @@ fn click_pane_tab(state: &mut AppState, panes: &[Box<dyn Pane>], index: usize) {
     let Some(target) = pr_target(&state.data, &popup.key) else {
         return;
     };
-    if let Some(&active) = applicable(panes, &target).get(index) {
+    if let Some(active) = frame::pane_tabs(panes, &target)
+        .get(index)
+        .filter(|tab| !tab.dim)
+        .map(|tab| tab.pane)
+    {
         let from = popup.active;
         popup.active = active;
         if from != active {
@@ -6405,6 +6410,31 @@ mod tests {
             state.ui.overlays.iter().all(|o| o.closing),
             "Esc closes the help"
         );
+    }
+
+    #[test]
+    fn the_dim_stack_tab_cannot_be_selected() {
+        let actions: Vec<Box<dyn Action>> = Vec::new();
+        let mut state = action_state(&pr_row(99));
+        act(&mut state, &actions, KeyCode::Enter);
+        let active = |state: &AppState| sidebar(state).map(|popup| popup.active);
+        assert_eq!(active(&state), Some(0));
+        act(&mut state, &actions, KeyCode::Char('4'));
+        assert_eq!(active(&state), Some(0), "4 selects nothing");
+        act(&mut state, &actions, KeyCode::Char('3'));
+        act(&mut state, &actions, KeyCode::Tab);
+        assert_eq!(active(&state), Some(4), "Tab skips the Stack tab");
+        state.ui.ui_events.clear();
+        let generation = state.generation;
+        let keymap = Keymap::default();
+        let click = click_on(Hit::PaneTab(3));
+        update_full(&mut state, &keymap, &TABS, &PANES, &actions, click);
+        assert_eq!(active(&state), Some(4), "a click on the Stack tab");
+        assert_eq!(state.generation, generation);
+        assert_eq!(state.ui.ui_events, vec![]);
+        let click = click_on(Hit::PaneTab(2));
+        update_full(&mut state, &keymap, &TABS, &PANES, &actions, click);
+        assert_eq!(active(&state), Some(2), "the tabs keep their places");
     }
 
     #[test]

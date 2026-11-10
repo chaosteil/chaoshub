@@ -522,7 +522,7 @@ selects the next pane:
 | `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the head has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments · space r to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order. |
-| `4` | Stack | The entries of the stack. Only for a stacked pull request. The cursor starts on the pull request of the detail. Enter opens the detail of the entry under the cursor on top, and `esc` goes back. `o` opens the page of that entry. |
+| `4` | Stack | The entries of the stack. Only for a stacked pull request. For a pull request without a stack, the tab shows dim, and `4`, `tab` and a click do not select it. The cursor starts on the pull request of the detail. Enter opens the detail of the entry under the cursor on top, and `esc` goes back. `o` opens the page of that entry. |
 | `5` | Files | The changed files as a tree, with the diff of each file inline. |
 | `6` | Agent | The pr-agent results: one section per tool. Only for a repo with a `path`. |
 
