@@ -507,7 +507,7 @@ pub(crate) enum Msg {
     },
     PrRefreshed(Box<PullRequest>),
     SyncFailed {
-        /// `sync`, `ci`, `detail` or `prefetch`.
+        /// `sync`, `ci`, `detail`, `prefetch`, `scan` or `startup`.
         source: &'static str,
         scope: Option<Scope>,
         err: SyncError,

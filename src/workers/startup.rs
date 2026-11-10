@@ -4,15 +4,19 @@
 //! It runs `viewer { login }` unless the configuration sets `login`. The
 //! cwd discovery runs at the same time. A failed `viewer` query sends
 //! `SyncFailed` and runs again after a wait that doubles up to 60 s,
-//! because no sync can start without the login.
+//! because no sync can start without the login. A current directory in a
+//! jj repo without `.git` sends `SyncFailed` with the source `startup`,
+//! and gives no cwd repo.
 
 use std::time::Duration;
 
 use futures::FutureExt;
 
-use crate::bus::Msg;
+use crate::bus::{Msg, SyncError};
 use crate::config::discover;
 use crate::domain::repo::Repo;
+use crate::vcs::error::VcsError;
+use crate::vcs::is_plain_jj;
 use crate::workers::ctx::WorkerCtx;
 use crate::workers::supervisor::Worker;
 use crate::workers::sync_error;
@@ -31,7 +35,7 @@ const MAX_RETRY: Duration = Duration::from_secs(60);
 
 /// Reads the login and the cwd repo and sends `StartupDone`.
 async fn run(ctx: WorkerCtx) {
-    let (login, cwd_repo) = tokio::join!(login(&ctx), cwd_repo());
+    let (login, cwd_repo) = tokio::join!(login(&ctx), cwd_repo(&ctx));
     let Some(login) = login else {
         return;
     };
@@ -64,15 +68,29 @@ async fn login(ctx: &WorkerCtx) -> Option<String> {
     }
 }
 
-/// The repo of the current directory, if it has a GitHub origin.
-async fn cwd_repo() -> Option<Repo> {
-    match std::env::current_dir() {
-        Ok(dir) => discover::cwd_repo(&dir).await,
+/// The repo of the current directory, if it has a GitHub origin. A jj
+/// repo without `.git` sends `SyncFailed` and gives `None`.
+async fn cwd_repo(ctx: &WorkerCtx) -> Option<Repo> {
+    let dir = match std::env::current_dir() {
+        Ok(dir) => dir,
         Err(err) => {
             tracing::warn!(%err, "cannot read the current directory");
-            None
+            return None;
         }
+    };
+    let root = discover::repo_root(&dir);
+    if is_plain_jj(&root) {
+        let err = VcsError::PlainJj { path: root };
+        tracing::warn!(%err, "cannot use the repo of the current directory");
+        let failed = Msg::SyncFailed {
+            source: "startup",
+            scope: None,
+            err: SyncError::Other(err.to_string()),
+        };
+        let _ = ctx.tx.send(failed).await;
+        return None;
     }
+    discover::cwd_repo(&dir).await
 }
 
 #[cfg(test)]

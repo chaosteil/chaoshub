@@ -1,4 +1,5 @@
-//! Prefetches git refs and reads the origin url.
+//! Prefetches git refs, reads the origin url, and reads the worktrees
+//! and the local branches of a git repo.
 //!
 //! The prefetch puts the objects of a pull request into the local repo
 //! before a review, so the fetch of codeview transfers nothing. The refs
@@ -10,8 +11,29 @@ use tokio::process::Command;
 
 use super::error::VcsError;
 use super::lock::RepoLocks;
-use super::run;
+use super::{parse, run};
 use crate::domain::keys::RepoKey;
+use crate::domain::local::{LocalChange, Workspace};
+
+/// The branch format of `git for-each-ref`: branch name, tip commit and
+/// subject, with the field separator of the parsers.
+const BRANCH_FORMAT: &str = "%(refname:lstrip=2)%1f%(objectname)%1f%(contents:subject)";
+
+/// Lists the worktrees of the repo at `repo_path`, the main worktree
+/// first. The main worktree is `default`, the same as the default jj
+/// workspace. Every other worktree has the name of its directory.
+pub(crate) async fn list_worktrees(repo_path: &Path) -> Result<Vec<Workspace>, VcsError> {
+    parse::worktrees(&run(list_worktrees_command(repo_path)).await?)
+}
+
+/// Reads the local branches of the repo at `repo_path`. A branch gets
+/// the name of the worktree in `worktrees` that has it.
+pub(crate) async fn read_branches(
+    repo_path: &Path,
+    worktrees: &[Workspace],
+) -> Result<Vec<LocalChange>, VcsError> {
+    parse::branches(&run(read_branches_command(repo_path)).await?, worktrees)
+}
 
 /// Fetches the branch `base_ref` of origin into
 /// `refs/chaoshub/base/<base_ref>`, under the lock of the repo.
@@ -92,6 +114,18 @@ fn fetch_command(repo_path: &Path, refspec: String) -> Command {
     cmd
 }
 
+fn list_worktrees_command(repo_path: &Path) -> Command {
+    let mut cmd = git(repo_path);
+    cmd.args(["worktree", "list", "--porcelain"]);
+    cmd
+}
+
+fn read_branches_command(repo_path: &Path) -> Command {
+    let mut cmd = git(repo_path);
+    cmd.args(["for-each-ref", "--format", BRANCH_FORMAT, "refs/heads/"]);
+    cmd
+}
+
 fn prefetch_base_command(repo_path: &Path, base_ref: &str) -> Command {
     fetch_command(
         repo_path,
@@ -150,6 +184,32 @@ mod tests {
         assert_eq!(
             args(&cmd),
             expected("+refs/pull/42/head:refs/chaoshub/pr/42/head")
+        );
+    }
+
+    #[test]
+    fn worktree_list_argv() {
+        let cmd = list_worktrees_command(Path::new("/repo"));
+        assert_eq!(cmd.as_std().get_program(), "git");
+        assert_eq!(
+            args(&cmd),
+            ["-C", "/repo", "worktree", "list", "--porcelain"]
+        );
+    }
+
+    #[test]
+    fn branch_list_argv() {
+        let cmd = read_branches_command(Path::new("/repo"));
+        assert_eq!(
+            args(&cmd),
+            [
+                "-C",
+                "/repo",
+                "for-each-ref",
+                "--format",
+                "%(refname:lstrip=2)%1f%(objectname)%1f%(contents:subject)",
+                "refs/heads/",
+            ]
         );
     }
 
