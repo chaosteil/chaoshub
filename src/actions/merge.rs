@@ -32,7 +32,7 @@ use crate::domain::pr::{CiState, PullRequest, ReviewDecision};
 use crate::domain::repo::Repo;
 use crate::github::parse::Me;
 use crate::github::rest::MergeArgs;
-use crate::vcs::jj;
+use crate::vcs::{self, Tool, git, jj};
 
 use super::{Action, Applicability, Prepare, Services};
 
@@ -276,7 +276,7 @@ struct Run<'a> {
     retarget: Retarget,
 }
 
-/// Merges the target, and runs `jj git fetch` after a merge. A stack with
+/// Merges the target, and fetches the repo after a merge. A stack with
 /// more than one merged entry and the `Sequential` strategy merges one
 /// entry after the other. Every state goes to `app` as
 /// `ActionEvent::MergeStatus`, with the action `id` and the row `key`. A
@@ -453,21 +453,33 @@ impl Run<'_> {
         }
     }
 
-    /// Runs `jj git fetch` in the repo after a merge, under the repo lock,
-    /// and sends `Progress("fetched")`. Gives `text`. A repo without a
-    /// path has nothing to fetch. A failed fetch does not fail the merge.
+    /// Fetches the repo after a merge, under the repo lock, and sends
+    /// `Progress("fetched")`. Gives `text`. A jj repo runs `jj git fetch`,
+    /// and a git repo runs `git fetch origin`. A repo without a path has
+    /// nothing to fetch. A failed fetch does not fail the merge, and its
+    /// text names the tool that ran.
     async fn fetch(&self, repo: &Repo, text: String) -> String {
         let Some(path) = &repo.path else {
             return text;
         };
-        match jj::git_fetch(&self.svc.locks, path).await {
+        let (tool, result) = match vcs::detect(path, vcs::jj_on_path()) {
+            Ok(Tool::Jj) => ("jj git fetch", jj::git_fetch(&self.svc.locks, path).await),
+            Ok(Tool::Git | Tool::GitWithoutJj) => {
+                ("git fetch", git::fetch_origin(&self.svc.locks, path).await)
+            }
+            Err(err) => {
+                tracing::warn!(%text, %err, "no fetch after the merge");
+                return format!("{text}, no fetch: {err}");
+            }
+        };
+        match result {
             Ok(()) => {
                 self.send(ActionEvent::Progress("fetched".to_owned())).await;
                 text
             }
             Err(err) => {
-                tracing::warn!(%text, %err, "jj git fetch after the merge failed");
-                format!("{text}, jj git fetch failed: {err}")
+                tracing::warn!(%text, %err, tool, "the fetch after the merge failed");
+                format!("{text}, {tool} failed: {err}")
             }
         }
     }
@@ -1204,7 +1216,7 @@ mod tests {
         let (result, events) = run_merge(&server, Some(dir.path().to_path_buf())).await;
 
         let text = result.unwrap();
-        assert!(text.starts_with("merged #7, jj git fetch failed"), "{text}");
+        assert!(text.starts_with("merged #7, git fetch failed"), "{text}");
         assert_eq!(
             events,
             [ActionEvent::MergeStatus(MergeProgress::Merged {

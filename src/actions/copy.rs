@@ -1,15 +1,16 @@
-//! The actions that copy the url or the change id.
+//! The actions that copy the url, or the change id or branch name.
 
 use futures::future::BoxFuture;
 
 use crate::actions::{Action, Applicability, Prepare, Services};
 use crate::bus::{ActionInput, Cmd, KeyChord, KeyCode, KeyModifiers, Selection, Target};
-use crate::domain::local::LocalMatch;
+use crate::domain::local::{LocalMatch, Vcs};
 
 /// The action that copies the url of a pull request.
 pub(crate) struct CopyUrl;
 
-/// The action that copies the jj change id of a pull request.
+/// The action that copies the jj change id of a pull request. In a git
+/// repo, it copies the local branch name.
 pub(crate) struct CopyChangeId;
 
 /// A key without modifiers.
@@ -21,7 +22,8 @@ fn key(c: char) -> KeyChord {
 }
 
 /// The change id of the local change that matches the pull request of the
-/// target. `None` for a pull request without a local change.
+/// target. In a git repo, the branch name. `None` for a pull request
+/// without a local change.
 fn change_id(target: &Target) -> Option<&str> {
     let Target::Pr { local, .. } = target;
     match local {
@@ -76,6 +78,16 @@ impl Action for CopyChangeId {
         "copy the change id"
     }
 
+    /// "copy the branch name" for a git branch.
+    fn target_label(&self, target: &Target) -> &'static str {
+        let Target::Pr { local, .. } = target;
+        match local {
+            LocalMatch::Synced { vcs: Vcs::Git, .. }
+            | LocalMatch::Diverged { vcs: Vcs::Git, .. } => "copy the branch name",
+            _ => self.label(),
+        }
+    }
+
     fn default_key(&self) -> Option<KeyChord> {
         Some(key('Y'))
     }
@@ -93,8 +105,8 @@ impl Action for CopyChangeId {
         Prepare::Command(Cmd::Copy(id.to_owned()))
     }
 
-    /// The change id goes to the clipboard through `Cmd::Copy`; the
-    /// runtime never calls this.
+    /// The change id or the branch name goes to the clipboard through
+    /// `Cmd::Copy`; the runtime never calls this.
     fn execute(
         &self,
         _sel: Selection,
@@ -108,7 +120,6 @@ impl Action for CopyChangeId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::local::Vcs;
     use crate::domain::pr::PullRequest;
     use crate::domain::repo::Repo;
 
@@ -168,6 +179,36 @@ mod tests {
         assert_eq!(
             CopyChangeId.applies(&selection(LocalMatch::None)),
             Applicability::Hidden
+        );
+    }
+
+    #[test]
+    fn shift_y_copies_the_branch_name_in_a_git_repo() {
+        let git = selection(LocalMatch::Diverged {
+            workspace: "default".into(),
+            change_id: "chaosteil/export".into(),
+            commit_id: "c0ffee".into(),
+            vcs: Vcs::Git,
+        });
+        assert_eq!(CopyChangeId.applies(&git), Applicability::Enabled);
+        assert_eq!(
+            CopyChangeId.prepare(&git),
+            Prepare::Command(Cmd::Copy("chaosteil/export".into()))
+        );
+        assert_eq!(
+            CopyChangeId.target_label(&git.target),
+            "copy the branch name"
+        );
+        let jj = selection(LocalMatch::Synced {
+            workspace: "default".into(),
+            change_id: "kpqvxwyz".into(),
+            commit_id: "oid7".into(),
+            vcs: Vcs::Jj,
+        });
+        assert_eq!(CopyChangeId.target_label(&jj.target), "copy the change id");
+        assert_eq!(
+            CopyChangeId.target_label(&selection(LocalMatch::None).target),
+            "copy the change id"
         );
     }
 }

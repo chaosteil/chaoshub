@@ -26,7 +26,7 @@ use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 
 use crate::bus::{
-    ActionInput, Cmd, ConfirmSpec, KeyChord, LaunchRequest, Msg, PromptSpec, Selection,
+    ActionInput, Cmd, ConfirmSpec, KeyChord, LaunchRequest, Msg, PromptSpec, Selection, Target,
 };
 use crate::github::GithubClient;
 use crate::vcs::lock::RepoLocks;
@@ -83,6 +83,11 @@ pub(crate) trait Action: Send + Sync {
     /// `[keys]` and the table name in `[actions.<id>]`.
     fn id(&self) -> &'static str;
     fn label(&self) -> &'static str;
+    /// The label for `target`. The actions menu shows it. The default is
+    /// `label`.
+    fn target_label(&self, _target: &Target) -> &'static str {
+        self.label()
+    }
     /// The key of the action when `[keys]` does not bind it.
     fn default_key(&self) -> Option<KeyChord>;
     /// Pure, called on each key press.

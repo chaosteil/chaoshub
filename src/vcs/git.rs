@@ -1,5 +1,5 @@
-//! Prefetches git refs, reads the origin url, and reads the worktrees
-//! and the local branches of a git repo.
+//! Prefetches git refs, reads the origin url, reads the worktrees and
+//! the local branches of a git repo, and runs `git fetch origin`.
 //!
 //! The prefetch puts the objects of a pull request into the local repo
 //! before a review, so the fetch of codeview transfers nothing. The refs
@@ -61,6 +61,13 @@ pub(crate) async fn prefetch_head(
         .map(drop)
 }
 
+/// Runs `git fetch origin` in the repo at `repo_path`, under the lock of
+/// the repo.
+pub(crate) async fn fetch_origin(locks: &RepoLocks, repo_path: &Path) -> Result<(), VcsError> {
+    let _guard = locks.lock(repo_path).await;
+    run(fetch_origin_command(repo_path)).await.map(drop)
+}
+
 /// The GitHub repo of the origin remote of the repo at `path`. `None`
 /// when git fails or the url has no `owner/name` path.
 pub(crate) async fn origin_url(path: &Path) -> Option<RepoKey> {
@@ -111,6 +118,12 @@ fn fetch_command(repo_path: &Path, refspec: String) -> Command {
         "origin",
     ])
     .arg(refspec);
+    cmd
+}
+
+fn fetch_origin_command(repo_path: &Path) -> Command {
+    let mut cmd = git(repo_path);
+    cmd.args(["fetch", "origin"]);
     cmd
 }
 
@@ -185,6 +198,15 @@ mod tests {
             args(&cmd),
             expected("+refs/pull/42/head:refs/chaoshub/pr/42/head")
         );
+    }
+
+    #[test]
+    fn fetch_origin_argv() {
+        let cmd = fetch_origin_command(Path::new("/repo"));
+        assert_eq!(cmd.as_std().get_program(), "git");
+        assert_eq!(args(&cmd), ["-C", "/repo", "fetch", "origin"]);
+        let envs: Vec<_> = cmd.as_std().get_envs().collect();
+        assert_eq!(envs, [("GIT_TERMINAL_PROMPT".as_ref(), Some("0".as_ref()))]);
     }
 
     #[test]
