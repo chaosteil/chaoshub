@@ -20,8 +20,8 @@ use crate::app::models::{CellStyle, HelpModel};
 use crate::app::panes::{PaneAction, PaneState};
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{
-    ChooseSpec, ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReviewKind, Scope,
-    Selection, Session, Size, SyncError, Target, TargetKey, UiEvent,
+    ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReviewButton, ReviewKind, Scope,
+    Selection, SendReviewSpec, Session, Size, SyncError, Target, TargetKey, UiEvent,
 };
 use crate::domain::agent::{AgentResults, ToolKind};
 use crate::domain::codeview::Comments;
@@ -30,7 +30,7 @@ use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
-use crate::domain::pr::PullRequest;
+use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::repo::Repo;
 use crate::store::Snapshot;
 
@@ -197,9 +197,19 @@ pub(crate) struct UiState {
     /// The `column_headers` value in the `ui_state` table of the cache,
     /// if any. It wins over `[theme] column_headers`.
     pub saved_column_headers: Option<bool>,
-    /// The codeview send that waits for a new read of the comment files:
-    /// the pull request and the chosen comment ids.
-    pub codeview_send: Option<(PrKey, Vec<String>)>,
+    /// The codeview send that waits for a new read of the comment files.
+    pub codeview_send: Option<PendingSend>,
+}
+
+/// A codeview send that waits for a new read of the comment files. The
+/// Send review dialog opens after the read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingSend {
+    pub key: PrKey,
+    /// The chosen comment ids.
+    pub ids: Vec<String>,
+    /// The event that `enter` sends in the dialog.
+    pub ready: Option<ReviewKind>,
 }
 
 /// The state of the syncs, for the status bar and the terminal status.
@@ -355,23 +365,16 @@ pub(crate) enum OverlayState {
         spec: PromptSpec,
         text: String,
     },
-    /// The choice popup of the codeview send: the key of an option picks
-    /// the event of the review of the comments `ids`.
-    Choose {
-        action: ActionDialog,
-        spec: ChooseSpec,
-        ids: Vec<String>,
-    },
-    /// The multi-line text of the review of the codeview comments `ids`.
-    /// `ctrl-s` runs the action with the text.
+    /// The Send review dialog of codeview comments: the key of a button
+    /// sends the review with its event.
+    SendReview(SendReview),
+    /// The text box of the message of a review, on top of the Send
+    /// review dialog. `esc` and `ctrl-s` go back to the dialog with the
+    /// text.
     ReviewText {
-        action: ActionDialog,
         title: String,
-        ids: Vec<String>,
-        event: ReviewKind,
         text: String,
-        /// The error that the popup shows, for example an empty text of
-        /// a change request.
+        /// The error that the popup shows, for example a failed editor.
         error: Option<String>,
     },
     /// The help overlay: the key bindings that it shows, and the index
@@ -398,6 +401,98 @@ pub(crate) const OUTPUT_LINES: usize = 2000;
 pub(crate) struct ActionDialog {
     pub id: &'static str,
     pub selection: Box<Selection>,
+}
+
+/// The Send review dialog: the codeview comments of the review, the
+/// message and the event that `enter` sends.
+#[derive(Debug)]
+pub(crate) struct SendReview {
+    /// The codeview send action and its selection.
+    pub action: ActionDialog,
+    /// The ids of the comments of the review. Empty for a review with
+    /// only the message.
+    pub ids: Vec<String>,
+    /// One line per comment of the review, then the notes.
+    pub lines: Vec<String>,
+    /// The message of the review.
+    pub text: String,
+    /// The event that `enter` sends. `A` and `R` set it.
+    pub ready: Option<ReviewKind>,
+}
+
+/// The most lines of the message that the Send review dialog shows.
+const MESSAGE_LINES: usize = 4;
+
+impl SendReview {
+    /// The pull request of the review.
+    pub(crate) fn pr(&self) -> &PullRequest {
+        let Target::Pr { pr, .. } = &self.action.selection.target;
+        pr
+    }
+
+    /// The title of the dialog.
+    pub(crate) fn title(&self) -> String {
+        format!("send review to #{}", self.pr().key.number)
+    }
+
+    /// Why the button of `event` cannot send now, or `None`. GitHub takes
+    /// no approval and no change request on a pull request that is not
+    /// open or on your own pull request. A change request needs a
+    /// message, and a comment review needs a message or a comment.
+    pub(crate) fn blocked(&self, event: ReviewKind) -> Option<&'static str> {
+        let pr = &self.pr().head.value;
+        let verdict = event != ReviewKind::Comment;
+        if verdict && pr.state != PrState::Open {
+            return Some("not open");
+        }
+        if verdict && pr.author == self.action.selection.me {
+            return Some("your own PR");
+        }
+        let empty = self.text.trim().is_empty();
+        match event {
+            ReviewKind::RequestChanges if empty => Some("needs a message"),
+            ReviewKind::Comment if empty && self.ids.is_empty() => Some("needs a message"),
+            _ => None,
+        }
+    }
+
+    /// The content of the dialog: the comment lines, the first
+    /// `MESSAGE_LINES` lines of the message, and the buttons.
+    pub(crate) fn spec(&self) -> SendReviewSpec {
+        let mut message: Vec<String> = Vec::new();
+        if !self.text.trim().is_empty() {
+            let lines: Vec<&str> = self.text.lines().collect();
+            message.extend(lines.iter().take(MESSAGE_LINES).map(|&l| l.to_owned()));
+            if lines.len() > MESSAGE_LINES {
+                let more = lines.len() - MESSAGE_LINES;
+                let noun = if more == 1 { "line" } else { "lines" };
+                message.push(format!("… {more} more {noun}"));
+            }
+        }
+        let write = if self.text.trim().is_empty() {
+            "write message"
+        } else {
+            "edit message"
+        };
+        let mut buttons = vec![ReviewButton {
+            key: 'm',
+            label: write,
+            blocked: None,
+            ready: false,
+        }];
+        buttons.extend(ReviewKind::ALL.map(|event| ReviewButton {
+            key: event.key(),
+            label: event.label(),
+            blocked: self.blocked(event),
+            ready: self.ready == Some(event),
+        }));
+        SendReviewSpec {
+            title: self.title(),
+            lines: self.lines.clone(),
+            message,
+            buttons,
+        }
+    }
 }
 
 /// The pull request popup: the pull request, the active pane and one

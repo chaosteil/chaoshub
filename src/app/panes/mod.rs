@@ -7,7 +7,7 @@
 pub(crate) mod agent;
 mod checks;
 pub(crate) mod conversation;
-mod description;
+pub(crate) mod description;
 mod files;
 mod stack;
 

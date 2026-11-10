@@ -549,35 +549,49 @@ These keys work while the section lists a comment that can go to GitHub:
 |---|---|
 | `J` / `K` | Moves the comment cursor down or up. |
 | `enter` | Selects or deselects the comment of the cursor. |
-| `space`, then `S` | Sends the selected comments. |
+| `space`, then `S` | Opens the Send review dialog for the selected comments. |
 
 The send reads the comment files again first. A comment that went out from
 codeview in the meantime drops out, and the dialog says
-`N comments went out from codeview already`. When no chosen comment is
-left, no dialog opens, and the status line says so.
+`N comments went out from codeview already`.
 
-The send dialog lists the chosen comments. Pick the event of the review:
+The Send review dialog is one step for the whole review. It lists the
+chosen comments. A row `PR (into the review text)` is a comment on the
+pull request document: it goes into the text of the review, after your
+message. Under the comments, the dialog shows the first lines of the
+message. Press the key of a button:
 
 | Key | What it does |
 |---|---|
-| `c` | A review that adds comments only. |
-| `a` | A review that approves the pull request. |
-| `r` | A review that requests changes. |
-| `n` / `esc` | Cancels the send. |
+| `m` | Opens the text box of the message. |
+| `c` | Sends a review that adds comments only. |
+| `a` | Sends a review that approves the pull request. |
+| `r` | Sends a review that requests changes. |
+| `n` / `esc` | Cancels the send. The message stays for the next dialog. |
 
-A text popup then asks for the overall text of the review. The text can
-have more than one line, and its line breaks go to GitHub:
+`c`, `a` and `r` send at once, with no other question. A button that
+cannot send now shows dim, with the reason:
+
+- `r` needs a message.
+- `c` needs a message when the review has no comment.
+- `a` and `r` show `your own PR` on your own pull request, and `not open`
+  on a closed or merged pull request. GitHub takes no such review. `c`
+  still works.
+
+With no selected comment, the dialog still works: the review has only
+the message. chaoshub then posts the review itself, as `A` and `R` do.
+
+The text box of the message can have more than one line, and its line
+breaks go to GitHub:
 
 | Key | What it does |
 |---|---|
 | `enter` | Adds a new line. |
-| `ctrl-s` | Sends the review. |
-| `ctrl-e` | Opens the text in `$VISUAL`, else `$EDITOR`, else `nvim`. chaoshub leaves its screen while the editor runs. When the editor quits, its text comes back into the popup. Then send with `ctrl-s`, or edit more. |
-| `esc` | Cancels the send. |
+| `ctrl-e` | Opens the text in `$VISUAL`, else `$EDITOR`, else `nvim`. chaoshub leaves its screen while the editor runs. When the editor quits, its text comes back into the text box. |
+| `ctrl-s` / `esc` | Goes back to the Send review dialog, with the text. |
 
-An empty text is valid, except for a request of changes: then `ctrl-s`
-shows an error in the popup, and the popup stays open. A comment on the
-pull request document goes into the text of the review, after your text.
+The message stays while the popup is open, also when you cancel the
+dialog. A review that went out clears it.
 When codeview can post none of the chosen comments, for example because
 no comment maps to the diff, it sends no review. The status line then
 says `the review did not go out`, and names the comments that stay

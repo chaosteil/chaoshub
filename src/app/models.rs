@@ -2,7 +2,9 @@
 //! styles to theme colors.
 #![allow(dead_code, reason = "app and ui build on the models in later phases")]
 
-use crate::bus::{ChooseSpec, ConfirmSpec, KeyChord, OverlayKind, PrRef, PromptSpec, TermStatus};
+use crate::bus::{
+    ConfirmSpec, KeyChord, OverlayKind, PrRef, PromptSpec, SendReviewSpec, TermStatus,
+};
 
 /// Everything that `ui::view` draws in one frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,8 +223,9 @@ pub(crate) enum OverlayContent {
         spec: PromptSpec,
         text: String,
     },
-    Choose(ChooseSpec),
-    /// The multi-line text popup of a review.
+    /// The Send review dialog of codeview comments.
+    SendReview(SendReviewSpec),
+    /// The multi-line text popup of the message of a review.
     ReviewText {
         title: String,
         text: String,

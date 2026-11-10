@@ -170,7 +170,7 @@ fn overlay_models(
                     spec: spec.clone(),
                     text: text.clone(),
                 },
-                OverlayState::Choose { spec, .. } => OverlayContent::Choose(spec.clone()),
+                OverlayState::SendReview(review) => OverlayContent::SendReview(review.spec()),
                 OverlayState::ReviewText {
                     title, text, error, ..
                 } => OverlayContent::ReviewText {
@@ -457,11 +457,12 @@ fn overlay_hints(
             hint(&[plain_key(KeyCode::Enter)], "submit"),
             hint(&[plain_key(KeyCode::Esc)], "cancel"),
         ],
-        OverlayState::Choose { spec, .. } => {
-            let mut hints: Vec<Option<KeyHint>> = spec
-                .options
+        OverlayState::SendReview(review) => {
+            let mut hints: Vec<Option<KeyHint>> = review
+                .spec()
+                .buttons
                 .iter()
-                .map(|(key, label)| hint(&[plain_key(KeyCode::Char(*key))], label))
+                .map(|button| hint(&[plain_key(KeyCode::Char(button.key))], button.label))
                 .collect();
             hints.push(app_hint(
                 keymap,
@@ -472,9 +473,9 @@ fn overlay_hints(
             hints
         }
         OverlayState::ReviewText { .. } => vec![
-            hint(&[ctrl_key('s')], "send"),
+            hint(&[ctrl_key('s')], "done"),
             hint(&[ctrl_key('e')], "editor"),
-            hint(&[plain_key(KeyCode::Esc)], "cancel"),
+            hint(&[plain_key(KeyCode::Esc)], "back"),
         ],
         OverlayState::Authors(_) => vec![
             app_hint(keymap, &["open"], "select", true),
