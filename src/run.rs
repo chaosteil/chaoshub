@@ -2165,6 +2165,27 @@ mod tests {
         insta::assert_snapshot!(screen(&mut app));
     }
 
+    #[test]
+    fn actions_menu_list_100() {
+        let mut app = seeded_app(100, 30, crate::app::testdata::mine_snapshot());
+        press(&mut app, ' ');
+        app.update(Msg::TransitionsDone);
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
+    #[test]
+    fn actions_menu_popup_100() {
+        let mut app = review_app(100, 30);
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(enter));
+        press(&mut app, ' ');
+        app.update(Msg::TransitionsDone);
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
     /// The mine app with `chaoshub` at a path, the popup of #101 on the
     /// Agent pane, and results of review (for an old head), improve and
     /// describe. Ask runs.
@@ -2250,6 +2271,14 @@ mod tests {
     #[test]
     fn agent_pane_160() {
         insta::assert_snapshot!(screen(&mut agent_app(160, 40)));
+    }
+
+    #[test]
+    fn actions_menu_agent_pane_100() {
+        let mut app = agent_app(100, 40);
+        press(&mut app, ' ');
+        app.update(Msg::TransitionsDone);
+        insta::assert_snapshot!(screen(&mut app));
     }
 
     /// The seeded mine app with the popup open on #101 (the fifth row).
