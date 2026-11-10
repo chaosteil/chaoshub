@@ -2446,6 +2446,53 @@ mod tests {
         insta::assert_snapshot!(screen(&mut conversation_app(160, 40)));
     }
 
+    /// The popup on #101 on the conversation pane, with eight comments
+    /// of five paragraphs, scrolled down once with `D`.
+    fn long_conversation_app(width: u16, height: u16) -> App {
+        let mut app = popup_app(width, height);
+        let key = crate::app::testdata::pr_key("chaoshub", 101);
+        let mut detail = crate::app::testdata::detail();
+        detail.head_oid = "oid101".into();
+        detail.reviews.clear();
+        detail.threads.clear();
+        let body: Vec<String> = (1..=5)
+            .map(|i| format!("Paragraph {i} of the comment."))
+            .collect();
+        detail.comments = (0..8)
+            .map(|i| crate::domain::detail::Comment {
+                author: if i % 2 == 0 { "alice" } else { "bob" }.into(),
+                body: body.join("\n\n"),
+                body_html: String::new(),
+                created_at: crate::domain::test_time() + chrono::TimeDelta::minutes(i),
+                url: format!("https://github.com/c/{i}"),
+            })
+            .collect();
+        let observed = crate::domain::observed::Observed {
+            value: detail,
+            observed_at: crate::domain::test_time(),
+        };
+        app.update(Msg::DetailLoaded(key, Ok(observed)));
+        press(&mut app, '3');
+        press(&mut app, 'D');
+        app
+    }
+
+    #[test]
+    fn popup_conversation_scrollbar_100_pierre() {
+        insta::assert_snapshot!(screen_in(
+            &mut long_conversation_app(100, 30),
+            ThemeKind::TrueColor
+        ));
+    }
+
+    #[test]
+    fn popup_conversation_scrollbar_100_ansi16() {
+        insta::assert_snapshot!(screen_in(
+            &mut long_conversation_app(100, 30),
+            ThemeKind::Ansi16
+        ));
+    }
+
     #[test]
     fn popup_stack_100() {
         let mut app = popup_app(100, 30);

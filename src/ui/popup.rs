@@ -6,7 +6,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Widget};
+use ratatui::widgets::{Clear, ScrollbarState, StatefulWidget, Widget};
 
 use crate::app::models::{PANE_TAB_GAP, PaneModel, PaneTab, pane_tab_rows};
 use crate::bus::Hit;
@@ -133,7 +133,7 @@ pub(crate) fn render(
         inner.height - header,
     );
     hits.push_text(body);
-    pane::render(
+    let view = pane::render(
         popup.pane,
         popup.cursor,
         popup.scroll,
@@ -142,6 +142,22 @@ pub(crate) fn render(
         theme,
         hits,
     );
+    if let Some(view) = view.filter(pane::ScrollView::scrolls) {
+        render_scrollbar(&view, body.right(), buf, theme);
+    }
+}
+
+/// The scrollbar of a pane that scrolls, in the right padding column at
+/// `x`, beside the rows that scroll. The mouse does not use it.
+fn render_scrollbar(view: &pane::ScrollView, x: u16, buf: &mut Buffer, theme: &Theme) {
+    let area = Rect::new(x, view.area.y, 1, view.area.height).intersection(buf.area);
+    let height = usize::from(view.area.height);
+    // One position per first row: the thumb reaches the end of the
+    // track on the last full page.
+    let mut state = ScrollbarState::new(view.rows - height + 1)
+        .position(view.scroll)
+        .viewport_content_length(height);
+    theme.scrollbar().render(area, buf, &mut state);
 }
 
 #[cfg(test)]
@@ -227,6 +243,143 @@ mod tests {
         assert_eq!(hits.at(agent, 4), Some(Hit::PaneTab(5)));
         assert!(row(&buf, 5).contains('─'), "the rule is under the tabs");
         assert!(row(&buf, 6).contains("first line"));
+    }
+
+    /// A pane of `count` numbered lines.
+    fn numbered_lines(count: usize) -> PaneModel {
+        PaneModel::Lines {
+            lines: (0..count)
+                .map(|i| {
+                    vec![crate::app::models::Cell {
+                        text: format!("line {i}"),
+                        style: crate::app::models::CellStyle::Normal,
+                    }]
+                })
+                .collect(),
+            wrap: true,
+        }
+    }
+
+    /// Draws a popup of 40 x 16 cells with one pane tab, `pane` at
+    /// `scroll`, in `theme`.
+    fn draw_pane(pane: &PaneModel, scroll: usize, theme: &Theme) -> Buffer {
+        let tabs = [PaneTab {
+            key: '1',
+            title: "Description",
+            pane: 0,
+        }];
+        let popup = Popup {
+            title: "#7 title",
+            subtitle: "subtitle",
+            tabs: &tabs,
+            active: 0,
+            pane,
+            cursor: 0,
+            scroll,
+        };
+        let area = Rect::new(0, 0, 40, 16);
+        let mut buf = Buffer::empty(area);
+        render(&popup, area, &mut buf, theme, &mut HitMap::default());
+        buf
+    }
+
+    /// The rows of a buffer, joined with newlines.
+    fn rows(buf: &Buffer) -> String {
+        (0..buf.area.height)
+            .map(|y| row(buf, y))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The column of the scrollbar: the right padding column, and the
+    /// rows of the pane body.
+    fn bar_cells(area: Rect) -> (u16, std::ops::Range<u16>) {
+        let inner = ThemeBlock::inner(area);
+        (inner.right() - 1, inner.y + HEADER_ROWS..inner.bottom())
+    }
+
+    #[test]
+    fn popup_with_a_scrollbar() {
+        insta::assert_snapshot!(rows(&draw_pane(
+            &numbered_lines(30),
+            10,
+            &testdata::pierre()
+        )));
+    }
+
+    #[test]
+    fn popup_without_a_scrollbar() {
+        insta::assert_snapshot!(rows(&draw_pane(&numbered_lines(3), 0, &testdata::pierre())));
+    }
+
+    #[test]
+    fn the_scrollbar_shows_only_when_the_pane_scrolls() {
+        let (x, body) = bar_cells(Rect::new(0, 0, 40, 16));
+        let height = usize::from(body.end - body.start);
+        for (count, shows) in [(height - 1, false), (height, false), (height + 1, true)] {
+            let buf = draw_pane(&numbered_lines(count), 0, &testdata::pierre());
+            let drawn = body.clone().any(|y| buf[(x, y)].symbol() != " ");
+            assert_eq!(drawn, shows, "{count} lines");
+        }
+    }
+
+    #[test]
+    fn the_scrollbar_thumb_follows_the_scroll_in_each_theme() {
+        use crate::theme::{PaletteChoice, ThemeKind, ThemeStyle};
+        let plain = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Plain,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
+        let themes = [
+            ("grunge", testdata::pierre(), "┃"),
+            ("plain", plain, "┃"),
+            ("ansi16", testdata::ansi16(), "┃"),
+            ("punk", testdata::punk(), "█"),
+            ("punk ansi16", testdata::punk_ansi16(), "█"),
+        ];
+        let (x, body) = bar_cells(Rect::new(0, 0, 40, 16));
+        let (top, bottom) = (body.start, body.end - 1);
+        let pane = numbered_lines(40);
+        for (name, theme, thumb) in themes {
+            let p = theme.palette;
+            let first = draw_pane(&pane, 0, &theme);
+            assert_eq!(
+                first[(x, top)].symbol(),
+                thumb,
+                "{name}: the thumb at the top"
+            );
+            assert_eq!(first[(x, top)].fg, p.primary, "{name}");
+            assert_eq!(first[(x, bottom)].symbol(), "│", "{name}: the track");
+            assert_eq!(first[(x, bottom)].fg, p.surface, "{name}");
+            assert_eq!(first[(x, bottom)].bg, p.bg, "{name}");
+            let last = draw_pane(&pane, 99, &theme);
+            assert_eq!(last[(x, top)].symbol(), "│", "{name}: the track");
+            assert_eq!(
+                last[(x, bottom)].symbol(),
+                thumb,
+                "{name}: the thumb at the end"
+            );
+        }
+    }
+
+    #[test]
+    fn a_table_scrollbar_starts_below_the_header_row() {
+        let checks = testdata::checks_pane();
+        let PaneModel::Table { columns, rows } = checks else {
+            unreachable!()
+        };
+        let many = (0..20).flat_map(|_| rows.clone()).collect();
+        let pane = PaneModel::Table {
+            columns,
+            rows: many,
+        };
+        let buf = draw_pane(&pane, 0, &testdata::pierre());
+        let (x, body) = bar_cells(Rect::new(0, 0, 40, 16));
+        assert_eq!(buf[(x, body.start)].symbol(), " ", "the header row");
+        assert_eq!(buf[(x, body.start + 1)].symbol(), "┃");
     }
 
     #[test]

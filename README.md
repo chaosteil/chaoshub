@@ -494,7 +494,9 @@ view follows the cursor by screen rows. When a comment is taller than
 the pane, `j` and `k` scroll through it before the cursor moves on.
 `D` and `U` scroll the active pane by half its height, apart from the
 cursor. Thus you can read a long comment or a long description. A
-pane scrolls down to its last full page, not further.
+pane scrolls down to its last full page, not further. When a pane has
+more rows than it shows, a thin scrollbar shows at its right edge. The
+mouse does not use the scrollbar.
 
 The action keys also work in the detail, on the pull request of the
 detail. For example, `v` opens codeview, and `m` opens the merge

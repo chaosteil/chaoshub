@@ -15,9 +15,37 @@ use crate::ui::hits::HitMap;
 use crate::ui::list::{self, Window};
 use crate::ui::{markdown, style};
 
+/// The part of a pane that scrolls, as drawn: the area of the rows that
+/// scroll, the rows of the content, and the first row that shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ScrollView {
+    pub area: Rect,
+    pub rows: usize,
+    pub scroll: usize,
+}
+
+impl ScrollView {
+    /// The view of `rows` rows in `area` at `scroll`. A scroll past the
+    /// last full page counts as the last full page.
+    fn new(area: Rect, rows: usize, scroll: usize) -> Self {
+        let last = rows.saturating_sub(usize::from(area.height));
+        Self {
+            area,
+            rows,
+            scroll: scroll.min(last),
+        }
+    }
+
+    /// True when the content has more rows than the area.
+    pub(crate) fn scrolls(&self) -> bool {
+        self.rows > usize::from(self.area.height)
+    }
+}
+
 /// Draws a pane model into an area. `cursor` and `scroll` come from the
 /// pane state. Each drawn table row and tree node is a `Hit::PaneRow`
-/// with its index in the model.
+/// with its index in the model. Returns the view of the rows that
+/// scroll, `None` for an empty area.
 pub(crate) fn render(
     model: &PaneModel,
     cursor: usize,
@@ -26,26 +54,33 @@ pub(crate) fn render(
     buf: &mut Buffer,
     theme: &Theme,
     hits: &mut HitMap,
-) {
+) -> Option<ScrollView> {
     let area = area.intersection(buf.area);
     if area.is_empty() {
-        return;
+        return None;
     }
-    match model {
+    let view = match model {
         PaneModel::Table { columns, rows } => {
             let window = Window {
                 cursor: Some(cursor),
                 scroll,
                 hit: Hit::PaneRow,
             };
-            render_table(columns, rows, window, area, buf, theme, hits);
+            let body = render_table(columns, rows, window, area, buf, theme, hits);
+            ScrollView::new(body, rows.len(), scroll)
         }
         PaneModel::Lines { lines, wrap } => {
             let lines = pane_lines(lines, *wrap, area.width, &theme.palette);
+            let view = ScrollView::new(area, lines.len(), scroll);
             render_lines(lines, scroll, area, buf, theme);
+            view
         }
-        PaneModel::Tree { nodes } => render_tree(nodes, cursor, scroll, area, buf, theme, hits),
-    }
+        PaneModel::Tree { nodes } => {
+            let rows = render_tree(nodes, cursor, scroll, area, buf, theme, hits);
+            ScrollView::new(area, rows, scroll)
+        }
+    };
+    Some(view)
 }
 
 /// The display lines of one line of cells. A markdown or HTML cell becomes
@@ -75,7 +110,8 @@ fn expand(cells: &[Cell], width: u16, palette: &Palette) -> Vec<Line<'static>> {
     out
 }
 
-/// A header row with the column titles, then the rows.
+/// A header row with the column titles, then the rows. Returns the area
+/// of the rows.
 fn render_table(
     columns: &[Column],
     rows: &[Row],
@@ -84,7 +120,7 @@ fn render_table(
     buf: &mut Buffer,
     theme: &Theme,
     hits: &mut HitMap,
-) {
+) -> Rect {
     list::render_header(
         columns,
         Rect::new(area.x, area.y, area.width, area.height.min(1)),
@@ -98,6 +134,7 @@ fn render_table(
         area.height.saturating_sub(1),
     );
     list::render_rows(columns, rows, window, body, buf, theme, hits);
+    body
 }
 
 /// The screen rows of the lines of a pane of lines at `width`: the
@@ -165,7 +202,7 @@ pub(crate) fn render_lines(
 /// offset (in rows) down. A node with a markdown body takes one row per
 /// body line, so the first node can start in the middle of its rows. A
 /// scroll past the last full page shows the last full page. The cursor
-/// node gets the `▌` marker.
+/// node gets the `▌` marker. Returns the rows of all the nodes.
 fn render_tree(
     nodes: &[TreeNode],
     cursor: usize,
@@ -174,7 +211,7 @@ fn render_tree(
     buf: &mut Buffer,
     theme: &Theme,
     hits: &mut HitMap,
-) {
+) -> usize {
     let p = &theme.palette;
     buf.set_style(area, Style::new().bg(p.bg).fg(p.fg));
     let selection = theme.selected_row();
@@ -251,6 +288,7 @@ fn render_tree(
             Hit::PaneRow(index),
         );
     }
+    total
 }
 
 #[cfg(test)]

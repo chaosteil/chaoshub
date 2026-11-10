@@ -11,7 +11,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
+use ratatui::widgets::{Scrollbar, ScrollbarOrientation, Widget};
 
 pub(crate) use block::ThemeBlock;
 use grunge::stencil;
@@ -186,6 +186,25 @@ impl Theme {
             Skin::Punk => Span::styled(punk::separator(width), style),
             Skin::Grunge { .. } | Skin::Plain => Span::styled("─".repeat(width), style),
         }
+    }
+
+    /// The scrollbar of a pane: a thin track in the surface color and a
+    /// thumb in the primary color, the accent of the popup border. Punk
+    /// draws a solid thumb, like its cards. The track does not show on a
+    /// 16-color terminal, where the surface is the background.
+    pub(crate) fn scrollbar(&self) -> Scrollbar<'static> {
+        let p = &self.palette;
+        let thumb = match self.skin {
+            Skin::Punk => "█",
+            Skin::Grunge { .. } | Skin::Plain => "┃",
+        };
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .track_style(Style::new().fg(p.surface).bg(p.bg))
+            .thumb_symbol(thumb)
+            .thumb_style(Style::new().fg(p.primary).bg(p.bg))
     }
 
     /// Fills the empty cells of an area. `seed` picks the pattern. Only
