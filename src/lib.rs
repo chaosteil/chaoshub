@@ -1,4 +1,4 @@
-//! chaoshub: a PR tracking TUI for jj, Rex and codeview.
+//! chaoshub: a PR tracking TUI for GitHub, with jj, Rex and codeview support.
 //!
 //! All logic lives in the modules of this library. The binary in `main.rs`
 //! is thin.
