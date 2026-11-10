@@ -5340,8 +5340,8 @@ mod tests {
     }
 
     #[test]
-    fn enter_marks_a_codeview_comment_and_space_does_not() {
-        let (mut state, _) = codeview_state();
+    fn enter_deselects_a_codeview_comment_and_space_does_not() {
+        let (mut state, pr) = codeview_state();
         let texts = |state: &mut AppState| match popup_content(state, &PANES) {
             OverlayContent::Popup {
                 pane: PaneModel::Lines { lines, .. },
@@ -5352,20 +5352,26 @@ mod tests {
                 .collect::<Vec<_>>(),
             other => panic!("not lines: {other:?}"),
         };
-        assert!(texts(&mut state).iter().any(|t| t.starts_with("> [ ] ")));
+        assert!(texts(&mut state).iter().any(|t| t.starts_with("> [x] ")));
         update(
             &mut state,
             &Keymap::default(),
             press(KeyCode::Enter, KeyModifiers::NONE),
         );
-        assert!(texts(&mut state).iter().any(|t| t.starts_with("> [x] ")));
+        assert!(texts(&mut state).iter().any(|t| t.starts_with("> [ ] ")));
         key(&mut state, ' ');
         assert!(action_menu(&state).is_some(), "space opens the menu");
         key(&mut state, 'q');
         update(&mut state, &Keymap::default(), Msg::TransitionsDone);
         assert!(
-            texts(&mut state).iter().any(|t| t.starts_with("> [x] ")),
-            "the mark stays"
+            texts(&mut state).iter().any(|t| t.starts_with("> [ ] ")),
+            "the deselection stays"
+        );
+        let msg = loaded_without(&state, &pr, "none");
+        update(&mut state, &Keymap::default(), msg);
+        assert!(
+            texts(&mut state).iter().any(|t| t.starts_with("> [ ] ")),
+            "a new load keeps the deselection"
         );
     }
 
@@ -7266,7 +7272,7 @@ mod tests {
             press(KeyCode::Enter, KeyModifiers::NONE),
         );
         menu(&mut state, 'S');
-        let msg = loaded_without(&state, &pr, "c1");
+        let msg = loaded_without(&state, &pr, "c2");
         update(&mut state, &Keymap::default(), msg);
         assert!(matches!(top(&state), OverlayState::Popup(_)));
         assert_eq!(

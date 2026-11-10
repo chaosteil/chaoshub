@@ -2322,7 +2322,7 @@ mod tests {
     }
 
     /// The popup app with the comments of `codeview_comments`, and the
-    /// first comment marked with `enter`.
+    /// first comment deselected with `enter`.
     fn codeview_app(width: u16, height: u16) -> App {
         let mut app = popup_app(width, height);
         app.update(Msg::CodeviewLoaded {

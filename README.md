@@ -527,16 +527,20 @@ see "Actions".
 #### Codeview comments
 
 You write review comments in codeview (`v`). The Description pane shows
-the comments that did not go to GitHub yet, and sends some of them, or
-all of them, as one review. chaoshub reads the comment files of
-codeview (`[codeview] comments_dir`) and never writes them.
+the comments that did not go to GitHub yet, and sends the selected
+comments as one review. chaoshub reads the comment files of codeview
+(`[codeview] comments_dir`) and never writes them.
 
-Each row shows the cursor (`>`), the mark (`[x]` or `[ ]`), the place
-(`path:L12-14 (new)`, or `PR` for a comment on the pull request
-document), and the first line of the comment. GitHub takes no comment
-on a commit message, so such a row shows dim with `[-]`, and you cannot
-mark it. A dim line counts the comments of an older push of the head:
-open codeview (`v`) to see them. Without comments, the pane shows no
+Each row shows the cursor (`>`), the selection (`[x]` selected, `[ ]`
+deselected), the place (`path:L12-14 (new)`, or `PR` for a comment on
+the pull request document), and the first line of the comment. Every
+comment starts selected. A new comment that shows while the popup is
+open also starts selected, for example after a refresh (`r`) or after
+a review in codeview (`v`). A comment that you deselect stays
+deselected while the popup is open. GitHub takes no comment on a commit
+message, so such a row shows dim with `[-]`, and you cannot select it.
+A dim line counts the comments of an older push of the head: open
+codeview (`v`) to see them. Without comments, the pane shows no
 section.
 
 These keys work while the section lists a comment that can go to GitHub:
@@ -544,8 +548,8 @@ These keys work while the section lists a comment that can go to GitHub:
 | Key | What it does |
 |---|---|
 | `J` / `K` | Moves the comment cursor down or up. |
-| `enter` | Marks or unmarks the comment of the cursor. |
-| `space`, then `S` | Sends the marked comments, or all of them when none is marked. |
+| `enter` | Selects or deselects the comment of the cursor. |
+| `space`, then `S` | Sends the selected comments. |
 
 The send reads the comment files again first. A comment that went out from
 codeview in the meantime drops out, and the dialog says

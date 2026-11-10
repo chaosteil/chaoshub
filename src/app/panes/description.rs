@@ -8,14 +8,15 @@
 //! detail, which loads in the background. The pane does not start a load.
 //!
 //! Between the block and the body, the pane lists the codeview comments of
-//! the head that went to GitHub not yet. `J` and `K` move the comment
-//! cursor, and `enter` marks the comment of the cursor. The own action
-//! `S` of the pane, in the actions menu (`space`), sends the marked
-//! comments, or all of them when none is marked: `app` reads the comment
-//! files again and opens the send dialog. A comment on a
-//! commit message shows dim and cannot be marked: GitHub takes no such
-//! comment. A dim line counts the comments of an older push. Without
-//! comments, the pane shows no section.
+//! the head that went to GitHub not yet. Each comment starts selected,
+//! also a comment that a new load adds. `J` and `K` move the comment
+//! cursor, and `enter` selects or deselects the comment of the cursor. A
+//! deselected comment stays deselected while the popup is open. The own
+//! action `S` of the pane, in the actions menu (`space`), sends the
+//! selected comments: `app` reads the comment files again and opens the
+//! send dialog. A comment on a commit message shows dim and cannot be
+//! selected: GitHub takes no such comment. A dim line counts the comments
+//! of an older push. Without comments, the pane shows no section.
 
 use std::collections::BTreeSet;
 
@@ -40,13 +41,15 @@ use crate::domain::pr::{
 pub(crate) struct DescriptionPane;
 
 /// The own state of the description pane: the comment cursor and the
-/// marked comments, by comment id. A load of the comments keeps them.
+/// deselected comments, by comment id. A load of the comments keeps them.
 #[derive(Debug, Default)]
 pub(crate) struct CodeviewState {
     /// The id of the comment of the cursor. `None` puts the cursor on
     /// the first comment that can go to GitHub.
     pub cursor: Option<String>,
-    pub marked: BTreeSet<String>,
+    /// The comments that you deselected. Every other comment is
+    /// selected, so a new comment starts selected.
+    pub deselected: BTreeSet<String>,
 }
 
 impl Pane for DescriptionPane {
@@ -106,7 +109,7 @@ impl Pane for DescriptionPane {
 
     /// The comment keys, while the section lists a comment that can go to
     /// GitHub: `J` and `K` move the comment cursor, and the `open` key
-    /// (`enter`) marks or unmarks the comment of the cursor.
+    /// (`enter`) selects or deselects the comment of the cursor.
     fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
         let Some(Target::Pr { pr, .. }) = cx.target else {
             return None;
@@ -119,8 +122,8 @@ impl Pane for DescriptionPane {
         let at = cursor_index(state, &comments);
         if cx.keys.matches("open", key) {
             let id = &comments[at].id;
-            if !state.marked.remove(id) {
-                state.marked.insert(id.clone());
+            if !state.deselected.remove(id) {
+                state.deselected.insert(id.clone());
             }
         } else if !key.mods.is_empty() {
             return None;
@@ -149,8 +152,8 @@ impl Pane for DescriptionPane {
         }
     }
 
-    /// `S` sends the marked comments, or all of them when none is
-    /// marked.
+    /// `S` sends the selected comments. With no comment selected, the
+    /// send has no comments.
     fn run_action(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
         if key != PaneAction::char(SEND_KEY, "").key {
             return None;
@@ -163,16 +166,11 @@ impl Pane for DescriptionPane {
             return None;
         }
         let state = ps.ext.downcast_ref::<CodeviewState>()?;
-        let marked: Vec<String> = comments
+        let ids = comments
             .iter()
-            .filter(|comment| state.marked.contains(&comment.id))
+            .filter(|comment| !state.deselected.contains(&comment.id))
             .map(|comment| comment.id.clone())
             .collect();
-        let ids = if marked.is_empty() {
-            comments.iter().map(|comment| comment.id.clone()).collect()
-        } else {
-            marked
-        };
         Some(Handled {
             cmds: vec![Cmd::SendCodeview {
                 key: pr.key.clone(),
@@ -227,7 +225,7 @@ fn codeview_section(
             cell("Codeview comments", CellStyle::Primary),
             cell(format!(" ({count} unsent)"), CellStyle::Dim),
             cell(
-                " [J/K] move · [enter] mark · [space S] send",
+                " [J/K] move · [enter] select · [space S] send",
                 CellStyle::Dim,
             ),
         ]
@@ -261,8 +259,9 @@ fn codeview_section(
     lines
 }
 
-/// One row of a comment: the cursor, the mark, the place and the first
-/// line of the body, cut to `width`. A commit message comment shows dim.
+/// One row of a comment: the cursor, the selection mark, the place and
+/// the first line of the body, cut to `width`. A commit message comment
+/// shows dim.
 fn row(comment: &Comment, cursor: Option<&str>, state: &CodeviewState, width: usize) -> Vec<Cell> {
     let pointer = if cursor == Some(comment.id.as_str()) {
         "> "
@@ -273,10 +272,10 @@ fn row(comment: &Comment, cursor: Option<&str>, state: &CodeviewState, width: us
         let text = format!("{pointer}[-] {} {}", comment.place(), comment.summary());
         return vec![cell(cut(&text, width), CellStyle::Dim)];
     }
-    let mark = if state.marked.contains(&comment.id) {
-        "[x] "
-    } else {
+    let mark = if state.deselected.contains(&comment.id) {
         "[ ] "
+    } else {
+        "[x] "
     };
     let lead = format!("{pointer}{mark}");
     let place = format!("{} ", comment.place());
@@ -1361,10 +1360,10 @@ mod tests {
             lines[3..lines.len() - 2],
             [
                 "",
-                "Codeview comments (3 unsent) [J/K] move · [enter] mark · [space S] send",
-                "> [ ] src/lib.rs:L12-14 (new) Trim the name.",
+                "Codeview comments (3 unsent) [J/K] move · [enter] select · [space S] send",
+                "> [x] src/lib.rs:L12-14 (new) Trim the name.",
                 "  [-] commit message Fix the typo",
-                "  [ ] PR Looks good overall.",
+                "  [x] PR Looks good overall.",
                 "1 comment on an older push. Open codeview (v) to see them.",
             ]
         );
@@ -1377,7 +1376,7 @@ mod tests {
         comments.pushes[0].comments[0].body = "a very long first line of the comment body".into();
         let state = codeview_state(Some(Ok(comments)));
         let lines = codeview_texts(&state, &DescriptionPane.init_state(), 40);
-        assert_eq!(lines[5], "> [ ] src/lib.rs:L12-14 (new) a very lo…");
+        assert_eq!(lines[5], "> [x] src/lib.rs:L12-14 (new) a very lo…");
         assert_eq!(display_width(&lines[5]), 40);
     }
 
@@ -1395,7 +1394,7 @@ mod tests {
     }
 
     #[test]
-    fn the_comment_keys_move_mark_and_send() {
+    fn the_comment_keys_move_select_and_send() {
         let state = codeview_state(Some(Ok(codeview_comments())));
         let mut ps = DescriptionPane.init_state();
         let changed = Some(Handled {
@@ -1405,7 +1404,7 @@ mod tests {
         assert_eq!(press_in(&state, &mut ps, 'J'), changed);
         let lines = codeview_texts(&state, &ps, 80);
         assert_eq!(
-            lines[7], "> [ ] PR Looks good overall.",
+            lines[7], "> [x] PR Looks good overall.",
             "J skips the commit message"
         );
         assert_eq!(
@@ -1416,9 +1415,13 @@ mod tests {
         assert_eq!(enter_in(&state, &mut ps), changed);
         assert_eq!(
             codeview_texts(&state, &ps, 80)[7],
-            "> [x] PR Looks good overall."
+            "> [ ] PR Looks good overall."
         );
-        assert_eq!(press_in(&state, &mut ps, ' '), None, "space does not mark");
+        assert_eq!(
+            press_in(&state, &mut ps, ' '),
+            None,
+            "space does not select"
+        );
         assert_eq!(press_in(&state, &mut ps, 'S'), None, "S is in the menu");
         assert_eq!(
             pane_actions(&state, &ps),
@@ -1441,22 +1444,52 @@ mod tests {
         };
         assert_eq!(
             menu_in(&state, &mut ps, 'S'),
-            send(&["c3"]),
-            "the marked one"
+            send(&["c1"]),
+            "the selected one"
         );
         assert_eq!(enter_in(&state, &mut ps), changed);
         assert_eq!(press_in(&state, &mut ps, 'K'), changed);
+        assert_eq!(enter_in(&state, &mut ps), changed);
         assert_eq!(
             codeview_texts(&state, &ps, 80)[5],
             "> [ ] src/lib.rs:L12-14 (new) Trim the name."
         );
+        assert_eq!(menu_in(&state, &mut ps, 'S'), send(&["c3"]));
+        assert_eq!(press_in(&state, &mut ps, 'J'), changed);
+        assert_eq!(enter_in(&state, &mut ps), changed);
         assert_eq!(
             menu_in(&state, &mut ps, 'S'),
-            send(&["c1", "c3"]),
-            "all without a mark"
+            send(&[]),
+            "none selected sends no comment"
         );
         assert_eq!(press_in(&state, &mut ps, 'x'), None);
         assert_eq!(menu_in(&state, &mut ps, 'x'), None);
+    }
+
+    #[test]
+    fn a_new_comment_starts_selected_and_a_deselected_one_stays() {
+        let mut state = codeview_state(Some(Ok(codeview_comments())));
+        let mut ps = DescriptionPane.init_state();
+        enter_in(&state, &mut ps);
+        let mut comments = codeview_comments();
+        let mut new = comments.pushes[0].comments[0].clone();
+        new.id = "c4".into();
+        new.body = "A new note".into();
+        comments.pushes[0].comments.push(new);
+        state
+            .data
+            .codeview
+            .insert(testdata::pr_key("chaoshub", 7), Ok(comments));
+        let lines = codeview_texts(&state, &ps, 80);
+        assert_eq!(
+            lines[5..9],
+            [
+                "> [ ] src/lib.rs:L12-14 (new) Trim the name.",
+                "  [-] commit message Fix the typo",
+                "  [x] PR Looks good overall.",
+                "  [x] src/lib.rs:L12-14 (new) A new note",
+            ]
+        );
     }
 
     #[test]
