@@ -7,32 +7,23 @@
 //! The reviews, the threads and the activity come from the conversation
 //! detail, which loads in the background. The pane does not start a load.
 //!
-//! Between the block and the body, the pane lists the codeview comments of
-//! the head that went to GitHub not yet. Each comment starts selected,
-//! also a comment that a new load adds. `J` and `K` move the comment
-//! cursor, and `enter` selects or deselects the comment of the cursor. The
-//! selection is in the review draft of the pull request in `AppData`, so a
-//! deselected comment stays deselected until chaoshub quits. The own
-//! action `S` of the pane, in the actions menu (`space`), opens the Review
-//! popup. A comment on a commit message shows dim and cannot be selected: GitHub takes no such
-//! comment. A dim line counts the comments of an older push. Without
-//! comments, the pane shows no section.
-
-use std::collections::BTreeSet;
+//! When the head has codeview comments that went to GitHub not yet, one
+//! dim line between the block and the body counts them, for example
+//! `3 unsent codeview comments · space R to review`. The Review popup
+//! lists and sends them. Without such comments, the pane shows no line.
 
 use chrono::{DateTime, Utc};
 
 use crate::app::age::age;
+use crate::app::keymap::{Keymap, chord_text};
 use crate::app::models::{Cell, CellStyle, PaneModel, Tone};
 use crate::app::panes::agent::head;
 use crate::app::panes::checks::failed;
-use crate::app::panes::{Pane, PaneAction, PaneState};
-use crate::app::state::AppData;
+use crate::app::panes::{Pane, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx};
-use crate::bus::{Cmd, KeyChord, KeyCode, Size, Target};
+use crate::bus::{KeyChord, Size, Target};
 use crate::domain::check::{Check, CheckConclusion, CheckStatus};
-use crate::domain::codeview::Comment;
 use crate::domain::detail::{PrDetail, ReviewState};
 use crate::domain::pr::{
     CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest, ReviewDecision,
@@ -40,15 +31,6 @@ use crate::domain::pr::{
 
 /// The description pane.
 pub(crate) struct DescriptionPane;
-
-/// The own state of the description pane: the comment cursor. A load of
-/// the comments keeps it.
-#[derive(Debug, Default)]
-pub(crate) struct CodeviewState {
-    /// The id of the comment of the cursor. `None` puts the cursor on
-    /// the first comment that can go to GitHub.
-    pub cursor: Option<String>,
-}
 
 impl Pane for DescriptionPane {
     fn id(&self) -> &'static str {
@@ -68,13 +50,10 @@ impl Pane for DescriptionPane {
     }
 
     fn init_state(&self) -> PaneState {
-        PaneState {
-            ext: Box::new(CodeviewState::default()),
-            ..PaneState::default()
-        }
+        PaneState::default()
     }
 
-    fn model(&self, cx: &KeyCx<'_>, ps: &PaneState, size: Size) -> PaneModel {
+    fn model(&self, cx: &KeyCx<'_>, _ps: &PaneState, _size: Size) -> PaneModel {
         let Some(Target::Pr { pr, .. }) = cx.target else {
             return PaneModel::Lines {
                 lines: Vec::new(),
@@ -92,258 +71,46 @@ impl Pane for DescriptionPane {
         } else {
             vec![cell(body, CellStyle::Markdown)]
         };
-        let empty = CodeviewState::default();
-        let state = ps.ext.downcast_ref::<CodeviewState>().unwrap_or(&empty);
         let mut lines = readiness(cx, pr);
-        let deselected = deselected(cx.data, pr);
-        let section = codeview_section(cx, pr, state, deselected, usize::from(size.width));
-        if !section.is_empty() {
+        if let Some(unsent) = codeview_line(cx, pr) {
             lines.push(Vec::new());
-            lines.extend(section);
+            lines.push(unsent);
         }
         lines.push(Vec::new());
         lines.push(line);
         PaneModel::Lines { lines, wrap: true }
     }
 
-    /// The comment keys, while the section lists a comment that can go to
-    /// GitHub: `J` and `K` move the comment cursor, and the `open` key
-    /// (`enter`) selects or deselects the comment of the cursor.
-    fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
-        let Some(Target::Pr { pr, .. }) = cx.target else {
-            return None;
-        };
-        let comments = sendable(cx, pr);
-        if comments.is_empty() {
-            return None;
-        }
-        let state = ps.ext.downcast_mut::<CodeviewState>()?;
-        let at = cursor_index(state, &comments);
-        if cx.keys.matches("open", key) {
-            return Some(Handled {
-                cmds: vec![Cmd::MarkCodeview {
-                    key: pr.key.clone(),
-                    id: comments[at].id.clone(),
-                }],
-                changed: true,
-                ..Handled::default()
-            });
-        } else if !key.mods.is_empty() {
-            return None;
-        } else if key.code == KeyCode::Char('J') {
-            let to = (at + 1).min(comments.len() - 1);
-            state.cursor = Some(comments[to].id.clone());
-        } else if key.code == KeyCode::Char('K') {
-            state.cursor = Some(comments[at.saturating_sub(1)].id.clone());
-        } else {
-            return None;
-        }
-        Some(Handled {
-            changed: true,
-            ..Handled::default()
-        })
-    }
-
-    /// The send of the codeview comments, while the section lists a
-    /// comment that can go to GitHub.
-    fn actions(&self, cx: &KeyCx<'_>, _ps: &PaneState) -> Vec<PaneAction> {
-        match cx.target {
-            Some(Target::Pr { pr, .. }) if !sendable(cx, pr).is_empty() => {
-                vec![PaneAction::char(SEND_KEY, "send a review")]
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    /// `S` sends the selected comments. With no comment selected, the
-    /// send has no comments.
-    fn run_action(&self, key: KeyChord, cx: &KeyCx<'_>, _ps: &mut PaneState) -> Option<Handled> {
-        if key != PaneAction::char(SEND_KEY, "").key {
-            return None;
-        }
-        let Some(Target::Pr { pr, .. }) = cx.target else {
-            return None;
-        };
-        let ids = selected(cx.data, pr, deselected(cx.data, pr))?;
-        Some(Handled {
-            cmds: vec![Cmd::SendCodeview {
-                key: pr.key.clone(),
-                ids,
-            }],
-            ..Handled::default()
-        })
+    fn handle_key(&self, _key: KeyChord, _cx: &KeyCx<'_>, _ps: &mut PaneState) -> Option<Handled> {
+        None
     }
 }
 
-/// The key of the send of the codeview comments in the actions menu.
-const SEND_KEY: char = 'S';
-
-/// The deselected comments of the review draft of `pr`.
-fn deselected<'a>(data: &'a AppData, pr: &PullRequest) -> &'a BTreeSet<String> {
-    static EMPTY: BTreeSet<String> = BTreeSet::new();
-    data.reviews
-        .get(&pr.key)
-        .map_or(&EMPTY, |draft| &draft.deselected)
-}
-
-/// The unsent codeview comments of the head of `pr`. Empty before the
-/// load and after a failed load.
-fn comments<'a>(data: &'a AppData, pr: &PullRequest) -> &'a [Comment] {
-    match data.codeview.get(&pr.key) {
-        Some(Ok(comments)) => comments.current(&head(data, pr)),
-        _ => &[],
-    }
-}
-
-/// The unsent comments of the head of `pr` that can go to GitHub.
-fn sendable<'a>(cx: &KeyCx<'a>, pr: &PullRequest) -> Vec<&'a Comment> {
-    comments(cx.data, pr)
-        .iter()
-        .filter(|comment| comment.sendable())
-        .collect()
-}
-
-/// The ids of the selected comments of the head of `pr`: the comments
-/// that can go to GitHub, without the ones in `deselected`. `None` when
-/// the head has no comment that can go to GitHub.
-pub(crate) fn selected(
-    data: &AppData,
-    pr: &PullRequest,
-    deselected: &BTreeSet<String>,
-) -> Option<Vec<String>> {
-    let comments: Vec<&Comment> = comments(data, pr)
-        .iter()
-        .filter(|comment| comment.sendable())
-        .collect();
-    (!comments.is_empty()).then(|| {
-        comments
-            .iter()
-            .filter(|comment| !deselected.contains(&comment.id))
-            .map(|comment| comment.id.clone())
-            .collect()
-    })
-}
-
-/// The index of the cursor in `comments`: the comment of the cursor id,
-/// else the first comment.
-fn cursor_index(state: &CodeviewState, comments: &[&Comment]) -> usize {
-    state
-        .cursor
-        .as_ref()
-        .and_then(|id| comments.iter().position(|comment| &comment.id == id))
-        .unwrap_or(0)
-}
-
-/// The lines of the codeview section: the header, one row per comment,
-/// and the line of the older pushes. Empty without comments. A failed
-/// load shows the header and the error.
-fn codeview_section(
-    cx: &KeyCx<'_>,
-    pr: &PullRequest,
-    state: &CodeviewState,
-    deselected: &BTreeSet<String>,
-    width: usize,
-) -> Vec<Vec<Cell>> {
-    let header = |count: usize| {
-        vec![
-            cell("Codeview comments", CellStyle::Primary),
-            cell(format!(" ({count} unsent)"), CellStyle::Dim),
-            cell(
-                " [J/K] move · [enter] select · [space S] send",
-                CellStyle::Dim,
-            ),
-        ]
+/// The dim line that counts the unsent codeview comments of the head of
+/// `pr`, with the keys of the Review popup. `None` without such comments,
+/// before the load and after a failed load.
+fn codeview_line(cx: &KeyCx<'_>, pr: &PullRequest) -> Option<Vec<Cell>> {
+    let Some(Ok(comments)) = cx.data.codeview.get(&pr.key) else {
+        return None;
     };
-    let comments = match cx.data.codeview.get(&pr.key) {
-        None => return Vec::new(),
-        Some(Err(err)) => return vec![header(0), vec![cell(err.clone(), CellStyle::Danger)]],
-        Some(Ok(comments)) => comments,
+    let count = comments.current(&head(cx.data, pr)).len();
+    if count == 0 {
+        return None;
+    }
+    let noun = if count == 1 { "comment" } else { "comments" };
+    let text = match review_keys(cx.keys) {
+        Some(keys) => format!("{count} unsent codeview {noun} · {keys} to review"),
+        None => format!("{count} unsent codeview {noun}"),
     };
-    let head = head(cx.data, pr);
-    let current = comments.current(&head);
-    let older = comments.older(&head);
-    if current.is_empty() && older == 0 {
-        return Vec::new();
-    }
-    let sendable: Vec<&Comment> = current.iter().filter(|c| c.sendable()).collect();
-    let cursor = sendable
-        .get(cursor_index(state, &sendable))
-        .map(|comment| comment.id.as_str());
-    let mut lines = vec![header(current.len())];
-    for comment in current {
-        lines.push(row(comment, cursor, deselected, width));
-    }
-    if older > 0 {
-        let noun = if older == 1 { "comment" } else { "comments" };
-        lines.push(vec![cell(
-            format!("{older} {noun} on an older push. Open codeview (v) to see them."),
-            CellStyle::Dim,
-        )]);
-    }
-    lines
+    Some(vec![cell(text, CellStyle::Dim)])
 }
 
-/// One row of a comment: the cursor, the selection mark, the place and
-/// the first line of the body, cut to `width`. A commit message comment
-/// shows dim.
-fn row(
-    comment: &Comment,
-    cursor: Option<&str>,
-    deselected: &BTreeSet<String>,
-    width: usize,
-) -> Vec<Cell> {
-    let pointer = if cursor == Some(comment.id.as_str()) {
-        "> "
-    } else {
-        "  "
-    };
-    if !comment.sendable() {
-        let text = format!("{pointer}[-] {} {}", comment.place(), comment.summary());
-        return vec![cell(cut(&text, width), CellStyle::Dim)];
-    }
-    let mark = if deselected.contains(&comment.id) {
-        "[ ] "
-    } else {
-        "[x] "
-    };
-    let lead = format!("{pointer}{mark}");
-    let place = format!("{} ", comment.place());
-    let used = display_width(&lead) + display_width(&place);
-    let rest = width.saturating_sub(used);
-    if rest == 0 {
-        return vec![cell(cut(&format!("{lead}{place}"), width), CellStyle::Info)];
-    }
-    vec![
-        cell(lead, CellStyle::Primary),
-        cell(place, CellStyle::Info),
-        cell(cut(comment.summary(), rest), CellStyle::Normal),
-    ]
-}
-
-/// `text` cut to `width` display columns. A cut text ends with `…`.
-fn cut(text: &str, width: usize) -> String {
-    if display_width(text) <= width {
-        return text.to_owned();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    for c in text.chars() {
-        let w = display_width(c.encode_utf8(&mut [0; 4]));
-        if used + w + 1 > width {
-            break;
-        }
-        out.push(c);
-        used += w;
-    }
-    if width > 0 {
-        out.push('…');
-    }
-    out
-}
-
-/// The display width of `text`.
-fn display_width(text: &str) -> usize {
-    textwrap::core::display_width(text)
+/// The keys that open the Review popup, for example `space R`. `None`
+/// when the actions menu or the review action has no key.
+fn review_keys(keys: &Keymap) -> Option<String> {
+    let menu = keys.chords("actions").first()?;
+    let review = keys.chords("codeview_send").first()?;
+    Some(format!("{} {}", chord_text(*menu), chord_text(*review)))
 }
 
 /// The three lines of the readiness block: the verdict, the signals and
@@ -1293,7 +1060,7 @@ mod tests {
         }
     }
 
-    /// The state of #7 with `comments`, the target and the pane state.
+    /// The state of #7 with `comments`.
     fn codeview_state(
         comments: Option<Result<crate::domain::codeview::Comments, String>>,
     ) -> AppState {
@@ -1309,240 +1076,91 @@ mod tests {
         state
     }
 
-    /// The texts of the lines of the pane at `width`, with the pane state
-    /// `ps`.
-    fn codeview_texts(state: &AppState, ps: &PaneState, width: u16) -> Vec<String> {
+    /// The pane of #7 in `state` with the key map `keys`: its lines, the
+    /// result of `enter` and the count of its own actions.
+    fn codeview_pane(state: &AppState, keys: &Keymap) -> (Vec<Vec<Cell>>, Option<Handled>, usize) {
         let target = pr_target(&state.data, &testdata::pr_key("chaoshub", 7)).unwrap();
         let areas = layout(state.data.size);
         let cx = KeyCx {
             data: &state.data,
             target: Some(&target),
             areas: &areas,
-            keys: &crate::app::keymap::DEFAULT,
+            keys,
         };
-        let size = Size { width, height: 20 };
-        let PaneModel::Lines { lines, .. } = DescriptionPane.model(&cx, ps, size) else {
+        let size = Size {
+            width: 80,
+            height: 20,
+        };
+        let mut ps = DescriptionPane.init_state();
+        let PaneModel::Lines { lines, .. } = DescriptionPane.model(&cx, &ps, size) else {
             panic!("not lines");
         };
+        let enter = KeyChord {
+            code: crate::bus::KeyCode::Enter,
+            mods: crate::bus::KeyModifiers::NONE,
+        };
+        let handled = DescriptionPane.handle_key(enter, &cx, &mut ps);
+        (lines, handled, DescriptionPane.actions(&cx, &ps).len())
+    }
+
+    /// The texts of the lines of the pane of #7 in `state`.
+    fn codeview_texts(state: &AppState, keys: &Keymap) -> Vec<String> {
+        let (lines, ..) = codeview_pane(state, keys);
         lines.iter().map(|line| text(line)).collect()
     }
 
-    /// Presses `code` in the pane. With `menu`, it runs the own action of
-    /// the key from the actions menu instead.
-    fn key_in(state: &AppState, ps: &mut PaneState, code: KeyCode, menu: bool) -> Option<Handled> {
-        let target = pr_target(&state.data, &testdata::pr_key("chaoshub", 7)).unwrap();
-        let areas = layout(state.data.size);
-        let cx = KeyCx {
-            data: &state.data,
-            target: Some(&target),
-            areas: &areas,
-            keys: &crate::app::keymap::DEFAULT,
-        };
-        let chord = KeyChord {
-            code,
-            mods: crate::bus::KeyModifiers::NONE,
-        };
-        if menu {
-            DescriptionPane.run_action(chord, &cx, ps)
-        } else {
-            DescriptionPane.handle_key(chord, &cx, ps)
-        }
-    }
-
-    /// Presses `c` in the pane.
-    fn press_in(state: &AppState, ps: &mut PaneState, c: char) -> Option<Handled> {
-        key_in(state, ps, KeyCode::Char(c), false)
-    }
-
-    /// Presses `enter` in the pane, and marks the comment of its
-    /// `Cmd::MarkCodeview` in the review draft, as `app` does.
-    fn enter_in(state: &mut AppState, ps: &mut PaneState) {
-        let Some(handled) = key_in(state, ps, KeyCode::Enter, false) else {
-            panic!("enter marks nothing");
-        };
-        let [Cmd::MarkCodeview { key, id }] = handled.cmds.as_slice() else {
-            panic!("no mark: {handled:?}");
-        };
-        assert!(handled.changed);
-        state
-            .data
-            .reviews
-            .entry(key.clone())
-            .or_default()
-            .toggle(id);
-    }
-
-    /// Runs the own action of `c` from the actions menu.
-    fn menu_in(state: &AppState, ps: &mut PaneState, c: char) -> Option<Handled> {
-        key_in(state, ps, KeyCode::Char(c), true)
-    }
-
-    /// The keys and the labels of the own actions of the pane.
-    fn pane_actions(state: &AppState, ps: &PaneState) -> Vec<(KeyChord, &'static str)> {
-        let target = pr_target(&state.data, &testdata::pr_key("chaoshub", 7)).unwrap();
-        let areas = layout(state.data.size);
-        let cx = KeyCx {
-            data: &state.data,
-            target: Some(&target),
-            areas: &areas,
-            keys: &crate::app::keymap::DEFAULT,
-        };
-        DescriptionPane
-            .actions(&cx, ps)
-            .into_iter()
-            .map(|action| (action.key, action.label))
-            .collect()
-    }
-
     #[test]
-    fn the_codeview_section_lists_the_unsent_comments_of_the_head() {
+    fn one_dim_line_counts_the_unsent_comments_of_the_head() {
         let state = codeview_state(Some(Ok(codeview_comments())));
-        let lines = codeview_texts(&state, &DescriptionPane.init_state(), 80);
+        let (lines, enter, actions) = codeview_pane(&state, &crate::app::keymap::DEFAULT);
         assert_eq!(
-            lines[3..lines.len() - 2],
+            codeview_texts(&state, &crate::app::keymap::DEFAULT)[3..],
             [
                 "",
-                "Codeview comments (3 unsent) [J/K] move · [enter] select · [space S] send",
-                "> [x] src/lib.rs:L12-14 (new) Trim the name.",
-                "  [-] commit message Fix the typo",
-                "  [x] PR Looks good overall.",
-                "1 comment on an older push. Open codeview (v) to see them.",
+                "3 unsent codeview comments · space R to review",
+                "",
+                "(no description)",
             ]
         );
-        assert_eq!(lines.last().unwrap(), "(no description)");
+        assert_eq!(lines[4][0].style, CellStyle::Dim);
+        assert_eq!(enter, None, "enter marks nothing in the pane");
+        assert_eq!(actions, 0, "the pane has no send");
     }
 
     #[test]
-    fn a_row_is_cut_to_the_width() {
+    fn the_line_follows_the_keys_and_the_count() {
         let mut comments = codeview_comments();
-        comments.pushes[0].comments[0].body = "a very long first line of the comment body".into();
+        comments.pushes[0].comments.truncate(1);
         let state = codeview_state(Some(Ok(comments)));
-        let lines = codeview_texts(&state, &DescriptionPane.init_state(), 40);
-        assert_eq!(lines[5], "> [x] src/lib.rs:L12-14 (new) a very lo…");
-        assert_eq!(display_width(&lines[5]), 40);
+        let overrides =
+            std::collections::BTreeMap::from([("codeview_send".to_owned(), "ctrl-r".to_owned())]);
+        let keys = Keymap::new(&overrides).unwrap();
+        let lines = codeview_texts(&state, &keys);
+        assert_eq!(
+            lines[4],
+            "1 unsent codeview comment · space ctrl-r to review"
+        );
+        let overrides =
+            std::collections::BTreeMap::from([("codeview_send".to_owned(), String::new())]);
+        let keys = Keymap::new(&overrides).unwrap();
+        let lines = codeview_texts(&state, &keys);
+        assert_eq!(lines[4], "1 unsent codeview comment");
     }
 
     #[test]
-    fn without_comments_the_pane_shows_no_section() {
+    fn without_unsent_comments_on_the_head_the_pane_shows_no_line() {
         let empty = crate::domain::codeview::Comments::default();
-        for comments in [None, Some(Ok(empty))] {
+        let mut older = codeview_comments();
+        older.pushes.remove(0);
+        for comments in [
+            None,
+            Some(Ok(empty)),
+            Some(Ok(older)),
+            Some(Err("version 2 is not 1".into())),
+        ] {
             let state = codeview_state(comments);
-            let lines = codeview_texts(&state, &DescriptionPane.init_state(), 80);
+            let lines = codeview_texts(&state, &crate::app::keymap::DEFAULT);
             assert_eq!(lines.len(), 5, "{lines:?}");
         }
-        let state = codeview_state(Some(Err("version 2 is not 1".into())));
-        let lines = codeview_texts(&state, &DescriptionPane.init_state(), 80);
-        assert_eq!(lines[5], "version 2 is not 1");
-    }
-
-    #[test]
-    fn the_comment_keys_move_select_and_send() {
-        let mut state = codeview_state(Some(Ok(codeview_comments())));
-        let mut ps = DescriptionPane.init_state();
-        let changed = Some(Handled {
-            changed: true,
-            ..Handled::default()
-        });
-        assert_eq!(press_in(&state, &mut ps, 'J'), changed);
-        let lines = codeview_texts(&state, &ps, 80);
-        assert_eq!(
-            lines[7], "> [x] PR Looks good overall.",
-            "J skips the commit message"
-        );
-        assert_eq!(
-            press_in(&state, &mut ps, 'J'),
-            changed,
-            "J stays on the last"
-        );
-        enter_in(&mut state, &mut ps);
-        assert_eq!(
-            codeview_texts(&state, &ps, 80)[7],
-            "> [ ] PR Looks good overall."
-        );
-        assert_eq!(
-            press_in(&state, &mut ps, ' '),
-            None,
-            "space does not select"
-        );
-        assert_eq!(press_in(&state, &mut ps, 'S'), None, "S is in the menu");
-        assert_eq!(
-            pane_actions(&state, &ps),
-            [(
-                KeyChord {
-                    code: KeyCode::Char('S'),
-                    mods: crate::bus::KeyModifiers::NONE,
-                },
-                "send a review"
-            )]
-        );
-        let send = |ids: &[&str]| {
-            Some(Handled {
-                cmds: vec![Cmd::SendCodeview {
-                    key: testdata::pr_key("chaoshub", 7),
-                    ids: ids.iter().map(|id| (*id).to_owned()).collect(),
-                }],
-                ..Handled::default()
-            })
-        };
-        assert_eq!(
-            menu_in(&state, &mut ps, 'S'),
-            send(&["c1"]),
-            "the selected one"
-        );
-        enter_in(&mut state, &mut ps);
-        assert_eq!(press_in(&state, &mut ps, 'K'), changed);
-        enter_in(&mut state, &mut ps);
-        assert_eq!(
-            codeview_texts(&state, &ps, 80)[5],
-            "> [ ] src/lib.rs:L12-14 (new) Trim the name."
-        );
-        assert_eq!(menu_in(&state, &mut ps, 'S'), send(&["c3"]));
-        assert_eq!(press_in(&state, &mut ps, 'J'), changed);
-        enter_in(&mut state, &mut ps);
-        assert_eq!(
-            menu_in(&state, &mut ps, 'S'),
-            send(&[]),
-            "none selected sends no comment"
-        );
-        assert_eq!(press_in(&state, &mut ps, 'x'), None);
-        assert_eq!(menu_in(&state, &mut ps, 'x'), None);
-    }
-
-    #[test]
-    fn a_new_comment_starts_selected_and_a_deselected_one_stays() {
-        let mut state = codeview_state(Some(Ok(codeview_comments())));
-        let mut ps = DescriptionPane.init_state();
-        enter_in(&mut state, &mut ps);
-        let mut comments = codeview_comments();
-        let mut new = comments.pushes[0].comments[0].clone();
-        new.id = "c4".into();
-        new.body = "A new note".into();
-        comments.pushes[0].comments.push(new);
-        state
-            .data
-            .codeview
-            .insert(testdata::pr_key("chaoshub", 7), Ok(comments));
-        let lines = codeview_texts(&state, &ps, 80);
-        assert_eq!(
-            lines[5..9],
-            [
-                "> [ ] src/lib.rs:L12-14 (new) Trim the name.",
-                "  [-] commit message Fix the typo",
-                "  [x] PR Looks good overall.",
-                "  [x] src/lib.rs:L12-14 (new) A new note",
-            ]
-        );
-    }
-
-    #[test]
-    fn the_comment_keys_need_a_comment() {
-        let state = codeview_state(None);
-        let mut ps = DescriptionPane.init_state();
-        for c in ['J', 'K'] {
-            assert_eq!(press_in(&state, &mut ps, c), None, "{c}");
-        }
-        assert_eq!(key_in(&state, &mut ps, KeyCode::Enter, false), None);
-        assert_eq!(menu_in(&state, &mut ps, 'S'), None);
-        assert_eq!(pane_actions(&state, &ps), []);
     }
 }

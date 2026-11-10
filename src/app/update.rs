@@ -843,18 +843,12 @@ fn open_confirm(state: &mut AppState, key: &PrKey, id: &'static str, spec: Confi
 const AGENT_ID: &str = crate::agent::ID;
 
 /// The commands of a pane, with each `Cmd::RunAgent` through
-/// `start_agent`, each `Cmd::SendCodeview` through `open_review_of` and each
-/// `Cmd::MarkCodeview` on the review draft.
+/// `start_agent`.
 fn pane_cmds(state: &mut AppState, cmds: Vec<Cmd>) -> Vec<Cmd> {
     let mut out = Vec::new();
     for cmd in cmds {
         match cmd {
             Cmd::RunAgent(job) => out.extend(start_agent(state, job)),
-            Cmd::SendCodeview { key, .. } => out.extend(open_review_of(state, &key)),
-            Cmd::MarkCodeview { key, id } => {
-                state.data.reviews.entry(key).or_default().toggle(&id);
-                state.bump();
-            }
             cmd => out.push(cmd),
         }
     }
@@ -863,20 +857,6 @@ fn pane_cmds(state: &mut AppState, cmds: Vec<Cmd>) -> Vec<Cmd> {
 
 /// The action id of the codeview send.
 const CODEVIEW_SEND_ID: &str = "codeview_send";
-
-/// Opens the Review popup of `key` with the codeview send action.
-/// Nothing opens when `key` is not loaded.
-fn open_review_of(state: &mut AppState, key: &PrKey) -> Vec<Cmd> {
-    let Some(target) = pr_target(&state.data, key) else {
-        return Vec::new();
-    };
-    let selection = Selection {
-        target,
-        me: state.data.session.login.clone().unwrap_or_default(),
-        action_config: state.data.action_config.get(CODEVIEW_SEND_ID).cloned(),
-    };
-    open_review(state, CODEVIEW_SEND_ID, selection)
-}
 
 /// Opens the Review popup of the action `id` on `selection` at once,
 /// with the codeview comments that are loaded, and loads the comment
@@ -5316,58 +5296,6 @@ mod tests {
     }
 
     #[test]
-    fn the_menu_shows_the_codeview_send_of_the_description_pane() {
-        let (mut state, _) = agent_state();
-        update(
-            &mut state,
-            &Keymap::default(),
-            press(KeyCode::Enter, KeyModifiers::NONE),
-        );
-        key(&mut state, ' ');
-        assert_eq!(pane_labels(&state), [""; 0], "no comments, no send");
-        let (mut state, pr) = codeview_state();
-        key(&mut state, ' ');
-        assert_eq!(pane_labels(&state), ["send a review"]);
-        assert_eq!(key(&mut state, 'S'), vec![Cmd::LoadCodeview(pr)]);
-    }
-
-    #[test]
-    fn enter_deselects_a_codeview_comment_and_space_does_not() {
-        let (mut state, pr) = codeview_state();
-        let texts = |state: &mut AppState| match popup_content(state, &PANES) {
-            OverlayContent::Popup {
-                pane: PaneModel::Lines { lines, .. },
-                ..
-            } => lines
-                .iter()
-                .map(|cells| cells.iter().map(|c| c.text.as_str()).collect::<String>())
-                .collect::<Vec<_>>(),
-            other => panic!("not lines: {other:?}"),
-        };
-        assert!(texts(&mut state).iter().any(|t| t.starts_with("> [x] ")));
-        update(
-            &mut state,
-            &Keymap::default(),
-            press(KeyCode::Enter, KeyModifiers::NONE),
-        );
-        assert!(texts(&mut state).iter().any(|t| t.starts_with("> [ ] ")));
-        key(&mut state, ' ');
-        assert!(action_menu(&state).is_some(), "space opens the menu");
-        key(&mut state, 'q');
-        update(&mut state, &Keymap::default(), Msg::TransitionsDone);
-        assert!(
-            texts(&mut state).iter().any(|t| t.starts_with("> [ ] ")),
-            "the deselection stays"
-        );
-        let msg = loaded_without(&state, &pr, "none");
-        update(&mut state, &Keymap::default(), msg);
-        assert!(
-            texts(&mut state).iter().any(|t| t.starts_with("> [ ] ")),
-            "a new load keeps the deselection"
-        );
-    }
-
-    #[test]
     fn a_pane_key_in_the_sidebar_selects_the_pane_before_an_action() {
         let actions = fake(FakeAction::new("approve", '2'));
         let mut state = sidebar_state(102, &actions);
@@ -7753,13 +7681,6 @@ mod tests {
             "",
             "a sent review clears the text"
         );
-    }
-
-    #[test]
-    fn s_in_the_description_pane_opens_the_review_popup() {
-        let (mut state, pr) = codeview_state();
-        assert_eq!(menu(&mut state, 'S'), vec![Cmd::LoadCodeview(pr)]);
-        assert!(matches!(top(&state), OverlayState::Review(_)));
     }
 
     #[test]

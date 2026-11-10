@@ -2309,19 +2309,14 @@ mod tests {
         }
     }
 
-    /// The popup app with the comments of `codeview_comments`, and the
-    /// first comment deselected with `enter`.
+    /// The popup app with the comments of `codeview_comments`: the
+    /// Description pane counts them in one line.
     fn codeview_app(width: u16, height: u16) -> App {
         let mut app = popup_app(width, height);
         app.update(Msg::CodeviewLoaded {
             key: crate::app::testdata::pr_key("chaoshub", 101),
             comments: Ok(codeview_comments()),
         });
-        let enter = crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Enter,
-            crossterm::event::KeyModifiers::NONE,
-        );
-        app.update(Msg::Key(enter));
         app
     }
 
