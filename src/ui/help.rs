@@ -1,16 +1,18 @@
-//! The help overlay: the key bindings in sections, at the right edge of
-//! the screen. The transitions slide it in from the right.
+//! The help overlay: the key bindings and the list symbols in sections,
+//! at the right edge of the screen. The transitions slide it in from the
+//! right.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Clear, Widget};
 
-use crate::app::models::HelpModel;
+use crate::app::models::{Cell, HelpModel};
 use crate::bus::Hit;
 use crate::theme::Theme;
 use crate::theme::ThemeBlock;
 use crate::ui::hits::HitMap;
+use crate::ui::style::cell_style;
 use crate::ui::text;
 
 /// The minimum width of the key column.
@@ -25,6 +27,9 @@ enum HelpLine<'a> {
     /// A key and its label, with the width of the key column of the
     /// section.
     Entry(&'a str, &'a str, usize),
+    /// A styled symbol and its label, with the width of the key column of
+    /// the section.
+    Symbol(&'a Cell, &'a str, usize),
 }
 
 /// The lines of the help overlay, in draw order. There are
@@ -40,6 +45,12 @@ fn help_lines(model: &HelpModel) -> Vec<HelpLine<'_>> {
             .entries
             .iter()
             .map(|(key, _)| text::width(key))
+            .chain(
+                section
+                    .symbols
+                    .iter()
+                    .map(|(cell, _)| text::width(&cell.text)),
+            )
             .max()
             .unwrap_or(0)
             .max(KEY_MIN);
@@ -48,6 +59,12 @@ fn help_lines(model: &HelpModel) -> Vec<HelpLine<'_>> {
                 .entries
                 .iter()
                 .map(|(key, label)| HelpLine::Entry(key, label, key_width)),
+        );
+        lines.extend(
+            section
+                .symbols
+                .iter()
+                .map(|(cell, label)| HelpLine::Symbol(cell, label, key_width)),
         );
     }
     lines
@@ -81,37 +98,53 @@ pub(crate) fn render(
         inner.height.saturating_sub(1),
     );
     hits.push_text(inner);
-    let width = usize::from(inner.width);
     let lines = help_lines(model);
     let rows = usize::from(inner.height);
     let skip = scroll.min(lines.len().saturating_sub(rows));
     for (y, line) in (inner.y..).zip(lines.into_iter().skip(skip).take(rows)) {
+        let row = Rect::new(inner.x, y, inner.width, 1);
         match line {
             HelpLine::Blank => {}
-            HelpLine::Title(title) => theme
-                .header(title, p.primary)
-                .render(Rect::new(inner.x, y, inner.width, 1), buf),
+            HelpLine::Title(title) => theme.header(title, p.primary).render(row, buf),
             HelpLine::Entry(key, label, key_width) => {
-                let key_text =
-                    text::fit(key, key_width.min(width), crate::app::models::Align::Left);
-                buf.set_string(
-                    inner.x,
-                    y,
-                    &key_text,
-                    Style::new().fg(p.primary).add_modifier(Modifier::BOLD),
-                );
-                let label_x = inner.x + u16::try_from(key_width + 1).unwrap_or(inner.width);
-                if label_x < inner.right() {
-                    let room = usize::from(inner.right() - label_x);
-                    buf.set_string(
-                        label_x,
-                        y,
-                        text::truncate(label, room),
-                        Style::new().fg(p.fg),
-                    );
-                }
+                let key_style = Style::new().fg(p.primary).add_modifier(Modifier::BOLD);
+                entry(key, key_style, label, key_width, row, buf, theme);
+            }
+            HelpLine::Symbol(cell, label, key_width) => {
+                let key_style = cell_style(cell.style, p);
+                entry(&cell.text, key_style, label, key_width, row, buf, theme);
             }
         }
+    }
+}
+
+/// Draws one entry into the one-line `row`: the key in `key_style` in the
+/// key column of `key_width` cells, then the label. A label that does not
+/// fit ends with `…`.
+fn entry(
+    key: &str,
+    key_style: Style,
+    label: &str,
+    key_width: usize,
+    row: Rect,
+    buf: &mut Buffer,
+    theme: &Theme,
+) {
+    let key_text = text::fit(
+        key,
+        key_width.min(usize::from(row.width)),
+        crate::app::models::Align::Left,
+    );
+    buf.set_string(row.x, row.y, &key_text, key_style);
+    let label_x = row.x + u16::try_from(key_width + 1).unwrap_or(row.width);
+    if label_x < row.right() {
+        let room = usize::from(row.right() - label_x);
+        buf.set_string(
+            label_x,
+            row.y,
+            text::truncate(label, room),
+            Style::new().fg(theme.palette.fg),
+        );
     }
 }
 
@@ -143,7 +176,7 @@ mod tests {
         let crate::app::models::OverlayContent::Help { help, .. } = &help.content else {
             unreachable!()
         };
-        assert_eq!(help.line_count(), 13);
+        assert_eq!(help.line_count(), 18);
         let draw = |scroll| {
             let area = Rect::new(0, 0, 40, 8);
             let mut buf = Buffer::empty(area);
@@ -164,7 +197,32 @@ mod tests {
         let scrolled = draw(2);
         assert!(!scrolled.contains("move down / up"), "{scrolled}");
         assert!(scrolled.contains("first / last row"), "{scrolled}");
-        assert_eq!(draw(12), draw(8), "the last page");
-        assert!(draw(12).contains("re-run failed checks"));
+        assert_eq!(draw(17), draw(13), "the last page");
+        assert!(draw(17).contains("re-run failed checks"));
+    }
+
+    #[test]
+    fn symbols_have_the_style_of_their_cell() {
+        let help = testdata::help_overlay();
+        let crate::app::models::OverlayContent::Help { help, .. } = &help.content else {
+            unreachable!()
+        };
+        for theme in [testdata::ansi16(), testdata::pierre(), testdata::punk()] {
+            let area = Rect::new(0, 0, 40, 30);
+            let mut buf = Buffer::empty(area);
+            render(help, 0, area, &mut buf, &theme, &mut HitMap::default());
+            let p = &theme.palette;
+            let at = |symbol: &str| {
+                (0..30)
+                    .flat_map(|y| (0..40).map(move |x| (x, y)))
+                    .find(|&(x, y)| buf[(x, y)].symbol() == symbol)
+                    .map(|(x, y)| &buf[(x, y)])
+                    .unwrap()
+            };
+            assert_eq!(at("✓").fg, p.success);
+            assert_eq!(at("◆").fg, p.warn);
+            assert!(at("◆").modifier.contains(Modifier::BOLD));
+            assert_eq!(at("a").fg, p.fg, "the label");
+        }
     }
 }

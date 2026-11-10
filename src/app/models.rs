@@ -329,9 +329,14 @@ pub(crate) struct HelpModel {
 
 impl HelpModel {
     /// The number of lines that the help overlay draws: a title line per
-    /// section, a line per entry, and a blank line between two sections.
+    /// section, a line per entry and per symbol, and a blank line between
+    /// two sections.
     pub(crate) fn line_count(&self) -> usize {
-        let lines: usize = self.sections.iter().map(|s| 1 + s.entries.len()).sum();
+        let lines: usize = self
+            .sections
+            .iter()
+            .map(|s| 1 + s.entries.len() + s.symbols.len())
+            .sum();
         lines + self.sections.len().saturating_sub(1)
     }
 }
@@ -342,6 +347,10 @@ pub(crate) struct HelpSection {
     pub title: String,
     /// The key text and the label of each binding.
     pub entries: Vec<(String, String)>,
+    /// The styled symbol and the label of each symbol entry. The help
+    /// draws a symbol in the style of its cell, as the list draws it. The
+    /// symbols come after the entries.
+    pub symbols: Vec<(Cell, String)>,
 }
 
 /// The status bar.

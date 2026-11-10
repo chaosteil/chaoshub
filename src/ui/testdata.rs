@@ -445,7 +445,7 @@ pub(crate) fn with_overlay(overlay: OverlayModel) -> FrameModel {
     }
 }
 
-/// The help overlay with the app keys and the actions.
+/// The help overlay with the app keys, some list symbols and the actions.
 pub(crate) fn help_overlay() -> OverlayModel {
     let entries = |pairs: &[(&str, &str)]| {
         pairs
@@ -468,6 +468,16 @@ pub(crate) fn help_overlay() -> OverlayModel {
                             ("Enter", "open the popup"),
                             ("/", "filter"),
                         ]),
+                        symbols: Vec::new(),
+                    },
+                    HelpSection {
+                        title: "list symbols".to_owned(),
+                        entries: Vec::new(),
+                        symbols: vec![
+                            (cell("CHECKS", CellStyle::Dim), "CI state".to_owned()),
+                            (cell("✓ 5/5", CellStyle::Success), "CI green".to_owned()),
+                            (cell("◆", CellStyle::Warn), "a pane is open".to_owned()),
+                        ],
                     },
                     HelpSection {
                         title: "actions".to_owned(),
@@ -478,6 +488,7 @@ pub(crate) fn help_overlay() -> OverlayModel {
                             ("R", "request changes"),
                             ("x", "re-run failed checks"),
                         ]),
+                        symbols: Vec::new(),
                     },
                 ],
             },
