@@ -34,7 +34,7 @@ use crate::github::parse::Me;
 use crate::github::rest::MergeArgs;
 use crate::vcs::{self, Tool, git, jj};
 
-use super::{Action, Applicability, Prepare, Services};
+use super::{Action, Applicability, Group, Prepare, Services};
 
 /// The id of the merge action.
 pub(crate) const ID: &str = "merge";
@@ -95,6 +95,10 @@ impl Action for MergeAction {
             code: KeyCode::Char('m'),
             mods: KeyModifiers::NONE,
         })
+    }
+
+    fn group(&self) -> Group {
+        Group::Change
     }
 
     fn applies(&self, sel: &Selection) -> Applicability {
@@ -165,6 +169,10 @@ impl Action for MergeStackAction {
             code: KeyCode::Char('s'),
             mods: KeyModifiers::NONE,
         })
+    }
+
+    fn group(&self) -> Group {
+        Group::Change
     }
 
     fn applies(&self, sel: &Selection) -> Applicability {

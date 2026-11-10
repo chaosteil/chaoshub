@@ -733,6 +733,10 @@ mod tests {
             None
         }
 
+        fn group(&self) -> crate::actions::Group {
+            crate::actions::Group::Change
+        }
+
         fn applies(&self, _sel: &Selection) -> crate::actions::Applicability {
             crate::actions::Applicability::Enabled
         }

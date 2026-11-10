@@ -2,7 +2,7 @@
 
 use futures::future::BoxFuture;
 
-use crate::actions::{Action, Applicability, Prepare, Services};
+use crate::actions::{Action, Applicability, Group, Prepare, Services};
 use crate::bus::{ActionInput, Cmd, KeyChord, KeyCode, KeyModifiers, Selection, Target};
 use crate::domain::local::{LocalMatch, Vcs};
 
@@ -45,6 +45,10 @@ impl Action for CopyUrl {
 
     fn default_key(&self) -> Option<KeyChord> {
         Some(key('y'))
+    }
+
+    fn group(&self) -> Group {
+        Group::Safe
     }
 
     /// A pull request.
@@ -90,6 +94,10 @@ impl Action for CopyChangeId {
 
     fn default_key(&self) -> Option<KeyChord> {
         Some(key('i'))
+    }
+
+    fn group(&self) -> Group {
+        Group::Safe
     }
 
     /// A pull request with a local change.

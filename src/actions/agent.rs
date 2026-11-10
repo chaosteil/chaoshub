@@ -7,7 +7,7 @@
 
 use futures::future::BoxFuture;
 
-use crate::actions::{Action, Applicability, Prepare, Services};
+use crate::actions::{Action, Applicability, Group, Prepare, Services};
 use crate::agent::store::Store;
 use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, Selection, Target};
 use crate::domain::agent::{ToolKind, describe_body, describe_title};
@@ -34,6 +34,10 @@ impl Action for Agent {
             code: KeyCode::Char('p'),
             mods: KeyModifiers::NONE,
         })
+    }
+
+    fn group(&self) -> Group {
+        Group::Safe
     }
 
     /// A pull request of a repo with a local path.

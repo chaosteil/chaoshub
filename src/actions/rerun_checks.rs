@@ -8,7 +8,7 @@
 
 use futures::future::BoxFuture;
 
-use crate::actions::{Action, Applicability, Prepare, Services};
+use crate::actions::{Action, Applicability, Group, Prepare, Services};
 use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, Selection, Target};
 use crate::domain::check::{Check, CheckConclusion};
 
@@ -78,6 +78,10 @@ impl Action for RerunChecks {
             code: KeyCode::Char('x'),
             mods: KeyModifiers::NONE,
         })
+    }
+
+    fn group(&self) -> Group {
+        Group::Change
     }
 
     /// A pull request with failed checks that can run again.

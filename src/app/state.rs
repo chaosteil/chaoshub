@@ -640,7 +640,8 @@ impl AuthorPicker {
 
 /// The actions menu of a list row or of the pull request popup: one item
 /// for each action that is not hidden for the pull request, then one
-/// item for each own action of the active pane of the popup.
+/// item for each own action of the active pane of the popup. A gap row
+/// shows between two groups of items. A gap row is not an item.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ActionMenu {
     /// The pull request that the actions run on.
@@ -650,6 +651,9 @@ pub(crate) struct ActionMenu {
     /// The own actions of the active pane of the popup under the menu,
     /// after the actions. Empty for a list row.
     pub pane: Vec<PaneAction>,
+    /// The indices of the items that have a gap row before them, in
+    /// increasing order.
+    pub gaps: Vec<usize>,
     /// The index of the cursor item.
     pub cursor: usize,
 }
@@ -660,10 +664,22 @@ impl ActionMenu {
         self.ids.len() + self.pane.len()
     }
 
-    /// The items of the menu: the key and the label of each action of
-    /// `actions` in `ids`, then of each pane action. A disabled action
-    /// also shows its reason in parentheses. An action without a key
-    /// shows only its label.
+    /// The row of the item at `item`: the index of the item plus the
+    /// number of gap rows before it.
+    pub(crate) fn row(&self, item: usize) -> usize {
+        item + self.gaps.iter().filter(|&&gap| gap <= item).count()
+    }
+
+    /// The item on the row at `row`. `None` for a gap row and for a row
+    /// after the last item.
+    pub(crate) fn item_at(&self, row: usize) -> Option<usize> {
+        (0..self.len()).find(|&item| self.row(item) == row)
+    }
+
+    /// The rows of the menu: the key and the label of each action of
+    /// `actions` in `ids`, then of each pane action, with an empty row
+    /// for each gap. A disabled action also shows its reason in
+    /// parentheses. An action without a key shows only its label.
     pub(crate) fn items(
         &self,
         data: &AppData,
@@ -696,6 +712,11 @@ impl ActionMenu {
                     .iter()
                     .map(|action| format!("{}  {}", frame::key_text(action.key), action.label)),
             )
+            .enumerate()
+            .flat_map(|(item, text)| {
+                let gap = self.gaps.contains(&item).then(String::new);
+                gap.into_iter().chain(std::iter::once(text))
+            })
             .collect()
     }
 }
