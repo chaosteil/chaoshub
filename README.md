@@ -524,7 +524,7 @@ selects the next pane:
 | `3` | Conversation | The comments, the reviews and the review threads, in time order. |
 | `4` | Stack | The entries of the stack. Only for a stacked pull request. For a pull request without a stack, the tab shows dim, and `4`, `tab` and a click do not select it. The cursor starts on the pull request of the detail. Enter opens the detail of the entry under the cursor on top, and `esc` goes back. `o` opens the page of that entry. |
 | `5` | Files | The changed files as a tree, with the diff of each file inline. |
-| `6` | Agent | The pr-agent results: one section per tool. Only for a repo with a `path`. |
+| `6` | Agent | The pr-agent results: one section per tool. Only for a repo with a `path`. For a repo without a `path`, the tab shows dim, and `6`, `tab` and a click do not select it. |
 
 `j`, `k` and the other motion keys move the cursor of the pane. In the
 description pane, they scroll the text. In the conversation pane, the
