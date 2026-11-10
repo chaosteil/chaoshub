@@ -53,7 +53,8 @@ pub(crate) struct LocalState {
     pub changes: Vec<LocalChange>,
 }
 
-/// How a pull request relates to a local change.
+/// How a pull request relates to a local change. In a git repo, the
+/// change id is the branch name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum LocalMatch {
     /// No local change matches.
@@ -63,12 +64,16 @@ pub(crate) enum LocalMatch {
         workspace: String,
         change_id: String,
         commit_id: String,
+        #[serde(default)]
+        vcs: Vcs,
     },
     /// A local change matches, but its commit differs from the head.
     Diverged {
         workspace: String,
         change_id: String,
         commit_id: String,
+        #[serde(default)]
+        vcs: Vcs,
     },
 }
 
@@ -112,6 +117,13 @@ mod tests {
             workspace: "feature".into(),
             change_id: "kxyzkxyz".into(),
             commit_id: "abc123".into(),
+            vcs: Vcs::Jj,
+        });
+        assert_round_trip(&LocalMatch::Synced {
+            workspace: "default".into(),
+            change_id: "me/feature".into(),
+            commit_id: "abc123".into(),
+            vcs: Vcs::Git,
         });
     }
 }

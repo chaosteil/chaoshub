@@ -108,6 +108,7 @@ impl Action for CopyChangeId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::local::Vcs;
     use crate::domain::pr::PullRequest;
     use crate::domain::repo::Repo;
 
@@ -154,12 +155,14 @@ mod tests {
             workspace: "default".into(),
             change_id: "kpqvxwyz".into(),
             commit_id: "oid7".into(),
+            vcs: Vcs::Jj,
         });
         assert_eq!(copy(&synced), enabled("kpqvxwyz"));
         let diverged = selection(LocalMatch::Diverged {
             workspace: "agent".into(),
             change_id: "mnoplqrs".into(),
             commit_id: "c0ffee".into(),
+            vcs: Vcs::Jj,
         });
         assert_eq!(copy(&diverged), enabled("mnoplqrs"));
         assert_eq!(

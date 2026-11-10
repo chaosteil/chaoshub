@@ -1,7 +1,7 @@
 //! Matches pull requests to local changes and groups stacks.
 
 use crate::domain::keys::PrKey;
-use crate::domain::local::{LocalChange, LocalMatch};
+use crate::domain::local::{LocalChange, LocalMatch, Vcs};
 use crate::domain::pr::PullRequest;
 use crate::domain::stack::StackGroup;
 
@@ -16,6 +16,11 @@ const MIN_CHANGE_PREFIX: usize = 8;
 ///    equals the head commit, else `Diverged`.
 /// 3. The last `/` segment of the head branch is a prefix of a change id
 ///    (at least 8 letters of the jj alphabet `k` to `z`): the same test.
+///    Only jj changes take part in this rule.
+///
+/// For a git branch, the commit is the tip of the branch and the bookmark
+/// is the branch name. So a branch matches when its tip is the head
+/// commit, or when its name is the head branch.
 ///
 /// Every pull request gets one entry; `LocalMatch::None` when no rule
 /// matches. `changes` are the changes of the repo of the pull requests.
@@ -44,7 +49,7 @@ fn match_pr(pr: &PullRequest, changes: &[LocalChange]) -> LocalMatch {
     if is_change_prefix(suffix)
         && let Some(change) = changes
             .iter()
-            .find(|change| change.change_id.starts_with(suffix))
+            .find(|change| change.vcs == Vcs::Jj && change.change_id.starts_with(suffix))
     {
         return compare(change, &head.head_oid);
     }
@@ -69,6 +74,7 @@ fn synced(change: &LocalChange) -> LocalMatch {
         workspace: change.workspace.clone(),
         change_id: change.change_id.clone(),
         commit_id: change.commit_id.clone(),
+        vcs: change.vcs,
     }
 }
 
@@ -81,6 +87,7 @@ fn compare(change: &LocalChange, head_oid: &str) -> LocalMatch {
         workspace: change.workspace.clone(),
         change_id: change.change_id.clone(),
         commit_id: change.commit_id.clone(),
+        vcs: change.vcs,
     }
 }
 
@@ -130,7 +137,6 @@ pub(crate) fn group_stacks(prs: &[&PullRequest]) -> Vec<StackGroup> {
 pub(crate) mod tests {
     use super::*;
     use crate::domain::keys::{PrKey, RepoKey};
-    use crate::domain::local::Vcs;
     use crate::domain::observed::Observed;
     use crate::domain::pr::{CiState, MergeStateStatus, Mergeable, PrHead, PrState};
     use crate::domain::repo::RepoSettings;
@@ -237,11 +243,13 @@ pub(crate) mod tests {
             workspace: ws.into(),
             change_id: id.into(),
             commit_id: commit.into(),
+            vcs: Vcs::Jj,
         };
         let diverged = |ws: &str, id: &str, commit: &str| LocalMatch::Diverged {
             workspace: ws.into(),
             change_id: id.into(),
             commit_id: commit.into(),
+            vcs: Vcs::Jj,
         };
         let changes = vec![
             change("default", "kxyzkxyzkxyzmmmm", "aaa111", &[]),
@@ -314,8 +322,69 @@ pub(crate) mod tests {
                 workspace: "two".into(),
                 change_id: "llllllllllll".into(),
                 commit_id: "bbb222".into(),
+                vcs: Vcs::Jj,
             }
         );
+    }
+
+    /// A git branch, checked out in `worktree`.
+    fn branch(worktree: &str, name: &str, tip: &str) -> LocalChange {
+        LocalChange {
+            workspace: worktree.into(),
+            change_id: name.into(),
+            commit_id: tip.into(),
+            bookmarks: vec![name.into()],
+            empty: false,
+            parents: Vec::new(),
+            description: "a commit".into(),
+            vcs: Vcs::Git,
+        }
+    }
+
+    #[test]
+    fn git_branches_match_by_tip_or_by_name() {
+        let git = |id: &str, commit: &str, synced: bool| {
+            let (workspace, change_id, commit_id) = ("default".into(), id.into(), commit.into());
+            if synced {
+                LocalMatch::Synced {
+                    workspace,
+                    change_id,
+                    commit_id,
+                    vcs: Vcs::Git,
+                }
+            } else {
+                LocalMatch::Diverged {
+                    workspace,
+                    change_id,
+                    commit_id,
+                    vcs: Vcs::Git,
+                }
+            }
+        };
+        let changes = vec![
+            branch("default", "me/topic", "aaa111"),
+            branch("default", "kxyzkxyzkxyz", "bbb222"),
+        ];
+        let cases = [
+            (
+                "tip commit",
+                headed("other", "aaa111"),
+                git("me/topic", "aaa111", true),
+            ),
+            (
+                "branch name, other commit",
+                headed("me/topic", "fff999"),
+                git("me/topic", "aaa111", false),
+            ),
+            (
+                "the change id rule is jj only",
+                headed("chaosteil/kxyzkxyz", "fff999"),
+                LocalMatch::None,
+            ),
+        ];
+        for (name, pr, expected) in cases {
+            assert_eq!(match_prs(&[&pr], &changes)[0].1, expected, "{name}");
+        }
     }
 
     /// The stack id and the numbers of each group.
