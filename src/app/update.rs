@@ -13,8 +13,9 @@ use crate::app::frame;
 use crate::app::help::help_model;
 use crate::app::keymap::{self, Keymap};
 use crate::app::layout::Areas;
-use crate::app::models::{Cell, CellStyle, PaneModel, RowItem};
-use crate::app::nav::{self, Motion};
+use crate::app::measure;
+use crate::app::models::{Cell, CellStyle, PaneModel, RowItem, TreeNode};
+use crate::app::nav::{self, Motion, TreeRows};
 use crate::app::panes::{PANES, Pane, PaneState, applicable, display_rows, init_states, items};
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
@@ -1219,16 +1220,34 @@ fn in_pane<R>(
 }
 
 /// Moves the cursor of a pane one step, or the scroll of a pane of
-/// lines.
+/// lines. The scroll of a tree counts screen rows: a move scrolls
+/// through a node that is taller than the pane.
 fn move_pane(pane: &dyn Pane, cx: &KeyCx<'_>, ps: &mut PaneState, size: Size, motion: Motion) {
     let model = pane.model(cx, ps, size);
-    if let PaneModel::Lines { lines, .. } = &model {
-        ps.scroll = move_in(ps.scroll, display_rows(lines, size.width), motion);
-    } else {
-        let count = items(&model);
-        ps.cursor = move_in(ps.cursor, count, motion);
-        ps.scroll = nav::keep_visible(count, ps.cursor, ps.scroll, usize::from(size.height));
+    let height = usize::from(size.height);
+    match &model {
+        PaneModel::Lines { lines, .. } => {
+            ps.scroll = move_in(ps.scroll, display_rows(lines, size.width), motion);
+        }
+        PaneModel::Tree { nodes } => {
+            let rows = tree_rows(cx, nodes, size);
+            (ps.cursor, ps.scroll) = rows.step(ps.cursor, ps.scroll, height, motion, PAGE);
+        }
+        PaneModel::Table { .. } => {
+            let count = items(&model);
+            ps.cursor = move_in(ps.cursor, count, motion);
+            ps.scroll = nav::keep_visible(count, ps.cursor, ps.scroll, height);
+        }
     }
+}
+
+/// The screen rows of the nodes of a tree pane of `size`.
+fn tree_rows(cx: &KeyCx<'_>, nodes: &[TreeNode], size: Size) -> TreeRows {
+    TreeRows::new(&measure::tree_rows(
+        nodes,
+        size.width,
+        cx.data.selection_shift,
+    ))
 }
 
 /// Pushes an overlay and starts its slide in.
@@ -1636,7 +1655,13 @@ fn click_pane_row(
                 return pane.handle_key(open, cx, ps);
             }
             ps.cursor = index;
-            ps.scroll = nav::keep_visible(count, index, ps.scroll, usize::from(size.height));
+            let height = usize::from(size.height);
+            ps.scroll = match &model {
+                PaneModel::Tree { nodes } => {
+                    tree_rows(cx, nodes, size).keep_visible(index, ps.scroll, height)
+                }
+                _ => nav::keep_visible(count, index, ps.scroll, height),
+            };
             Some(Handled {
                 changed: true,
                 ..Handled::default()
@@ -1698,9 +1723,11 @@ fn click_item(state: &mut AppState, tabs: &[Box<dyn Tab>], index: usize) -> Vec<
     pick_author(state, tabs, tab, author)
 }
 
+/// The items of a page move in a menu, a text overlay or a pane.
+const PAGE: usize = 5;
+
 /// The cursor in a list of `len` items after a move.
 fn move_in(cursor: usize, len: usize, motion: Motion) -> usize {
-    const PAGE: usize = 5;
     let last = len.saturating_sub(1);
     match motion {
         Motion::Down => cursor + 1,
@@ -5585,6 +5612,128 @@ mod tests {
             ),
             "pane a has three nodes"
         );
+    }
+
+    /// A comment body of `paragraphs` short paragraphs: one markdown row
+    /// per paragraph and a blank row between two.
+    fn paragraphs(paragraphs: usize) -> String {
+        (0..paragraphs)
+            .map(|i| format!("paragraph {i}"))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    /// The mine state with 20 list rows and the sidebar of #99 open on
+    /// the conversation pane. The pane body has 15 rows. The
+    /// conversation has one comment per body of `bodies`: a header node
+    /// and a body node each.
+    fn conversation_sidebar(bodies: &[String]) -> AppState {
+        let mut state = mine_state(20);
+        let pr = testdata::pr_key("chaoshub", 99);
+        let mut detail = testdata::detail();
+        detail.reviews.clear();
+        detail.threads.clear();
+        detail.comments = (0..)
+            .zip(bodies)
+            .map(|(minute, body)| crate::domain::detail::Comment {
+                author: "alice".into(),
+                body: body.clone(),
+                body_html: String::new(),
+                created_at: test_time() + TimeDelta::minutes(minute),
+                url: format!("https://github.com/c/{minute}"),
+            })
+            .collect();
+        detail
+            .head_oid
+            .clone_from(&state.data.prs[&pr].head.value.head_oid);
+        state.data.details.insert(pr, testdata::observed(detail));
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        key(&mut state, '3');
+        assert_eq!(
+            sidebar(&state).map(|p| PANES[p.active].id()),
+            Some("conversation")
+        );
+        state
+    }
+
+    /// The cursor and the scroll of the active pane of the sidebar.
+    fn pane_view(state: &mut AppState) -> (usize, usize) {
+        match popup_content(state, &PANES) {
+            OverlayContent::Popup { cursor, scroll, .. } => (cursor, scroll),
+            other => panic!("not a popup: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn j_scrolls_a_conversation_of_tall_comments_to_the_last_node() {
+        // Six comments of 1 + 5 rows: 36 rows in a pane of 15.
+        let mut state = conversation_sidebar(&vec![paragraphs(3); 6]);
+        for _ in 0..5 {
+            key(&mut state, 'j');
+        }
+        assert_eq!(pane_view(&mut state), (5, 3), "the third body shows whole");
+        for _ in 0..20 {
+            key(&mut state, 'j');
+        }
+        assert_eq!(pane_view(&mut state), (11, 21), "the last page");
+        key(&mut state, 'k');
+        assert_eq!(pane_view(&mut state), (10, 21));
+        key(&mut state, 'g');
+        assert_eq!(pane_view(&mut state), (0, 0));
+        key(&mut state, 'G');
+        assert_eq!(pane_view(&mut state), (11, 21));
+    }
+
+    #[test]
+    fn j_and_k_scroll_through_a_comment_that_is_taller_than_the_pane() {
+        // A header and a body of 59 rows, then a header and a body of
+        // one row: 62 rows in a pane of 15.
+        let mut state = conversation_sidebar(&[paragraphs(30), paragraphs(1)]);
+        key(&mut state, 'j');
+        assert_eq!(pane_view(&mut state), (1, 0), "the body starts in view");
+        key(&mut state, 'j');
+        assert_eq!(pane_view(&mut state), (1, 1), "j scrolls the body");
+        for _ in 0..44 {
+            key(&mut state, 'j');
+        }
+        assert_eq!(pane_view(&mut state), (1, 45), "the end of the body");
+        key(&mut state, 'j');
+        assert_eq!(pane_view(&mut state), (2, 46), "the next header");
+        key(&mut state, 'j');
+        assert_eq!(pane_view(&mut state), (3, 47), "the last page");
+        key(&mut state, 'k');
+        assert_eq!(pane_view(&mut state), (2, 47));
+        key(&mut state, 'k');
+        assert_eq!(pane_view(&mut state), (1, 47), "the body stays in view");
+        key(&mut state, 'k');
+        assert_eq!(pane_view(&mut state), (1, 46), "k scrolls the body");
+    }
+
+    #[test]
+    fn the_wheel_scrolls_a_conversation_by_rows() {
+        let mut state = conversation_sidebar(&vec![paragraphs(3); 6]);
+        for _ in 0..4 {
+            update(&mut state, &Keymap::default(), wheel_down());
+        }
+        assert_eq!(pane_view(&mut state), (11, 21), "the last page");
+        let mut state = conversation_sidebar(&[paragraphs(30)]);
+        update(&mut state, &Keymap::default(), wheel_down());
+        assert_eq!(pane_view(&mut state), (1, 2), "one row into the body");
+        update(&mut state, &Keymap::default(), wheel_down());
+        assert_eq!(pane_view(&mut state), (1, 5));
+        update(&mut state, &Keymap::default(), wheel_up());
+        assert_eq!(pane_view(&mut state), (1, 2));
+    }
+
+    #[test]
+    fn a_click_on_a_node_below_scrolls_to_it_by_rows() {
+        let mut state = conversation_sidebar(&vec![paragraphs(3); 6]);
+        update(&mut state, &Keymap::default(), click_on(Hit::PaneRow(5)));
+        assert_eq!(pane_view(&mut state), (5, 3), "the body shows whole");
     }
 
     /// The scroll of the top help or output overlay.

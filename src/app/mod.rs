@@ -8,6 +8,7 @@ mod frame;
 mod help;
 pub(crate) mod keymap;
 pub(crate) mod layout;
+pub(crate) mod measure;
 mod merge;
 pub(crate) mod models;
 mod nav;
@@ -89,6 +90,14 @@ impl App {
     /// pull request in a pane. With `None`, it opens the sidebar.
     pub(crate) fn with_detail_pane(mut self, detail: Option<DetailPane>) -> Self {
         self.state.data.detail = detail;
+        self
+    }
+
+    /// Sets the cells that the theme moves the text of a selected row to
+    /// the right. The panes measure their tree rows with it.
+    pub(crate) fn with_selection_shift(mut self, shift: u16) -> Self {
+        self.state.data.selection_shift = shift;
+        self.state.bump();
         self
     }
 

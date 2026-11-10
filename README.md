@@ -488,7 +488,9 @@ selects the next pane:
 | `6` | Agent | The pr-agent results: one section per tool. Only for a repo with a `path`. |
 
 `j`, `k` and the other motion keys move the cursor of the pane. In the
-description pane, they scroll the text.
+description pane, they scroll the text. In the conversation pane, the
+view follows the cursor by screen rows. When a comment is taller than
+the pane, `j` and `k` scroll through it before the cursor moves on.
 
 The action keys also work in the detail, on the pull request of the
 detail. For example, `v` opens codeview, and `m` opens the merge

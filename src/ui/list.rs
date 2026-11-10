@@ -18,8 +18,7 @@ use crate::ui::{style, text};
 
 /// The space between two columns.
 pub(crate) const GAP: u16 = 1;
-/// The width of the cursor gutter.
-pub(crate) const GUTTER: u16 = 1;
+pub(crate) use crate::app::measure::GUTTER;
 /// The cells of indent per tree depth.
 const INDENT: usize = 2;
 

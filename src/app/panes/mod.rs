@@ -23,6 +23,8 @@ use crate::markup::{self, Source};
 #[derive(Debug)]
 pub(crate) struct PaneState {
     pub cursor: usize,
+    /// The first visible row. A tree and a pane of lines count screen
+    /// rows. A table counts its rows.
     pub scroll: usize,
     /// The own state of the pane, for example the expanded threads.
     pub ext: Box<dyn Any + Send + Sync>,
