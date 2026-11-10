@@ -1,6 +1,6 @@
 //! The codeview send action: sends chosen codeview comments as one review.
 //!
-//! The send dialog of the Description pane starts the action with
+//! The Send review dialog of the Description pane starts the action with
 //! `ActionInput::Review`. The action has no default key. With comments, it
 //! does not post to GitHub itself: it runs codeview in a headless nvim,
 //! and codeview maps the comments to the lines of the diff, posts the
@@ -57,7 +57,7 @@ impl Action for CodeviewSend {
     }
 
     fn label(&self) -> &'static str {
-        "send codeview comments"
+        "send review"
     }
 
     /// The `S` key of the Description pane starts the send.

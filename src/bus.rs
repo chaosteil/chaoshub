@@ -297,6 +297,27 @@ pub(crate) enum ReviewKind {
 }
 
 impl ReviewKind {
+    /// The events, in the order of the buttons of the Send review dialog.
+    pub(crate) const ALL: [Self; 3] = [Self::Comment, Self::Approve, Self::RequestChanges];
+
+    /// The key of the button of the event in the Send review dialog.
+    pub(crate) fn key(self) -> char {
+        match self {
+            Self::Comment => 'c',
+            Self::Approve => 'a',
+            Self::RequestChanges => 'r',
+        }
+    }
+
+    /// The label of the button of the event in the Send review dialog.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Comment => "comment",
+            Self::Approve => "approve",
+            Self::RequestChanges => "request changes",
+        }
+    }
+
     /// The name of the event in the request of codeview: `comment`,
     /// `approve` or `request-changes`.
     pub(crate) fn name(self) -> &'static str {
@@ -317,14 +338,28 @@ pub(crate) struct ConfirmSpec {
     pub danger: bool,
 }
 
-/// The content of a choice popup: a title, the lines, and one key per
-/// option. `esc` and `n` cancel.
+/// The content of the Send review dialog: the comments of the review,
+/// the message so far, and one button per key. `esc` and `n` cancel.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChooseSpec {
+pub(crate) struct SendReviewSpec {
     pub title: String,
+    /// One line per comment of the review, then the notes.
     pub lines: Vec<String>,
-    /// The key and the label of each option.
-    pub options: Vec<(char, String)>,
+    /// The first lines of the message. Empty without a message.
+    pub message: Vec<String>,
+    pub buttons: Vec<ReviewButton>,
+}
+
+/// One button of the Send review dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReviewButton {
+    pub key: char,
+    pub label: &'static str,
+    /// Why the button cannot send now. The button then shows dim, with
+    /// the reason.
+    pub blocked: Option<&'static str>,
+    /// True for the button that `enter` presses.
+    pub ready: bool,
 }
 
 /// The content of a prompt popup.
@@ -561,7 +596,7 @@ pub(crate) enum Cmd {
     LoadCodeview(PrKey),
     /// Sends the codeview comments `ids` of `key`. It never leaves `app`:
     /// the description pane sends it, and `app` reads the comment files
-    /// again and opens the send dialog.
+    /// again and opens the Send review dialog.
     SendCodeview {
         key: PrKey,
         ids: Vec<String>,

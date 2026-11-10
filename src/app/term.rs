@@ -142,7 +142,7 @@ fn question(state: &AppState) -> Option<String> {
         .find_map(|overlay| match &overlay.state {
             OverlayState::Confirm { spec, .. } => Some(spec.title.clone()),
             OverlayState::Prompt { spec, .. } => Some(spec.title.clone()),
-            OverlayState::Choose { spec, .. } => Some(spec.title.clone()),
+            OverlayState::SendReview(review) => Some(review.title()),
             OverlayState::ReviewText { title, .. } => Some(title.clone()),
             _ => None,
         })

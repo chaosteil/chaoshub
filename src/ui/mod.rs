@@ -1,7 +1,6 @@
 //! ratatui renderers for the models in `app::models`.
 #![allow(dead_code, reason = "run calls the renderers in later phases")]
 
-mod choose;
 mod confirm;
 mod filter;
 mod help;
@@ -16,6 +15,7 @@ mod popup;
 mod prompt;
 mod review;
 pub(crate) mod select;
+mod send_review;
 mod status;
 mod style;
 mod tabbar;
@@ -38,7 +38,8 @@ const DIALOG_WIDTH: u16 = 64;
 const PROMPT_HEIGHT: u16 = 8;
 /// The width of a picker popup.
 const PICKER_WIDTH: u16 = 40;
-/// The width of the text popup of a review.
+/// The width of the text popup of a review and of the Send review
+/// dialog.
 const REVIEW_WIDTH: u16 = 80;
 /// The height of the text popup of a review.
 const REVIEW_HEIGHT: u16 = 14;
@@ -118,11 +119,7 @@ pub(crate) fn overlay_area(overlay: &OverlayModel, areas: &Areas) -> Rect {
             centered(list, DIALOG_WIDTH, lines.saturating_add(4))
         }
         OverlayContent::Prompt { .. } => centered(list, DIALOG_WIDTH, PROMPT_HEIGHT),
-        OverlayContent::Choose(spec) => {
-            let lines = u16::try_from(spec.lines.len()).unwrap_or(u16::MAX);
-            // The frame, the lines, one blank row and the key hint.
-            centered(list, DIALOG_WIDTH, lines.saturating_add(4))
-        }
+        OverlayContent::SendReview(spec) => centered(list, REVIEW_WIDTH, send_review::height(spec)),
         OverlayContent::ReviewText { .. } => centered(list, REVIEW_WIDTH, REVIEW_HEIGHT),
         OverlayContent::Picker { items, .. } => {
             let items = u16::try_from(items.len()).unwrap_or(u16::MAX);
@@ -211,7 +208,7 @@ pub(crate) fn render_overlay(
             output::render(&content, area, buf, theme, hits);
         }
         OverlayContent::Confirm(spec) => confirm::render(spec, area, buf, theme, hits),
-        OverlayContent::Choose(spec) => choose::render(spec, area, buf, theme, hits),
+        OverlayContent::SendReview(spec) => send_review::render(spec, area, buf, theme, hits),
         OverlayContent::ReviewText { title, text, error } => {
             review::render(title, text, error.as_deref(), area, buf, theme, hits);
         }

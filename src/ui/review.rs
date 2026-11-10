@@ -1,6 +1,6 @@
-//! The text popup of a review, built on ratatui-textarea. `app` keeps the
-//! text; the popup draws it with the cursor at the end, an error line
-//! when the text is not valid, and the keys on the last row.
+//! The text popup of the message of a review, built on ratatui-textarea.
+//! `app` keeps the text; the popup draws it with the cursor at the end, an
+//! error line when the editor failed, and the keys on the last row.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -14,10 +14,10 @@ use crate::theme::ThemeBlock;
 use crate::ui::hits::HitMap;
 
 /// The key hint on the last row.
-const HINT: &str = "ctrl-s send · ctrl-e editor · esc cancel";
+const HINT: &str = "ctrl-s done · ctrl-e editor · esc back";
 
 /// The placeholder of an empty text.
-const PLACEHOLDER: &str = "the text of the review (optional)";
+const PLACEHOLDER: &str = "the message of the review";
 
 /// Draws the text popup into its area. The whole area is a
 /// `Hit::Inside`.

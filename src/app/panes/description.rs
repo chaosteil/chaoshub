@@ -14,9 +14,11 @@
 //! deselected comment stays deselected while the popup is open. The own
 //! action `S` of the pane, in the actions menu (`space`), sends the
 //! selected comments: `app` reads the comment files again and opens the
-//! send dialog. A comment on a commit message shows dim and cannot be
-//! selected: GitHub takes no such comment. A dim line counts the comments
-//! of an older push. Without comments, the pane shows no section.
+//! Send review dialog. With no comment selected, the review has only the
+//! message. The pane keeps the message of the dialog. A comment on a
+//! commit message shows dim and cannot be selected: GitHub takes no such
+//! comment. A dim line counts the comments of an older push. Without
+//! comments, the pane shows no section.
 
 use std::collections::BTreeSet;
 
@@ -50,6 +52,9 @@ pub(crate) struct CodeviewState {
     /// The comments that you deselected. Every other comment is
     /// selected, so a new comment starts selected.
     pub deselected: BTreeSet<String>,
+    /// The message of the Send review dialog. It stays while the popup
+    /// is open, also when you cancel the dialog. A sent review clears it.
+    pub message: String,
 }
 
 impl Pane for DescriptionPane {
@@ -146,7 +151,7 @@ impl Pane for DescriptionPane {
     fn actions(&self, cx: &KeyCx<'_>, _ps: &PaneState) -> Vec<PaneAction> {
         match cx.target {
             Some(Target::Pr { pr, .. }) if !sendable(cx, pr).is_empty() => {
-                vec![PaneAction::char(SEND_KEY, "send the codeview comments")]
+                vec![PaneAction::char(SEND_KEY, "send a review")]
             }
             _ => Vec::new(),
         }
@@ -1430,7 +1435,7 @@ mod tests {
                     code: KeyCode::Char('S'),
                     mods: crate::bus::KeyModifiers::NONE,
                 },
-                "send the codeview comments"
+                "send a review"
             )]
         );
         let send = |ids: &[&str]| {

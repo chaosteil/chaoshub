@@ -16,13 +16,14 @@ use crate::app::layout::Areas;
 use crate::app::measure;
 use crate::app::models::{Cell, CellStyle, PaneModel, RowItem, TreeNode};
 use crate::app::nav::{self, Motion, TreeRows};
+use crate::app::panes::description::CodeviewState;
 use crate::app::panes::{PANES, Pane, PaneAction, PaneState, applicable, init_states, items};
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
     AUTHOR_KEY, ActionDialog, ActionMenu, AppData, AppState, AuthorPicker, COLUMN_HEADERS_KEY,
     Condition, FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaneHandleState,
-    PopupState, error_text, ui_key,
+    PendingSend, PopupState, SendReview, error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, cells, pr_ref};
 use crate::app::target::{pr_target, row_target};
@@ -33,9 +34,10 @@ use crate::bus::{
     KeyModifiers, LaunchRequest, MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection,
     Size, SyncError, Target, TargetKey, UiEvent,
 };
-use crate::bus::{ChooseSpec, ConfirmSpec, PromptSpec, ReviewKind};
+use crate::bus::{ConfirmSpec, PromptSpec, ReviewKind};
 use crate::domain::agent::{AgentResults, Record, Tool, ToolKind, short_tokens};
 use crate::domain::check::Check;
+use crate::domain::codeview::CommentKind;
 use crate::domain::detail::PrDetail;
 use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
@@ -819,10 +821,10 @@ fn codeview_loaded(
         .ui
         .codeview_send
         .as_ref()
-        .is_some_and(|(send, _)| send == key)
-        && let Some((_, ids)) = state.ui.codeview_send.take()
+        .is_some_and(|send| send.key == *key)
+        && let Some(send) = state.ui.codeview_send.take()
     {
-        open_send(state, key, &ids);
+        open_send(state, send);
     }
     Vec::new()
 }
@@ -857,7 +859,7 @@ fn pane_cmds(state: &mut AppState, cmds: Vec<Cmd>) -> Vec<Cmd> {
     for cmd in cmds {
         match cmd {
             Cmd::RunAgent(job) => out.extend(start_agent(state, job)),
-            Cmd::SendCodeview { key, ids } => out.push(start_send(state, key, ids)),
+            Cmd::SendCodeview { key, ids } => out.push(start_send(state, key, ids, None)),
             cmd => out.push(cmd),
         }
     }
@@ -868,9 +870,19 @@ fn pane_cmds(state: &mut AppState, cmds: Vec<Cmd>) -> Vec<Cmd> {
 const CODEVIEW_SEND_ID: &str = "codeview_send";
 
 /// The start of a codeview send of the comments `ids` of `key`: the
-/// comment files load again, and the send dialog opens after the load.
-fn start_send(state: &mut AppState, key: PrKey, ids: Vec<String>) -> Cmd {
-    state.ui.codeview_send = Some((key.clone(), ids));
+/// comment files load again, and the Send review dialog opens after the
+/// load. `ready` is the event that `enter` sends in the dialog.
+fn start_send(
+    state: &mut AppState,
+    key: PrKey,
+    ids: Vec<String>,
+    ready: Option<ReviewKind>,
+) -> Cmd {
+    state.ui.codeview_send = Some(PendingSend {
+        key: key.clone(),
+        ids,
+        ready,
+    });
     Cmd::LoadCodeview(key)
 }
 
@@ -883,16 +895,22 @@ fn comments_noun(count: usize) -> String {
     }
 }
 
-/// Opens the send dialog of the comments `ids` of `key` after a new read
-/// of the comment files. A chosen comment that went out in the meantime
-/// drops out, and the dialog says so. When no chosen comment is left,
-/// the status line says so and no dialog opens.
-fn open_send(state: &mut AppState, key: &PrKey, ids: &[String]) {
-    let Some(target) = pr_target(&state.data, key) else {
+/// The most comment lines of the Send review dialog. A line counts the
+/// rest.
+const SEND_LINES: usize = 10;
+
+/// Opens the Send review dialog of the pending send `send` after a new
+/// read of the comment files. A chosen comment that went out in the
+/// meantime drops out, and the dialog says so. Without a chosen comment,
+/// the review has only the message. The message starts from the message
+/// of the popup of the pull request.
+fn open_send(state: &mut AppState, send: PendingSend) {
+    let PendingSend { key, ids, ready } = send;
+    let Some(target) = pr_target(&state.data, &key) else {
         return;
     };
     let Target::Pr { pr, .. } = &target;
-    let comments = match state.data.codeview.get(key) {
+    let comments = match state.data.codeview.get(&key) {
         Some(Ok(comments)) => comments.current(&crate::app::panes::agent::head(&state.data, pr)),
         Some(Err(err)) => {
             let text = format!("cannot read the codeview comments: {err}");
@@ -910,40 +928,35 @@ fn open_send(state: &mut AppState, key: &PrKey, ids: &[String]) {
         })
         .collect();
     let gone = ids.len() - chosen.len();
-    if chosen.is_empty() {
-        let text = if gone > 0 {
-            format!("{} went out from codeview already", comments_noun(gone))
-        } else {
-            "no codeview comment to send".to_owned()
-        };
-        state.message(text, CellStyle::Warn, INFO_TTL);
-        return;
-    }
     let mut lines: Vec<String> = chosen
         .iter()
-        .map(|comment| format!("{}  {}", comment.place(), comment.summary()))
+        .take(SEND_LINES)
+        .map(|comment| match comment.kind {
+            CommentKind::Pr => format!("PR (into the review text)  {}", comment.summary()),
+            CommentKind::Line | CommentKind::Message => {
+                format!("{}  {}", comment.place(), comment.summary())
+            }
+        })
         .collect();
+    if chosen.len() > SEND_LINES {
+        lines.push(format!(
+            "and {} more",
+            comments_noun(chosen.len() - SEND_LINES)
+        ));
+    }
+    if chosen.is_empty() {
+        lines.push("no comment: the review has only the message".to_owned());
+    }
     if gone > 0 {
-        lines.push(String::new());
         lines.push(format!(
             "{} went out from codeview already",
             comments_noun(gone)
         ));
     }
-    let spec = ChooseSpec {
-        title: format!(
-            "send {} as one review to #{}",
-            comments_noun(chosen.len()),
-            key.number
-        ),
-        lines,
-        options: vec![
-            ('c', "comment".to_owned()),
-            ('a', "approve".to_owned()),
-            ('r', "request changes".to_owned()),
-        ],
-    };
     let ids = chosen.iter().map(|comment| comment.id.clone()).collect();
+    let text = codeview_pane(state, &key)
+        .map(|codeview| codeview.message.clone())
+        .unwrap_or_default();
     let action = ActionDialog {
         id: CODEVIEW_SEND_ID,
         selection: Box::new(Selection {
@@ -952,127 +965,125 @@ fn open_send(state: &mut AppState, key: &PrKey, ids: &[String]) {
             action_config: state.data.action_config.get(CODEVIEW_SEND_ID).cloned(),
         }),
     };
+    let review = SendReview {
+        action,
+        ids,
+        lines,
+        text,
+        ready,
+    };
     open_overlay(
         state,
         OverlayKind::Confirm,
-        OverlayState::Choose { action, spec, ids },
+        OverlayState::SendReview(review),
     );
 }
 
-/// A key for the send dialog on top of the overlay stack: the key of an
-/// option opens the text popup of the review with its event, `cancel`
-/// closes the dialog.
-fn choose_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) {
+/// The own state of the Description pane in the open popup of `key`.
+/// `None` without such a popup.
+fn codeview_pane<'a>(state: &'a mut AppState, key: &PrKey) -> Option<&'a mut CodeviewState> {
+    state.ui.overlays.iter_mut().find_map(|overlay| {
+        if overlay.closing {
+            return None;
+        }
+        let OverlayState::Popup(popup) = &mut overlay.state else {
+            return None;
+        };
+        if popup.key != *key {
+            return None;
+        }
+        popup
+            .panes
+            .iter_mut()
+            .find_map(|ps| ps.ext.downcast_mut::<CodeviewState>())
+    })
+}
+
+/// A key for the Send review dialog on top of the overlay stack: `m`
+/// opens the text box of the message, the key of an event button sends
+/// the review with the event, `enter` sends the ready event, `cancel`
+/// closes the dialog. A blocked button sends nothing, and the status
+/// line says why.
+fn send_review_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) -> Vec<Cmd> {
     let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
-        return;
+        return Vec::new();
     };
-    let OverlayState::Choose { action, spec, ids } = &overlay.state else {
-        return;
+    let OverlayState::SendReview(review) = &overlay.state else {
+        return Vec::new();
     };
     if keymap.matches("cancel", chord) {
         close_overlay(state);
-        return;
+        return Vec::new();
     }
-    let KeyCode::Char(c) = chord.code else {
-        return;
+    let event = if keymap.matches("open", chord) {
+        review.ready
+    } else {
+        match chord.code {
+            KeyCode::Char('m') if chord.mods.is_empty() => {
+                let overlay = OverlayState::ReviewText {
+                    title: format!("message of the review to #{}", review.pr().key.number),
+                    text: review.text.clone(),
+                    error: None,
+                };
+                open_overlay(state, OverlayKind::Prompt, overlay);
+                return Vec::new();
+            }
+            KeyCode::Char(c) if chord.mods.is_empty() => review_kind(c),
+            _ => None,
+        }
     };
-    if !chord.mods.is_empty() {
-        return;
+    let Some(event) = event else {
+        return Vec::new();
+    };
+    if let Some(reason) = review.blocked(event) {
+        let text = format!("{}: {reason}", event.label());
+        state.message(text, CellStyle::Warn, INFO_TTL);
+        return Vec::new();
     }
-    let Some(event) = spec
-        .options
-        .iter()
-        .find(|(key, _)| *key == c)
-        .and_then(|(key, _)| review_kind(*key))
-    else {
-        return;
+    let cmd = Cmd::RunAction {
+        id: review.action.id,
+        selection: review.action.selection.clone(),
+        input: ActionInput::Review {
+            ids: review.ids.clone(),
+            event,
+            body: review.text.clone(),
+        },
     };
-    let action = ActionDialog {
-        id: action.id,
-        selection: action.selection.clone(),
-    };
-    let ids = ids.clone();
     close_overlay(state);
-    open_review_text(state, action, ids, event);
+    vec![cmd]
 }
 
-/// The event of an option key of the send dialog.
+/// The event of a button key of the Send review dialog.
 fn review_kind(key: char) -> Option<ReviewKind> {
-    match key {
-        'c' => Some(ReviewKind::Comment),
-        'a' => Some(ReviewKind::Approve),
-        'r' => Some(ReviewKind::RequestChanges),
-        _ => None,
-    }
+    ReviewKind::ALL.into_iter().find(|event| event.key() == key)
 }
 
-/// Opens the text popup of the review of the comments `ids`.
-fn open_review_text(
-    state: &mut AppState,
-    action: ActionDialog,
-    ids: Vec<String>,
-    event: ReviewKind,
-) {
-    let Target::Pr { pr, .. } = &action.selection.target;
-    let title = format!("{} review on #{}", event.name(), pr.key.number);
-    let overlay = OverlayState::ReviewText {
-        action,
-        title,
-        ids,
-        event,
-        text: String::new(),
-        error: None,
-    };
-    open_overlay(state, OverlayKind::Prompt, overlay);
-}
-
-/// A key for the text popup of a review on top of the overlay stack:
-/// characters and backspace edit the text, `enter` adds a line, `ctrl-s`
-/// runs the codeview send with the text, `ctrl-e` opens the text in the
-/// editor, `esc` cancels the send. A change request with an empty text
-/// shows an error and keeps the popup open. `None` when the top overlay
-/// is not the text popup.
+/// A key for the text box of the message on top of the overlay stack:
+/// characters and backspace edit the text, `enter` adds a line,
+/// `ctrl-e` opens the text in the editor, and `esc` or `ctrl-s` go back
+/// to the Send review dialog with the text. `None` when the top overlay
+/// is not the text box.
 fn review_text_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
     let overlay = state.ui.overlays.iter_mut().rev().find(|o| !o.closing)?;
-    let OverlayState::ReviewText {
-        action,
-        ids,
-        event,
-        text,
-        error,
-        ..
-    } = &mut overlay.state
-    else {
+    let OverlayState::ReviewText { text, error, .. } = &mut overlay.state else {
         return None;
     };
     let control = chord.mods.contains(KeyModifiers::CONTROL);
     match chord.code {
-        KeyCode::Esc => {
-            close_overlay(state);
+        KeyCode::Esc => {}
+        KeyCode::Char('s') if control => {}
+        KeyCode::Char('e') if control => return Some(vec![Cmd::EditText(text.clone())]),
+        KeyCode::Enter => {
+            text.push('\n');
+            *error = None;
+            state.bump();
             return Some(Vec::new());
         }
-        KeyCode::Char('s') if control => {
-            if *event == ReviewKind::RequestChanges && text.trim().is_empty() {
-                *error = Some("a change request needs a text".to_owned());
-                state.bump();
-                return Some(Vec::new());
-            }
-            let cmd = Cmd::RunAction {
-                id: action.id,
-                selection: action.selection.clone(),
-                input: ActionInput::Review {
-                    ids: ids.clone(),
-                    event: *event,
-                    body: text.clone(),
-                },
-            };
-            close_overlay(state);
-            return Some(vec![cmd]);
-        }
-        KeyCode::Char('e') if control => return Some(vec![Cmd::EditText(text.clone())]),
-        KeyCode::Enter => text.push('\n'),
         KeyCode::Backspace => {
             text.pop();
+            *error = None;
+            state.bump();
+            return Some(Vec::new());
         }
         KeyCode::Char(c)
             if !chord
@@ -1080,12 +1091,34 @@ fn review_text_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
         {
             text.push(c);
+            *error = None;
+            state.bump();
+            return Some(Vec::new());
         }
         _ => return Some(Vec::new()),
     }
-    *error = None;
-    state.bump();
+    let text = std::mem::take(text);
+    close_overlay(state);
+    message_back(state, text);
     Some(Vec::new())
+}
+
+/// The text box of the message closed with `text`: the Send review
+/// dialog under it takes the text, and so does the Description pane of
+/// the popup of its pull request, so the text stays for the next dialog.
+fn message_back(state: &mut AppState, text: String) {
+    let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
+        return;
+    };
+    let OverlayState::SendReview(review) = &mut overlay.state else {
+        return;
+    };
+    review.text.clone_from(&text);
+    let key = review.pr().key.clone();
+    if let Some(codeview) = codeview_pane(state, &key) {
+        codeview.message = text;
+    }
+    state.bump();
 }
 
 /// The editor of the text popup ended: the text of the file replaces the
@@ -1571,10 +1604,7 @@ fn overlay_key(
             }
             Vec::new()
         }
-        OverlayState::Choose { .. } => {
-            choose_key(state, keymap, chord);
-            Vec::new()
-        }
+        OverlayState::SendReview(_) => send_review_key(state, keymap, chord),
         OverlayState::Prompt { .. } | OverlayState::ReviewText { .. } => Vec::new(),
     }
 }
@@ -1629,7 +1659,7 @@ fn scroll_text(overlay: &mut OverlayState, motion: Motion) -> bool {
         | OverlayState::Actions(_)
         | OverlayState::Confirm { .. }
         | OverlayState::Prompt { .. }
-        | OverlayState::Choose { .. }
+        | OverlayState::SendReview(_)
         | OverlayState::ReviewText { .. } => return false,
     }
     true
@@ -2630,6 +2660,12 @@ fn action_event(
             if result.is_ok() {
                 let TargetKey::Pr(pr) = &key;
                 state.ui.ui_events.push(UiEvent::RowFlash(pr.clone()));
+                // The review went out, so its message is done.
+                if id == CODEVIEW_SEND_ID
+                    && let Some(codeview) = codeview_pane(state, pr)
+                {
+                    codeview.message.clear();
+                }
                 state.bump();
             }
             match result {
@@ -4195,7 +4231,7 @@ mod tests {
                 | OverlayState::Actions(_)
                 | OverlayState::Confirm { .. }
                 | OverlayState::Prompt { .. }
-                | OverlayState::Choose { .. }
+                | OverlayState::SendReview(_)
                 | OverlayState::ReviewText { .. }
                 | OverlayState::Help { .. }
                 | OverlayState::Output { .. } => None,
@@ -5335,7 +5371,7 @@ mod tests {
         assert_eq!(pane_labels(&state), [""; 0], "no comments, no send");
         let (mut state, pr) = codeview_state();
         key(&mut state, ' ');
-        assert_eq!(pane_labels(&state), ["send the codeview comments"]);
+        assert_eq!(pane_labels(&state), ["send a review"]);
         assert_eq!(key(&mut state, 'S'), vec![Cmd::LoadCodeview(pr)]);
     }
 
@@ -7241,30 +7277,41 @@ mod tests {
         );
         let msg = loaded_without(&state, &pr, "c2");
         update(&mut state, &Keymap::default(), msg);
-        let OverlayState::Choose { spec, ids, action } = top(&state) else {
-            panic!("no send dialog");
-        };
-        assert_eq!(action.id, "codeview_send");
-        assert_eq!(ids, &["c1"]);
+        let review = dialog(&state);
+        assert_eq!(review.action.id, "codeview_send");
+        assert_eq!(review.ids, ["c1"]);
+        assert_eq!(review.title(), format!("send review to #{}", pr.number));
         assert_eq!(
-            spec.title,
-            format!("send 1 comment as one review to #{}", pr.number)
-        );
-        assert_eq!(
-            spec.lines,
+            review.lines,
             [
                 "src/a.rs:L3 (new)  First note",
-                "",
                 "1 comment went out from codeview already",
             ]
         );
-        let keys: Vec<char> = spec.options.iter().map(|(c, _)| *c).collect();
-        assert_eq!(keys, ['c', 'a', 'r']);
+        assert_eq!(review.ready, None);
+        let keys: Vec<char> = review.spec().buttons.iter().map(|b| b.key).collect();
+        assert_eq!(keys, ['m', 'c', 'a', 'r']);
         assert_eq!(state.ui.codeview_send, None);
     }
 
+    /// Opens the Send review dialog with `c1` and `c2`.
+    fn open_dialog(state: &mut AppState, pr: &PrKey) {
+        menu(state, 'S');
+        let msg = loaded_without(state, pr, "none");
+        update(state, &Keymap::default(), msg);
+        assert!(matches!(top(state), OverlayState::SendReview(_)));
+    }
+
+    /// The Send review dialog on top.
+    fn dialog(state: &AppState) -> &SendReview {
+        let OverlayState::SendReview(review) = top(state) else {
+            panic!("no send dialog");
+        };
+        review
+    }
+
     #[test]
-    fn no_dialog_opens_when_every_chosen_comment_went_out() {
+    fn without_a_chosen_comment_the_review_has_only_the_message() {
         let (mut state, pr) = codeview_state();
         update(
             &mut state,
@@ -7274,25 +7321,42 @@ mod tests {
         menu(&mut state, 'S');
         let msg = loaded_without(&state, &pr, "c2");
         update(&mut state, &Keymap::default(), msg);
-        assert!(matches!(top(&state), OverlayState::Popup(_)));
+        let review = dialog(&state);
+        assert_eq!(review.ids, Vec::<String>::new());
         assert_eq!(
-            status_text(&state),
-            Some("1 comment went out from codeview already")
+            review.lines,
+            [
+                "no comment: the review has only the message",
+                "1 comment went out from codeview already",
+            ]
+        );
+        assert_eq!(review.blocked(ReviewKind::Comment), Some("needs a message"));
+        assert_eq!(key(&mut state, 'c'), vec![]);
+        assert_eq!(status_text(&state), Some("comment: needs a message"));
+        let cmds = key(&mut state, 'a');
+        let [Cmd::RunAction { input, .. }] = cmds.as_slice() else {
+            panic!("no send: {cmds:?}");
+        };
+        assert_eq!(
+            input,
+            &ActionInput::Review {
+                ids: Vec::new(),
+                event: ReviewKind::Approve,
+                body: String::new(),
+            }
         );
     }
 
     #[test]
-    fn the_text_keeps_its_line_breaks_into_the_send() {
+    fn m_writes_the_message_and_ctrl_s_goes_back_to_the_dialog() {
         let (mut state, pr) = codeview_state();
-        menu(&mut state, 'S');
-        let msg = loaded_without(&state, &pr, "none");
-        update(&mut state, &Keymap::default(), msg);
-        key(&mut state, 'c');
-        let OverlayState::ReviewText { event, title, .. } = top(&state) else {
+        open_dialog(&mut state, &pr);
+        key(&mut state, 'm');
+        let OverlayState::ReviewText { title, text, .. } = top(&state) else {
             panic!("no text popup");
         };
-        assert_eq!(*event, ReviewKind::Comment);
-        assert_eq!(title, &format!("comment review on #{}", pr.number));
+        assert_eq!(title, &format!("message of the review to #{}", pr.number));
+        assert_eq!(text, "");
         for c in "one q".chars() {
             key(&mut state, c);
         }
@@ -7302,7 +7366,10 @@ mod tests {
             press(KeyCode::Enter, KeyModifiers::NONE),
         );
         key(&mut state, 'n');
-        let cmds = ctrl(&mut state, 's');
+        assert_eq!(ctrl(&mut state, 's'), vec![]);
+        assert_eq!(dialog(&state).text, "one q\nn");
+        assert_eq!(dialog(&state).spec().message, ["one q", "n"]);
+        let cmds = key(&mut state, 'c');
         let [Cmd::RunAction { id, input, .. }] = cmds.as_slice() else {
             panic!("no send: {cmds:?}");
         };
@@ -7319,33 +7386,46 @@ mod tests {
     }
 
     #[test]
-    fn a_change_request_needs_a_text() {
+    fn a_change_request_needs_a_message() {
         let (mut state, pr) = codeview_state();
-        menu(&mut state, 'S');
-        let msg = loaded_without(&state, &pr, "none");
-        update(&mut state, &Keymap::default(), msg);
-        key(&mut state, 'r');
-        assert_eq!(ctrl(&mut state, 's'), Vec::<Cmd>::new());
-        let OverlayState::ReviewText { error, .. } = top(&state) else {
-            panic!("the popup closed");
-        };
-        assert_eq!(error.as_deref(), Some("a change request needs a text"));
+        open_dialog(&mut state, &pr);
+        assert_eq!(key(&mut state, 'r'), vec![]);
+        assert_eq!(
+            status_text(&state),
+            Some("request changes: needs a message")
+        );
+        assert_eq!(
+            dialog(&state).blocked(ReviewKind::RequestChanges),
+            Some("needs a message")
+        );
+        key(&mut state, 'm');
         key(&mut state, 'x');
-        let OverlayState::ReviewText { error, .. } = top(&state) else {
-            panic!("the popup closed");
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert_eq!(dialog(&state).text, "x", "esc keeps the text");
+        assert_eq!(dialog(&state).blocked(ReviewKind::RequestChanges), None);
+        let cmds = key(&mut state, 'r');
+        let [Cmd::RunAction { input, .. }] = cmds.as_slice() else {
+            panic!("no send: {cmds:?}");
         };
-        assert_eq!(*error, None, "an edit clears the error");
-        assert_eq!(ctrl(&mut state, 's').len(), 1);
+        assert_eq!(
+            input,
+            &ActionInput::Review {
+                ids: vec!["c1".into(), "c2".into()],
+                event: ReviewKind::RequestChanges,
+                body: "x".into(),
+            }
+        );
     }
 
     #[test]
-    fn an_approval_with_an_empty_text_goes_out() {
+    fn an_approval_without_a_message_goes_out() {
         let (mut state, pr) = codeview_state();
-        menu(&mut state, 'S');
-        let msg = loaded_without(&state, &pr, "none");
-        update(&mut state, &Keymap::default(), msg);
-        key(&mut state, 'a');
-        let cmds = ctrl(&mut state, 's');
+        open_dialog(&mut state, &pr);
+        let cmds = key(&mut state, 'a');
         let [Cmd::RunAction { input, .. }] = cmds.as_slice() else {
             panic!("no send: {cmds:?}");
         };
@@ -7360,12 +7440,36 @@ mod tests {
     }
 
     #[test]
+    fn your_own_or_a_closed_pull_request_blocks_approve_and_request_changes() {
+        let (mut state, pr) = codeview_state();
+        let author = state.data.prs[&pr].head.value.author.clone();
+        state.data.session.login = Some(author);
+        open_dialog(&mut state, &pr);
+        let review = dialog(&state);
+        assert_eq!(review.blocked(ReviewKind::Approve), Some("your own PR"));
+        assert_eq!(
+            review.blocked(ReviewKind::RequestChanges),
+            Some("your own PR")
+        );
+        assert_eq!(review.blocked(ReviewKind::Comment), None);
+        assert_eq!(key(&mut state, 'a'), vec![]);
+        assert_eq!(status_text(&state), Some("approve: your own PR"));
+        key(&mut state, 'n');
+        state.data.session.login = Some("someone".into());
+        state.data.prs.get_mut(&pr).unwrap().head.value.state = PrState::Closed;
+        open_dialog(&mut state, &pr);
+        assert_eq!(
+            dialog(&state).blocked(ReviewKind::Approve),
+            Some("not open")
+        );
+        assert_eq!(key(&mut state, 'c').len(), 1, "a comment still goes out");
+    }
+
+    #[test]
     fn ctrl_e_opens_the_editor_and_its_text_comes_back() {
         let (mut state, pr) = codeview_state();
-        menu(&mut state, 'S');
-        let msg = loaded_without(&state, &pr, "none");
-        update(&mut state, &Keymap::default(), msg);
-        key(&mut state, 'c');
+        open_dialog(&mut state, &pr);
+        key(&mut state, 'm');
         key(&mut state, 'h');
         assert_eq!(ctrl(&mut state, 'e'), vec![Cmd::EditText("h".into())]);
         update(
@@ -7392,14 +7496,10 @@ mod tests {
     #[test]
     fn esc_and_n_cancel_the_send() {
         let (mut state, pr) = codeview_state();
-        menu(&mut state, 'S');
-        let msg = loaded_without(&state, &pr, "none");
-        update(&mut state, &Keymap::default(), msg.clone());
+        open_dialog(&mut state, &pr);
         key(&mut state, 'n');
         assert!(matches!(top(&state), OverlayState::Popup(_)));
-        menu(&mut state, 'S');
-        update(&mut state, &Keymap::default(), msg);
-        key(&mut state, 'c');
+        open_dialog(&mut state, &pr);
         assert_eq!(
             update(
                 &mut state,
@@ -7409,6 +7509,39 @@ mod tests {
             Vec::<Cmd>::new()
         );
         assert!(matches!(top(&state), OverlayState::Popup(_)));
+    }
+
+    #[test]
+    fn the_message_stays_for_the_next_dialog_until_a_send_ends() {
+        let (mut state, pr) = codeview_state();
+        open_dialog(&mut state, &pr);
+        key(&mut state, 'm');
+        for c in "keep".chars() {
+            key(&mut state, c);
+        }
+        ctrl(&mut state, 's');
+        key(&mut state, 'n');
+        update(&mut state, &Keymap::default(), Msg::TransitionsDone);
+        open_dialog(&mut state, &pr);
+        assert_eq!(dialog(&state).text, "keep", "a cancel keeps the text");
+        key(&mut state, 'n');
+        let failed = Msg::ActionEvent {
+            id: "codeview_send",
+            key: TargetKey::Pr(pr.clone()),
+            event: ActionEvent::Done(Err("HTTP 422".into())),
+        };
+        update(&mut state, &Keymap::default(), failed);
+        open_dialog(&mut state, &pr);
+        assert_eq!(dialog(&state).text, "keep", "a failed send keeps the text");
+        key(&mut state, 'n');
+        let done = Msg::ActionEvent {
+            id: "codeview_send",
+            key: TargetKey::Pr(pr.clone()),
+            event: ActionEvent::Done(Ok("approved #1".into())),
+        };
+        update(&mut state, &Keymap::default(), done);
+        open_dialog(&mut state, &pr);
+        assert_eq!(dialog(&state).text, "", "a sent review clears the text");
     }
 
     #[test]
