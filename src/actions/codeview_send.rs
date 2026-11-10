@@ -1,18 +1,24 @@
 //! The codeview send action: sends chosen codeview comments as one review.
 //!
 //! The send dialog of the Description pane starts the action with
-//! `ActionInput::Review`. The action has no default key. It never posts
-//! to GitHub itself: it runs codeview in a headless nvim, and codeview
-//! maps the comments to the lines of the diff, posts the review, and marks
-//! the comments as sent. So the lock and the sent marks of codeview cover
-//! each send.
+//! `ActionInput::Review`. The action has no default key. With comments, it
+//! does not post to GitHub itself: it runs codeview in a headless nvim,
+//! and codeview maps the comments to the lines of the diff, posts the
+//! review, and marks the comments as sent. So the lock and the sent marks
+//! of codeview cover each send.
 //!
 //! The action reads the comment files again first, and leaves out the
 //! comments that went out from codeview in the meantime. It writes the
 //! request of `codeview.bridge` to a temporary file in the state
 //! directory, runs
 //! `nvim --headless -c "lua require('codeview.bridge').submit_file('<path>')"`
-//! in the repo directory, and reads the result file.
+//! in the repo directory, and reads the result file. When codeview posts
+//! no comment, it sends no review, and the action fails with
+//! "the review did not go out".
+//!
+//! Without comments, codeview has nothing to post. Then the action posts
+//! a review with only the message, with `addPullRequestReview`, as the
+//! approve and the request changes actions do.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -27,6 +33,8 @@ use crate::actions::{Action, Applicability, Prepare, Services};
 use crate::bus::{ActionInput, KeyChord, ReviewKind, Selection, Target};
 use crate::codeview::store;
 use crate::domain::keys::PrKey;
+use crate::domain::pr::PullRequest;
+use crate::github::ReviewEvent;
 
 /// The longest run of the headless nvim.
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -72,18 +80,22 @@ impl Action for CodeviewSend {
     }
 
     /// Sends the comments of `ActionInput::Review` with a headless
-    /// codeview.
+    /// codeview. Without comments, it posts a review with only the
+    /// message.
     fn execute(
         &self,
         sel: Selection,
         input: ActionInput,
-        _svc: Services,
+        svc: Services,
     ) -> BoxFuture<'static, Result<String, String>> {
         Box::pin(async move {
             let Target::Pr { pr, repo, .. } = sel.target;
             let ActionInput::Review { ids, event, body } = input else {
                 return Err("choose the comments in the Description pane".to_owned());
             };
+            if ids.is_empty() {
+                return message_review(&svc, &pr, event, &body).await;
+            }
             let repo = repo
                 .path
                 .ok_or_else(|| "the repo has no local path".to_owned())?;
@@ -165,18 +177,48 @@ struct Skipped {
     reason: String,
 }
 
-/// The text of the comments that went out from codeview already.
-const SENT_ALREADY: &str = "the comments went out from codeview already";
+/// The error of the comments that went out from codeview already.
+const SENT_ALREADY: &str = "the review did not go out: the comments went out from codeview already";
+
+/// The error of a send that posted no comment: codeview then sends no
+/// review.
+const NOT_OUT: &str = "the review did not go out";
+
+/// Posts a review of `pr` with only the message `body`, with
+/// `addPullRequestReview`. A comment review and a change request need a
+/// message. An approval without a message has no body.
+async fn message_review(
+    svc: &Services,
+    pr: &PullRequest,
+    event: ReviewKind,
+    body: &str,
+) -> Result<String, String> {
+    let (event, done) = match event {
+        ReviewKind::Comment => (ReviewEvent::Comment, "commented on"),
+        ReviewKind::Approve => (ReviewEvent::Approve, "approved"),
+        ReviewKind::RequestChanges => (ReviewEvent::RequestChanges, "requested changes on"),
+    };
+    let empty = body.trim().is_empty();
+    if empty && event != ReviewEvent::Approve {
+        return Err("the review needs a message".to_owned());
+    }
+    svc.client
+        .add_review(&pr.node_id, event, (!empty).then_some(body))
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(format!("{done} #{}", pr.key.number))
+}
 
 /// Reads the comment files again, runs the headless codeview on the
 /// comments that are still unsent, and returns the text of the result.
+/// A send that posted no comment is an error: no review went out.
 async fn send(job: Job) -> Result<String, String> {
     let (dir, repo, number) = (job.comments_dir.clone(), job.repo.clone(), job.key.number);
     let comments = tokio::task::spawn_blocking(move || store::load(&dir, &repo, number))
         .await
         .map_err(|err| err.to_string())??;
     let Some(push) = job.ids.iter().find_map(|id| comments.push_of(id)) else {
-        return Ok(SENT_ALREADY.to_owned());
+        return Err(SENT_ALREADY.to_owned());
     };
     let places: BTreeMap<&str, String> = push
         .comments
@@ -221,11 +263,7 @@ async fn send(job: Job) -> Result<String, String> {
     if !outcome.ok {
         return Err(outcome.error);
     }
-    let mut text = format!(
-        "posted {} as a {} review",
-        noun(outcome.posted),
-        job.event.name()
-    );
+    let mut text = String::new();
     if !outcome.skipped.is_empty() {
         let names: Vec<String> = outcome
             .skipped
@@ -249,7 +287,14 @@ async fn send(job: Job) -> Result<String, String> {
             names.join(", ")
         );
     }
-    Ok(text)
+    if outcome.posted == 0 {
+        return Err(format!("{NOT_OUT}{text}"));
+    }
+    Ok(format!(
+        "posted {} as a {} review{text}",
+        noun(outcome.posted),
+        job.event.name()
+    ))
 }
 
 /// `1 comment` or `N comments`.
@@ -412,10 +457,10 @@ mod tests {
     async fn the_result_names_the_skipped_comments() {
         let body = r#"printf '%s' '{"version":1,"ok":true,"posted":0,"skipped":[{"id":"c1","reason":"the diff does not hold new line 2"}],"already_sent":[],"url":"","error":""}' > "$out""#;
         let setup = Setup::new(body);
-        let text = send(setup.job(&["c1"], TIMEOUT)).await.unwrap();
+        let err = send(setup.job(&["c1"], TIMEOUT)).await.unwrap_err();
         assert_eq!(
-            text,
-            "posted 0 comments as a comment review · stays local: src/a.rs:L2 (new): the diff does not hold new line 2"
+            err,
+            "the review did not go out · stays local: src/a.rs:L2 (new): the diff does not hold new line 2"
         );
     }
 
@@ -451,12 +496,120 @@ mod tests {
     #[tokio::test]
     async fn comments_that_went_out_already_post_nothing() {
         let setup = Setup::new(OK);
-        let text = send(setup.job(&["c2"], TIMEOUT)).await.unwrap();
-        assert_eq!(text, SENT_ALREADY);
+        let err = send(setup.job(&["c2"], TIMEOUT)).await.unwrap_err();
+        assert_eq!(err, SENT_ALREADY);
         assert!(
             !setup.root.path().join("request.json").exists(),
             "nvim did not run"
         );
+    }
+
+    /// A selection of the pull request of `testdata/pr.json`, by
+    /// `reviewer`.
+    fn selection() -> Selection {
+        let pr: PullRequest = serde_json::from_str(include_str!("testdata/pr.json")).unwrap();
+        Selection {
+            target: Target::Pr {
+                repo: crate::domain::repo::Repo {
+                    key: pr.key.repo.clone(),
+                    path: None,
+                    settings: None,
+                },
+                pr,
+                stack: Vec::new(),
+                local: crate::domain::local::LocalMatch::None,
+            },
+            me: "reviewer".into(),
+            action_config: None,
+        }
+    }
+
+    /// A GraphQL server that answers every request with one review.
+    async fn server() -> wiremock::MockServer {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/graphql"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .insert_header("x-ratelimit-remaining", "4990")
+                    .insert_header("x-ratelimit-reset", "1790000000")
+                    .set_body_json(serde_json::json!({ "data": {
+                        "addPullRequestReview": { "pullRequestReview": { "id": "PRR_1", "state": "COMMENTED" } }
+                    } })),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn services(server: &wiremock::MockServer) -> Services {
+        let client = crate::github::GithubClient::new(
+            crate::github::TokenSource::command("echo", &["tok"]),
+            &server.uri(),
+        );
+        Services {
+            client: std::sync::Arc::new(client.unwrap()),
+            locks: crate::vcs::lock::RepoLocks::default(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            tx: tokio::sync::mpsc::channel(8).0,
+        }
+    }
+
+    /// The input of a review without comments.
+    fn message(event: ReviewKind, body: &str) -> ActionInput {
+        ActionInput::Review {
+            ids: Vec::new(),
+            event,
+            body: body.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn without_comments_the_review_has_only_the_message() {
+        let cases = [
+            (ReviewKind::Approve, "", "approved #7", "APPROVE", None),
+            (
+                ReviewKind::Comment,
+                "Thanks!",
+                "commented on #7",
+                "COMMENT",
+                Some("Thanks!"),
+            ),
+            (
+                ReviewKind::RequestChanges,
+                "Split it.",
+                "requested changes on #7",
+                "REQUEST_CHANGES",
+                Some("Split it."),
+            ),
+        ];
+        for (event, body, text, name, sent) in cases {
+            let server = server().await;
+            let result = CodeviewSend
+                .execute(selection(), message(event, body), services(&server))
+                .await;
+            assert_eq!(result, Ok(text.to_owned()));
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            let request: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+            assert_eq!(request["operationName"], "AddReview");
+            assert_eq!(
+                request["variables"],
+                serde_json::json!({ "id": "PR_kwDO7", "event": name, "body": sent })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn without_comments_a_comment_or_a_change_request_needs_a_message() {
+        let server = server().await;
+        for event in [ReviewKind::Comment, ReviewKind::RequestChanges] {
+            let result = CodeviewSend
+                .execute(selection(), message(event, " \n"), services(&server))
+                .await;
+            assert_eq!(result, Err("the review needs a message".to_owned()));
+        }
+        assert_eq!(server.received_requests().await.unwrap().len(), 0);
     }
 
     #[test]

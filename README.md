@@ -578,6 +578,10 @@ have more than one line, and its line breaks go to GitHub:
 An empty text is valid, except for a request of changes: then `ctrl-s`
 shows an error in the popup, and the popup stays open. A comment on the
 pull request document goes into the text of the review, after your text.
+When codeview can post none of the chosen comments, for example because
+no comment maps to the diff, it sends no review. The status line then
+says `the review did not go out`, and names the comments that stay
+local.
 
 ### Actions
 
