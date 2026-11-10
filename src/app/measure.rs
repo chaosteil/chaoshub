@@ -1,6 +1,8 @@
 //! The screen rows of the pane models. `app` scrolls the panes by these
-//! rows, and `ui` draws the panes with the same widths. Thus the two
-//! never disagree.
+//! rows, and `ui` draws the panes with the same widths and the same
+//! wrap. Thus the two never disagree.
+
+use std::ops::Range;
 
 use crate::app::models::{Cell, CellStyle, TreeNode};
 use crate::markup::{self, Source};
@@ -71,6 +73,113 @@ pub(crate) fn tree_rows(nodes: &[TreeNode], width: u16, shift: u16) -> Vec<usize
     nodes.iter().map(|node| node_rows(node, width)).collect()
 }
 
+/// The display width of a char in cells.
+fn char_width(c: char) -> usize {
+    textwrap::core::display_width(c.encode_utf8(&mut [0; 4]))
+}
+
+/// The byte ranges of the rows of `text` wrapped at word boundaries to
+/// `width` cells. A row breaks after its last space that fits. The space
+/// at a break goes away. A word that is wider than `width` breaks at
+/// the last char that fits. A text without a break, the empty text too,
+/// is one row.
+pub(crate) fn wrap_ranges(text: &str, width: usize) -> Vec<Range<usize>> {
+    let width = width.max(1);
+    let mut rows = Vec::new();
+    let mut start = 0;
+    let mut used = 0;
+    // The byte after the last space of the row, and the width up to it.
+    let mut space: Option<(usize, usize)> = None;
+    for (i, c) in text.char_indices() {
+        let w = char_width(c);
+        if used + w > width && i > start {
+            if c == ' ' {
+                rows.push(start..i);
+                start = i + 1;
+                used = 0;
+                space = None;
+                continue;
+            }
+            match space.take() {
+                Some((at, at_width)) if used - at_width + w <= width => {
+                    rows.push(start..at);
+                    start = at;
+                    used -= at_width;
+                }
+                _ => {
+                    rows.push(start..i);
+                    start = i;
+                    used = 0;
+                }
+            }
+        }
+        used += w;
+        if c == ' ' {
+            space = Some((i + 1, used));
+        }
+    }
+    rows.push(start..text.len());
+    rows
+}
+
+/// The text of `cells`.
+fn cells_text(cells: &[Cell]) -> String {
+    cells.iter().map(|c| c.text.as_str()).collect()
+}
+
+/// The texts of the display lines of one line of cells at `width`, as
+/// `ui` draws them before the wrap. A line without a markdown or HTML
+/// cell is one display line. A markdown or HTML cell becomes the rows of
+/// `markup::rows` at the width after the cells before it. The next rows
+/// are indented under the first, and the cells after it end the last
+/// row.
+pub(crate) fn line_texts(cells: &[Cell], width: u16) -> Vec<String> {
+    let Some(at) = markup_cell(cells) else {
+        return vec![cells_text(cells)];
+    };
+    let before = cells_text(&cells[..at]);
+    let after = cells_text(&cells[at + 1..]);
+    let indent = textwrap::core::display_width(&before);
+    let body_width = usize::from(width).saturating_sub(indent).max(1);
+    let rows = markup::rows(source(&cells[at]), body_width);
+    let mut texts: Vec<String> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let lead = if i == 0 {
+                before.clone()
+            } else {
+                " ".repeat(indent)
+            };
+            row.iter().fold(lead, |text, piece| text + &piece.text)
+        })
+        .collect();
+    if texts.is_empty() {
+        texts.push(before);
+    }
+    if let Some(last) = texts.last_mut() {
+        last.push_str(&after);
+    }
+    texts
+}
+
+/// The screen rows of the lines of a pane of lines at `width`: the
+/// display lines of each line, each wrapped to `width` when `wrap` is
+/// true.
+pub(crate) fn display_rows(lines: &[Vec<Cell>], wrap: bool, width: u16) -> usize {
+    lines
+        .iter()
+        .flat_map(|cells| line_texts(cells, width))
+        .map(|text| {
+            if wrap {
+                wrap_ranges(&text, usize::from(width)).len()
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +221,115 @@ mod tests {
         ];
         for (name, node, rows) in cases {
             assert_eq!(node_rows(&node, 12), rows, "{name}");
+        }
+    }
+
+    #[test]
+    fn wrap_ranges_cases() {
+        let cases: [(&str, &str, usize, &[&str]); 9] = [
+            ("empty", "", 5, &[""]),
+            ("fits", "one two", 7, &["one two"]),
+            (
+                "a break after a space",
+                "one two three",
+                5,
+                &["one ", "two ", "three"],
+            ),
+            ("the space at the break goes", "one two", 3, &["one", "two"]),
+            ("a long word", "abcdefgh", 3, &["abc", "def", "gh"]),
+            (
+                "a long word after a word",
+                "a bcdefgh",
+                4,
+                &["a ", "bcde", "fgh"],
+            ),
+            ("wide chars", "日本語", 4, &["日本", "語"]),
+            ("leading spaces stay", "  ab cd", 4, &["  ab", "cd"]),
+            ("width zero is one cell", "ab", 0, &["a", "b"]),
+        ];
+        for (name, text, width, rows) in cases {
+            let got: Vec<&str> = wrap_ranges(text, width)
+                .into_iter()
+                .map(|range| &text[range])
+                .collect();
+            assert_eq!(got, rows, "{name}");
+        }
+    }
+
+    #[test]
+    fn display_rows_cases() {
+        let plain = |text: &str| vec![cell(text, CellStyle::Normal)];
+        let markdown = |text: &str| vec![cell(text, CellStyle::Markdown)];
+        let cases: Vec<(&str, Vec<Vec<Cell>>, u16, usize)> = vec![
+            ("no lines", Vec::new(), 10, 0),
+            (
+                "plain lines",
+                vec![plain("a"), plain("b c d e f g h")],
+                4,
+                1 + 4,
+            ),
+            (
+                "a plain line that wraps",
+                vec![plain("one two three")],
+                5,
+                3,
+            ),
+            ("empty line", vec![Vec::new()], 10, 1),
+            ("one short line", vec![markdown("abc")], 10, 1),
+            ("exact width", vec![markdown("abcdefghij")], 10, 1),
+            ("one row more", vec![markdown("abcdefghijk")], 10, 2),
+            ("blank source line", vec![markdown("a\n\nb")], 10, 3),
+            ("wide characters", vec![markdown("日本語")], 4, 2),
+            ("width zero", vec![markdown("abc")], 0, 3),
+            (
+                "markdown after a plain cell",
+                vec![vec![
+                    cell("by ", CellStyle::Dim),
+                    cell("ab\ncd", CellStyle::Markdown),
+                ]],
+                10,
+                1,
+            ),
+            (
+                "mixed lines",
+                vec![plain("x"), markdown("abcdefghijklmnopqrstu"), plain("y")],
+                10,
+                1 + 3 + 1,
+            ),
+        ];
+        for (name, lines, width, rows) in cases {
+            assert_eq!(display_rows(&lines, true, width), rows, "{name}");
+        }
+        let long = vec![plain("a text that is too wide")];
+        assert_eq!(display_rows(&long, false, 5), 1, "no wrap");
+    }
+
+    #[test]
+    fn display_rows_of_headings_are_the_rendered_rows() {
+        let text = "The sidebar must open on the description of the pull request.";
+        let body = format!(
+            "## Why\n{text}\n\n## What\n{text}\n\n## Testing\n{text}\n\n## Verification\n{text}"
+        );
+        // The rendered rows of `ui::markdown::render`.
+        let cases: [(&str, &str, u16, usize); 4] = [
+            (
+                "four headings",
+                "## Why\ntext\n## What\ntext\n## Testing\ntext\n## Verification\ntext",
+                76,
+                15,
+            ),
+            (
+                "eight headings",
+                "# A\n# B\n# C\n# D\n# E\n# F\n# G\n# H\ntext",
+                76,
+                17,
+            ),
+            ("body at width 76", &body, 76, 15),
+            ("body at width 40", &body, 40, 19),
+        ];
+        for (name, text, width, rendered) in cases {
+            let rows = display_rows(&[vec![cell(text, CellStyle::Markdown)]], true, width);
+            assert_eq!(rows, rendered, "{name}");
         }
     }
 

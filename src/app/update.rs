@@ -16,7 +16,7 @@ use crate::app::layout::Areas;
 use crate::app::measure;
 use crate::app::models::{Cell, CellStyle, PaneModel, RowItem, TreeNode};
 use crate::app::nav::{self, Motion, TreeRows};
-use crate::app::panes::{PANES, Pane, PaneState, applicable, display_rows, init_states, items};
+use crate::app::panes::{PANES, Pane, PaneState, applicable, init_states, items};
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
@@ -1226,8 +1226,9 @@ fn move_pane(pane: &dyn Pane, cx: &KeyCx<'_>, ps: &mut PaneState, size: Size, mo
     let model = pane.model(cx, ps, size);
     let height = usize::from(size.height);
     match &model {
-        PaneModel::Lines { lines, .. } => {
-            ps.scroll = move_in(ps.scroll, display_rows(lines, size.width), motion);
+        PaneModel::Lines { lines, wrap } => {
+            let rows = measure::display_rows(lines, *wrap, size.width);
+            ps.scroll = move_in(ps.scroll, rows, motion);
         }
         PaneModel::Tree { nodes } => {
             let rows = tree_rows(cx, nodes, size);
