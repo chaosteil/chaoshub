@@ -292,13 +292,16 @@ impl Theme {
         }
     }
 
-    /// The background and the foreground of the active tab: black on the
-    /// primary color for punk, the surface background for grunge and
-    /// plain.
-    pub(crate) fn active_tab_colors(&self) -> (Color, Color) {
+    /// The background and the foreground of the highlight of a tab slide:
+    /// black on the primary color for punk, and the surface background
+    /// for grunge and plain, as on the active tab. On a 16-color terminal
+    /// the surface is the background, so grunge and plain use the muted
+    /// grey there. Else the highlight does not show.
+    pub(crate) fn slide_colors(&self) -> (Color, Color) {
         let p = &self.palette;
         match self.skin {
             Skin::Punk => (p.primary, p.bg),
+            Skin::Grunge { .. } | Skin::Plain if p.surface == p.bg => (p.fg_mute, p.fg),
             Skin::Grunge { .. } | Skin::Plain => (p.surface, p.fg),
         }
     }

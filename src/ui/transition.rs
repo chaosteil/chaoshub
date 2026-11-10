@@ -3,9 +3,10 @@
 //! after `view`.
 //!
 //! - Tab switch (`FxKey::Tab`): the highlight of the active tab glides
-//!   from the old tab to the new tab in the tab bar row. The list shows
-//!   the new tab at once. The last frame of the glide shows the real tab
-//!   bar.
+//!   from the old tab to the new tab in the tab bar row. The tab edges
+//!   keep their shape: the punk `◢` and `◤` cells, and the `▌` marker and
+//!   the bold text of grunge and plain. The list shows the new tab at
+//!   once. The last frame of the glide shows the real tab bar.
 //! - Pane tab switch (`FxKey::PaneTab`): the same glide on the pane tab
 //!   row of the popup. When the two tabs are on different rows, the new
 //!   tab shows at once. The pane content switches at once.
@@ -39,7 +40,7 @@ use std::time::Duration;
 use ratatui::Frame;
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::{Offset, Rect};
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 use tachyonfx::{
     EffectManager, EffectTimer, Interpolatable, Interpolation, Motion, RefCount, RefRect, fx,
     ref_count,
@@ -185,8 +186,22 @@ fn cursor_view(model: &FrameModel) -> Option<(CursorView, usize)> {
     }
 }
 
+/// The edge cell at the start of a punk tab card. The glyph fills the
+/// lower right half of the cell: its foreground is the color of the
+/// right side.
+const CARD_START: &str = "◢";
+/// The edge cell at the end of a punk tab card. The glyph fills the
+/// upper left half of the cell: its foreground is the color of the left
+/// side.
+const CARD_END: &str = "◤";
+
+/// True when the symbol is an edge cell of a punk tab card.
+fn card_edge(symbol: &str) -> bool {
+    symbol == CARD_START || symbol == CARD_END
+}
+
 /// The state of a tab glide: in the tab bar or on a pane tab row.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct TabGlide {
     /// The row of tabs with no active tab.
     bar: Buffer,
@@ -194,9 +209,90 @@ struct TabGlide {
     from: (u16, u16),
     /// The x and the width of the new active tab.
     to: (u16, u16),
+    /// The theme that draws the tabs.
+    theme: Theme,
 }
 
 impl TabGlide {
+    /// The glide over `bar` from the tab at `from` to the tab at `to`.
+    /// Each tab is its x and its width. For punk, the highlight covers
+    /// the cells of the card between its edge cells: the edge cells get
+    /// the colors of the cells next to them.
+    fn new(bar: Buffer, from: (u16, u16), to: (u16, u16), theme: Theme) -> Self {
+        let mut glide = Self {
+            bar,
+            from,
+            to,
+            theme,
+        };
+        if theme.skin == Skin::Punk {
+            glide.from = glide.inside_edges(from);
+            glide.to = glide.inside_edges(to);
+        }
+        glide
+    }
+
+    /// The cells of the tab at `(x, width)` without the edge cells at its
+    /// two ends.
+    fn inside_edges(&self, (mut x, mut width): (u16, u16)) -> (u16, u16) {
+        let y = self.bar.area.y;
+        let edge = |x: u16| {
+            self.bar
+                .cell((x, y))
+                .is_some_and(|cell| card_edge(cell.symbol()))
+        };
+        while width > 0 && edge(x) {
+            x += 1;
+            width -= 1;
+        }
+        while width > 0 && edge(x + width - 1) {
+            width -= 1;
+        }
+        (x, width)
+    }
+
+    /// Draws the row with the highlight at `alpha` into `buf`. The cells
+    /// of the highlight get the slide colors and bold text. Grunge and
+    /// plain draw the `▌` marker in the first cell of the highlight. A
+    /// punk edge cell keeps its glyph: each of its two sides gets the
+    /// highlight color when the cell on that side is in the highlight.
+    fn draw(&self, alpha: f32, buf: &mut Buffer) {
+        let (bg, fg) = self.theme.slide_colors();
+        let punk = self.theme.skin == Skin::Punk;
+        let (l, r) = self.span(alpha);
+        let lit = |x: u16| (l..r).contains(&x);
+        let lit_left = |x: u16| x.checked_sub(1).is_some_and(lit);
+        let lit_right = |x: u16| x.checked_add(1).is_some_and(lit);
+        for (x, y) in positions(self.bar.area) {
+            let Some(dst) = buf.cell_mut((x, y)) else {
+                continue;
+            };
+            *dst = self.bar[(x, y)].clone();
+            if punk && dst.symbol() == CARD_START {
+                if lit_left(x) {
+                    dst.set_bg(bg);
+                }
+                if lit_right(x) {
+                    dst.set_fg(bg);
+                }
+            } else if punk && dst.symbol() == CARD_END {
+                if lit_left(x) {
+                    dst.set_fg(bg);
+                }
+                if lit_right(x) {
+                    dst.set_bg(bg);
+                }
+            } else if !punk && x == l && l < r {
+                dst.set_symbol("▌")
+                    .set_bg(bg)
+                    .set_fg(self.theme.palette.primary);
+            } else if lit(x) {
+                dst.set_bg(bg).set_fg(fg);
+                dst.modifier.insert(Modifier::BOLD);
+            }
+        }
+    }
+
     /// The cells `[l, r)` of the highlight at `alpha`: from the span of
     /// the old tab at 0 to the span of the new tab at 1.
     fn span(&self, alpha: f32) -> (u16, u16) {
@@ -343,27 +439,17 @@ impl Transitions {
 
     /// Starts a glide: the highlight of the active tab moves from the old
     /// tab to the new tab over the row of `glide`. Each frame, the effect
-    /// copies the row with no active tab over the frame and gives the
-    /// cells of the highlight the active tab colors. The last frame keeps
-    /// the frame as `view` draws it, so the real tabs stay on the screen
-    /// after the glide. The tab bar and the pane tabs share it.
+    /// copies the row with no active tab over the frame and draws the
+    /// highlight on it (`TabGlide::draw`). The last frame keeps the frame
+    /// as `view` draws it, so the real tabs stay on the screen after the
+    /// glide. The tab bar and the pane tabs share it.
     fn glide(&mut self, key: FxKey, glide: TabGlide) {
-        let (bg, fg) = self.theme.active_tab_colors();
         let timer = Self::timer(Duration::from_millis(TAB_GLIDE_MS));
         let effect = fx::effect_fn_buf(glide, timer, move |glide, cx, buf| {
             if cx.timer.done() {
                 return;
             }
-            let (l, r) = glide.span(cx.alpha());
-            for (x, y) in positions(glide.bar.area) {
-                let Some(dst) = buf.cell_mut((x, y)) else {
-                    continue;
-                };
-                *dst = glide.bar[(x, y)].clone();
-                if (l..r).contains(&x) {
-                    dst.set_bg(bg).set_fg(fg);
-                }
-            }
+            glide.draw(cx.alpha(), buf);
         });
         self.manager.add_unique_effect(key, effect);
     }
@@ -386,11 +472,7 @@ impl Transitions {
         };
         tabbar::render(&idle, bar_area, &mut bar, &self.theme, &mut hits);
         let span = |i| hits.region(Hit::Tab(i)).map(|r| (r.x, r.width));
-        Some(TabGlide {
-            bar,
-            from: span(from)?,
-            to: span(to)?,
-        })
+        Some(TabGlide::new(bar, span(from)?, span(to)?, self.theme))
     }
 
     /// The glide of the pane tabs of the open popup: the popup drawn with
@@ -438,11 +520,12 @@ impl Transitions {
         }
         let left = old.x.min(new.x);
         let right = old.right().max(new.right());
-        Some(TabGlide {
-            bar: copy(&buf, Rect::new(left, old.y, right - left, 1)),
-            from: (old.x, old.width.min(from_width)),
-            to: (new.x, new.width.min(to_width)),
-        })
+        Some(TabGlide::new(
+            copy(&buf, Rect::new(left, old.y, right - left, 1)),
+            (old.x, old.width.min(from_width)),
+            (new.x, new.width.min(to_width)),
+            self.theme,
+        ))
     }
 
     /// The band wipes onto the cursor row: at alpha `a`, the cells left of
@@ -1153,8 +1236,25 @@ mod tests {
         model: &FrameModel,
         elapsed_ms: u64,
     ) -> Buffer {
+        draw_tabs_in(
+            terminal,
+            transitions,
+            model,
+            elapsed_ms,
+            &testdata::pierre(),
+        )
+    }
+
+    /// Draws one frame in `theme`: the tab bar and the list, then the
+    /// effects.
+    fn draw_tabs_in(
+        terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+        transitions: &mut Transitions,
+        model: &FrameModel,
+        elapsed_ms: u64,
+        theme: &Theme,
+    ) -> Buffer {
         let areas = testdata::areas(WIDTH, HEIGHT);
-        let theme = testdata::pierre();
         transitions.prepare(model, &areas);
         terminal
             .draw(|frame| {
@@ -1162,14 +1262,14 @@ mod tests {
                     &model.tab_bar,
                     rect(areas.tab_bar),
                     frame.buffer_mut(),
-                    &theme,
+                    theme,
                     &mut HitMap::default(),
                 );
                 list::render(
                     &model.list,
                     rect(areas.list),
                     frame.buffer_mut(),
-                    &theme,
+                    theme,
                     &mut HitMap::default(),
                 );
                 transitions.process(frame, Duration::from_millis(elapsed_ms));
@@ -1199,7 +1299,7 @@ mod tests {
 
     /// The cells `[l, r)` of the tabs that have the active tab background.
     fn highlight(buf: &Buffer, tabs: &[(u16, u16)]) -> (u16, u16) {
-        let (bg, _) = testdata::pierre().active_tab_colors();
+        let (bg, _) = testdata::pierre().slide_colors();
         let y = rect(testdata::areas(WIDTH, HEIGHT).tab_bar).y;
         let end = tabs.last().map_or(0, |&(_, r)| r);
         let lit: Vec<u16> = (0..end).filter(|&x| buf[(x, y)].bg == bg).collect();
@@ -1249,10 +1349,101 @@ mod tests {
         assert!(tabs[0].0 < l && l < tabs[1].0, "{l} between the tabs");
         assert!(tabs[0].1 < r && r < tabs[1].1, "{r} between the tabs");
         assert_eq!(list_text(&middle), list_text(&plain));
+        let y = rect(testdata::areas(WIDTH, HEIGHT).tab_bar).y;
+        assert_eq!(middle[(l, y)].symbol(), "▌", "the marker moves");
+        assert!(middle[(l + 1, y)].modifier.contains(Modifier::BOLD));
         let end = draw_tabs(&mut terminal, &mut fx, &model, 60);
         assert_eq!(highlight(&end, &tabs), tabs[1], "on the new tab");
         assert!(!fx.active());
         assert_eq!(end, plain, "the last frame is the real tab bar");
+    }
+
+    /// The row `y` of a buffer.
+    fn buffer_row(buf: &Buffer, y: u16) -> Vec<ratatui::buffer::Cell> {
+        (0..buf.area.width).map(|x| buf[(x, y)].clone()).collect()
+    }
+
+    /// Checks that each punk card edge of the row `y` has the glyph of
+    /// `real`, and that each of its two sides has the primary color only
+    /// when the cell on that side has the primary background.
+    fn assert_card_edges(buf: &Buffer, real: &Buffer, y: u16, theme: &Theme) {
+        let primary = theme.palette.primary;
+        let lit = |x: Option<u16>| x.is_some_and(|x| buf[(x, y)].bg == primary);
+        let mut edges = 0;
+        for x in 0..buf.area.width {
+            let cell = &buf[(x, y)];
+            let (left, right) = match cell.symbol() {
+                CARD_START => (cell.bg, cell.fg),
+                CARD_END => (cell.fg, cell.bg),
+                _ => continue,
+            };
+            edges += 1;
+            assert_eq!(cell.symbol(), real[(x, y)].symbol(), "the glyph at {x}");
+            assert_eq!(
+                left == primary,
+                lit(x.checked_sub(1)),
+                "the left side of {x}"
+            );
+            assert_eq!(right == primary, lit(Some(x + 1)), "the right side of {x}");
+        }
+        let real_edges = (0..real.area.width)
+            .filter(|&x| card_edge(real[(x, y)].symbol()))
+            .count();
+        assert_eq!(edges, real_edges, "every edge keeps its glyph");
+    }
+
+    #[test]
+    fn punk_tab_slide_keeps_the_card_edges() {
+        let theme = testdata::punk();
+        let y = rect(testdata::areas(WIDTH, HEIGHT).tab_bar).y;
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut off = Transitions::new(false, 160);
+        let old = draw_tabs_in(&mut terminal, &mut off, &testdata::frame(), 0, &theme);
+        let model = testdata::sliding_frame();
+        let real = draw_tabs_in(&mut terminal, &mut off, &model, 0, &theme);
+        let mut fx = Transitions::new(true, 160).with_theme(theme);
+        draw_tabs_in(&mut terminal, &mut fx, &testdata::frame(), 0, &theme);
+        fx.apply(vec![UiEvent::TabChanged { from: 0, to: 1 }]);
+        let start = draw_tabs_in(&mut terminal, &mut fx, &model, 0, &theme);
+        assert_eq!(
+            buffer_row(&start, y),
+            buffer_row(&old, y),
+            "the first frame is the old tab"
+        );
+        let mut frames = Vec::new();
+        for ms in [20, 20, 20, 20, 20] {
+            let buf = draw_tabs_in(&mut terminal, &mut fx, &model, ms, &theme);
+            assert_card_edges(&buf, &real, y, &theme);
+            frames.push(buf);
+        }
+        // `◢ 1 MINE ◤ 2 TEAM ◤`: in the middle of the glide, the blue
+        // card covers the join of the two tabs, and the join is blue on
+        // its two sides.
+        assert!(frames.iter().any(|buf| {
+            let join = &buf[(9, y)];
+            join.fg == theme.palette.primary && join.bg == theme.palette.primary
+        }));
+        assert!(fx.active());
+        let end = draw_tabs_in(&mut terminal, &mut fx, &model, 20, &theme);
+        assert!(!fx.active());
+        assert_eq!(end, real, "the last frame is the real tab bar");
+    }
+
+    #[test]
+    fn the_tab_slide_shows_on_16_colors() {
+        let theme = testdata::ansi16();
+        let p = theme.palette;
+        let y = rect(testdata::areas(WIDTH, HEIGHT).tab_bar).y;
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let model = testdata::sliding_frame();
+        let mut fx = Transitions::new(true, 160).with_theme(theme);
+        draw_tabs_in(&mut terminal, &mut fx, &testdata::frame(), 0, &theme);
+        fx.apply(vec![UiEvent::TabChanged { from: 0, to: 1 }]);
+        draw_tabs_in(&mut terminal, &mut fx, &model, 0, &theme);
+        let middle = draw_tabs_in(&mut terminal, &mut fx, &model, 60, &theme);
+        let lit = (0..WIDTH).filter(|&x| middle[(x, y)].bg != p.bg).count();
+        assert!(lit > 0, "the highlight has its own background");
+        assert!((0..WIDTH).any(|x| middle[(x, y)].symbol() == "▌"));
     }
 
     #[test]
@@ -1377,7 +1568,7 @@ mod tests {
     /// The cells `[l, r)` of the pane tab row `y` that have the active tab
     /// background.
     fn pane_highlight(buf: &Buffer, tabs: &[(u16, u16, u16)], y: u16) -> (u16, u16) {
-        let (bg, _) = testdata::pierre().active_tab_colors();
+        let (bg, _) = testdata::pierre().slide_colors();
         let row: Vec<_> = tabs.iter().filter(|t| t.2 == y).collect();
         let (start, end) = (row[0].0, row[row.len() - 1].1);
         let lit: Vec<u16> = (start..end).filter(|&x| buf[(x, y)].bg == bg).collect();
@@ -1412,6 +1603,31 @@ mod tests {
         assert_eq!(pane_highlight(&end, &tabs, y), span(2), "on the new tab");
         assert!(!fx.active());
         assert_eq!(end, plain, "the last frame is the real pane tabs");
+    }
+
+    #[test]
+    fn punk_pane_tab_slide_keeps_the_card_edges() {
+        let theme = testdata::punk();
+        let model = popup_frame(2, &[]);
+        let areas = testdata::areas(WIDTH, HEIGHT);
+        let mut hits = HitMap::default();
+        let mut buf = Buffer::empty(screen(&areas));
+        render_overlay(&model.overlays[0], &areas, &mut buf, &theme, &mut hits);
+        let y = hits.region(Hit::PaneTab(0)).unwrap().y;
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut off = Transitions::new(false, 160);
+        let real = draw_view_in(&mut terminal, &mut off, &model, 0, &theme);
+        let mut fx = Transitions::new(true, 160).with_theme(theme);
+        draw_view_in(&mut terminal, &mut fx, &popup_frame(1, &[]), 0, &theme);
+        fx.apply(vec![UiEvent::PaneTabChanged { from: 1, to: 2 }]);
+        for ms in [0, 20, 20, 20, 20, 20] {
+            let buf = draw_view_in(&mut terminal, &mut fx, &model, ms, &theme);
+            assert_card_edges(&buf, &real, y, &theme);
+        }
+        assert!(fx.active());
+        let end = draw_view_in(&mut terminal, &mut fx, &model, 20, &theme);
+        assert!(!fx.active());
+        assert_eq!(end, real, "the last frame is the real pane tabs");
     }
 
     #[test]
