@@ -1,13 +1,15 @@
 //! The help model: the key bindings of the app, of each tab and of each
-//! action, in sections.
+//! action, and the symbols of the list, in sections.
 //!
 //! `app` builds the model from the key map, `TABS` and `REGISTRY`, so `ui`
 //! renders it without a look at the tabs or the actions.
 
 use crate::actions::Action;
 use crate::app::keymap::{self, Keymap};
-use crate::app::models::{HelpModel, HelpSection};
+use crate::app::models::{Cell, CellStyle, HelpModel, HelpSection};
 use crate::app::tabs::Tab;
+use crate::app::tabs::cells::{self, cell};
+use crate::domain::pr::{CiState, ReviewDecision};
 
 /// The app bindings that the help shows, with their labels, in help
 /// order. One entry can show more than one binding. The tab bindings
@@ -30,6 +32,9 @@ const APP_KEYS: &[(&[&str], &str)] = &[
     (&["quit"], "quit"),
 ];
 
+/// The title of the section of the list symbols.
+const SYMBOLS_TITLE: &str = "list symbols";
+
 /// The title of the actions section of the help.
 const ACTIONS_TITLE: &str = "actions (in the actions menu)";
 
@@ -37,16 +42,17 @@ const ACTIONS_TITLE: &str = "actions (in the actions menu)";
 /// list and in the pull request detail.
 const DETAIL_TITLE: &str = "actions in the list and the detail";
 
-/// The help model: the app keys, the keys of each tab that has its own,
-/// the actions, and the direct action keys of the list and the pull
-/// request detail. A binding without a chord is not in the help. The
-/// titles of the action sections tell where the action keys work.
+/// The help model: the app keys, the list symbols, the keys of each tab
+/// that has its own, the actions, and the direct action keys of the list
+/// and the pull request detail. A binding without a chord is not in the
+/// help. The titles of the action sections tell where the action keys
+/// work.
 pub(crate) fn help_model(
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
     actions: &[Box<dyn Action>],
 ) -> HelpModel {
-    let mut sections = vec![app_section(keymap, tabs)];
+    let mut sections = vec![app_section(keymap, tabs), symbols_section()];
     for tab in tabs {
         let entries: Vec<(String, String)> = tab
             .help()
@@ -57,6 +63,7 @@ pub(crate) fn help_model(
             sections.push(HelpSection {
                 title: tab.title().to_owned(),
                 entries,
+                symbols: Vec::new(),
             });
         }
     }
@@ -78,6 +85,7 @@ pub(crate) fn help_model(
         sections.push(HelpSection {
             title: DETAIL_TITLE.to_owned(),
             entries: detail,
+            symbols: Vec::new(),
         });
     }
     HelpModel { sections }
@@ -109,6 +117,72 @@ fn app_section(keymap: &Keymap, tabs: &[Box<dyn Tab>]) -> HelpSection {
     HelpSection {
         title: "keys".to_owned(),
         entries,
+        symbols: Vec::new(),
+    }
+}
+
+/// The list symbols, in the styles of the list: the glyphs of the CHECKS,
+/// REV and FLG columns, the CHANGE colors and the stack tree of the Mine
+/// tab, and the ready rule of the Review and the Team tab. A column name
+/// in the style of the column header starts each group. The labels are
+/// short, so that they fit the help overlay at its minimum width.
+fn symbols_section() -> HelpSection {
+    let heading = |name: &str| cell(name, CellStyle::Dim);
+    let checks = |state, counts: &str| {
+        let glyph = cells::ci(state);
+        cell(format!("{} {counts}", glyph.text), glyph.style)
+    };
+    let symbols: [(Cell, &str); 27] = [
+        (heading("CHECKS"), "CI state, passed/all checks"),
+        (cell("·", CellStyle::Dim), "no checks"),
+        (checks(CiState::Success, "5/5"), "CI green, 5 of 5 pass"),
+        (checks(CiState::Failure, "3/5"), "CI failed, 3 of 5 pass"),
+        (checks(CiState::Pending, "2/5"), "CI pending, 2 of 5 pass"),
+        (heading("REV"), "approvals and change requests"),
+        (cell("✓2", CellStyle::Success), "2 approvals"),
+        (
+            cell("✓2 ✗1", CellStyle::Danger),
+            "2 approvals, 1 change request",
+        ),
+        (cells::review(Some(ReviewDecision::Approved)), "approved"),
+        (
+            cells::review(Some(ReviewDecision::ChangesRequested)),
+            "changes requested",
+        ),
+        (
+            cells::review(Some(ReviewDecision::ReviewRequired)),
+            "review required",
+        ),
+        (cells::review(None), "no review needed"),
+        (heading("FLG"), "flags"),
+        (cell("D", CellStyle::Warn), "draft"),
+        (cell("C", CellStyle::Warn), "merge conflicts"),
+        (cell("Q", CellStyle::Warn), "in the merge queue"),
+        (cell("◆", CellStyle::Warn), "a pane of the PR is open"),
+        (heading("CHANGE"), "the local change (Mine tab)"),
+        (
+            cell("wqnv", CellStyle::Primary),
+            "synced: same commit as the PR",
+        ),
+        (
+            cell("wqnv", CellStyle::Warn),
+            "diverged: a different commit",
+        ),
+        (heading("TITLE"), "the stack tree (Mine tab)"),
+        (cell("─", CellStyle::Dim), "a PR without a stack"),
+        (cell("┌", CellStyle::Dim), "the top PR of a stack"),
+        (cell("├", CellStyle::Dim), "a middle PR of a stack"),
+        (cell("└", CellStyle::Dim), "the bottom PR of a stack"),
+        (heading("READY"), "what Review and Team show"),
+        (cell("ready", CellStyle::Dim), "open, not a draft, CI green"),
+    ];
+    HelpSection {
+        title: SYMBOLS_TITLE.to_owned(),
+        entries: Vec::new(),
+        symbols: symbols
+            .into_iter()
+            .map(|(symbol, label)| (symbol, label.to_owned()))
+            .collect(),
     }
 }
 
@@ -139,7 +213,7 @@ mod tests {
         let keymap = Keymap::with_actions(&actions, &overrides).unwrap();
         let model = help_model(&keymap, &tabs, &actions);
         let titles: Vec<&str> = model.sections.iter().map(|s| s.title.as_str()).collect();
-        assert_eq!(titles, ["keys", ACTIONS_TITLE, DETAIL_TITLE]);
+        assert_eq!(titles, ["keys", SYMBOLS_TITLE, ACTIONS_TITLE, DETAIL_TITLE]);
         let keys = &model.sections[0].entries;
         assert_eq!(keys[0], entry("1", "tab one"));
         assert_eq!(keys[1], entry("tab", "next tab"));
@@ -153,11 +227,11 @@ mod tests {
         );
         assert!(!keys.iter().any(|(_, label)| label == "tab two"));
         assert_eq!(
-            model.sections[1].entries,
+            model.sections[2].entries,
             [entry("m", "merge"), entry("v", "review")]
         );
         assert_eq!(
-            model.sections[2].entries,
+            model.sections[3].entries,
             [entry("v", "review")],
             "only review works directly in the list and the detail"
         );
@@ -165,7 +239,7 @@ mod tests {
         let keymap = Keymap::with_actions(&actions, &overrides).unwrap();
         let model = help_model(&keymap, &tabs, &actions);
         assert_eq!(
-            model.sections[2].entries,
+            model.sections[3].entries,
             [entry("m", "merge"), entry("v", "review")],
             "a detail binding adds a direct key"
         );

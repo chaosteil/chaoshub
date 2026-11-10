@@ -178,6 +178,7 @@ pub(crate) fn action_help(keymap: &Keymap, actions: &[Box<dyn Action>]) -> HelpS
     HelpSection {
         title: "actions".to_owned(),
         entries,
+        symbols: Vec::new(),
     }
 }
 
@@ -426,6 +427,7 @@ mod tests {
                     ("v".into(), "review".into()),
                     (String::new(), "quiet".into()),
                 ],
+                symbols: Vec::new(),
             }
         );
     }

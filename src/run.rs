@@ -2144,6 +2144,26 @@ mod tests {
     }
 
     #[test]
+    fn help_overlay_symbols_100() {
+        let mut app = seeded_app(100, 40, crate::app::testdata::mine_snapshot());
+        press(&mut app, '?');
+        for _ in 0..19 {
+            press(&mut app, 'j');
+        }
+        let screen = screen(&mut app);
+        assert!(screen.contains("LIST SYMBOLS"), "{screen}");
+        let help: Vec<String> = screen
+            .lines()
+            .map(|line| line.chars().skip(61).collect())
+            .collect();
+        assert!(
+            !help.iter().any(|line| line.contains('…')),
+            "every label fits: {screen}"
+        );
+        insta::assert_snapshot!(screen);
+    }
+
+    #[test]
     fn output_overlay_100() {
         let mut app = seeded_app(100, 30, crate::app::testdata::mine_snapshot());
         let key = crate::bus::TargetKey::Pr(crate::app::testdata::pr_key("chaoshub", 101));
