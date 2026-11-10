@@ -13,7 +13,7 @@ expression: screen(&mut app)
 "                    ▌ CHECKS ✓1 ✗1 ●1   REVIEWS …   THREADS …   3 files +42 −7                     ┃"
 "                    ▌ loading the activity… · stack 1 of 3                                         ┃"
 "          ◢━ REVIEW #101 ╱━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱╱╱━◥         ┃"
-"          ▌ cannot read the codeview comments: version 2 is not 1                        ┃ send    ┃"
+"          ▌ cannot read the codeview comments: version 2 is not 1                        ┃         ┃"
 "          ▌                                                                              ┃         ┃"
 "          ▌ m   write message                                                            ┃         ┃"
 "          ▌ c   comment          needs a message                                         ┃         ┃"

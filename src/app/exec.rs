@@ -193,8 +193,6 @@ impl Runtime {
             Cmd::RunAgent(job) => self.run_agent(job),
             Cmd::LoadAgent(key) => self.load_agent(key),
             Cmd::LoadCodeview(key) => self.load_codeview(key),
-            Cmd::SendCodeview { .. } => tracing::warn!("app handles the codeview send"),
-            Cmd::MarkCodeview { .. } => tracing::warn!("app handles the codeview marks"),
             Cmd::EditText(_) => tracing::warn!("the event loop runs the editor"),
         }
     }

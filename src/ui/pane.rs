@@ -420,7 +420,7 @@ mod tests {
         let plain = |text: &str| vec![testdata::cell(text, CellStyle::Normal)];
         let markdown = |text: &str| vec![testdata::cell(text, CellStyle::Markdown)];
         let lines = vec![
-            plain("Codeview comments (3 unsent) [J/K] move · [space] mark · [S] send"),
+            plain("3 unsent codeview comments · space R to review"),
             Vec::new(),
             markdown("## Why\nThe sidebar must open on the description of the pull request."),
             markdown("```\nlet a_long_name = a_function_with_a_long_name(argument_one);\n```"),
