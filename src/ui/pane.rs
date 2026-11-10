@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget, Wrap};
+use ratatui::widgets::{Paragraph, Widget};
 
 use crate::app::measure;
 use crate::app::models::{Cell, Column, PaneModel, Row, TreeNode};
@@ -41,11 +41,8 @@ pub(crate) fn render(
             render_table(columns, rows, window, area, buf, theme, hits);
         }
         PaneModel::Lines { lines, wrap } => {
-            let lines: Vec<Line<'static>> = lines
-                .iter()
-                .flat_map(|cells| expand(cells, area.width, &theme.palette))
-                .collect();
-            render_lines(lines, *wrap, scroll, area, buf, theme);
+            let lines = pane_lines(lines, *wrap, area.width, &theme.palette);
+            render_lines(lines, scroll, area, buf, theme);
         }
         PaneModel::Tree { nodes } => render_tree(nodes, cursor, scroll, area, buf, theme, hits),
     }
@@ -103,24 +100,65 @@ fn render_table(
     list::render_rows(columns, rows, window, body, buf, theme, hits);
 }
 
-/// Lines of text, wrapped at word boundaries when `wrap` is true, from the
-/// scroll offset down.
+/// The screen rows of the lines of a pane of lines at `width`: the
+/// display lines of each line, each wrapped by `measure::wrap_ranges`
+/// when `wrap` is true. `measure::display_rows` counts the same rows.
+fn pane_lines(
+    lines: &[Vec<Cell>],
+    wrap: bool,
+    width: u16,
+    palette: &Palette,
+) -> Vec<Line<'static>> {
+    let lines = lines.iter().flat_map(|cells| expand(cells, width, palette));
+    if wrap {
+        lines.flat_map(|line| wrap_line(line, width)).collect()
+    } else {
+        lines.collect()
+    }
+}
+
+/// The rows of a display line wrapped at word boundaries to `width`.
+/// Each piece of a row keeps the style of its span.
+fn wrap_line(line: Line<'static>, width: u16) -> Vec<Line<'static>> {
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    let ranges = measure::wrap_ranges(&text, usize::from(width));
+    if ranges.len() == 1 {
+        return vec![line];
+    }
+    ranges
+        .into_iter()
+        .map(|range| {
+            let mut at = 0;
+            let mut spans = Vec::new();
+            for span in &line.spans {
+                let end = at + span.content.len();
+                let (from, to) = (range.start.max(at), range.end.min(end));
+                if from < to {
+                    spans.push(Span::styled(
+                        span.content[from - at..to - at].to_owned(),
+                        span.style,
+                    ));
+                }
+                at = end;
+            }
+            Line::from(spans).style(line.style)
+        })
+        .collect()
+}
+
+/// Rows of text from the scroll offset down.
 pub(crate) fn render_lines(
     lines: Vec<Line<'static>>,
-    wrap: bool,
     scroll: usize,
     area: Rect,
     buf: &mut Buffer,
     theme: &Theme,
 ) {
     let p = &theme.palette;
-    let mut paragraph = Paragraph::new(lines)
+    Paragraph::new(lines)
         .style(Style::new().bg(p.bg).fg(p.fg))
-        .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0));
-    if wrap {
-        paragraph = paragraph.wrap(Wrap { trim: false });
-    }
-    paragraph.render(area, buf);
+        .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0))
+        .render(area, buf);
 }
 
 /// The nodes of a tree with indent and an expand marker, from the scroll
@@ -337,6 +375,63 @@ mod tests {
             .map(|row| row.trim_end().to_owned())
             .collect();
         assert_eq!(rows, ["", "     c", "   header two"]);
+    }
+
+    #[test]
+    fn the_wrapped_lines_are_the_rows_that_app_counts() {
+        let plain = |text: &str| vec![testdata::cell(text, CellStyle::Normal)];
+        let markdown = |text: &str| vec![testdata::cell(text, CellStyle::Markdown)];
+        let lines = vec![
+            plain("Codeview comments (3 unsent) [J/K] move · [space] mark · [S] send"),
+            Vec::new(),
+            markdown("## Why\nThe sidebar must open on the description of the pull request."),
+            markdown("```\nlet a_long_name = a_function_with_a_long_name(argument_one);\n```"),
+            vec![
+                testdata::cell("by ", CellStyle::Dim),
+                testdata::cell("a body after a cell that wraps", CellStyle::Markdown),
+                testdata::cell(" (end)", CellStyle::Dim),
+            ],
+            markdown("| a | table |\n|---|---|\n| with a cell that is wide | x |"),
+            plain("日本語のテキストは二つのセルを使う"),
+        ];
+        let palette = testdata::pierre().palette;
+        for width in [1, 7, 12, 20, 33, 76] {
+            let drawn = pane_lines(&lines, true, width, &palette);
+            assert_eq!(
+                drawn.len(),
+                measure::display_rows(&lines, true, width),
+                "width {width}"
+            );
+            assert!(
+                drawn
+                    .iter()
+                    .all(|line| line.width() <= usize::from(width).max(2)),
+                "width {width}: no row is wider than the pane"
+            );
+            let unwrapped = pane_lines(&lines, false, width, &palette);
+            assert_eq!(
+                unwrapped.len(),
+                measure::display_rows(&lines, false, width),
+                "width {width} without wrap"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wrapped_line_keeps_the_styles_of_its_spans() {
+        let p = testdata::pierre().palette;
+        let line = style::line(
+            &[
+                testdata::cell("alice ", CellStyle::Info),
+                testdata::cell("wrote a long line", CellStyle::Normal),
+            ],
+            &p,
+        );
+        let rows = wrap_line(line, 10);
+        let texts: Vec<String> = rows.iter().map(ToString::to_string).collect();
+        assert_eq!(texts, ["alice ", "wrote a ", "long line"]);
+        assert_eq!(rows[0].spans[0].style.fg, Some(p.info));
+        assert_eq!(rows[1].spans[0].style.fg, Some(p.fg));
     }
 
     #[test]
