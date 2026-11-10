@@ -4,4 +4,4 @@ expression: "lines(&draw(&model, 100, 4, &testdata::ansi16()))"
 ---
 ▌├ feat(app): checks pane                             #102 xlmkrtpq 3ccf7581 default     ✓   ✓      
  └ feat(app): Pane trait, registry and overlay sta…   #101 trptoqkq 3ccf7581 default     ✗   ✗  C   
- ─ fix(store): reopen the connection after an error    #99 kxyzmmop 3ccf7581 default     ·   ·  ▶
+ ─ fix(store): reopen the connection after an error    #99 kxyzmmop 3ccf7581 default     ·   ·  ◆
