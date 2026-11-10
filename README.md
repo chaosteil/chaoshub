@@ -404,7 +404,9 @@ different keys. A chord that does not parse stops chaoshub with an
 error.
 
 The binding names are the app keys and the action ids in the keymap
-below.
+below. A `detail_<id>` binding, for example `detail_approve = "A"`,
+runs the action `<id>` directly in the pull request detail (see
+"Actions").
 
 ### `[terminal]`
 
@@ -444,7 +446,7 @@ for `[keys]`.
 | `scroll_down`, `scroll_up` | `D`, `U` | In the pull request detail, scrolls the active pane down or up by half its height. The cursor stays. When the cursor leaves the pane, it moves to the first visible row. |
 | `open` | `enter` | Opens the pull request detail: a Rex pane inside Rex, else the sidebar (see `[detail]`). A second `enter` on the same pull request focuses its pane. In the conversation pane, expands a thread. |
 | `open_url` | `o` | In the checks pane, opens the selected check in the browser. |
-| `actions` | `space` | In the list, opens the actions menu of the selected row (see "Actions"). |
+| `actions` | `space` | Opens the actions menu: in the list, of the selected row; in the pull request detail, of its pull request and its active pane (see "Actions"). |
 | `close_overlay` | `esc`, `q` | Closes the sidebar or the overlay. When nothing is open, these keys quit (see `quit`). In the Rex pane of the detail, they quit the pane. |
 | `confirm` | `y` | Confirms in a confirm popup. `enter` also confirms. |
 | `cancel` | `n` | Cancels a confirm popup. |
@@ -498,16 +500,23 @@ pane scrolls down to its last full page, not further. When a pane has
 more rows than it shows, a thin scrollbar shows at its right edge. The
 mouse does not use the scrollbar.
 
-The action keys also work in the detail, on the pull request of the
-detail. For example, `v` opens codeview, and `m` opens the merge
-confirm popup on top of the detail. The pane keys, the motion keys and
+In the detail, only the keys that change nothing on GitHub work
+directly: the navigation keys, `r` (refresh), `v` (codeview), `o`
+(browser), `y` and `Y` (copy). The other actions are in the actions
+menu. Press `space` to open it on top of the detail, then the key of
+the action. For example, `space` then `A` approves the pull request,
+and `space` then `m` opens the merge confirm popup. `esc` closes the
+menu, and the detail shows again. The pane keys, the motion keys and
 the keys of the active pane come first: in the checks pane, `o` opens
-the selected check, not the pull request. The key hint bar shows the
-action keys that work for the pull request.
+the selected check, not the pull request. The key hint bar shows
+`Space actions`.
 
-The pane keys win over the action keys. In the Agent pane, `r`, `i`,
-`d` and `a` start pr-agent, so `d` (draft) does not work while the Agent
-pane is selected.
+The actions menu also lists the own actions of the active pane, after
+the actions of the pull request: the pr-agent tools of the Agent pane,
+and the send of the Description pane. In the menu, a pane key wins over
+an action key. Thus in the Agent pane, `space` then `d` starts
+describe, not draft. To bind a direct key for an action in the detail,
+see "Actions".
 
 #### Codeview comments
 
@@ -529,10 +538,10 @@ These keys work while the section lists a comment that can go to GitHub:
 | Key | What it does |
 |---|---|
 | `J` / `K` | Moves the comment cursor down or up. |
-| `space` | Marks or unmarks the comment of the cursor. |
-| `S` | Sends the marked comments, or all of them when none is marked. |
+| `enter` | Marks or unmarks the comment of the cursor. |
+| `space`, then `S` | Sends the marked comments, or all of them when none is marked. |
 
-`S` reads the comment files again first. A comment that went out from
+The send reads the comment files again first. A comment that went out from
 codeview in the meantime drops out, and the dialog says
 `N comments went out from codeview already`. When no chosen comment is
 left, no dialog opens, and the status line says so.
@@ -563,7 +572,7 @@ pull request document goes into the text of the review, after your text.
 ### Actions
 
 The actions work on the pull request of the selected row, or on the
-pull request of the sidebar. When an action cannot run, the status line
+pull request of the detail. When an action cannot run, the status line
 says why.
 
 In the list, the action keys do nothing. Thus a wrong key cannot send a
@@ -577,8 +586,13 @@ disabled action shows the reason in parentheses. In the menu:
   approves the pull request.
 - `esc` or `q` closes the menu.
 
-The action keys work in the actions menu, in the sidebar and in the
-detail.
+The action keys work in the actions menu. In the pull request detail
+(the sidebar and the Rex pane), `space` opens the same menu for the
+pull request of the detail. There only `v`, `o`, `y` and `Y` also work
+directly. To run another action directly in the detail, bind a key to
+`detail_<id>` in `[keys]`. For example, `detail_approve = "A"` makes
+`A` approve the pull request of the detail. These bindings have no
+default.
 
 | Binding | Key | What it does |
 |---|---|---|
@@ -594,7 +608,7 @@ detail.
 | `copy_url` | `y` | Copies the pull request URL. |
 | `copy_change_id` | `Y` | Copies the jj change id of the local change that matches the pull request. Hidden when no local change matches. |
 | `agent` | `P` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
-| `codeview_send` | none | Sends the chosen codeview comments as one review. The `S` key of the Description pane starts it (see "Codeview comments"). A key that you bind to it opens the Description pane. |
+| `codeview_send` | none | Sends the chosen codeview comments as one review. In the Description pane, `space` then `S` starts it (see "Codeview comments"). A key that you bind to it opens the Description pane. |
 
 A merge of a stacked pull request includes every entry up to it. To
 merge every entry, use `merge_stack` (`M`) from any entry. The
@@ -626,7 +640,7 @@ A click acts on what it hits:
 |---|---|
 | A tab in the tab bar | Selects the tab. |
 | A list row | Selects the row. A click on the selected row opens the sidebar. |
-| A key hint | Presses the key. For example, `Space actions` in the list opens the actions menu, and `v review` in the sidebar opens codeview. |
+| A key hint | Presses the key. For example, `Space actions` in the list or in the sidebar opens the actions menu. |
 | A pane tab in the sidebar | Selects the pane. |
 | A row in a pane | Moves the cursor of the pane to the row. In the conversation pane, a click on the selected thread expands it or collapses it. In the stack pane, a click on the selected entry opens its detail. |
 | An author in the author picker | Picks the author. |
@@ -669,7 +683,7 @@ request and keeps the result on your disk. codeview shows the result in
 the diff. pr-agent runs with `publish_output=false`, so it writes nothing
 to GitHub. A result goes to GitHub only when you take it as your own: in
 codeview, you adopt a suggestion as a local comment and submit it, or in
-chaoshub, you apply a describe result with `p` and `y`.
+chaoshub, you apply a describe result with `space`, `p` and `y`.
 
 pr-agent must be installed, or `[agent] command` must start it (for
 example with `uvx`). pr-agent runs in the local checkout, so the repo
@@ -677,13 +691,16 @@ needs a `path`.
 
 ### The Agent pane
 
-`P` on a pull request opens the detail on the Agent pane (`6`). The
-pane has one section per tool. Each section shows the state (`never`,
+`space` then `P` on a pull request opens the detail on the Agent pane
+(`6`). The pane has one section per tool. Each section shows the state (`never`,
 `running` with a spinner, `done 5m ago`, or `failed` with the error), the
 model and the head commit of the result. When the head of the pull
 request moved after the run, the section says
 `outdated: for 3a1f2c0, the head is now 9bd2e11`. chaoshub does not run
 pr-agent again by itself.
+
+The pane has no direct keys. Its tools are in the actions menu: press
+`space`, then the key of the tool.
 
 | Key | Tool | What it shows |
 |---|---|---|
@@ -693,12 +710,12 @@ pr-agent again by itself.
 | `a` | ask | Asks for a question first. Shows the questions and the answers, newest first. |
 | `p` | | Opens a confirm popup with the line diff of the old and the new title and body. `y` sets the title and the body of the pull request on GitHub. |
 
-One run per tool per pull request runs at a time. A second `r` while
-the review runs only says `review runs already`. Different tools, and
+One run per tool per pull request runs at a time. A second `space`
+then `r` while the review runs only says `review runs already`. Different tools, and
 different pull requests, run at the same time.
 
-The pane keys win over the action keys, so `d` (draft) does not work
-while the Agent pane is selected.
+In the menu, the pane keys win over the action keys, so `d` starts
+describe, not draft, while the Agent pane is selected.
 
 While a run goes, the status bar shows the spinner and one item per run,
 for example `agent review #7 · agent ask #7`. The last output line of

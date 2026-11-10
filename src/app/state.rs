@@ -17,7 +17,7 @@ use crate::actions::{Action, Applicability};
 use crate::app::frame::{self, ModelCache};
 use crate::app::keymap::Keymap;
 use crate::app::models::{CellStyle, HelpModel};
-use crate::app::panes::PaneState;
+use crate::app::panes::{PaneAction, PaneState};
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{
     ChooseSpec, ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReviewKind, Scope,
@@ -441,22 +441,32 @@ impl AuthorPicker {
     }
 }
 
-/// The actions menu of a list row: one item for each action that is not
-/// hidden for the row.
+/// The actions menu of a list row or of the pull request popup: one item
+/// for each action that is not hidden for the pull request, then one
+/// item for each own action of the active pane of the popup.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ActionMenu {
-    /// The row that the actions run on.
+    /// The pull request that the actions run on.
     pub target: Box<Target>,
     /// The ids of the actions, in display order.
     pub ids: Vec<&'static str>,
+    /// The own actions of the active pane of the popup under the menu,
+    /// after the actions. Empty for a list row.
+    pub pane: Vec<PaneAction>,
     /// The index of the cursor item.
     pub cursor: usize,
 }
 
 impl ActionMenu {
+    /// The number of items: the actions and the pane actions.
+    pub(crate) fn len(&self) -> usize {
+        self.ids.len() + self.pane.len()
+    }
+
     /// The items of the menu: the key and the label of each action of
-    /// `actions` in `ids`. A disabled action also shows its reason in
-    /// parentheses. An action without a key shows only its label.
+    /// `actions` in `ids`, then of each pane action. A disabled action
+    /// also shows its reason in parentheses. An action without a key
+    /// shows only its label.
     pub(crate) fn items(
         &self,
         data: &AppData,
@@ -484,6 +494,11 @@ impl ActionMenu {
                     Applicability::Enabled | Applicability::Hidden => text,
                 }
             })
+            .chain(
+                self.pane
+                    .iter()
+                    .map(|action| format!("{}  {}", frame::key_text(action.key), action.label)),
+            )
             .collect()
     }
 }

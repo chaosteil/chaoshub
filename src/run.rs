@@ -2312,14 +2312,18 @@ mod tests {
     }
 
     /// The popup app with the comments of `codeview_comments`, and the
-    /// first comment marked.
+    /// first comment marked with `enter`.
     fn codeview_app(width: u16, height: u16) -> App {
         let mut app = popup_app(width, height);
         app.update(Msg::CodeviewLoaded {
             key: crate::app::testdata::pr_key("chaoshub", 101),
             comments: Ok(codeview_comments()),
         });
-        press(&mut app, ' ');
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(enter));
         app
     }
 
@@ -2338,7 +2342,9 @@ mod tests {
     fn review_text_app(width: u16, height: u16) -> App {
         let mut app = codeview_app(width, height);
         let key = crate::app::testdata::pr_key("chaoshub", 101);
+        press(&mut app, ' ');
         press(&mut app, 'S');
+        app.update(Msg::TransitionsDone);
         app.update(Msg::CodeviewLoaded {
             key,
             comments: Ok(codeview_comments()),

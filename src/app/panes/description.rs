@@ -9,9 +9,10 @@
 //!
 //! Between the block and the body, the pane lists the codeview comments of
 //! the head that went to GitHub not yet. `J` and `K` move the comment
-//! cursor, and `space` marks the comment of the cursor. `S` sends the
-//! marked comments, or all of them when none is marked: `app` reads the
-//! comment files again and opens the send dialog. A comment on a
+//! cursor, and `enter` marks the comment of the cursor. The own action
+//! `S` of the pane, in the actions menu (`space`), sends the marked
+//! comments, or all of them when none is marked: `app` reads the comment
+//! files again and opens the send dialog. A comment on a
 //! commit message shows dim and cannot be marked: GitHub takes no such
 //! comment. A dim line counts the comments of an older push. Without
 //! comments, the pane shows no section.
@@ -24,7 +25,7 @@ use crate::app::age::age;
 use crate::app::models::{Cell, CellStyle, PaneModel, Tone};
 use crate::app::panes::agent::head;
 use crate::app::panes::checks::failed;
-use crate::app::panes::{Pane, PaneState};
+use crate::app::panes::{Pane, PaneAction, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx};
 use crate::bus::{Cmd, KeyChord, KeyCode, Size, Target};
@@ -104,13 +105,9 @@ impl Pane for DescriptionPane {
     }
 
     /// The comment keys, while the section lists a comment that can go to
-    /// GitHub: `J` and `K` move the comment cursor, `space` marks or
-    /// unmarks the comment of the cursor, and `S` sends the marked
-    /// comments, or all of them when none is marked.
+    /// GitHub: `J` and `K` move the comment cursor, and the `open` key
+    /// (`enter`) marks or unmarks the comment of the cursor.
     fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
-        if !key.mods.is_empty() {
-            return None;
-        }
         let Some(Target::Pr { pr, .. }) = cx.target else {
             return None;
         };
@@ -120,47 +117,74 @@ impl Pane for DescriptionPane {
         }
         let state = ps.ext.downcast_mut::<CodeviewState>()?;
         let at = cursor_index(state, &comments);
-        match key.code {
-            KeyCode::Char('J') => {
-                let to = (at + 1).min(comments.len() - 1);
-                state.cursor = Some(comments[to].id.clone());
+        if cx.keys.matches("open", key) {
+            let id = &comments[at].id;
+            if !state.marked.remove(id) {
+                state.marked.insert(id.clone());
             }
-            KeyCode::Char('K') => {
-                state.cursor = Some(comments[at.saturating_sub(1)].id.clone());
-            }
-            KeyCode::Char(' ') => {
-                let id = &comments[at].id;
-                if !state.marked.remove(id) {
-                    state.marked.insert(id.clone());
-                }
-            }
-            KeyCode::Char('S') => {
-                let marked: Vec<String> = comments
-                    .iter()
-                    .filter(|comment| state.marked.contains(&comment.id))
-                    .map(|comment| comment.id.clone())
-                    .collect();
-                let ids = if marked.is_empty() {
-                    comments.iter().map(|comment| comment.id.clone()).collect()
-                } else {
-                    marked
-                };
-                return Some(Handled {
-                    cmds: vec![Cmd::SendCodeview {
-                        key: pr.key.clone(),
-                        ids,
-                    }],
-                    ..Handled::default()
-                });
-            }
-            _ => return None,
+        } else if !key.mods.is_empty() {
+            return None;
+        } else if key.code == KeyCode::Char('J') {
+            let to = (at + 1).min(comments.len() - 1);
+            state.cursor = Some(comments[to].id.clone());
+        } else if key.code == KeyCode::Char('K') {
+            state.cursor = Some(comments[at.saturating_sub(1)].id.clone());
+        } else {
+            return None;
         }
         Some(Handled {
             changed: true,
             ..Handled::default()
         })
     }
+
+    /// The send of the codeview comments, while the section lists a
+    /// comment that can go to GitHub.
+    fn actions(&self, cx: &KeyCx<'_>, _ps: &PaneState) -> Vec<PaneAction> {
+        match cx.target {
+            Some(Target::Pr { pr, .. }) if !sendable(cx, pr).is_empty() => {
+                vec![PaneAction::char(SEND_KEY, "send the codeview comments")]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// `S` sends the marked comments, or all of them when none is
+    /// marked.
+    fn run_action(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
+        if key != PaneAction::char(SEND_KEY, "").key {
+            return None;
+        }
+        let Some(Target::Pr { pr, .. }) = cx.target else {
+            return None;
+        };
+        let comments = sendable(cx, pr);
+        if comments.is_empty() {
+            return None;
+        }
+        let state = ps.ext.downcast_ref::<CodeviewState>()?;
+        let marked: Vec<String> = comments
+            .iter()
+            .filter(|comment| state.marked.contains(&comment.id))
+            .map(|comment| comment.id.clone())
+            .collect();
+        let ids = if marked.is_empty() {
+            comments.iter().map(|comment| comment.id.clone()).collect()
+        } else {
+            marked
+        };
+        Some(Handled {
+            cmds: vec![Cmd::SendCodeview {
+                key: pr.key.clone(),
+                ids,
+            }],
+            ..Handled::default()
+        })
+    }
 }
+
+/// The key of the send of the codeview comments in the actions menu.
+const SEND_KEY: char = 'S';
 
 /// The unsent codeview comments of the head of `pr`. Empty before the
 /// load and after a failed load.
@@ -202,7 +226,10 @@ fn codeview_section(
         vec![
             cell("Codeview comments", CellStyle::Primary),
             cell(format!(" ({count} unsent)"), CellStyle::Dim),
-            cell(" [J/K] move · [space] mark · [S] send", CellStyle::Dim),
+            cell(
+                " [J/K] move · [enter] mark · [space S] send",
+                CellStyle::Dim,
+            ),
         ]
     };
     let comments = match cx.data.codeview.get(&pr.key) {
@@ -1272,8 +1299,9 @@ mod tests {
         lines.iter().map(|line| text(line)).collect()
     }
 
-    /// Presses `c` in the pane.
-    fn press_in(state: &AppState, ps: &mut PaneState, c: char) -> Option<Handled> {
+    /// Presses `code` in the pane. With `menu`, it runs the own action of
+    /// the key from the actions menu instead.
+    fn key_in(state: &AppState, ps: &mut PaneState, code: KeyCode, menu: bool) -> Option<Handled> {
         let target = pr_target(&state.data, &testdata::pr_key("chaoshub", 7)).unwrap();
         let areas = layout(state.data.size);
         let cx = KeyCx {
@@ -1283,10 +1311,46 @@ mod tests {
             keys: &crate::app::keymap::DEFAULT,
         };
         let chord = KeyChord {
-            code: KeyCode::Char(c),
+            code,
             mods: crate::bus::KeyModifiers::NONE,
         };
-        DescriptionPane.handle_key(chord, &cx, ps)
+        if menu {
+            DescriptionPane.run_action(chord, &cx, ps)
+        } else {
+            DescriptionPane.handle_key(chord, &cx, ps)
+        }
+    }
+
+    /// Presses `c` in the pane.
+    fn press_in(state: &AppState, ps: &mut PaneState, c: char) -> Option<Handled> {
+        key_in(state, ps, KeyCode::Char(c), false)
+    }
+
+    /// Presses `enter` in the pane.
+    fn enter_in(state: &AppState, ps: &mut PaneState) -> Option<Handled> {
+        key_in(state, ps, KeyCode::Enter, false)
+    }
+
+    /// Runs the own action of `c` from the actions menu.
+    fn menu_in(state: &AppState, ps: &mut PaneState, c: char) -> Option<Handled> {
+        key_in(state, ps, KeyCode::Char(c), true)
+    }
+
+    /// The keys and the labels of the own actions of the pane.
+    fn pane_actions(state: &AppState, ps: &PaneState) -> Vec<(KeyChord, &'static str)> {
+        let target = pr_target(&state.data, &testdata::pr_key("chaoshub", 7)).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        DescriptionPane
+            .actions(&cx, ps)
+            .into_iter()
+            .map(|action| (action.key, action.label))
+            .collect()
     }
 
     #[test]
@@ -1297,7 +1361,7 @@ mod tests {
             lines[3..lines.len() - 2],
             [
                 "",
-                "Codeview comments (3 unsent) [J/K] move · [space] mark · [S] send",
+                "Codeview comments (3 unsent) [J/K] move · [enter] mark · [space S] send",
                 "> [ ] src/lib.rs:L12-14 (new) Trim the name.",
                 "  [-] commit message Fix the typo",
                 "  [ ] PR Looks good overall.",
@@ -1349,10 +1413,22 @@ mod tests {
             changed,
             "J stays on the last"
         );
-        assert_eq!(press_in(&state, &mut ps, ' '), changed);
+        assert_eq!(enter_in(&state, &mut ps), changed);
         assert_eq!(
             codeview_texts(&state, &ps, 80)[7],
             "> [x] PR Looks good overall."
+        );
+        assert_eq!(press_in(&state, &mut ps, ' '), None, "space does not mark");
+        assert_eq!(press_in(&state, &mut ps, 'S'), None, "S is in the menu");
+        assert_eq!(
+            pane_actions(&state, &ps),
+            [(
+                KeyChord {
+                    code: KeyCode::Char('S'),
+                    mods: crate::bus::KeyModifiers::NONE,
+                },
+                "send the codeview comments"
+            )]
         );
         let send = |ids: &[&str]| {
             Some(Handled {
@@ -1364,30 +1440,34 @@ mod tests {
             })
         };
         assert_eq!(
-            press_in(&state, &mut ps, 'S'),
+            menu_in(&state, &mut ps, 'S'),
             send(&["c3"]),
             "the marked one"
         );
-        assert_eq!(press_in(&state, &mut ps, ' '), changed);
+        assert_eq!(enter_in(&state, &mut ps), changed);
         assert_eq!(press_in(&state, &mut ps, 'K'), changed);
         assert_eq!(
             codeview_texts(&state, &ps, 80)[5],
             "> [ ] src/lib.rs:L12-14 (new) Trim the name."
         );
         assert_eq!(
-            press_in(&state, &mut ps, 'S'),
+            menu_in(&state, &mut ps, 'S'),
             send(&["c1", "c3"]),
             "all without a mark"
         );
         assert_eq!(press_in(&state, &mut ps, 'x'), None);
+        assert_eq!(menu_in(&state, &mut ps, 'x'), None);
     }
 
     #[test]
     fn the_comment_keys_need_a_comment() {
         let state = codeview_state(None);
         let mut ps = DescriptionPane.init_state();
-        for c in ['J', 'K', ' ', 'S'] {
+        for c in ['J', 'K'] {
             assert_eq!(press_in(&state, &mut ps, c), None, "{c}");
         }
+        assert_eq!(enter_in(&state, &mut ps), None);
+        assert_eq!(menu_in(&state, &mut ps, 'S'), None);
+        assert_eq!(pane_actions(&state, &ps), []);
     }
 }

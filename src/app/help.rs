@@ -31,11 +31,16 @@ const APP_KEYS: &[(&[&str], &str)] = &[
 ];
 
 /// The title of the actions section of the help.
-const ACTIONS_TITLE: &str = "actions (in the sidebar, the detail and the actions menu)";
+const ACTIONS_TITLE: &str = "actions (in the actions menu)";
+
+/// The title of the section of the action keys that work directly in the
+/// pull request detail.
+const DETAIL_TITLE: &str = "actions in the detail";
 
 /// The help model: the app keys, the keys of each tab that has its own,
-/// and the actions. A binding without a chord is not in the app keys.
-/// The title of the actions section tells where the action keys work.
+/// the actions, and the action keys of the pull request detail. A binding
+/// without a chord is not in the help. The titles of the action sections
+/// tell where the action keys work.
 pub(crate) fn help_model(
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
@@ -58,6 +63,23 @@ pub(crate) fn help_model(
     let mut action_section = keymap::action_help(keymap, actions);
     ACTIONS_TITLE.clone_into(&mut action_section.title);
     sections.push(action_section);
+    let detail: Vec<(String, String)> = actions
+        .iter()
+        .filter_map(|action| {
+            let keys: Vec<String> = keymap
+                .detail_chords(action.id())
+                .into_iter()
+                .map(keymap::chord_text)
+                .collect();
+            (!keys.is_empty()).then(|| (keys.join(" "), action.label().to_owned()))
+        })
+        .collect();
+    if !detail.is_empty() {
+        sections.push(HelpSection {
+            title: DETAIL_TITLE.to_owned(),
+            entries: detail,
+        });
+    }
     HelpModel { sections }
 }
 
@@ -117,7 +139,7 @@ mod tests {
         let keymap = Keymap::with_actions(&actions, &overrides).unwrap();
         let model = help_model(&keymap, &tabs, &actions);
         let titles: Vec<&str> = model.sections.iter().map(|s| s.title.as_str()).collect();
-        assert_eq!(titles, ["keys", ACTIONS_TITLE]);
+        assert_eq!(titles, ["keys", ACTIONS_TITLE, DETAIL_TITLE]);
         let keys = &model.sections[0].entries;
         assert_eq!(keys[0], entry("1", "tab one"));
         assert_eq!(keys[1], entry("tab", "next tab"));
@@ -133,6 +155,19 @@ mod tests {
         assert_eq!(
             model.sections[1].entries,
             [entry("m", "merge"), entry("v", "review")]
+        );
+        assert_eq!(
+            model.sections[2].entries,
+            [entry("v", "review")],
+            "only review works directly in the detail"
+        );
+        let overrides = BTreeMap::from([("detail_merge".to_owned(), "m".to_owned())]);
+        let keymap = Keymap::with_actions(&actions, &overrides).unwrap();
+        let model = help_model(&keymap, &tabs, &actions);
+        assert_eq!(
+            model.sections[2].entries,
+            [entry("m", "merge"), entry("v", "review")],
+            "a detail binding adds a direct key"
         );
     }
 

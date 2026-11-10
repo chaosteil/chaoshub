@@ -56,17 +56,6 @@ pub(crate) enum Applicability {
     Disabled(&'static str),
 }
 
-/// The priority of the key hint of an action in the key hint bar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Hint {
-    /// The hint always shows when the action is enabled.
-    Primary,
-    /// The hint shows when the bar has space for it.
-    Secondary,
-    /// The action has no hint.
-    None,
-}
-
 /// What happens after a key press, before `execute`.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Prepare {
@@ -95,11 +84,6 @@ pub(crate) trait Action: Send + Sync {
     fn label(&self) -> &'static str;
     /// The key of the action when `[keys]` does not bind it.
     fn default_key(&self) -> Option<KeyChord>;
-    /// The priority of the key hint of the action. The default is
-    /// `Hint::Secondary`.
-    fn hint(&self) -> Hint {
-        Hint::Secondary
-    }
     /// Pure, called on each key press.
     fn applies(&self, sel: &Selection) -> Applicability;
     /// Pure, called on each key press after `applies` gave `Enabled`.

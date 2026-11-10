@@ -24,7 +24,7 @@ expression: screen(&mut app)
 "    ·       ·     ·            ˙                            ▌ H             show or hide the colu… ▐"
 "     ˙ ·             ░                   ░                 ·▌ q esc ctrl-c  quit                   ▐"
 "          ░    ░░       ·   ˙      ░                       ˙▌                                      ▓"
-"              ·             ░            ··░                ▌ ▌ A C T I O N S   ( I N   T H E   S  ▐"
+"              ·             ░            ··░                ▌ ▌ A C T I O N S   ( I N   T H E   A  ▐"
 "    ·     ░                  ˙        ░              ░      ▌ v      review in codeview            ▓"
 "    ˙  ·    ˙  ˙             ·     ˙░   ·                   ▌ m      Merge                         ▐"
 "         ·       ░           ˙       ░ ·           ˙˙ · ·   ▌ M      Merge stack                   ▐"

@@ -23,7 +23,7 @@ use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 use crate::actions::review::{NVIM, agent_env};
-use crate::actions::{Action, Applicability, Hint, Prepare, Services};
+use crate::actions::{Action, Applicability, Prepare, Services};
 use crate::bus::{ActionInput, KeyChord, ReviewKind, Selection, Target};
 use crate::codeview::store;
 use crate::domain::keys::PrKey;
@@ -55,10 +55,6 @@ impl Action for CodeviewSend {
     /// The `S` key of the Description pane starts the send.
     fn default_key(&self) -> Option<KeyChord> {
         None
-    }
-
-    fn hint(&self) -> Hint {
-        Hint::None
     }
 
     /// A pull request of a repo with a local path: codeview runs in it.
