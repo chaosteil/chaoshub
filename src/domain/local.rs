@@ -1,8 +1,20 @@
-//! Local jj workspaces and changes.
+//! Local jj workspaces and changes, and local git worktrees and branches.
 
 use serde::{Deserialize, Serialize};
 
-/// A jj workspace and its working-copy commit.
+/// The tool that reads a local repo.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum Vcs {
+    /// jj reads the repo.
+    #[default]
+    Jj,
+    /// git reads the repo.
+    Git,
+}
+
+/// A jj workspace and its working-copy commit. In a git repo, a worktree:
+/// the change id is the branch name of the worktree, and empty for a
+/// detached worktree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Workspace {
     pub name: String,
@@ -10,22 +22,31 @@ pub(crate) struct Workspace {
     pub commit_id: String,
 }
 
-/// A change in the stack of a workspace.
+/// A change in the stack of a workspace. In a git repo, a local branch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LocalChange {
-    /// The name of the workspace whose stack holds the change.
+    /// The name of the workspace whose stack holds the change. In a git
+    /// repo, the name of the worktree that has the branch, and empty when
+    /// no worktree has it.
     pub workspace: String,
+    /// The jj change id. In a git repo, the branch name.
     pub change_id: String,
+    /// The commit id. In a git repo, the tip of the branch.
     pub commit_id: String,
+    /// The bookmarks of the change. In a git repo, the branch name.
     pub bookmarks: Vec<String>,
     pub empty: bool,
     /// The change ids of the parents.
     pub parents: Vec<String>,
     /// The first line of the description.
     pub description: String,
+    /// The tool that read the change. A cached scan without this field is
+    /// a jj scan.
+    #[serde(default)]
+    pub vcs: Vcs,
 }
 
-/// The result of one jj scan of a repo.
+/// The result of one jj or git scan of a repo.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct LocalState {
     pub workspaces: Vec<Workspace>,
@@ -72,8 +93,16 @@ mod tests {
                 empty: false,
                 parents: vec!["zzzzzzzz".into()],
                 description: "Add a thing".into(),
+                vcs: Vcs::Jj,
             }],
         });
+    }
+
+    #[test]
+    fn a_cached_change_without_a_tool_is_a_jj_change() {
+        let json = r#"{"workspace":"default","change_id":"kxyz","commit_id":"abc","bookmarks":[],"empty":false,"parents":[],"description":""}"#;
+        let change: LocalChange = serde_json::from_str(json).unwrap();
+        assert_eq!(change.vcs, Vcs::Jj);
     }
 
     #[test]

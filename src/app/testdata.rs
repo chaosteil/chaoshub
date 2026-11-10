@@ -142,6 +142,7 @@ pub(crate) fn change(
         empty: description.is_empty(),
         parents: parents.iter().map(|p| (*p).to_owned()).collect(),
         description: description.into(),
+        vcs: crate::domain::local::Vcs::Jj,
     }
 }
 

@@ -130,6 +130,7 @@ pub(crate) fn group_stacks(prs: &[&PullRequest]) -> Vec<StackGroup> {
 pub(crate) mod tests {
     use super::*;
     use crate::domain::keys::{PrKey, RepoKey};
+    use crate::domain::local::Vcs;
     use crate::domain::observed::Observed;
     use crate::domain::pr::{CiState, MergeStateStatus, Mergeable, PrHead, PrState};
     use crate::domain::repo::RepoSettings;
@@ -218,6 +219,7 @@ pub(crate) mod tests {
             empty: false,
             parents: Vec::new(),
             description: "a change".into(),
+            vcs: Vcs::Jj,
         }
     }
 

@@ -1,7 +1,13 @@
-//! Parsers for the output of the jj templates.
+//! Parsers for the output of the jj templates and of the git commands.
+
+use std::path::Path;
 
 use super::error::VcsError;
-use crate::domain::local::{LocalChange, Workspace};
+use crate::domain::local::{LocalChange, Vcs, Workspace};
+
+/// The name of the main git worktree, the same as the default jj
+/// workspace.
+const MAIN_WORKTREE: &str = "default";
 
 /// The field separator of the templates.
 const SEP: char = '\x1f';
@@ -50,6 +56,80 @@ pub(super) fn stack(workspace: &str, out: &str) -> Result<Vec<LocalChange>, VcsE
                 empty,
                 parents: list(parents),
                 description: description.to_owned(),
+                vcs: Vcs::Jj,
+            })
+        })
+        .collect()
+}
+
+/// Parses the output of `git worktree list --porcelain`: one block of
+/// lines per worktree, with an empty line after each block. The first
+/// worktree is the main worktree, `default`. Every other worktree has the
+/// name of its directory. A detached worktree has an empty change id.
+pub(super) fn worktrees(out: &str) -> Result<Vec<Workspace>, VcsError> {
+    out.split("\n\n")
+        .filter(|block| !block.trim().is_empty())
+        .enumerate()
+        .map(|(index, block)| {
+            let mut path = None;
+            let mut head = "";
+            let mut branch = "";
+            for line in block.lines() {
+                if let Some(rest) = line.strip_prefix("worktree ") {
+                    path = Some(rest);
+                } else if let Some(rest) = line.strip_prefix("HEAD ") {
+                    head = rest;
+                } else if let Some(rest) = line.strip_prefix("branch ") {
+                    branch = rest.strip_prefix("refs/heads/").unwrap_or(rest);
+                }
+            }
+            let Some(path) = path else {
+                return Err(parse_error("worktree list", block));
+            };
+            let name = if index == 0 {
+                MAIN_WORKTREE.to_owned()
+            } else {
+                Path::new(path).file_name().map_or_else(
+                    || path.to_owned(),
+                    |name| name.to_string_lossy().into_owned(),
+                )
+            };
+            Ok(Workspace {
+                name,
+                change_id: branch.to_owned(),
+                commit_id: head.to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// Parses the output of the branch format of `git for-each-ref`: branch
+/// name, tip commit and subject per line. A branch gets the name of the
+/// worktree in `worktrees` that has it, else an empty workspace.
+pub(super) fn branches(out: &str, worktrees: &[Workspace]) -> Result<Vec<LocalChange>, VcsError> {
+    out.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let mut fields = line.splitn(3, SEP);
+            let (Some(name), Some(commit_id), Some(subject)) =
+                (fields.next(), fields.next(), fields.next())
+            else {
+                return Err(parse_error("branch list", line));
+            };
+            let workspace = worktrees
+                .iter()
+                .find(|worktree| worktree.change_id == name)
+                .map(|worktree| worktree.name.clone())
+                .unwrap_or_default();
+            Ok(LocalChange {
+                workspace,
+                change_id: name.to_owned(),
+                commit_id: commit_id.to_owned(),
+                bookmarks: vec![name.to_owned()],
+                empty: false,
+                parents: Vec::new(),
+                description: subject.to_owned(),
+                vcs: Vcs::Git,
             })
         })
         .collect()
@@ -109,6 +189,7 @@ mod tests {
                 empty: true,
                 parents: vec!["yytlukzkkywoxkvpstplyzzmxsylynmr".into()],
                 description: "feat(vcs): jj workspace list, stack read and git fetch".into(),
+                vcs: Vcs::Jj,
             }
         );
         assert!(!changes[1].empty);
@@ -151,5 +232,82 @@ mod tests {
     fn empty_output_is_empty() {
         assert_eq!(workspaces("").unwrap(), []);
         assert_eq!(stack("default", "\n").unwrap(), []);
+        assert_eq!(worktrees("").unwrap(), []);
+        assert_eq!(branches("\n", &[]).unwrap(), []);
+    }
+
+    const WORKTREE_LIST: &str = "\
+worktree /home/me/code/chaoshub
+HEAD 1111111111111111111111111111111111111111
+branch refs/heads/main
+
+worktree /home/me/code/workspaces/chaoshub/feature
+HEAD 2222222222222222222222222222222222222222
+branch refs/heads/me/feature
+locked
+
+worktree /home/me/code/workspaces/chaoshub/spike
+HEAD 3333333333333333333333333333333333333333
+detached
+
+";
+
+    #[test]
+    fn worktrees_from_porcelain_output() {
+        let workspace = |name: &str, branch: &str, head: &str| Workspace {
+            name: name.into(),
+            change_id: branch.into(),
+            commit_id: head.into(),
+        };
+        assert_eq!(
+            worktrees(WORKTREE_LIST).unwrap(),
+            [
+                workspace("default", "main", &"1".repeat(40)),
+                workspace("feature", "me/feature", &"2".repeat(40)),
+                workspace("spike", "", &"3".repeat(40)),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_main_worktree_of_a_bare_repo_is_default() {
+        let list = worktrees("worktree /srv/repo.git\nbare\n\n").unwrap();
+        assert_eq!(list[0].name, "default");
+        assert_eq!(list[0].change_id, "");
+    }
+
+    #[test]
+    fn branches_get_the_name_of_their_worktree() {
+        let out =
+            "main\x1f1111\x1fdocs: a readme\nme/feature\x1f2222\x1ffeat: a\x1fb\nold\x1f4444\x1f\n";
+        let changes = branches(out, &worktrees(WORKTREE_LIST).unwrap()).unwrap();
+        assert_eq!(
+            changes[1],
+            LocalChange {
+                workspace: "feature".into(),
+                change_id: "me/feature".into(),
+                commit_id: "2222".into(),
+                bookmarks: vec!["me/feature".into()],
+                empty: false,
+                parents: Vec::new(),
+                description: "feat: a\x1fb".into(),
+                vcs: Vcs::Git,
+            }
+        );
+        assert_eq!(changes[0].workspace, "default");
+        assert_eq!(changes[2].workspace, "", "no worktree has the branch");
+        assert_eq!(changes[2].description, "");
+    }
+
+    #[test]
+    fn malformed_git_lines_are_errors() {
+        assert!(matches!(
+            worktrees("HEAD 1111\n\n"),
+            Err(VcsError::Parse { .. })
+        ));
+        assert!(matches!(
+            branches("main\x1f1111\n", &[]),
+            Err(VcsError::Parse { .. })
+        ));
     }
 }

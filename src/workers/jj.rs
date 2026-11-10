@@ -1,12 +1,18 @@
-//! The jj worker: scans the local workspaces of a repo.
+//! The jj worker: scans the local workspaces of a repo, with jj or git.
 //!
 //! It serves `JjReq::Scan(repo)` and runs its own timer: every
 //! `refresh.jj_secs` (30 s by default) while `Interest.wants_local` is
-//! true, it scans every repo with a path. A scan lists the workspaces and
-//! reads the stack of each one. The result is one `Observed<LocalState>`
-//! per repo, so an older slow scan never replaces a newer one. The worker
-//! sends `JjScanned` first and then writes the scan as one store row.
+//! true, it scans every repo with a path. A scan first finds the tool of
+//! the repo (see `vcs::detect`). A jj scan lists the workspaces and reads
+//! the stack of each one. A git scan lists the worktrees and reads the
+//! local branches. The result is one `Observed<LocalState>` per repo, so
+//! an older slow scan never replaces a newer one. The worker sends
+//! `JjScanned` first and then writes the scan as one store row.
+//!
+//! A repo that uses git is logged once, not on every scan. A jj repo
+//! without `.git` sends one `SyncFailed` with the source `scan`.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,12 +21,12 @@ use chrono::Utc;
 use futures::FutureExt;
 use tokio::time::MissedTickBehavior;
 
-use crate::bus::{JjReq, Msg};
+use crate::bus::{JjReq, Msg, SyncError};
 use crate::domain::keys::RepoKey;
 use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
 use crate::vcs::error::VcsError;
-use crate::vcs::jj;
+use crate::vcs::{self, Tool, git, jj};
 use crate::workers::ctx::WorkerCtx;
 use crate::workers::supervisor::Worker;
 use crate::workers::wait_for_login;
@@ -43,13 +49,14 @@ async fn run(ctx: WorkerCtx) {
     let period = Duration::from_secs(ctx.config.refresh.jj_secs.max(1));
     let mut ticker = tokio::time::interval(period);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut noted = HashSet::new();
     // The first tick fires at once. `app` asks for the first scans.
     ticker.tick().await;
     loop {
         tokio::select! {
             request = requests.recv() => match request {
                 Some(JjReq::Scan(repo)) => {
-                    if !scan_repo(&ctx, &repo).await {
+                    if !scan_repo(&ctx, &repo, &mut noted).await {
                         return;
                     }
                 }
@@ -68,7 +75,7 @@ async fn run(ctx: WorkerCtx) {
                     .map(|repo| repo.key.clone())
                     .collect();
                 for repo in repos {
-                    if !scan_repo(&ctx, &repo).await {
+                    if !scan_repo(&ctx, &repo, &mut noted).await {
                         return;
                     }
                 }
@@ -78,8 +85,9 @@ async fn run(ctx: WorkerCtx) {
 }
 
 /// Scans `repo` when the session has a path for it, sends `JjScanned`
-/// and writes the store row. False when `app` is gone.
-async fn scan_repo(ctx: &WorkerCtx, repo: &RepoKey) -> bool {
+/// and writes the store row. `noted` holds the repos whose tool is
+/// already logged. False when `app` is gone.
+async fn scan_repo(ctx: &WorkerCtx, repo: &RepoKey, noted: &mut HashSet<RepoKey>) -> bool {
     let path = ctx
         .session
         .borrow()
@@ -91,11 +99,36 @@ async fn scan_repo(ctx: &WorkerCtx, repo: &RepoKey) -> bool {
         tracing::debug!(?repo, "jj scan skipped: the repo has no path");
         return true;
     };
+    let tool = match vcs::detect(&path, vcs::jj_on_path()) {
+        Ok(tool) => tool,
+        Err(err) => {
+            if !noted.insert(repo.clone()) {
+                return true;
+            }
+            tracing::warn!(?repo, %err, "cannot scan the repo");
+            let failed = Msg::SyncFailed {
+                source: "scan",
+                scope: None,
+                err: SyncError::Other(err.to_string()),
+            };
+            return ctx.tx.send(failed).await.is_ok();
+        }
+    };
+    if tool != Tool::Jj && noted.insert(repo.clone()) {
+        match tool {
+            Tool::GitWithoutJj => {
+                tracing::info!(?repo, "jj is not on the PATH, the scan uses git");
+            }
+            Tool::Git | Tool::Jj => {
+                tracing::info!(?repo, "the repo has no .jj, the scan uses git");
+            }
+        }
+    }
     let observed_at = Utc::now();
-    let value = match scan(&path).await {
+    let value = match scan(&path, tool).await {
         Ok(value) => value,
         Err(err) => {
-            tracing::warn!(?repo, %err, "jj scan failed");
+            tracing::warn!(?repo, %err, "local scan failed");
             return true;
         }
     };
@@ -113,9 +146,17 @@ async fn scan_repo(ctx: &WorkerCtx, repo: &RepoKey) -> bool {
     true
 }
 
-/// The workspaces of the repo at `path` and the stack of each one. A
+/// The local state of the repo at `path`, read with `tool`.
+async fn scan(path: &Path, tool: Tool) -> Result<LocalState, VcsError> {
+    match tool {
+        Tool::Jj => scan_jj(path).await,
+        Tool::Git | Tool::GitWithoutJj => scan_git(path).await,
+    }
+}
+
+/// The workspaces of the jj repo at `path` and the stack of each one. A
 /// workspace whose stack does not read is left out.
-async fn scan(path: &Path) -> Result<LocalState, VcsError> {
+async fn scan_jj(path: &Path) -> Result<LocalState, VcsError> {
     let workspaces = jj::list_workspaces(path).await?;
     let mut changes = Vec::new();
     for workspace in &workspaces {
@@ -126,6 +167,16 @@ async fn scan(path: &Path) -> Result<LocalState, VcsError> {
             }
         }
     }
+    Ok(LocalState {
+        workspaces,
+        changes,
+    })
+}
+
+/// The worktrees and the local branches of the git repo at `path`.
+async fn scan_git(path: &Path) -> Result<LocalState, VcsError> {
+    let workspaces = git::list_worktrees(path).await?;
+    let changes = git::read_branches(path, &workspaces).await?;
     Ok(LocalState {
         workspaces,
         changes,
@@ -274,7 +325,7 @@ mod tests {
                 }],
             })
             .unwrap();
-        assert!(scan_repo(&ctx, &testkit::repo()).await);
+        assert!(scan_repo(&ctx, &testkit::repo(), &mut HashSet::new()).await);
         assert!(harness.quiet_for(Duration::from_millis(50)).await);
     }
 

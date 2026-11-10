@@ -59,7 +59,7 @@ pub(crate) fn parse_origin(url: &str) -> Option<RepoKey> {
 
 /// The nearest directory at or above `dir` that holds `.jj` or `.git`.
 /// `dir` itself when no such directory exists.
-fn repo_root(dir: &Path) -> PathBuf {
+pub(crate) fn repo_root(dir: &Path) -> PathBuf {
     dir.ancestors()
         .find(|candidate| candidate.join(".jj").exists() || candidate.join(".git").exists())
         .unwrap_or(dir)
