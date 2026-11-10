@@ -208,11 +208,11 @@ impl StackSetting {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub(crate) struct ThemeConfig {
-    /// The look: grunge, punk or plain.
+    /// The look: punk, grunge or plain.
     pub style: ThemeStyleSetting,
     /// The colors: Pierre or the 16 ANSI colors.
     pub palette: PaletteSetting,
-    /// Draws the rough block borders.
+    /// Draws the rough block borders. Grunge only.
     pub grunge: bool,
     /// Fills empty areas with noise textures. Grunge only.
     pub textures: bool,
@@ -229,7 +229,7 @@ pub(crate) struct ThemeConfig {
 impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
-            style: ThemeStyleSetting::Grunge,
+            style: ThemeStyleSetting::Punk,
             palette: PaletteSetting::Pierre,
             grunge: true,
             textures: true,
@@ -246,10 +246,10 @@ impl Default for ThemeConfig {
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ThemeStyleSetting {
     /// Rough block borders and textures.
-    #[default]
     Grunge,
     /// Angular cuts, diagonal accents, inverted headers and a selection
     /// band.
+    #[default]
     Punk,
     /// Rounded borders, no textures.
     Plain,
@@ -554,7 +554,8 @@ mod tests {
         assert_eq!(theme.style, ThemeStyleSetting::Punk);
         assert!(theme.textures);
         let theme: ThemeConfig = toml::from_str("").unwrap();
-        assert_eq!(theme.style, ThemeStyleSetting::Grunge);
+        assert_eq!(theme.style, ThemeStyleSetting::Punk);
+        assert_eq!(ThemeConfig::default().style, ThemeStyleSetting::Punk);
         assert!(toml::from_str::<ThemeConfig>("style = \"neon\"").is_err());
     }
 

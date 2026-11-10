@@ -53,7 +53,7 @@ Command line options:
 | `--repo OWNER/NAME` | Adds a repo for this session. Repeat the option for more repos. A repo from this option has no local path. |
 | `--config PATH` | Reads the configuration from `PATH` instead of `~/.config/chaoshub/config.toml`. |
 | `--no-prefetch` | Turns off the prefetch of pull request refs for this session. |
-| `--theme STYLE` | Uses `grunge`, `punk` or `plain` for this session, in place of `[theme] style`. |
+| `--theme STYLE` | Uses `punk`, `grunge` or `plain` for this session, in place of `[theme] style`. |
 | `--palette NAME` | Uses `pierre` or `ansi16` for this session, in place of `[theme] palette`. |
 | `cache clear` | Deletes the cache file. The next start syncs from GitHub again. |
 | `pr OWNER/NAME NUMBER` | Shows one pull request and nothing else: the panes of the pull request detail. A pull request that is not in the cache loads from GitHub. `q` or `esc` quits. The detail pane inside Rex runs this command. |
@@ -340,7 +340,7 @@ command = [
 
 | Key | Default | Meaning |
 |---|---|---|
-| `style` | `grunge` | The look: `grunge`, `punk` or `plain`. |
+| `style` | `punk` | The look: `punk`, `grunge` or `plain`. |
 | `palette` | `pierre` | The colors: `pierre` or `ansi16`. On a 16-color terminal, `pierre` changes to `ansi16`. |
 | `grunge` | `true` | Draws the rough block borders. Applies to the grunge style only. |
 | `textures` | `true` | Fills empty areas with noise textures. Applies to the grunge style only. |
@@ -350,10 +350,16 @@ command = [
 | `column_headers` | `true` | Shows the header row with the column names above the list. The `H` key turns it on or off for the session and saves the choice in the cache. A saved choice wins over this value. |
 
 The style and the palette are two switches. The style sets the shapes,
-and the palette sets the colors. The punk style keeps the palette and
-changes the shapes: cut corners, diagonal accents, inverted headers,
-slanted tab cards, a two-layer selection band and drop shadows under
-popups. To try it, start chaoshub with `--theme punk`.
+and the palette sets the colors. The default style is punk: cut
+corners, diagonal accents, inverted headers, slanted tab cards, a
+two-layer selection band and drop shadows under popups. Punk keeps the
+palette, also on a 16-color terminal.
+
+The other style is grunge: rough block borders, stencil headers and
+noise textures. To try it, start chaoshub with `--theme grunge`. The
+`grunge` and `textures` keys only affect the grunge style. With
+`grunge = false`, or on a 16-color terminal, the grunge style draws the
+plain look.
 
 The transitions are short, and a key press during a transition
 retargets it, so nothing blocks typing:

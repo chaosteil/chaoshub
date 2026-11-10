@@ -2,9 +2,9 @@
 source: src/run.rs
 expression: terminal.backend()
 ---
-"▌ 1 M I N E   2 R E V I E W   3 T E A M "
+"◢ 1 MINE ◤ 2 REVIEW ◤ 3 TEAM ◤          "
 " TITLE                             # CH…"
-"          ˙      ˙                      "
-"                ░            ˙       ˙  "
-"▌ j/k move  Enter open  / filter  …     "
-" [MINE] 0 repos                  ? help "
+"                                        "
+"                                        "
+"╱ j/k move  Enter open  / filter  …     "
+" [MINE] 0 repos ◤                ? help "

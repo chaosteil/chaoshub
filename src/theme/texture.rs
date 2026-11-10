@@ -71,7 +71,7 @@ impl Widget for Texture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::ThemeKind;
+    use crate::theme::{PaletteChoice, ThemeKind, ThemeStyle};
 
     fn text(buf: &Buffer) -> String {
         let area = buf.area;
@@ -87,7 +87,13 @@ mod tests {
 
     #[test]
     fn texture_fill() {
-        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let theme = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 6));
         Texture::new(&theme).render(buf.area, &mut buf);
         insta::assert_snapshot!(text(&buf));
@@ -95,7 +101,13 @@ mod tests {
 
     #[test]
     fn texture_keeps_text() {
-        let theme = Theme::new(ThemeKind::TrueColor, true, true);
+        let theme = Theme::styled(
+            ThemeKind::TrueColor,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
         let mut buf = Buffer::with_lines(["readable text that stays readable"]);
         Texture::new(&theme).render(buf.area, &mut buf);
         assert_eq!(text(&buf), "readable text that stays readable");
@@ -103,7 +115,13 @@ mod tests {
 
     #[test]
     fn no_texture_when_off() {
-        let theme = Theme::new(ThemeKind::Ansi16, true, true);
+        let theme = Theme::styled(
+            ThemeKind::Ansi16,
+            ThemeStyle::Grunge,
+            PaletteChoice::Pierre,
+            true,
+            true,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 6));
         Texture::new(&theme).render(buf.area, &mut buf);
         assert_eq!(buf, Buffer::empty(Rect::new(0, 0, 40, 6)));
