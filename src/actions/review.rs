@@ -40,10 +40,6 @@ impl Action for Review {
         })
     }
 
-    fn hint(&self) -> crate::actions::Hint {
-        crate::actions::Hint::Primary
-    }
-
     /// A pull request of a repo with a local path.
     fn applies(&self, sel: &Selection) -> Applicability {
         match &sel.target {

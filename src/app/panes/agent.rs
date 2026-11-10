@@ -2,16 +2,17 @@
 //! tool, with its state, the age of the last run, the model and the head
 //! commit.
 //!
-//! The keys `r`, `i`, `d` and `a` start review, improve, describe and
+//! The pane has no direct keys. Its own actions are in the actions menu
+//! (`space`): `r`, `i`, `d` and `a` start review, improve, describe and
 //! ask. `a` asks for the question first. `p` opens a confirm popup with
 //! the line diff of the describe result, and `y` there sets the title and
-//! the body of the pull request. The pane keys win over the action keys,
-//! so `d` (draft) does not work while the pane is selected.
+//! the body of the pull request. In the menu, the pane keys win over the
+//! action keys, so `d` there starts describe, not draft.
 
 use crate::app::age::age;
 use crate::app::frame::spinner;
 use crate::app::models::{Cell, CellStyle, PaneModel};
-use crate::app::panes::{Pane, PaneState};
+use crate::app::panes::{Pane, PaneAction, PaneState};
 use crate::app::state::AppData;
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx};
@@ -68,7 +69,26 @@ impl Pane for AgentPane {
         PaneModel::Lines { lines, wrap: true }
     }
 
-    fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, _ps: &mut PaneState) -> Option<Handled> {
+    fn handle_key(&self, _key: KeyChord, _cx: &KeyCx<'_>, _ps: &mut PaneState) -> Option<Handled> {
+        None
+    }
+
+    /// The tools, and the apply of the describe result when there is one.
+    fn actions(&self, cx: &KeyCx<'_>, _ps: &PaneState) -> Vec<PaneAction> {
+        let mut out: Vec<PaneAction> = ToolKind::ALL
+            .into_iter()
+            .map(|kind| {
+                let (_, key) = title(kind);
+                PaneAction::char(key, label(kind))
+            })
+            .collect();
+        if apply_confirm(cx).is_some() {
+            out.push(PaneAction::char('p', "apply the pr-agent description"));
+        }
+        out
+    }
+
+    fn run_action(&self, key: KeyChord, cx: &KeyCx<'_>, _ps: &mut PaneState) -> Option<Handled> {
         if !key.mods.is_empty() {
             return None;
         }
@@ -146,6 +166,16 @@ fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
 
+/// The label of a tool in the actions menu.
+fn label(kind: ToolKind) -> &'static str {
+    match kind {
+        ToolKind::Review => "pr-agent review",
+        ToolKind::Improve => "pr-agent improve",
+        ToolKind::Describe => "pr-agent describe",
+        ToolKind::Ask => "pr-agent ask",
+    }
+}
+
 /// The title and the key of a tool.
 fn title(kind: ToolKind) -> (&'static str, char) {
     match kind {
@@ -170,7 +200,7 @@ fn section(
     let error = results.errors.get(&kind);
     let mut header = vec![
         cell(name, CellStyle::Primary),
-        cell(format!(" [{key}] · "), CellStyle::Dim),
+        cell(format!(" [space {key}] · "), CellStyle::Dim),
     ];
     header.push(if running {
         cell(format!("{} running", spinner(cx.data.now)), CellStyle::Warn)
@@ -343,13 +373,13 @@ mod tests {
         assert_eq!(
             texts(&state()),
             [
-                "Review [r] · never",
+                "Review [space r] · never",
                 "",
-                "Improve [i] · never",
+                "Improve [space i] · never",
                 "",
-                "Describe [d] · never",
+                "Describe [space d] · never",
                 "",
-                "Ask [a] · never",
+                "Ask [space a] · never",
             ]
         );
     }
@@ -389,15 +419,15 @@ mod tests {
         assert_eq!(
             lines[..3],
             [
-                "Review [r] · done 5m ago · anthropic/claude-sonnet-5-5 · head 3a1f2c0",
+                "Review [space r] · done 5m ago · anthropic/claude-sonnet-5-5 · head 3a1f2c0",
                 "outdated: for 3a1f2c0, the head is now oid7",
                 "**Key issues**\n\n- **Possible Bug** `src/lib.rs:3-5`: It breaks.",
             ]
         );
-        assert!(lines[4].starts_with("Improve [i] · "), "{}", lines[4]);
+        assert!(lines[4].starts_with("Improve [space i] · "), "{}", lines[4]);
         assert!(lines[4].contains(" running · "), "{}", lines[4]);
         assert_eq!(lines[5], "possible issue · src/lib.rs:4 · Trim the name");
-        assert_eq!(lines[7], "Describe [d] · failed");
+        assert_eq!(lines[7], "Describe [space d] · failed");
         assert_eq!(lines[8], "pr-agent failed: no key");
         assert_eq!(lines[11], "5m ago · head oid7");
         assert_eq!(lines[12], "**Q:** Why?\n\nBecause.");
@@ -421,7 +451,7 @@ mod tests {
                 mods: KeyModifiers::NONE,
             };
             AgentPane
-                .handle_key(chord, &cx, &mut PaneState::default())
+                .run_action(chord, &cx, &mut PaneState::default())
                 .map(|handled| handled.cmds)
         };
         let job = |tool| {
@@ -471,7 +501,7 @@ mod tests {
             mods: KeyModifiers::NONE,
         };
         let handled = AgentPane
-            .handle_key(chord, &cx, &mut PaneState::default())
+            .run_action(chord, &cx, &mut PaneState::default())
             .unwrap();
         let (id, spec) = handled.confirm.unwrap();
         assert_eq!(id, "agent");

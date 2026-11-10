@@ -59,6 +59,37 @@ pub(crate) trait Pane: Send + Sync {
     fn model(&self, cx: &KeyCx<'_>, ps: &PaneState, size: Size) -> PaneModel;
     /// `None` when the pane does not handle the key.
     fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled>;
+    /// The own actions of the pane, in display order. The actions menu
+    /// of the popup shows them after the actions of the pull request.
+    /// The default has none.
+    fn actions(&self, _cx: &KeyCx<'_>, _ps: &PaneState) -> Vec<PaneAction> {
+        Vec::new()
+    }
+    /// Runs the own action with the key `key`, from the actions menu.
+    /// `None` when the pane has no such action. The default has none.
+    fn run_action(&self, _key: KeyChord, _cx: &KeyCx<'_>, _ps: &mut PaneState) -> Option<Handled> {
+        None
+    }
+}
+
+/// An own action of a pane: its key in the actions menu and its label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PaneAction {
+    pub key: KeyChord,
+    pub label: &'static str,
+}
+
+impl PaneAction {
+    /// The action of the character key `c` without modifiers.
+    pub(crate) fn char(c: char, label: &'static str) -> Self {
+        Self {
+            key: KeyChord {
+                code: crate::bus::KeyCode::Char(c),
+                mods: crate::bus::KeyModifiers::NONE,
+            },
+            label,
+        }
+    }
 }
 
 /// The pane registry, in popup order.

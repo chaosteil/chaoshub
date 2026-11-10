@@ -9,7 +9,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use textwrap::core::display_width;
 
-use crate::actions::{Action, Applicability, Hint, REGISTRY};
+use crate::actions::{Action, Applicability, REGISTRY};
 use crate::app::age::age;
 use crate::app::keymap::{self, Keymap};
 use crate::app::layout::{Areas, layout_full};
@@ -107,7 +107,7 @@ pub(crate) fn frame_model_full<'s>(
 ) -> &'s FrameModel {
     if state.cache.frame_generation != Some(state.generation) {
         let list = active_list(state, tabs);
-        let hints = hints_model(state, tabs, panes, &REGISTRY, &list);
+        let hints = hints_model(state, tabs, panes, &list);
         let titles = if state.ui.pinned.is_some() {
             Vec::new()
         } else {
@@ -308,7 +308,6 @@ fn hints_model(
     state: &AppState,
     tabs: &[Box<dyn Tab>],
     panes: &[Box<dyn Pane>],
-    actions: &[Box<dyn Action>],
     list: &ListModel,
 ) -> Option<KeyHintsModel> {
     if !state.cache.key_hints {
@@ -316,7 +315,7 @@ fn hints_model(
     }
     let keymap = &state.cache.keymap;
     let hints = match state.ui.overlays.iter().rev().find(|o| !o.closing) {
-        Some(overlay) => overlay_hints(&state.data, keymap, panes, actions, &overlay.state),
+        Some(overlay) => overlay_hints(&state.data, keymap, panes, &overlay.state),
         None if state.ui.filter_edit => filter_hints(),
         None => list_hints(state, keymap, tabs, list),
     };
@@ -372,38 +371,6 @@ fn list_hints(
     hints
 }
 
-/// The hints of the actions that are enabled for `target`, in registry
-/// order. An action with `Hint::None` or without a key has no hint. The
-/// label is the action id with spaces.
-fn action_hints(
-    data: &AppData,
-    keymap: &Keymap,
-    actions: &[Box<dyn Action>],
-    target: Target,
-) -> Vec<KeyHint> {
-    let states = applicability(data, actions, target);
-    let mut hints = Vec::new();
-    for (action, state) in actions.iter().zip(states) {
-        let primary = match action.hint() {
-            Hint::Primary => true,
-            Hint::Secondary => false,
-            Hint::None => continue,
-        };
-        let Some(&chord) = keymap.chords(action.id()).first() else {
-            continue;
-        };
-        if state == Applicability::Enabled {
-            hints.push(KeyHint {
-                key: key_text(chord),
-                label: action.id().replace('_', " "),
-                primary,
-                chord: Some(chord),
-            });
-        }
-    }
-    hints
-}
-
 /// Whether each action of `actions` applies to `target`, in registry
 /// order.
 pub(crate) fn applicability(
@@ -454,14 +421,12 @@ fn ctrl_key(c: char) -> KeyChord {
     }
 }
 
-/// The hints of an overlay. They are all primary, except the action
-/// hints of the pull request popup: they come after the pane hints, the
-/// primary ones first.
+/// The hints of an overlay. They are all primary. The pull request
+/// popup has no action hints: the `actions` hint opens the actions menu.
 fn overlay_hints(
     data: &AppData,
     keymap: &Keymap,
     panes: &[Box<dyn Pane>],
-    actions: &[Box<dyn Action>],
     overlay: &OverlayState,
 ) -> Vec<KeyHint> {
     let hints = match overlay {
@@ -477,20 +442,12 @@ fn overlay_hints(
                 })
                 .unwrap_or_default();
             keys.extend(first_chords(keymap, &["next_tab"]));
-            let mut hints: Vec<KeyHint> = [
+            vec![
                 hint(&keys, "pane tabs"),
                 app_hint(keymap, &["open"], "expand", true),
                 app_hint(keymap, &["close_overlay"], "close", true),
+                target.and_then(|_| app_hint(keymap, &["actions"], "actions", true)),
             ]
-            .into_iter()
-            .flatten()
-            .collect();
-            if let Some(target) = target {
-                let mut actions = action_hints(data, keymap, actions, target);
-                actions.sort_by_key(|hint| !hint.primary);
-                hints.extend(actions);
-            }
-            return hints;
         }
         OverlayState::Confirm { .. } => vec![
             app_hint(keymap, &["confirm"], "confirm", true),
