@@ -13,11 +13,8 @@
 //! cursor, and `enter` selects or deselects the comment of the cursor. The
 //! selection is in the review draft of the pull request in `AppData`, so a
 //! deselected comment stays deselected until chaoshub quits. The own
-//! action `S` of the pane, in the actions menu (`space`), sends the
-//! selected comments: `app` reads the comment files again and opens the
-//! Send review dialog. With no comment selected, the review has only the
-//! message. The review draft keeps the message of the dialog. A comment on a
-//! commit message shows dim and cannot be selected: GitHub takes no such
+//! action `S` of the pane, in the actions menu (`space`), opens the Review
+//! popup. A comment on a commit message shows dim and cannot be selected: GitHub takes no such
 //! comment. A dim line counts the comments of an older push. Without
 //! comments, the pane shows no section.
 

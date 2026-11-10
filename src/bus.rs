@@ -297,10 +297,10 @@ pub(crate) enum ReviewKind {
 }
 
 impl ReviewKind {
-    /// The events, in the order of the buttons of the Send review dialog.
+    /// The events, in the order of the key rows of the Review popup.
     pub(crate) const ALL: [Self; 3] = [Self::Comment, Self::Approve, Self::RequestChanges];
 
-    /// The key of the button of the event in the Send review dialog.
+    /// The key of the event in the Review popup.
     pub(crate) fn key(self) -> char {
         match self {
             Self::Comment => 'c',
@@ -309,7 +309,7 @@ impl ReviewKind {
         }
     }
 
-    /// The label of the button of the event in the Send review dialog.
+    /// The label of the event in the Review popup.
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Comment => "comment",
@@ -338,28 +338,53 @@ pub(crate) struct ConfirmSpec {
     pub danger: bool,
 }
 
-/// The content of the Send review dialog: the comments of the review,
-/// the message so far, and one button per key. `esc` and `n` cancel.
+/// The content of the Review popup: the list of the codeview comments,
+/// the key rows and the message. `esc` cancels.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SendReviewSpec {
+pub(crate) struct ReviewSpec {
     pub title: String,
-    /// One line per comment of the review, then the notes.
-    pub lines: Vec<String>,
-    /// The first lines of the message. Empty without a message.
-    pub message: Vec<String>,
+    /// The rows of the comment list.
+    pub rows: Vec<ReviewRow>,
+    /// The index of the row of the cursor. `None` without a comment that
+    /// can go to GitHub.
+    pub cursor: Option<usize>,
+    /// The index of the first visible row of the list.
+    pub scroll: usize,
+    /// The message of the review. Empty without a message. `ui` wraps
+    /// it in its column.
+    pub message: String,
+    /// The key rows of the message and of the events.
     pub buttons: Vec<ReviewButton>,
 }
 
-/// One button of the Send review dialog.
+/// One row of the comment list of the Review popup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReviewRow {
+    /// A comment that can go to GitHub. A marked comment goes into the
+    /// review.
+    Comment {
+        marked: bool,
+        place: String,
+        summary: String,
+    },
+    /// A comment that cannot go to GitHub, for example a comment on a
+    /// commit message. It shows dim as `[-]`.
+    Fixed { place: String, summary: String },
+    /// A dim note, for example the count of the comments on an older
+    /// push.
+    Note(String),
+    /// The error of a failed load of the comment files.
+    Error(String),
+}
+
+/// One key row of the Review popup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReviewButton {
     pub key: char,
     pub label: &'static str,
-    /// Why the button cannot send now. The button then shows dim, with
-    /// the reason.
+    /// Why the key cannot send now. The row then shows dim, with the
+    /// reason.
     pub blocked: Option<&'static str>,
-    /// True for the button that `enter` presses.
-    pub ready: bool,
 }
 
 /// The content of a prompt popup.
@@ -594,9 +619,8 @@ pub(crate) enum Cmd {
     LoadAgent(PrKey),
     /// Reads the codeview comment files of a pull request.
     LoadCodeview(PrKey),
-    /// Sends the codeview comments `ids` of `key`. It never leaves `app`:
-    /// the description pane sends it, and `app` reads the comment files
-    /// again and opens the Send review dialog.
+    /// Opens the Review popup of `key`. It never leaves `app`: the
+    /// description pane sends it. `ids` are the selected comments.
     SendCodeview {
         key: PrKey,
         ids: Vec<String>,

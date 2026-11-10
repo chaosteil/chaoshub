@@ -2347,30 +2347,129 @@ mod tests {
         insta::assert_snapshot!(screen(&mut codeview_app(160, 40)));
     }
 
-    /// The codeview app with the text box of the message open, with two
-    /// lines of text.
-    fn review_text_app(width: u16, height: u16) -> App {
-        let mut app = codeview_app(width, height);
-        let key = crate::app::testdata::pr_key("chaoshub", 101);
-        press(&mut app, ' ');
-        press(&mut app, 'S');
+    /// Sends the keys of `keys` to the app. A `\n` is `enter`.
+    fn type_keys(app: &mut App, keys: &str) {
+        let mods = crossterm::event::KeyModifiers::NONE;
+        for c in keys.chars() {
+            let code = match c {
+                '\n' => crossterm::event::KeyCode::Enter,
+                c => crossterm::event::KeyCode::Char(c),
+            };
+            app.update(Msg::Key(crossterm::event::KeyEvent::new(code, mods)));
+        }
+    }
+
+    /// Opens the Review popup of the pull request of the popup.
+    fn open_review(app: &mut App) {
+        press(app, ' ');
+        press(app, 'S');
         app.update(Msg::TransitionsDone);
+    }
+
+    /// The popup app with the comments of `codeview_comments` and the
+    /// Review popup open, for the user `login`. `keys` go to the Review
+    /// popup, and `message` is the message of the review.
+    fn review_popup_app(width: u16, height: u16, login: &str, keys: &str, message: &str) -> App {
+        let mut app = popup_app(width, height);
+        if !login.is_empty() {
+            app.update(Msg::StartupDone {
+                login: login.into(),
+                cwd_repo: None,
+            });
+        }
         app.update(Msg::CodeviewLoaded {
-            key,
+            key: crate::app::testdata::pr_key("chaoshub", 101),
             comments: Ok(codeview_comments()),
         });
+        open_review(&mut app);
+        type_keys(&mut app, keys);
+        if !message.is_empty() {
+            press(&mut app, 'm');
+            type_keys(&mut app, message);
+            app.update(Msg::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('s'),
+                crossterm::event::KeyModifiers::CONTROL,
+            )));
+            app.update(Msg::TransitionsDone);
+        }
+        app
+    }
+
+    /// The message of the Review popup snapshots: a line that wraps in
+    /// its column, and more lines than the popup shows.
+    const MESSAGE: &str = "Please clamp the cursor when the filter drops the last rows.\n\
+                           Thanks!\nName the list in the title.\nOne more line.";
+
+    /// The first comment unmarked, the cursor on the second one, and a
+    /// message.
+    #[test]
+    fn review_popup_100() {
+        insta::assert_snapshot!(screen(&mut review_popup_app(100, 30, "", "\nj", MESSAGE)));
+    }
+
+    #[test]
+    fn review_popup_160() {
+        insta::assert_snapshot!(screen(&mut review_popup_app(160, 40, "", "\nj", MESSAGE)));
+    }
+
+    /// Your own pull request: approve and request changes show dim.
+    #[test]
+    fn review_popup_own_100() {
+        insta::assert_snapshot!(screen(&mut review_popup_app(100, 30, "chaosteil", "", "")));
+    }
+
+    /// Many comments, with the cursor on the last one: the list scrolls
+    /// and shows a scrollbar.
+    #[test]
+    fn review_popup_scrolled_100() {
+        let mut app = review_popup_app(100, 30, "", "", "");
+        let mut comments = codeview_comments();
+        let more = (1..=12).map(|i| crate::domain::codeview::Comment {
+            id: format!("n{i}"),
+            file: "src/ui/pane.rs".into(),
+            start_line: i * 10,
+            end_line: i * 10,
+            side: "new".into(),
+            body: format!("Note number {i}"),
+            kind: crate::domain::codeview::CommentKind::Line,
+        });
+        comments.pushes[0].comments.extend(more);
+        app.update(Msg::CodeviewLoaded {
+            key: crate::app::testdata::pr_key("chaoshub", 101),
+            comments: Ok(comments),
+        });
+        press(&mut app, 'G');
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
+    /// No comments and no message: comment and request changes show dim.
+    #[test]
+    fn review_popup_empty_100() {
+        let mut app = review_popup_app(100, 30, "", "", "");
+        app.update(Msg::CodeviewLoaded {
+            key: crate::app::testdata::pr_key("chaoshub", 101),
+            comments: Ok(crate::domain::codeview::Comments::default()),
+        });
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
+    /// A failed load of the comment files shows in the list.
+    #[test]
+    fn review_popup_error_100() {
+        let mut app = review_popup_app(100, 30, "", "", "");
+        app.update(Msg::CodeviewLoaded {
+            key: crate::app::testdata::pr_key("chaoshub", 101),
+            comments: Err("version 2 is not 1".into()),
+        });
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
+    /// The Review popup with the text box of the message open, with two
+    /// lines of text.
+    fn review_text_app(width: u16, height: u16) -> App {
+        let mut app = review_popup_app(width, height, "", "", "");
         press(&mut app, 'm');
-        for c in "Please clamp the cursor.".chars() {
-            press(&mut app, c);
-        }
-        let enter = crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Enter,
-            crossterm::event::KeyModifiers::NONE,
-        );
-        app.update(Msg::Key(enter));
-        for c in "Thanks!".chars() {
-            press(&mut app, c);
-        }
+        type_keys(&mut app, "Please clamp the cursor.\nThanks!");
         app
     }
 
@@ -2382,99 +2481,6 @@ mod tests {
     #[test]
     fn review_text_160() {
         insta::assert_snapshot!(screen(&mut review_text_app(160, 40)));
-    }
-
-    /// The popup app with the Send review dialog of the comments of
-    /// `codeview_comments`, for the user `login`. `keys` go to the popup
-    /// before the send, and `message` is the message of the dialog. A
-    /// `\n` in them is `enter`.
-    fn send_review_app(width: u16, height: u16, login: &str, keys: &str, message: &str) -> App {
-        let key = crate::app::testdata::pr_key("chaoshub", 101);
-        let mut app = popup_app(width, height);
-        if !login.is_empty() {
-            app.update(Msg::StartupDone {
-                login: login.into(),
-                cwd_repo: None,
-            });
-        }
-        app.update(Msg::CodeviewLoaded {
-            key: key.clone(),
-            comments: Ok(codeview_comments()),
-        });
-        let code = |c: char| match c {
-            '\n' => crossterm::event::KeyCode::Enter,
-            c => crossterm::event::KeyCode::Char(c),
-        };
-        let mods = crossterm::event::KeyModifiers::NONE;
-        for c in keys.chars() {
-            app.update(Msg::Key(crossterm::event::KeyEvent::new(code(c), mods)));
-        }
-        press(&mut app, ' ');
-        press(&mut app, 'S');
-        app.update(Msg::TransitionsDone);
-        app.update(Msg::CodeviewLoaded {
-            key,
-            comments: Ok(codeview_comments()),
-        });
-        if !message.is_empty() {
-            press(&mut app, 'm');
-            for c in message.chars() {
-                app.update(Msg::Key(crossterm::event::KeyEvent::new(code(c), mods)));
-            }
-            app.update(Msg::Key(crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Char('s'),
-                crossterm::event::KeyModifiers::CONTROL,
-            )));
-            app.update(Msg::TransitionsDone);
-        }
-        app
-    }
-
-    /// The message of the Send review snapshots.
-    const MESSAGE: &str = "Please clamp the cursor.\nThanks!";
-
-    #[test]
-    fn send_review_100() {
-        insta::assert_snapshot!(screen(&mut send_review_app(100, 30, "", "", MESSAGE)));
-    }
-
-    #[test]
-    fn send_review_160() {
-        insta::assert_snapshot!(screen(&mut send_review_app(160, 40, "", "", MESSAGE)));
-    }
-
-    /// Your own pull request: approve and request changes show dim.
-    #[test]
-    fn send_review_own_100() {
-        let mut app = send_review_app(100, 30, "chaosteil", "", "");
-        insta::assert_snapshot!(screen(&mut app));
-    }
-
-    /// `space` then `A` with comments: the dialog opens with approve
-    /// ready.
-    #[test]
-    fn send_review_ready_100() {
-        let key = crate::app::testdata::pr_key("chaoshub", 101);
-        let mut app = popup_app(100, 30);
-        app.update(Msg::CodeviewLoaded {
-            key: key.clone(),
-            comments: Ok(codeview_comments()),
-        });
-        press(&mut app, ' ');
-        press(&mut app, 'A');
-        app.update(Msg::TransitionsDone);
-        app.update(Msg::CodeviewLoaded {
-            key,
-            comments: Ok(codeview_comments()),
-        });
-        insta::assert_snapshot!(screen(&mut app));
-    }
-
-    /// No selected comment and no message: comment and request changes
-    /// show dim.
-    #[test]
-    fn send_review_empty_100() {
-        insta::assert_snapshot!(screen(&mut send_review_app(100, 30, "", "\nJ\n", "")));
     }
 
     #[test]

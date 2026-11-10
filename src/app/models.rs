@@ -2,9 +2,7 @@
 //! styles to theme colors.
 #![allow(dead_code, reason = "app and ui build on the models in later phases")]
 
-use crate::bus::{
-    ConfirmSpec, KeyChord, OverlayKind, PrRef, PromptSpec, SendReviewSpec, TermStatus,
-};
+use crate::bus::{ConfirmSpec, KeyChord, OverlayKind, PrRef, PromptSpec, ReviewSpec, TermStatus};
 
 /// Everything that `ui::view` draws in one frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,6 +203,22 @@ pub(crate) struct OverlayModel {
     pub content: OverlayContent,
 }
 
+/// The most rows of the comment list of the Review popup. The list
+/// scrolls past them.
+pub(crate) const REVIEW_LIST_ROWS: usize = 10;
+
+/// The rows of the Review popup around the comment list: the frame, a
+/// blank row and the five key rows.
+pub(crate) const REVIEW_FRAME_ROWS: usize = 8;
+
+/// The visible rows of a comment list of `rows` rows, in a list area of
+/// `height` rows: at least one, at most `REVIEW_LIST_ROWS`, and not more
+/// than the area leaves after `REVIEW_FRAME_ROWS`.
+pub(crate) fn review_list_rows(rows: usize, height: u16) -> usize {
+    let room = usize::from(height).saturating_sub(REVIEW_FRAME_ROWS);
+    rows.clamp(1, REVIEW_LIST_ROWS).min(room).max(1)
+}
+
 /// The content of an overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum OverlayContent {
@@ -223,8 +237,8 @@ pub(crate) enum OverlayContent {
         spec: PromptSpec,
         text: String,
     },
-    /// The Send review dialog of codeview comments.
-    SendReview(SendReviewSpec),
+    /// The Review popup of a pull request.
+    Review(ReviewSpec),
     /// The multi-line text popup of the message of a review.
     ReviewText {
         title: String,
