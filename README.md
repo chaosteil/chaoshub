@@ -549,10 +549,12 @@ the selected check, not the pull request. The key hint bar shows
 
 The actions menu also lists the own actions of the active pane, after
 the actions of the pull request: the pr-agent tools of the Agent pane.
-In the menu, a pane key wins over
-an action key. Thus in the Agent pane, `space` then `d` starts
-describe, not draft. To bind a direct key for an action in the detail,
-see "Actions".
+In the menu, an action key wins over
+a pane key. Thus in the Agent pane, `space` then `r` opens the Review
+popup, and `space` then `R` starts the pr-agent review. The menu of the
+Agent pane does not show the `agent` action, because the pane shows
+already. To bind a direct key for an action in the detail, see
+"Actions".
 
 #### Codeview comments
 
@@ -765,18 +767,21 @@ The pane has no direct keys. Its tools are in the actions menu: press
 
 | Key | Tool | What it shows |
 |---|---|---|
-| `r` | review | The fields of the review and the key issues, with file and lines. |
-| `i` | improve | One line per suggestion: `label · file:line · summary`. |
-| `d` | describe | The new title and the new body. |
+| `R` | review | The fields of the review and the key issues, with file and lines. |
+| `I` | improve | One line per suggestion: `label · file:line · summary`. |
+| `D` | describe | The new title and the new body. |
 | `a` | ask | Asks for a question first. Shows the questions and the answers, newest first. |
 | `p` | | Opens a confirm popup with the line diff of the old and the new title and body. `y` sets the title and the body of the pull request on GitHub. |
 
 One run per tool per pull request runs at a time. A second `space`
-then `r` while the review runs only says `review runs already`. Different tools, and
+then `R` while the review runs only says `review runs already`. Different tools, and
 different pull requests, run at the same time.
 
-In the menu, the pane keys win over the action keys, so `d` starts
-describe, not draft, while the Agent pane is selected.
+In the menu, the action keys win over the pane keys. Thus a tool uses
+an uppercase key when an action uses the lowercase letter: `r` opens
+the Review popup, `i` copies the change id, and `d` changes the draft
+state. `p` applies the describe result, because the menu of the Agent
+pane does not show the `agent` action.
 
 While a run goes, the status bar shows the spinner and one item per run,
 for example `agent review #7 · agent ask #7`. The last output line of

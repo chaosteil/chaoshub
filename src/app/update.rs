@@ -355,22 +355,28 @@ fn open_actions(state: &mut AppState, tabs: &[Box<dyn Tab>], actions: &[Box<dyn 
     else {
         return;
     };
-    open_menu(state, actions, target, Vec::new());
+    open_menu(state, actions, target, Vec::new(), None);
 }
 
 /// Opens the actions menu of `target`: one item for each action that is
 /// not hidden for it, in registry order, then one item for each pane
-/// action of `pane`.
+/// action of `pane`. `active` is the id of the active pane of the popup
+/// under the menu. An action that opens that pane is not in the menu,
+/// because the pane shows already.
 fn open_menu(
     state: &mut AppState,
     actions: &[Box<dyn Action>],
     target: Target,
     pane: Vec<PaneAction>,
+    active: Option<&str>,
 ) {
     let ids = actions
         .iter()
         .zip(frame::applicability(&state.data, actions, target.clone()))
         .filter(|(_, applies)| *applies != Applicability::Hidden)
+        .filter(|(action, _)| {
+            active.is_none_or(|id| !opens_pane(&state.data, action.as_ref(), &target, id))
+        })
         .map(|(action, _)| action.id())
         .collect();
     open_overlay(
@@ -385,10 +391,21 @@ fn open_menu(
     );
 }
 
+/// True when `action` opens the pull request popup of `target` on the
+/// pane with the id `pane`.
+fn opens_pane(data: &AppData, action: &dyn Action, target: &Target, pane: &str) -> bool {
+    let selection = Selection {
+        target: target.clone(),
+        me: data.session.login.clone().unwrap_or_default(),
+        action_config: data.action_config.get(action.id()).cloned(),
+    };
+    matches!(action.prepare(&selection), Prepare::OpenPopup(id) if id == pane)
+}
+
 /// A key for the actions menu on top of the overlay stack: the motion
 /// keys move the cursor, `open` runs the item of the cursor, and the key
-/// of an item runs that item. On a key of a pane action and of an
-/// action, the pane action runs.
+/// of an item runs that item. On a key of an action and of a pane
+/// action, the action runs.
 fn action_menu_key(
     state: &mut AppState,
     keymap: &Keymap,
@@ -411,11 +428,15 @@ fn action_menu_key(
     let item = if keymap.matches("open", chord) {
         Some(menu.cursor)
     } else {
-        menu.pane
+        menu.ids
             .iter()
-            .position(|action| action.key == chord)
-            .map(|i| menu.ids.len() + i)
-            .or_else(|| menu.ids.iter().position(|id| keymap.matches(id, chord)))
+            .position(|id| keymap.matches(id, chord))
+            .or_else(|| {
+                menu.pane
+                    .iter()
+                    .position(|action| action.key == chord)
+                    .map(|i| menu.ids.len() + i)
+            })
     };
     let Some(item) = item else {
         return Vec::new();
@@ -1495,6 +1516,7 @@ fn overlay_key(
                     return Vec::new();
                 };
                 if keymap.matches("actions", chord) {
+                    let active = panes.get(popup.active).map(|pane| pane.id());
                     let pane = in_pane(
                         &state.data,
                         &areas,
@@ -1504,7 +1526,7 @@ fn overlay_key(
                         |pane, cx, ps, _| pane.actions(cx, ps),
                     )
                     .unwrap_or_default();
-                    open_menu(state, actions, target, pane);
+                    open_menu(state, actions, target, pane, active);
                     return Vec::new();
                 }
                 return run_detail_key(state, keymap, panes, actions, target, chord)
@@ -5388,16 +5410,34 @@ mod tests {
             .unwrap()
             .items(&state.data, &Keymap::default(), &REGISTRY);
         assert_eq!(items.last().map(String::as_str), Some("a  pr-agent ask"));
-        let describe = agent_job(&state, &pr, Tool::Describe);
-        assert_eq!(
-            key(&mut state, 'd'),
-            vec![Cmd::RunAgent(describe)],
-            "the pane action wins over draft"
+        assert!(
+            !action_menu(&state).unwrap().ids.contains(&"agent"),
+            "the Agent pane shows already"
         );
+        let describe = agent_job(&state, &pr, Tool::Describe);
+        assert_eq!(key(&mut state, 'D'), vec![Cmd::RunAgent(describe)]);
         assert!(
             sidebar(&state).is_some(),
             "the menu closes, the popup stays"
         );
+    }
+
+    #[test]
+    fn in_the_agent_pane_menu_an_action_key_wins_over_a_pane_key() {
+        let (mut state, pr) = agent_state();
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        key(&mut state, '6');
+        assert_eq!(
+            menu(&mut state, 'r'),
+            vec![Cmd::LoadCodeview(pr.clone())],
+            "r opens the Review popup, not the pr-agent review"
+        );
+        assert_eq!(&dialog(&state).pr().key, &pr);
+        assert!(state.data.agent_jobs.is_empty());
     }
 
     #[test]
@@ -7058,18 +7098,18 @@ mod tests {
         key(&mut state, ' ');
         key(&mut state, 'p');
         let review = agent_job(&state, &pr, Tool::Review);
-        assert_eq!(menu(&mut state, 'r'), vec![Cmd::RunAgent(review)]);
+        assert_eq!(menu(&mut state, 'R'), vec![Cmd::RunAgent(review)]);
         assert!(
             state
                 .data
                 .agent_jobs
                 .contains(&(pr.clone(), ToolKind::Review))
         );
-        assert_eq!(menu(&mut state, 'r'), Vec::new());
+        assert_eq!(menu(&mut state, 'R'), Vec::new());
         assert_eq!(status_text(&state), Some("review runs already"));
         // Another tool on the same pull request runs at the same time.
         let improve = agent_job(&state, &pr, Tool::Improve);
-        assert_eq!(menu(&mut state, 'i'), vec![Cmd::RunAgent(improve)]);
+        assert_eq!(menu(&mut state, 'I'), vec![Cmd::RunAgent(improve)]);
         assert_eq!(state.data.agent_jobs.len(), 2);
     }
 
@@ -7078,8 +7118,8 @@ mod tests {
         let (mut state, pr) = agent_state();
         key(&mut state, ' ');
         key(&mut state, 'p');
-        menu(&mut state, 'r');
-        menu(&mut state, 'i');
+        menu(&mut state, 'R');
+        menu(&mut state, 'I');
         let done = Msg::AgentFinished {
             key: pr.clone(),
             kind: ToolKind::Review,
@@ -7121,7 +7161,7 @@ mod tests {
         );
         // The tool is free again.
         let review = agent_job(&state, &pr, Tool::Review);
-        assert_eq!(menu(&mut state, 'r'), vec![Cmd::RunAgent(review)]);
+        assert_eq!(menu(&mut state, 'R'), vec![Cmd::RunAgent(review)]);
     }
 
     #[test]
