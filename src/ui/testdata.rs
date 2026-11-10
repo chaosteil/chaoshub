@@ -191,7 +191,7 @@ pub(crate) fn mine_list() -> ListModel {
                 "kxyzmmop",
                 ("·", CellStyle::Dim),
                 ("·", CellStyle::Dim),
-                "▶",
+                "◆",
             ),
         ],
         cursor: 1,

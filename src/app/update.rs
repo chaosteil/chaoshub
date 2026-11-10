@@ -5630,7 +5630,7 @@ mod tests {
             state.data.panes.get(&pane),
             Some(&PaneHandleState::Starting)
         );
-        assert_eq!(flags_of(&mut state, 99), "▶");
+        assert_eq!(flags_of(&mut state, 99), "◆");
         let focus = Cmd::FocusPane {
             id: "review",
             key: key.clone(),
@@ -7017,7 +7017,7 @@ mod tests {
             &Keymap::default(),
             Msg::PaneStarted { id: DETAIL_ID, key },
         );
-        assert_eq!(flags_of(&mut state, 99), "▶");
+        assert_eq!(flags_of(&mut state, 99), "◆");
     }
 
     #[test]
