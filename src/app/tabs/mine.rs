@@ -2,8 +2,10 @@
 //!
 //! A stack shows a header row (`stack #S -> main · 3 PRs`) and its pull
 //! requests top first with the tree glyphs `┌ ├ └`. A pull request
-//! without a stack is a single row with `─`. The jj columns come from the
-//! matched local change.
+//! without a stack is a single row with `─`. The local columns come from
+//! the matched local change. For a jj change they show the change id, the
+//! commit and the workspace. For a git branch they show the branch name,
+//! the short commit and the worktree. A list can show both.
 
 use std::collections::HashMap;
 
@@ -190,7 +192,7 @@ fn mine_prs<'a>(cx: &KeyCx<'a>) -> Vec<&'a PullRequest> {
     prs
 }
 
-/// The jj view of the Mine tab: the local match of each pull request.
+/// The local view of the Mine tab: the local match of each pull request.
 #[derive(Debug, Default)]
 struct LocalView {
     matches: HashMap<PrKey, LocalMatch>,
@@ -281,7 +283,9 @@ fn short(id: &str, n: u16) -> String {
     id.chars().take(usize::from(n)).collect()
 }
 
-/// The change id, commit and workspace cells of a local match.
+/// The change id, commit and workspace cells of a local match. For a git
+/// branch, the change id is the branch name and the workspace is the
+/// worktree.
 fn local_cells(local: &LocalMatch, set: Columns) -> Vec<Cell> {
     let (change, commit, workspace, style) = match local {
         LocalMatch::None => (String::new(), String::new(), String::new(), CellStyle::Dim),
@@ -289,6 +293,7 @@ fn local_cells(local: &LocalMatch, set: Columns) -> Vec<Cell> {
             workspace,
             change_id,
             commit_id,
+            ..
         } => (
             change_id.clone(),
             commit_id.clone(),
@@ -299,6 +304,7 @@ fn local_cells(local: &LocalMatch, set: Columns) -> Vec<Cell> {
             workspace,
             change_id,
             commit_id,
+            ..
         } => (
             change_id.clone(),
             commit_id.clone(),
@@ -570,6 +576,58 @@ mod tests {
                 cell("default", CellStyle::Dim),
             ],
             "diverged by its bookmark"
+        );
+    }
+
+    #[test]
+    fn a_list_shows_jj_changes_and_git_branches() {
+        use crate::domain::local::{LocalChange, LocalState, Vcs};
+
+        let mut state = with_local();
+        let mut export = pr("codeview", 3, "Fix the export");
+        export.head.value.head_oid = "c0ffee0123456789".into();
+        state.data.scopes.insert(export.key.clone(), Scope::Mine);
+        state.data.prs.insert(export.key.clone(), export);
+        let branch = LocalChange {
+            workspace: "export".into(),
+            change_id: "chaosteil/3".into(),
+            commit_id: "c0ffee0123456789".into(),
+            bookmarks: vec!["chaosteil/3".into()],
+            empty: false,
+            parents: Vec::new(),
+            description: "Fix the export".into(),
+            vcs: Vcs::Git,
+        };
+        state.data.local.insert(
+            testdata::repo_key("codeview"),
+            testdata::observed(LocalState {
+                workspaces: Vec::new(),
+                changes: vec![branch],
+            }),
+        );
+        let model = model(&state, &Mine.init_state());
+        let cells = |title: &str| {
+            model
+                .rows
+                .iter()
+                .find(|row| row.cells[0].text == title)
+                .unwrap()
+                .cells[2..5]
+                .to_vec()
+        };
+        assert_eq!(
+            cells("Fix the export"),
+            [
+                cell("chaostei", CellStyle::Primary),
+                cell("c0ffee01", CellStyle::Dim),
+                cell("export", CellStyle::Dim),
+            ],
+            "the branch name, the short commit and the worktree"
+        );
+        assert_eq!(
+            cells("feat(ui): popup frame with pane tabs")[0],
+            cell("wqnvzxop", CellStyle::Primary),
+            "the jj change id"
         );
     }
 
