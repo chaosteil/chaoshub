@@ -198,21 +198,35 @@ fn overlay_models(
 }
 
 /// The pane tabs for `target`, in registry order: the panes that apply,
-/// and the dim tabs of the panes that keep their tab.
-pub(crate) fn pane_tabs(panes: &[Box<dyn Pane>], target: &Target) -> Vec<PaneTab> {
-    panes
-        .iter()
-        .enumerate()
-        .filter_map(|(i, pane)| {
-            let applies = pane.applies(target);
-            (applies || pane.keeps_tab()).then(|| PaneTab {
-                key: pane.key(),
-                title: pane.title(),
-                pane: i,
-                dim: !applies,
+/// and the dim tabs of the panes that keep their tab. When the tabs with
+/// the full titles do not fit on one row of `width` cells, the tabs have
+/// the short titles.
+pub(crate) fn pane_tabs(panes: &[Box<dyn Pane>], target: &Target, width: u16) -> Vec<PaneTab> {
+    let tabs = |short: bool| -> Vec<PaneTab> {
+        panes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, pane)| {
+                let applies = pane.applies(target);
+                (applies || pane.keeps_tab()).then(|| PaneTab {
+                    key: pane.key(),
+                    title: if short {
+                        pane.short_title()
+                    } else {
+                        pane.title()
+                    },
+                    pane: i,
+                    dim: !applies,
+                })
             })
-        })
-        .collect()
+            .collect()
+    };
+    let full = tabs(false);
+    if pane_tab_rows(&full, width).len() > 1 {
+        tabs(true)
+    } else {
+        full
+    }
 }
 
 /// The size of the pane body of the popup with `tabs`. Each row of pane
@@ -272,7 +286,7 @@ fn popup_content(
         .is_some_and(|detail| is_stale(&detail.value, pr));
     let tag = if old_detail { " · stale" } else { "" };
     let order = applicable(panes, &target);
-    let tabs = pane_tabs(panes, &target);
+    let tabs = pane_tabs(panes, &target, areas.popup_body.width);
     let cx = KeyCx {
         data,
         target: Some(&target),

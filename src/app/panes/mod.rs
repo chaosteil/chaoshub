@@ -51,6 +51,11 @@ pub(crate) trait Pane: Send + Sync {
     )]
     fn id(&self) -> &'static str;
     fn title(&self) -> &'static str;
+    /// The title of the tab when the tabs with the full titles do not fit
+    /// on one row. The default is the full title.
+    fn short_title(&self) -> &'static str {
+        self.title()
+    }
     /// The key that selects the pane in the popup, for example `1`.
     fn key(&self) -> char;
     fn applies(&self, target: &Target) -> bool;
