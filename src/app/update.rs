@@ -1320,7 +1320,7 @@ fn in_pane<R>(
     let target = pr_target(data, &popup.key)?;
     let pane = panes.get(popup.active)?;
     let ps = popup.panes.get_mut(popup.active)?;
-    let tabs = frame::pane_tabs(panes, &target);
+    let tabs = frame::pane_tabs(panes, &target, areas.popup_body.width);
     let size = frame::pane_size(areas, &tabs);
     let cx = KeyCx {
         data,
@@ -1781,6 +1781,7 @@ fn click_row(
 /// becomes active. A click on a dim tab does nothing. The tabs are the
 /// tabs of `frame::pane_tabs`.
 fn click_pane_tab(state: &mut AppState, panes: &[Box<dyn Pane>], index: usize) {
+    let width = frame::areas(state).popup_body.width;
     let Some(Overlay {
         state: OverlayState::Popup(popup),
         ..
@@ -1791,7 +1792,7 @@ fn click_pane_tab(state: &mut AppState, panes: &[Box<dyn Pane>], index: usize) {
     let Some(target) = pr_target(&state.data, &popup.key) else {
         return;
     };
-    if let Some(active) = frame::pane_tabs(panes, &target)
+    if let Some(active) = frame::pane_tabs(panes, &target, width)
         .get(index)
         .filter(|tab| !tab.dim)
         .map(|tab| tab.pane)
@@ -6056,7 +6057,7 @@ mod tests {
     }
 
     /// The mine state with 20 list rows and the sidebar of #99 open on
-    /// the conversation pane. The pane body has 14 rows. The
+    /// the conversation pane. The pane body has 15 rows. The
     /// conversation has one comment per body of `bodies`: a header node
     /// and a body node each.
     fn conversation_sidebar(bodies: &[String]) -> AppState {
@@ -6102,47 +6103,47 @@ mod tests {
 
     #[test]
     fn j_scrolls_a_conversation_of_tall_comments_to_the_last_node() {
-        // Six comments of 1 + 5 rows: 36 rows in a pane of 14.
+        // Six comments of 1 + 5 rows: 36 rows in a pane of 15.
         let mut state = conversation_sidebar(&vec![paragraphs(3); 6]);
         for _ in 0..5 {
             key(&mut state, 'j');
         }
-        assert_eq!(pane_view(&mut state), (5, 4), "the third body shows whole");
+        assert_eq!(pane_view(&mut state), (5, 3), "the third body shows whole");
         for _ in 0..20 {
             key(&mut state, 'j');
         }
-        assert_eq!(pane_view(&mut state), (11, 22), "the last page");
+        assert_eq!(pane_view(&mut state), (11, 21), "the last page");
         key(&mut state, 'k');
-        assert_eq!(pane_view(&mut state), (10, 22));
+        assert_eq!(pane_view(&mut state), (10, 21));
         key(&mut state, 'g');
         assert_eq!(pane_view(&mut state), (0, 0));
         key(&mut state, 'G');
-        assert_eq!(pane_view(&mut state), (11, 22));
+        assert_eq!(pane_view(&mut state), (11, 21));
     }
 
     #[test]
     fn j_and_k_scroll_through_a_comment_that_is_taller_than_the_pane() {
         // A header and a body of 59 rows, then a header and a body of
-        // one row: 62 rows in a pane of 14.
+        // one row: 62 rows in a pane of 15.
         let mut state = conversation_sidebar(&[paragraphs(30), paragraphs(1)]);
         key(&mut state, 'j');
         assert_eq!(pane_view(&mut state), (1, 0), "the body starts in view");
         key(&mut state, 'j');
         assert_eq!(pane_view(&mut state), (1, 1), "j scrolls the body");
-        for _ in 0..45 {
+        for _ in 0..44 {
             key(&mut state, 'j');
         }
-        assert_eq!(pane_view(&mut state), (1, 46), "the end of the body");
+        assert_eq!(pane_view(&mut state), (1, 45), "the end of the body");
         key(&mut state, 'j');
-        assert_eq!(pane_view(&mut state), (2, 47), "the next header");
+        assert_eq!(pane_view(&mut state), (2, 46), "the next header");
         key(&mut state, 'j');
-        assert_eq!(pane_view(&mut state), (3, 48), "the last page");
+        assert_eq!(pane_view(&mut state), (3, 47), "the last page");
         key(&mut state, 'k');
-        assert_eq!(pane_view(&mut state), (2, 48));
+        assert_eq!(pane_view(&mut state), (2, 47));
         key(&mut state, 'k');
-        assert_eq!(pane_view(&mut state), (1, 48), "the body stays in view");
+        assert_eq!(pane_view(&mut state), (1, 47), "the body stays in view");
         key(&mut state, 'k');
-        assert_eq!(pane_view(&mut state), (1, 47), "k scrolls the body");
+        assert_eq!(pane_view(&mut state), (1, 46), "k scrolls the body");
     }
 
     #[test]
@@ -6151,7 +6152,7 @@ mod tests {
         for _ in 0..4 {
             update(&mut state, &Keymap::default(), wheel_down());
         }
-        assert_eq!(pane_view(&mut state), (11, 22), "the last page");
+        assert_eq!(pane_view(&mut state), (11, 21), "the last page");
         let mut state = conversation_sidebar(&[paragraphs(30)]);
         update(&mut state, &Keymap::default(), wheel_down());
         assert_eq!(pane_view(&mut state), (1, 2), "one row into the body");
@@ -6163,15 +6164,15 @@ mod tests {
 
     #[test]
     fn ctrl_d_and_ctrl_u_move_half_a_page_in_a_conversation() {
-        // Nodes of 1 and 5 rows; the pane has 14 rows, so half a page is
+        // Nodes of 1 and 5 rows; the pane has 15 rows, so half a page is
         // 7 rows.
         let mut state = conversation_sidebar(&vec![paragraphs(3); 6]);
         ctrl(&mut state, 'd');
         assert_eq!(pane_view(&mut state), (3, 0), "the node of row 7");
         ctrl(&mut state, 'd');
-        assert_eq!(pane_view(&mut state), (5, 4), "the node of row 14");
+        assert_eq!(pane_view(&mut state), (5, 3), "the node of row 14");
         ctrl(&mut state, 'u');
-        assert_eq!(pane_view(&mut state), (2, 4), "the node of row 6");
+        assert_eq!(pane_view(&mut state), (2, 3), "the node of row 6");
     }
 
     #[test]
@@ -6186,13 +6187,11 @@ mod tests {
         key(&mut state, 'D');
         assert_eq!(pane_view(&mut state), (5, 14));
         key(&mut state, 'D');
+        assert_eq!(pane_view(&mut state), (7, 21), "the last full page");
+        key(&mut state, 'D');
         assert_eq!(pane_view(&mut state), (7, 21));
-        key(&mut state, 'D');
-        assert_eq!(pane_view(&mut state), (7, 22), "the last full page");
-        key(&mut state, 'D');
-        assert_eq!(pane_view(&mut state), (7, 22));
         key(&mut state, 'U');
-        assert_eq!(pane_view(&mut state), (7, 15), "the cursor still shows");
+        assert_eq!(pane_view(&mut state), (7, 14), "the cursor still shows");
         let mut state = conversation_sidebar(&[paragraphs(30)]);
         key(&mut state, 'j');
         key(&mut state, 'D');
@@ -6235,7 +6234,7 @@ mod tests {
     #[test]
     fn the_description_scrolls_half_a_page_and_stops_at_the_last_page() {
         let mut state = description_sidebar(&paragraphs(40));
-        let last = lines_rows(&mut state) - 14;
+        let last = lines_rows(&mut state) - 15;
         ctrl(&mut state, 'd');
         assert_eq!(pane_view(&mut state), (0, 7));
         key(&mut state, 'D');
@@ -6281,7 +6280,7 @@ mod tests {
     fn a_click_on_a_node_below_scrolls_to_it_by_rows() {
         let mut state = conversation_sidebar(&vec![paragraphs(3); 6]);
         update(&mut state, &Keymap::default(), click_on(Hit::PaneRow(5)));
-        assert_eq!(pane_view(&mut state), (5, 4), "the body shows whole");
+        assert_eq!(pane_view(&mut state), (5, 3), "the body shows whole");
     }
 
     /// The scroll of the top help or output overlay.

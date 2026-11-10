@@ -35,6 +35,10 @@ impl Pane for Conversation {
         "Conversation"
     }
 
+    fn short_title(&self) -> &'static str {
+        "Convo"
+    }
+
     fn key(&self) -> char {
         '3'
     }

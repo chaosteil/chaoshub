@@ -41,6 +41,10 @@ impl Pane for DescriptionPane {
         "Description"
     }
 
+    fn short_title(&self) -> &'static str {
+        "Desc"
+    }
+
     fn key(&self) -> char {
         '1'
     }
