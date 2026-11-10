@@ -9,7 +9,7 @@ of your local checkout. A header row above the list names the columns;
 colleagues that request your review. The Team tab shows the other pull
 requests of your colleagues. By default, these two tabs show only the
 pull requests that are ready for review. From the list, you can review a
-pull request in codeview, merge it, approve it, and do other actions.
+pull request in codeview, merge it, send a review, and do other actions.
 
 chaoshub keeps a local cache. It shows the cached lists at once when it
 starts, and then syncs with GitHub in the background.
@@ -410,7 +410,7 @@ different keys. A chord that does not parse stops chaoshub with an
 error.
 
 The binding names are the app keys and the action ids in the keymap
-below. A `detail_<id>` binding, for example `detail_approve = "A"`,
+below. A `detail_<id>` binding, for example `detail_merge = "m"`,
 runs the action `<id>` directly in the pull request detail (see
 "Actions").
 
@@ -489,7 +489,7 @@ selects the next pane:
 
 | Key | Pane | What it shows |
 |---|---|---|
-| `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. Below the block, the section `Codeview comments (N unsent)` lists the codeview comments of the head that did not go to GitHub yet (see "Codeview comments" below). Only for a repo with a `path`. |
+| `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the head has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments · space R to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order. |
 | `4` | Stack | The entries of the stack. Only for a stacked pull request. The cursor starts on the pull request of the detail. Enter opens the detail of the entry under the cursor on top, and `esc` goes back. `o` opens the page of that entry. |
@@ -510,7 +510,7 @@ In the detail, only the keys that change nothing on GitHub work
 directly: the navigation keys, `r` (refresh), `v` (codeview), `o`
 (browser), `y` and `Y` (copy). The other actions are in the actions
 menu. Press `space` to open it on top of the detail, then the key of
-the action. For example, `space` then `A` approves the pull request,
+the action. For example, `space` then `R` opens the Review popup,
 and `space` then `m` opens the merge confirm popup. `esc` closes the
 menu, and the detail shows again. The pane keys, the motion keys and
 the keys of the active pane come first: in the checks pane, `o` opens
@@ -518,76 +518,67 @@ the selected check, not the pull request. The key hint bar shows
 `Space actions`.
 
 The actions menu also lists the own actions of the active pane, after
-the actions of the pull request: the pr-agent tools of the Agent pane,
-and the send of the Description pane. In the menu, a pane key wins over
+the actions of the pull request: the pr-agent tools of the Agent pane.
+In the menu, a pane key wins over
 an action key. Thus in the Agent pane, `space` then `d` starts
 describe, not draft. To bind a direct key for an action in the detail,
 see "Actions".
 
 #### Codeview comments
 
-You write review comments in codeview (`v`). The Description pane shows
-the comments that did not go to GitHub yet, and sends the selected
-comments as one review. chaoshub reads the comment files of codeview
-(`[codeview] comments_dir`) and never writes them.
+You write review comments in codeview (`v`). The Review popup lists the
+comments that did not go to GitHub yet, and sends the marked comments
+as one review. The Review popup is the only way to approve a pull
+request, to request changes, and to send codeview comments. chaoshub
+reads the comment files of codeview (`[codeview] comments_dir`) and
+never writes them.
 
-Each row shows the cursor (`>`), the selection (`[x]` selected, `[ ]`
-deselected), the place (`path:L12-14 (new)`, or `PR` for a comment on
-the pull request document), and the first line of the comment. Every
-comment starts selected. A new comment that shows while the popup is
-open also starts selected, for example after a refresh (`r`) or after
-a review in codeview (`v`). A comment that you deselect stays
-deselected while the popup is open. GitHub takes no comment on a commit
-message, so such a row shows dim with `[-]`, and you cannot select it.
-A dim line counts the comments of an older push of the head: open
-codeview (`v`) to see them. Without comments, the pane shows no
-section.
+Press `space`, then `R`, to open the Review popup. This works in the
+list and in the pull request detail. The popup opens at once with the
+comments that chaoshub has, and reads the comment files again. When the
+read ends, the popup shows the new comments. The popup also opens
+without comments, and for a repo without a `path`. When the read
+fails, the popup shows the error in the list, and approve still works.
 
-These keys work while the section lists a comment that can go to GitHub:
+The comment list is on top. Each row shows the cursor (`>`), the mark
+(`[x]` marked, `[ ]` not marked), the place (`path:L12-14 (new)`, or
+`PR` for a comment on the pull request document), and the first line of
+the comment. A `PR` comment goes into the text of the review, after
+your message. Every comment starts marked, also a new comment. GitHub
+takes no comment on a commit message, so such a row shows dim with
+`[-]`, and the cursor skips it. A dim line counts the comments of an
+older push of the head: open codeview (`v`) to see them.
 
-| Key | What it does |
-|---|---|
-| `J` / `K` | Moves the comment cursor down or up. |
-| `enter` | Selects or deselects the comment of the cursor. |
-| `space`, then `S` | Opens the Send review dialog for the selected comments. |
-
-The send reads the comment files again first. A comment that went out from
-codeview in the meantime drops out, and the dialog says
-`N comments went out from codeview already`.
-
-The Send review dialog is one step for the whole review. It lists the
-chosen comments. A row `PR (into the review text)` is a comment on the
-pull request document: it goes into the text of the review, after your
-message. Under the comments, the dialog shows the first lines of the
-message. Press the key of a button:
+Below the list, the keys are on the left, and the message is on the
+right. The message wraps in its column. The popup shows up to 4 rows
+of it, then `… N more lines`.
 
 | Key | What it does |
 |---|---|
+| `j` / `k` | Moves the cursor down or up. The other motion keys also work, and the list scrolls. |
+| `enter` | Marks or unmarks the comment of the cursor. |
 | `m` | Opens the text box of the message. |
 | `c` | Sends a review that adds comments only. |
 | `a` | Sends a review that approves the pull request. |
 | `r` | Sends a review that requests changes. |
-| `n` / `esc` | Cancels the send. The message stays for the next dialog. |
+| `esc` | Closes the popup. The marks and the message stay. |
 
-`c`, `a` and `r` send at once, with no other question. A button that
+`c`, `a` and `r` send at once, with no other question. A key that
 cannot send now shows dim, with the reason:
 
 - `r` needs a message.
-- `c` needs a message when the review has no comment.
+- `c` needs a message when no comment is marked.
 - `a` and `r` show `your own PR` on your own pull request, and `not open`
   on a closed or merged pull request. GitHub takes no such review. `c`
   still works.
 
-With no selected comment, the dialog still works: the review has only
-the message. chaoshub then posts the review itself, as `A` and `R` do.
+With no marked comment, the popup still works: the review has only the
+message. chaoshub then posts the review itself.
 
-When unsent codeview comments wait on the head of the pull request, the
-approve action (`A`) and the request changes action (`R`) open the Send
-review dialog too, with the selected comments. Their button is ready:
-it shows the cursor (`>`) and `enter`, and `enter` sends that event. So
-the comments go out with the approval or the change request. For `R`,
-write the message first with `m`. Without such comments, `A` and `R`
-work as before.
+The marks and the message stay for each pull request until chaoshub
+quits. They stay when you close the popup or the detail, and the popup
+in the list shows the same marks as the popup in the detail. A review
+that went out clears the message.
 
 The text box of the message can have more than one line, and its line
 breaks go to GitHub:
@@ -596,14 +587,13 @@ breaks go to GitHub:
 |---|---|
 | `enter` | Adds a new line. |
 | `ctrl-e` | Opens the text in `$VISUAL`, else `$EDITOR`, else `nvim`. chaoshub leaves its screen while the editor runs. When the editor quits, its text comes back into the text box. |
-| `ctrl-s` / `esc` | Goes back to the Send review dialog, with the text. |
+| `ctrl-s` / `esc` | Goes back to the Review popup, with the text. |
 
-The message stays while the popup is open, also when you cancel the
-dialog. A review that went out clears it.
-When codeview can post none of the chosen comments, for example because
-no comment maps to the diff, it sends no review. The status line then
-says `the review did not go out`, and names the comments that stay
-local.
+When a marked comment went out from codeview in the meantime, the send
+leaves it out. When codeview can post none of the marked comments, for
+example because no comment maps to the diff, it sends no review. The
+status line then says `the review did not go out`, and names the
+comments that stay local.
 
 ### Actions
 
@@ -618,16 +608,16 @@ disabled action shows the reason in parentheses. In the menu:
 
 - `j` and `k` move the cursor.
 - `enter` runs the action of the cursor.
-- The key of an action runs that action. For example, `space` then `A`
-  approves the pull request.
+- The key of an action runs that action. For example, `space` then `R`
+  opens the Review popup.
 - `esc` or `q` closes the menu.
 
 The action keys work in the actions menu. In the pull request detail
 (the sidebar and the Rex pane), `space` opens the same menu for the
 pull request of the detail. There only `v`, `o`, `y` and `Y` also work
 directly. To run another action directly in the detail, bind a key to
-`detail_<id>` in `[keys]`. For example, `detail_approve = "A"` makes
-`A` approve the pull request of the detail. These bindings have no
+`detail_<id>` in `[keys]`. For example, `detail_merge = "m"` makes
+`m` open the merge confirm popup of the detail. These bindings have no
 default.
 
 | Binding | Key | What it does |
@@ -635,8 +625,6 @@ default.
 | `review` | `v` | Reviews the pull request in codeview. Needs a repo with a `path`. A second press focuses the open pane. |
 | `merge` | `m` | Merges the pull request after a confirm popup. For a stacked pull request, see the stack merge paragraph below. |
 | `merge_stack` | `M` | Merges the whole stack of the pull request after a confirm popup, from any entry of the stack. It is the same merge as `merge` on the top entry. Hidden for a pull request without a stack. |
-| `approve` | `A` | Approves the pull request. Not for your own pull request. When unsent codeview comments wait, it opens the Send review dialog instead (see "Codeview comments"). |
-| `request_changes` | `R` | Asks for a message, then requests changes. Not for your own pull request. The message must not be empty. When unsent codeview comments wait, it opens the Send review dialog instead (see "Codeview comments"). |
 | `rerun_checks` | `x` | Runs the failed checks again. |
 | `draft` | `d` | Changes the pull request from draft to ready, or from ready to draft. |
 | `close` | `X` | Closes the pull request after a confirm popup. |
@@ -644,7 +632,7 @@ default.
 | `copy_url` | `y` | Copies the pull request URL. |
 | `copy_change_id` | `Y` | Copies the jj change id of the local change that matches the pull request. Hidden when no local change matches. |
 | `agent` | `P` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
-| `codeview_send` | none | Sends the chosen codeview comments as one review. In the Description pane, `space` then `S` starts it (see "Codeview comments"). A key that you bind to it opens the Description pane. |
+| `codeview_send` | `R` | Opens the Review popup. There you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). |
 
 A merge of a stacked pull request includes every entry up to it. To
 merge every entry, use `merge_stack` (`M`) from any entry. The
@@ -669,6 +657,7 @@ The wheel moves three rows per step:
 - In the sidebar, it scrolls the description pane, and moves the
   cursor of the other panes.
 - In the help overlay and the output popup, it scrolls the text.
+- In the Review popup, it moves the cursor of the comment list.
 
 A click acts on what it hits:
 
@@ -681,6 +670,7 @@ A click acts on what it hits:
 | A row in a pane | Moves the cursor of the pane to the row. In the conversation pane, a click on the selected thread expands it or collapses it. In the stack pane, a click on the selected entry opens its detail. |
 | An author in the author picker | Picks the author. |
 | An action in the actions menu | Runs the action. |
+| A comment in the Review popup | Marks or unmarks the comment. |
 | A cell outside of the sidebar or the overlay | Closes it. For a confirm popup, this cancels the action. |
 
 A drag with the left button selects text. The text areas are the body
@@ -878,7 +868,7 @@ transition runs before or after nvim.
 When the review ends, chaoshub syncs the pull request again and scans
 the repo again.
 
-### What `S` runs
+### What the Review popup runs
 
 The send of codeview comments runs codeview in a headless nvim, in the
 local path of the repo:
