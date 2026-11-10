@@ -4,7 +4,8 @@
 //!
 //! - Tab switch (`FxKey::Tab`): the highlight of the active tab glides
 //!   from the old tab to the new tab in the tab bar row. The list shows
-//!   the new tab at once.
+//!   the new tab at once. The last frame of the glide shows the real tab
+//!   bar.
 //! - Pane tab switch (`FxKey::PaneTab`): the same glide on the pane tab
 //!   row of the popup. When the two tabs are on different rows, the new
 //!   tab shows at once. The pane content switches at once.
@@ -343,12 +344,16 @@ impl Transitions {
     /// Starts a glide: the highlight of the active tab moves from the old
     /// tab to the new tab over the row of `glide`. Each frame, the effect
     /// copies the row with no active tab over the frame and gives the
-    /// cells of the highlight the active tab colors. The tab bar and the
-    /// pane tabs share it.
+    /// cells of the highlight the active tab colors. The last frame keeps
+    /// the frame as `view` draws it, so the real tabs stay on the screen
+    /// after the glide. The tab bar and the pane tabs share it.
     fn glide(&mut self, key: FxKey, glide: TabGlide) {
         let (bg, fg) = self.theme.active_tab_colors();
         let timer = Self::timer(Duration::from_millis(TAB_GLIDE_MS));
         let effect = fx::effect_fn_buf(glide, timer, move |glide, cx, buf| {
+            if cx.timer.done() {
+                return;
+            }
             let (l, r) = glide.span(cx.alpha());
             for (x, y) in positions(glide.bar.area) {
                 let Some(dst) = buf.cell_mut((x, y)) else {
@@ -1246,8 +1251,8 @@ mod tests {
         assert_eq!(list_text(&middle), list_text(&plain));
         let end = draw_tabs(&mut terminal, &mut fx, &model, 60);
         assert_eq!(highlight(&end, &tabs), tabs[1], "on the new tab");
-        draw_tabs(&mut terminal, &mut fx, &model, 16);
         assert!(!fx.active());
+        assert_eq!(end, plain, "the last frame is the real tab bar");
     }
 
     #[test]
@@ -1405,8 +1410,8 @@ mod tests {
         assert!(span(1).1 < r && r < span(2).1, "{r} between the tabs");
         let end = draw_view(&mut terminal, &mut fx, &model, 60);
         assert_eq!(pane_highlight(&end, &tabs, y), span(2), "on the new tab");
-        draw_view(&mut terminal, &mut fx, &model, 16);
         assert!(!fx.active());
+        assert_eq!(end, plain, "the last frame is the real pane tabs");
     }
 
     #[test]
