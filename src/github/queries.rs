@@ -515,6 +515,13 @@ mod tests {
             body["variables"],
             json!({ "owner": "acme", "name": "monorepo", "number": 3311 })
         );
+        // The newest reviews, not the oldest.
+        assert!(
+            body["query"]
+                .as_str()
+                .unwrap()
+                .contains("reviews(last: 50)")
+        );
     }
 
     /// Serves `data` to every request, with rate limit headers, because a
