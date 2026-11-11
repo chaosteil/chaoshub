@@ -181,6 +181,9 @@ The limit changes list membership. It does not change a stack on GitHub
 or prevent `chaoshub pr OWNER/NAME NUMBER` from opening a specific PR.
 The existing author and text filters apply within the included PRs.
 
+The `T` switch skips the limit (see "Hidden rows"). While `T` is on in a
+tab, the syncs search GitHub without the limit.
+
 ### `[refresh]`
 
 The poll intervals, in seconds.
@@ -563,6 +566,42 @@ By default, the Review and the Team tab show only the pull requests that
 are ready for review: open, not a draft, and CI green. `t` shows all open
 pull requests.
 
+### Hidden rows
+
+Four rules hide pull requests from a list:
+
+- the age limit (`[filters] max_age`),
+- the ready rule of the Review and the Team tab (`t`),
+- the author picker (`a`),
+- the filter text (`/`).
+
+Press `T` to show every open pull request of the active tab. The four
+rules then do not hide rows. In the Mine tab, only the age limit and the
+filter text apply. Press `T` again for the normal view.
+
+| Symbol | Meaning |
+|---|---|
+| `?` | Before the title: only `T` shows this row. The normal view hides it. In the Mine tab, the `?` comes before the tree glyph. |
+| dim row | The same rows are dim. |
+
+While `T` is on, the mode row at the top of the list shows the number of
+rows, for example `everything · 12 · T for the normal view`.
+
+Each tab has its own `T` switch. chaoshub does not save it: after a
+restart, every tab shows the normal view.
+
+While `T` is on in a tab, the syncs search GitHub without the age limit.
+The pull requests past the limit arrive with the next full sync (see
+`[refresh] full_secs`). Press `r` to sync now. While `T` is on, a full
+sync does not remove the pull requests past the limit from the list.
+After you set `T` off in every tab, the next full sync removes them
+again.
+
+The rows that `T` shows count as visible rows: chaoshub polls their CI,
+loads their details and prefetches their refs, like any other row.
+These requests and the searches without the age limit use more of the
+GitHub rate budget.
+
 ## Filter
 
 Press `/` to type a filter for the active tab. The list shows only the
@@ -576,6 +615,8 @@ fix(store): reopen the connection #99 alice alice/reopen
 ```
 
 The filter does not search the repo, the base branch or the labels.
+`T` also shows the pull requests that the filter hides, as dim rows with
+a `?` (see "Hidden rows").
 
 | Key | What it does |
 |---|---|
@@ -635,6 +676,7 @@ for `[keys]`.
 | `filter` | `/` | Types a fuzzy filter for the active tab. |
 | `authors` | `a` | Opens the author picker of the Review or the Team tab. |
 | `toggle_all` | `t` | On the Review and the Team tab, shows every open pull request, not only the ready ones. |
+| `show_hidden` | `T` | Shows every open pull request of the active tab, also the rows that the age limit, the ready rule, the author picker and the filter text hide (see "Hidden rows"). Only the help overlay shows this key, not the key hint bar. |
 | `refresh` | `r` | Syncs both lists now. In the pull request detail, syncs the pull request and its stack, and scans its repo. |
 | `column_headers` | `H` | Shows or hides the header row with the column names. chaoshub saves the choice in the cache. |
 | `help` | `?` | Shows the help overlay with every binding. |
