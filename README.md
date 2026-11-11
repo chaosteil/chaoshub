@@ -591,8 +591,9 @@ Each tab has its own `T` switch. chaoshub does not save it: after a
 restart, every tab shows the normal view.
 
 While `T` is on in a tab, the syncs search GitHub without the age limit.
-The pull requests past the limit arrive with the next full sync (see
-`[refresh] full_secs`). Press `r` to sync now. While `T` is on, a full
+When you set `T` on, chaoshub starts a full sync of the tab at once, so
+the pull requests past the limit arrive after a few seconds. Setting `T`
+off starts no sync. While `T` is on, a full
 sync does not remove the pull requests past the limit from the list.
 After you set `T` off in every tab, the next full sync removes them
 again.

@@ -2021,14 +2021,25 @@ fn filter_key(state: &mut AppState, tabs: &[Box<dyn Tab>], chord: KeyChord) -> V
 }
 
 /// Turns the `show_hidden` switch of the active tab on or off. The
-/// filter of the tab scores again for the new set of pull requests.
+/// filter of the tab scores again for the new set of pull requests. When
+/// the switch turns on, a full sync of the scope of the tab starts after
+/// the new interest, so the old pull requests arrive at once.
 fn toggle_show_hidden(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
-    let Some(ts) = state.ui.tabs.get_mut(state.ui.active) else {
+    let index = state.ui.active;
+    let Some(ts) = state.ui.tabs.get_mut(index) else {
         return Vec::new();
     };
     ts.show_hidden = !ts.show_hidden;
+    let on = ts.show_hidden;
     state.bump();
-    after_change(state, tabs)
+    let mut cmds = after_change(state, tabs);
+    if on
+        && let Some(scope) = tabs.get(index).and_then(|tab| tab.scope())
+        && state.data.sync.pending.insert(scope)
+    {
+        cmds.push(Cmd::SyncNow(scope));
+    }
+    cmds
 }
 
 /// Shows or hides the header row of the list for the session, and
@@ -4435,13 +4446,17 @@ mod tests {
         assert_eq!(model.rows.len(), 7, "the mode row and every row");
         let hidden = model.rows.iter().filter(|row| row.hidden).count();
         assert_eq!(hidden, 4, "the rows that do not match the text");
-        let Some(Cmd::SetInterest(interest)) = cmds.last() else {
-            panic!("no interest: {cmds:?}");
+        let [Cmd::SetInterest(interest), Cmd::SyncNow(Scope::Mine)] = cmds.as_slice() else {
+            panic!("no interest, then no sync: {cmds:?}");
         };
         assert_eq!(interest.visible.len(), 5, "the hidden rows are visible");
         assert!(interest.show_hidden, "the syncs skip the age limit");
-        key(&mut state, 'T');
+        let cmds = key(&mut state, 'T');
         assert!(!state.ui.tabs[0].show_hidden);
+        assert!(
+            !cmds.iter().any(|cmd| matches!(cmd, Cmd::SyncNow(_))),
+            "no sync when T turns off: {cmds:?}"
+        );
         assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 2);
     }
 
