@@ -9,7 +9,7 @@ expression: screen(&mut app)
 "                    ▌ ◢ 1 Desc ◤ ◢ 2 Checks ◤ ◢ 3 Convo ◤   4 Stack   ◢ 5 Files ◤   6 Agent        ┃"
 "                    ▌ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱ ┃"
 "                    ▌  BLOCKED  ╱ review required                                                  ┃"
-"                    ▌ CHECKS none   REVIEWS …   THREADS …   3 files +42 −7                         ┃"
+"                    ▌ CHECKS none   REVIEWS ○   THREADS …   3 files +42 −7                         ┃"
 "                    ▌ loading ◢━ ACTIONS FOR #88 ╱━━━━━━━━━━━━━━━╱╱╱━◥                             ┃"
 "                    ▌         ▌▶  v  review in codeview (the repo …◤◤┃                             ┃"
 "                    ▌ (no desc▌  r  review                           ┃                             ┃"

@@ -9,7 +9,7 @@ expression: screen(&mut app)
 " ┌ feat(ui): popup f▌ ◢ 1 Desc ◤ ◢ 2 Checks ◤ ◢ 3 Convo ◤   4 Stack   ◢ 5 Files ◤   6 Agent        ┃"
 " ├ feat(app): checks▌ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱ ┃"
 " └ feat(app): Pane t▌  CHECKING                                                                    ┃"
-" ─ docs: describe th▌ CHECKS none   REVIEWS …   THREADS …   3 files +42 −7                         ┃"
+" ─ docs: describe th▌ CHECKS none   REVIEWS none   THREADS …   3 files +42 −7                      ┃"
 "                    ▌ loading the activity…                                                        ┃"
 "                    ▌                                                                              ┃"
 "                    ▌ (no description)                                                             ┃"
