@@ -493,7 +493,7 @@ mod tests {
                     pierre.palette.purple,
                 ],
             ),
-            (&ansi16, [Color::Green, Color::Magenta, Color::Magenta]),
+            (&ansi16, [Color::Green, Color::Green, Color::Green]),
         ];
         for (theme, colors) in cases {
             let area = Rect::new(0, 0, 12, 3);

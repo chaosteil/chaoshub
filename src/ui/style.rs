@@ -53,7 +53,8 @@ pub(crate) fn cell_style(cell: CellStyle, palette: &Palette) -> Style {
 
 /// The color at `mix` between `from` (0) and `to` (255), mixed in RGB.
 /// Colors that are not RGB, as in the 16-color palette, do not mix: the
-/// color switches from `from` to `to` at the half.
+/// color stays `from`, so the merge badge does not pulse. It switches to
+/// the purple only when the pull request shows MERGED.
 fn blend(from: Color, to: Color, mix: u8) -> Color {
     if let (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) = (from, to) {
         let channel = |a: u8, b: u8| {
@@ -63,7 +64,7 @@ fn blend(from: Color, to: Color, mix: u8) -> Color {
         };
         return Color::Rgb(channel(r1, r2), channel(g1, g2), channel(b1, b2));
     }
-    if mix < 128 { from } else { to }
+    from
 }
 
 /// A line of cells, each in its style.
@@ -107,15 +108,16 @@ mod tests {
     }
 
     #[test]
-    fn a_merge_badge_on_16_colors_switches_without_a_fade() {
+    fn a_merge_badge_on_16_colors_stays_green_until_merged() {
         let p = Palette::ansi16();
-        let bg = |mix| cell_style(CellStyle::MergeBadge(mix), &p).bg;
-        for mix in [0, 64, 127] {
-            assert_eq!(bg(mix), Some(Color::Green), "{mix}");
+        // Every mix that the pulse gives over the time of a merge.
+        for mix in 0..=u8::MAX {
+            let bg = cell_style(CellStyle::MergeBadge(mix), &p).bg;
+            assert_eq!(bg, Some(Color::Green), "{mix}");
         }
-        for mix in [128, 192, 255] {
-            assert_eq!(bg(mix), Some(Color::Magenta), "{mix}");
-        }
+        // The MERGED badge when the merge lands.
+        let merged = cell_style(CellStyle::Badge(Tone::Merge), &p).bg;
+        assert_eq!(merged, Some(Color::Magenta));
     }
 
     #[test]
