@@ -24,6 +24,7 @@ use crate::bus::{
     ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReviewButton, ReviewKind, ReviewRow,
     ReviewSpec, Scope, Selection, Session, Size, SyncError, Target, TargetKey, UiEvent,
 };
+use crate::bus::{MergeProgress, MergeStep};
 use crate::domain::agent::{AgentResults, ToolKind};
 use crate::domain::codeview::{Comment, Comments};
 use crate::domain::detail::PrDetail;
@@ -93,8 +94,10 @@ pub(crate) struct AppData {
     /// The panes of the terminal actions, by action id and target. One
     /// pane per key.
     pub panes: HashMap<(&'static str, TargetKey), PaneHandleState>,
-    /// The state of the last async merge, from `ActionEvent::MergeStatus`.
-    /// A key press clears a final state.
+    /// The state of the last async merge run, from the confirm, the
+    /// `ActionEvent::MergeStep` and the `ActionEvent::MergeStatus` events.
+    /// A key press clears it only after the run ended and the end shows
+    /// (`MergeState::settled`).
     pub merge: Option<MergeState>,
     /// The prefetch batch that runs, for the terminal progress bar.
     pub prefetch: Option<PrefetchBatch>,
@@ -149,14 +152,75 @@ pub(crate) struct DetailPane {
     pub ratio: Option<u8>,
 }
 
-/// The state of an async merge.
+/// The state of an async merge run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MergeState {
-    /// The merged pull request: the top entry for a stack.
+    /// The selected row of the merge: the key of the events of the run.
     pub key: PrKey,
-    pub progress: crate::bus::MergeProgress,
+    /// The state of the last merge request of the run.
+    pub progress: MergeProgress,
     /// When the state arrived.
     pub at: DateTime<Utc>,
+    /// When the run started: the confirm, or the first event without a
+    /// confirm.
+    pub started: DateTime<Utc>,
+    /// The step of the run.
+    pub step: MergeStep,
+    /// True after the `Done` of the run.
+    pub done: bool,
+}
+
+impl MergeState {
+    /// A run of the merge of `key` that starts at `now`: a pending merge
+    /// of `key` alone, until the first step event comes.
+    pub(crate) fn new(key: PrKey, now: DateTime<Utc>) -> Self {
+        let step = MergeStep::Entry {
+            number: key.number,
+            index: 1,
+            total: 1,
+        };
+        Self {
+            key,
+            progress: MergeProgress::Pending,
+            at: now,
+            started: now,
+            step,
+            done: false,
+        }
+    }
+
+    /// True while the run goes on: from the start until a failure, the
+    /// merge queue, or the end of the run with the pull request `pr` no
+    /// longer open. After a merge, the run goes on until the refreshed
+    /// pull request shows the merge. `pr` is `None` when the pull
+    /// request is not loaded.
+    pub(crate) fn running(&self, pr: Option<&PullRequest>) -> bool {
+        match self.progress {
+            MergeProgress::Failed(_) | MergeProgress::Enqueued => false,
+            MergeProgress::Pending | MergeProgress::Merged { .. } => !(self.done && ended(pr)),
+        }
+    }
+
+    /// True when a key press can clear the state: the run ended, and the
+    /// pull request `pr` shows the end. A failure shows only in the
+    /// state, so it can always go.
+    pub(crate) fn settled(&self, pr: Option<&PullRequest>) -> bool {
+        if !self.done {
+            return false;
+        }
+        match self.progress {
+            MergeProgress::Failed(_) => true,
+            MergeProgress::Enqueued => {
+                ended(pr) || pr.is_some_and(|pr| pr.head.value.in_merge_queue)
+            }
+            MergeProgress::Pending | MergeProgress::Merged { .. } => ended(pr),
+        }
+    }
+}
+
+/// True when the pull request `pr` is no longer open, or not loaded.
+fn ended(pr: Option<&PullRequest>) -> bool {
+    pr.is_none_or(|pr| pr.head.value.state != PrState::Open)
 }
 
 /// The progress of a prefetch batch.
