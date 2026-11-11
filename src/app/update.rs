@@ -27,13 +27,13 @@ use crate::app::state::{
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, cells, pr_ref};
 use crate::app::target::{pr_target, row_target};
 use crate::app::term::term_status;
-use crate::bus::MergeProgress;
 use crate::bus::{
     ActionEvent, ActionInput, AgentJob, Cmd, Hit, KeyChord, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, LaunchRequest, MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection,
     Size, SyncError, Target, TargetKey, UiEvent,
 };
 use crate::bus::{ConfirmSpec, PromptSpec, ReviewKind};
+use crate::bus::{MergeProgress, MergeStep};
 use crate::domain::agent::{AgentResults, Record, Tool, ToolKind, short_tokens};
 use crate::domain::check::Check;
 use crate::domain::detail::PrDetail;
@@ -162,6 +162,11 @@ pub(crate) fn update_full(
             event: ActionEvent::MergeStatus(progress),
             ..
         } => merge_status(state, key, progress),
+        Msg::ActionEvent {
+            key: TargetKey::Pr(key),
+            event: ActionEvent::MergeStep(step),
+            ..
+        } => merge_step(state, key, step),
         Msg::ActionEvent { id, key, event } => action_event(state, actions, id, key, event),
         msg @ (Msg::AgentStarted { .. } | Msg::AgentFinished { .. } | Msg::AgentLoaded { .. }) => {
             agent_msg(state, msg)
@@ -233,7 +238,7 @@ fn key(
         .data
         .merge
         .as_ref()
-        .is_some_and(|merge| merge.progress != MergeProgress::Pending)
+        .is_some_and(|merge| merge.settled(state.data.prs.get(&merge.key)))
     {
         state.data.merge = None;
         state.bump();
@@ -1573,6 +1578,11 @@ fn overlay_key(
                 selection: action.selection.clone(),
                 input: ActionInput::Confirmed,
             };
+            // The merge shows from the confirm, before its first event.
+            if is_merge(action.id) {
+                let TargetKey::Pr(key) = action.selection.target.key();
+                state.data.merge = Some(MergeState::new(key, state.data.now));
+            }
             close_overlay(state);
             vec![cmd]
         }
@@ -2684,10 +2694,7 @@ fn action_event(
                     );
                 }
             }
-            if merge_pending(&state.data, &key) {
-                state.data.merge = None;
-                state.bump();
-            }
+            merge_done(state, id, &key);
             // A pane whose launch failed never started: its `Done` is the
             // last message of the pane.
             let pane = (id, key.clone());
@@ -2779,23 +2786,69 @@ fn follow_up(data: &AppData, key: &TargetKey) -> Vec<Cmd> {
     cmds
 }
 
-/// A new state of an async merge.
+/// The action id of the merge.
+const MERGE_ID: &str = "merge";
+/// The action id of the stack merge.
+const MERGE_STACK_ID: &str = "merge_stack";
+
+/// True for the ids of the merge actions.
+fn is_merge(id: &str) -> bool {
+    id == MERGE_ID || id == MERGE_STACK_ID
+}
+
+/// The merge run of `key`. A run of another key gives way to a new run
+/// of `key` that starts now.
+fn merge_run(data: &mut AppData, key: PrKey) -> &mut MergeState {
+    let now = data.now;
+    let merge = data
+        .merge
+        .take()
+        .filter(|merge| merge.key == key)
+        .unwrap_or_else(|| MergeState::new(key, now));
+    data.merge.insert(merge)
+}
+
+/// A new state of an async merge. The run keeps its start and its step.
 fn merge_status(state: &mut AppState, key: PrKey, progress: MergeProgress) -> Vec<Cmd> {
-    state.data.merge = Some(MergeState {
-        key,
-        progress,
-        at: state.data.now,
-    });
+    let now = state.data.now;
+    let merge = merge_run(&mut state.data, key);
+    merge.progress = progress;
+    merge.at = now;
     state.bump();
     Vec::new()
 }
 
-/// True while the merge of `key` is pending. A `Done` then means that the
-/// poll stopped before a final state, for example on a cancel.
-fn merge_pending(data: &AppData, key: &TargetKey) -> bool {
-    data.merge.as_ref().is_some_and(|merge| {
-        merge.progress == MergeProgress::Pending && *key == TargetKey::Pr(merge.key.clone())
-    })
+/// The next step of an async merge run: a new entry starts as pending.
+fn merge_step(state: &mut AppState, key: PrKey, step: MergeStep) -> Vec<Cmd> {
+    let now = state.data.now;
+    let merge = merge_run(&mut state.data, key);
+    if matches!(step, MergeStep::Entry { .. }) {
+        merge.progress = MergeProgress::Pending;
+        merge.at = now;
+    }
+    merge.step = step;
+    state.bump();
+    Vec::new()
+}
+
+/// The `Done` of the action `id` on `key` ends the merge run of `key`.
+/// A run that is still pending stopped before a final state, for example
+/// on a cancel or at the poll limit: its state goes. Every other state
+/// stays until it is settled and a key press comes.
+fn merge_done(state: &mut AppState, id: &str, key: &TargetKey) {
+    let TargetKey::Pr(key) = key;
+    let Some(merge) = &mut state.data.merge else {
+        return;
+    };
+    if !is_merge(id) || merge.key != *key {
+        return;
+    }
+    if merge.progress == MergeProgress::Pending {
+        state.data.merge = None;
+    } else {
+        merge.done = true;
+    }
+    state.bump();
 }
 
 /// The refs of the loaded pull requests in the stack of `key`, position 1
@@ -5212,6 +5265,136 @@ mod tests {
         act_menu(&mut state, &actions, KeyCode::Char('m'));
         assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
         assert!(state.ui.overlays.iter().all(|o| o.closing));
+    }
+
+    /// An event of the action `id` on `#102` of `chaoshub`.
+    fn merge_event(id: &'static str, event: ActionEvent) -> Msg {
+        Msg::ActionEvent {
+            id,
+            key: TargetKey::Pr(testdata::pr_key("chaoshub", 102)),
+            event,
+        }
+    }
+
+    /// The step event of the merge of #`number`, the entry `index` of
+    /// `total`.
+    fn entry_step(number: u64, index: usize, total: usize) -> ActionEvent {
+        ActionEvent::MergeStep(MergeStep::Entry {
+            number,
+            index,
+            total,
+        })
+    }
+
+    fn merged() -> ActionEvent {
+        ActionEvent::MergeStatus(MergeProgress::Merged { sha: "abc".into() })
+    }
+
+    /// The action state on `#102` after the confirm of a merge.
+    fn confirmed_merge(actions: &[Box<dyn Action>]) -> AppState {
+        let mut state = action_state(&pr_row(102));
+        act_menu(&mut state, actions, KeyCode::Char('m'));
+        assert_eq!(act(&mut state, actions, KeyCode::Char('y')).len(), 1);
+        state
+    }
+
+    #[test]
+    fn the_confirm_of_a_merge_starts_a_pending_merge() {
+        let actions = confirm_merge();
+        let state = confirmed_merge(&actions);
+        let key = testdata::pr_key("chaoshub", 102);
+        assert_eq!(state.data.merge, Some(MergeState::new(key, state.data.now)));
+    }
+
+    #[test]
+    fn a_key_press_keeps_the_progress_of_a_stack_merge() {
+        let actions = confirm_merge();
+        let mut state = confirmed_merge(&actions);
+        let started = state.data.now;
+        let events = [
+            entry_step(101, 1, 2),
+            merged(),
+            ActionEvent::Progress("merged #101 (1 of 2)".into()),
+            ActionEvent::MergeStep(MergeStep::Retarget { number: 102 }),
+            entry_step(102, 2, 2),
+        ];
+        for event in events {
+            state.data.now += TimeDelta::seconds(1);
+            run_msg(&mut state, &actions, merge_event("merge", event));
+            act(&mut state, &actions, KeyCode::Char('j'));
+            assert!(state.data.merge.is_some(), "the key press keeps the run");
+        }
+        let merge = state.data.merge.as_ref().unwrap();
+        assert_eq!(merge.started, started, "the run keeps its start");
+        assert_eq!(
+            merge.step,
+            MergeStep::Entry {
+                number: 102,
+                index: 2,
+                total: 2
+            }
+        );
+        assert_eq!(
+            merge.progress,
+            MergeProgress::Pending,
+            "a new entry is pending"
+        );
+        assert!(!merge.done);
+    }
+
+    #[test]
+    fn the_done_of_a_pending_merge_clears_the_merge() {
+        let actions = confirm_merge();
+        let mut state = confirmed_merge(&actions);
+        let done = ActionEvent::Done(Err("stopped the poll".into()));
+        run_msg(&mut state, &actions, merge_event("merge", done));
+        assert_eq!(state.data.merge, None);
+    }
+
+    #[test]
+    fn a_failed_merge_stays_until_a_key_press_after_the_done() {
+        let actions = confirm_merge();
+        let mut state = confirmed_merge(&actions);
+        let failed = ActionEvent::MergeStatus(MergeProgress::Failed("checks failing".into()));
+        run_msg(&mut state, &actions, merge_event("merge", failed));
+        act(&mut state, &actions, KeyCode::Char('j'));
+        assert!(state.data.merge.is_some(), "the run did not end");
+        let done = ActionEvent::Done(Err("checks failing".into()));
+        run_msg(&mut state, &actions, merge_event("merge", done));
+        assert!(state.data.merge.as_ref().is_some_and(|merge| merge.done));
+        act(&mut state, &actions, KeyCode::Char('j'));
+        assert_eq!(state.data.merge, None);
+    }
+
+    #[test]
+    fn a_merge_stays_until_the_pull_request_shows_the_merge() {
+        let actions = confirm_merge();
+        let mut state = confirmed_merge(&actions);
+        run_msg(&mut state, &actions, merge_event("merge", merged()));
+        let done = ActionEvent::Done(Ok("merged #102".into()));
+        run_msg(&mut state, &actions, merge_event("merge", done));
+        act(&mut state, &actions, KeyCode::Char('j'));
+        let merge = state.data.merge.as_ref().unwrap();
+        assert!(merge.done, "the run ended");
+        let key = testdata::pr_key("chaoshub", 102);
+        assert!(merge.running(state.data.prs.get(&key)), "the fetch goes on");
+        let mut pr = state.data.prs[&key].clone();
+        pr.head.value.state = PrState::Merged;
+        pr.head.observed_at += TimeDelta::minutes(1);
+        assert!(pr_refreshed(&mut state, pr));
+        let merge = state.data.merge.as_ref().unwrap();
+        assert!(!merge.running(state.data.prs.get(&key)));
+        act(&mut state, &actions, KeyCode::Char('j'));
+        assert_eq!(state.data.merge, None);
+    }
+
+    #[test]
+    fn the_done_of_another_action_does_not_end_the_merge() {
+        let actions = confirm_merge();
+        let mut state = confirmed_merge(&actions);
+        let done = ActionEvent::Done(Ok("approved".into()));
+        run_msg(&mut state, &actions, merge_event("approve", done));
+        assert!(state.data.merge.as_ref().is_some_and(|merge| !merge.done));
     }
 
     /// The action state on `#number`, with the sidebar open on it.

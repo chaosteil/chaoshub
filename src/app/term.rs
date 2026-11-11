@@ -19,7 +19,8 @@
 //! | Review pane open | `idle`: the pane is the user's | unchanged |
 //!
 //! A failure stays until the next key press or the next successful sync.
-//! A final merge state stays until the next key press.
+//! A final merge state stays until the next key press after the end of
+//! the run, when the pull request shows the end.
 
 use chrono::{DateTime, TimeDelta, Utc};
 
@@ -286,9 +287,8 @@ mod tests {
 
     fn merge(progress: MergeProgress) -> MergeState {
         MergeState {
-            key: crate::app::testdata::pr_key("a", 7),
             progress,
-            at: at(0),
+            ..MergeState::new(crate::app::testdata::pr_key("a", 7), at(0))
         }
     }
 
