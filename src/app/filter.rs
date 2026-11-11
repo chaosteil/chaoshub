@@ -24,29 +24,33 @@ pub(crate) enum ItemKey {
 pub(crate) struct Filter {
     /// Made on the first non-empty filter text, then reused.
     matcher: Option<Matcher>,
-    /// The filter text and the data revision of the last scoring.
-    scored: Option<(String, u64)>,
+    /// The filter text, the data revision and the `show_hidden` switch
+    /// of the last scoring.
+    scored: Option<(String, u64, bool)>,
     /// The items that match. `None` when the filter text is empty.
     matches: Option<HashSet<ItemKey>>,
 }
 
 impl Filter {
-    /// Scores the candidates again when `text` or `revision` changed
-    /// since the last call. True when it scored.
+    /// Scores the candidates again when `text`, `revision` or
+    /// `show_hidden` changed since the last call. With `show_hidden`,
+    /// the candidates also hold the pull requests that the normal view
+    /// hides. True when it scored.
     pub(crate) fn rescore(
         &mut self,
         text: &str,
         revision: u64,
+        show_hidden: bool,
         candidates: impl IntoIterator<Item = (ItemKey, String)>,
     ) -> bool {
         if self
             .scored
             .as_ref()
-            .is_some_and(|(t, r)| t == text && *r == revision)
+            .is_some_and(|(t, r, h)| t == text && *r == revision && *h == show_hidden)
         {
             return false;
         }
-        self.scored = Some((text.to_owned(), revision));
+        self.scored = Some((text.to_owned(), revision, show_hidden));
         if text.trim().is_empty() {
             self.matches = None;
             return true;
@@ -144,7 +148,7 @@ mod tests {
         ];
         for (text, expected, name) in cases {
             let mut filter = Filter::default();
-            filter.rescore(text, 0, candidates());
+            filter.rescore(text, 0, false, candidates());
             assert_eq!(kept(&filter), expected, "{name}: {text:?}");
         }
     }
@@ -152,11 +156,18 @@ mod tests {
     #[test]
     fn rescore_skips_when_nothing_moved() {
         let mut filter = Filter::default();
-        assert!(filter.rescore("mine", 1, candidates()));
-        assert!(!filter.rescore("mine", 1, candidates()));
-        assert!(filter.rescore("mine", 2, candidates()), "the data moved");
-        assert!(filter.rescore("tab", 2, candidates()), "the text moved");
-        assert!(filter.rescore("", 2, candidates()));
+        assert!(filter.rescore("mine", 1, false, candidates()));
+        assert!(!filter.rescore("mine", 1, false, candidates()));
+        assert!(
+            filter.rescore("mine", 2, false, candidates()),
+            "the data moved"
+        );
+        assert!(
+            filter.rescore("tab", 2, false, candidates()),
+            "the text moved"
+        );
+        assert!(filter.rescore("tab", 2, true, candidates()), "T moved");
+        assert!(filter.rescore("", 2, true, candidates()));
         assert_eq!(kept(&filter), [1, 2, 31]);
     }
 }

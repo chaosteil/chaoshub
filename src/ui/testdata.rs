@@ -134,6 +134,7 @@ fn pr_row(
         depth,
         glyph: Some(glyph),
         style: RowStyle::Normal,
+        hidden: false,
     }
 }
 
@@ -148,6 +149,7 @@ pub(crate) fn mine_list() -> ListModel {
         depth: 0,
         glyph: None,
         style: RowStyle::Header,
+        hidden: false,
     };
     ListModel {
         columns: mine_columns(),
@@ -220,6 +222,7 @@ pub(crate) fn team_list() -> ListModel {
         depth: 0,
         glyph: None,
         style: RowStyle::Normal,
+        hidden: false,
     };
     ListModel {
         columns,
@@ -311,6 +314,7 @@ fn check_row(name: &str, state: (&str, CellStyle), duration: &str) -> Row {
         depth: 0,
         glyph: None,
         style: RowStyle::Normal,
+        hidden: false,
     }
 }
 

@@ -1,0 +1,16 @@
+---
+source: src/run.rs
+expression: screen(&mut app)
+---
+"◢ 1 MINE ◤ 2 REVIEW ◤ 3 TEAM ◤                                                             chaoshub "
+" TITLE                                      # REPO         AUTHOR          UPD CHECKS   REV  FLG    "
+" everything · 3 · T for the normal view                                                             "
+"▶ perf(store): batch inserts               #87 chaoshub     bob              3h    ·      ○       ◤◤"
+" ? fix(vcs): parse empty bookmarks        #84 chaoshub     dave             1d    ·      ○          "
+" perf(ui): cache the texture              #86 codeview     bob              2d    ·     ✓1          "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"╱ j/k move  Enter open  Space actions  / filter  1/2/3/Tab tabs  r refresh  ? help  q quit  …       "
+" [TEAM] 0 repos · cache from 5m ago ◤                                                        ? help "

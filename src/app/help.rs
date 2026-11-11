@@ -27,6 +27,7 @@ const APP_KEYS: &[(&[&str], &str)] = &[
     (&["filter"], "filter"),
     (&["authors"], "pick an author"),
     (&["toggle_all"], "show all open"),
+    (&["show_hidden"], "show the hidden rows"),
     (&["refresh"], "refresh"),
     (&["column_headers"], "show or hide the column names"),
     (&["quit"], "quit"),
@@ -166,7 +167,8 @@ fn filter_section(keymap: &Keymap) -> HelpSection {
 
 /// The list symbols, in the styles of the list: the glyphs of the CHECKS,
 /// REV and FLG columns, the CHANGE colors and the stack tree of the Mine
-/// tab, and the ready rule of the Review and the Team tab. A column name
+/// tab, the ready rule of the Review and the Team tab, and the marks of
+/// the hidden rows that the `show_hidden` key (`T`) shows. A column name
 /// in the style of the column header starts each group. The labels are
 /// short, so that they fit the help overlay at its minimum width.
 fn symbols_section() -> HelpSection {
@@ -175,7 +177,7 @@ fn symbols_section() -> HelpSection {
         let glyph = cells::ci(state);
         cell(format!("{} {counts}", glyph.text), glyph.style)
     };
-    let symbols: [(Cell, &str); 27] = [
+    let symbols: [(Cell, &str); 30] = [
         (heading("CHECKS"), "CI state, passed/all checks"),
         (cell("·", CellStyle::Dim), "no checks"),
         (checks(CiState::Success, "5/5"), "CI green, 5 of 5 pass"),
@@ -218,6 +220,9 @@ fn symbols_section() -> HelpSection {
         (cell("└", CellStyle::Dim), "the bottom PR of a stack"),
         (heading("READY"), "what Review and Team show"),
         (cell("ready", CellStyle::Dim), "open, not a draft, CI green"),
+        (heading("HIDDEN"), "the rows that only T shows"),
+        (cell("?", CellStyle::Dim), "before the title of the row"),
+        (cell("title", CellStyle::Dim), "the row is dim"),
     ];
     HelpSection {
         title: SYMBOLS_TITLE.to_owned(),
@@ -273,6 +278,7 @@ mod tests {
         assert!(keys.contains(&entry("q esc ctrl-c", "quit")));
         assert!(keys.contains(&entry("esc q", "close the popup")));
         assert!(keys.contains(&entry("j k", "down, up")));
+        assert!(keys.contains(&entry("T", "show the hidden rows")));
         assert!(
             !keys.iter().any(|(_, label)| label == "pick an author"),
             "an unbound key is not in the help"

@@ -6,8 +6,11 @@
 //! the matched local change. For a jj change they show the change id, the
 //! commit and the workspace. For a git branch they show the branch name,
 //! the short commit and the worktree. A list can show both.
+//!
+//! The `show_hidden` key (`T`) also shows the pull requests past the age
+//! limit and the ones that the filter text hides, under a mode row.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::app::filter::{Filter, ItemKey, pr_candidate};
 use crate::app::models::{
@@ -15,7 +18,7 @@ use crate::app::models::{
 };
 use crate::app::nav::place;
 use crate::app::tabs::cells::{self, cell};
-use crate::app::tabs::{Handled, KeyCx, Tab, TabState, list_interest, pr_ref};
+use crate::app::tabs::{Handled, KeyCx, Tab, TabState, list_interest, pr_ref, show_hidden_text};
 use crate::bus::{Interest, KeyChord, Scope, Size, TargetKey};
 use crate::domain::keys::PrKey;
 use crate::domain::local::LocalMatch;
@@ -92,7 +95,7 @@ impl Tab for Mine {
     fn model(&self, cx: &KeyCx<'_>, ts: &TabState, size: Size) -> ListModel {
         let set = Columns::for_width(size.width);
         let filter = ts.ext.downcast_ref::<Filter>();
-        let rows = rows(cx, set, filter);
+        let rows = rows(cx, set, filter, ts.show_hidden);
         let (cursor, scroll) = place(
             &rows,
             ts.selected.as_ref(),
@@ -121,8 +124,11 @@ impl Tab for Mine {
         let Some(filter) = ts.ext.downcast_mut::<Filter>() else {
             return;
         };
-        let candidates: Vec<_> = mine_prs(cx).into_iter().map(pr_candidate).collect();
-        filter.rescore(&ts.filter, cx.data.revision, candidates);
+        let candidates: Vec<_> = mine_prs(cx, ts.show_hidden)
+            .into_iter()
+            .map(pr_candidate)
+            .collect();
+        filter.rescore(&ts.filter, cx.data.revision, ts.show_hidden, candidates);
     }
 
     fn authors(&self, _cx: &KeyCx<'_>) -> Vec<String> {
@@ -173,15 +179,16 @@ fn columns(set: Columns) -> Vec<Column> {
     columns
 }
 
-/// The open pull requests of the Mine scope, newest update first.
-fn mine_prs<'a>(cx: &KeyCx<'a>) -> Vec<&'a PullRequest> {
+/// The open pull requests of the Mine scope, newest update first. Only
+/// the ones in the age limit unless `show_hidden`.
+fn mine_prs<'a>(cx: &KeyCx<'a>, show_hidden: bool) -> Vec<&'a PullRequest> {
     let data = cx.data;
     let mut prs: Vec<&PullRequest> = data
         .prs
         .values()
         .filter(|pr| data.scopes.get(&pr.key) == Some(&Scope::Mine))
         .filter(|pr| pr.head.value.state == PrState::Open)
-        .filter(|pr| data.filters.matches(pr, data.now))
+        .filter(|pr| show_hidden || data.filters.matches(pr, data.now))
         .collect();
     prs.sort_by(|a, b| {
         b.head
@@ -216,27 +223,39 @@ fn local_view(cx: &KeyCx<'_>) -> LocalView {
     view
 }
 
-/// The rows of every stack group, of the pull requests that pass the
-/// filter.
-fn rows(cx: &KeyCx<'_>, set: Columns, filter: Option<&Filter>) -> Vec<Row> {
-    let keeps = |key: ItemKey| filter.is_none_or(|filter| filter.keeps(&key));
-    let mut prs = mine_prs(cx);
-    prs.retain(|pr| keeps(ItemKey::Pr(pr.key.clone())));
-    let view = local_view(cx);
+/// The rows of every stack group, of the pull requests that pass the age
+/// limit and the filter. With `show_hidden`, a mode row comes first,
+/// and the rows of the other pull requests are hidden rows.
+fn rows(cx: &KeyCx<'_>, set: Columns, filter: Option<&Filter>, show_hidden: bool) -> Vec<Row> {
+    let data = cx.data;
+    let normal = |pr: &PullRequest| {
+        data.filters.matches(pr, data.now)
+            && filter.is_none_or(|filter| filter.keeps(&ItemKey::Pr(pr.key.clone())))
+    };
+    let mut prs = mine_prs(cx, show_hidden);
+    let mut hidden = HashSet::new();
     let mut rows = Vec::new();
+    if show_hidden {
+        hidden.extend(prs.iter().filter(|pr| !normal(pr)).map(|pr| &pr.key));
+        rows.push(header("mine".into(), show_hidden_text(prs.len())));
+    } else {
+        prs.retain(|pr| normal(pr));
+    }
+    let view = local_view(cx);
     for group in group_stacks(&prs) {
-        group_rows(cx, set, &group, &view, &mut rows);
+        group_rows(cx, set, &group, &view, &hidden, &mut rows);
     }
     rows
 }
 
 /// The rows of one group: a header and the tree for a stack, one row for
-/// a single pull request.
+/// a single pull request. The pull requests of `hidden` get hidden rows.
 fn group_rows(
     cx: &KeyCx<'_>,
     set: Columns,
     group: &StackGroup,
     view: &LocalView,
+    hidden: &HashSet<&PrKey>,
     rows: &mut Vec<Row>,
 ) {
     let prs: Vec<&PullRequest> = group
@@ -264,7 +283,12 @@ fn group_rows(
         };
         let local = view.matches.get(&pr.key).unwrap_or(&LocalMatch::None);
         let pane = cx.data.pane_open(&TargetKey::Pr(pr.key.clone()));
-        rows.push(pr_row(pr, local, set, glyph, pane));
+        let mut row = pr_row(pr, local, set, glyph, pane);
+        if hidden.contains(&pr.key) {
+            row.style = RowStyle::Dim;
+            row.hidden = true;
+        }
+        rows.push(row);
     }
 }
 
@@ -276,6 +300,7 @@ fn header(stack_id: String, text: String) -> Row {
         depth: 0,
         glyph: None,
         style: RowStyle::Header,
+        hidden: false,
     }
 }
 
@@ -346,6 +371,7 @@ fn pr_row(pr: &PullRequest, local: &LocalMatch, set: Columns, glyph: char, pane:
         depth: 0,
         glyph: Some(glyph),
         style: RowStyle::Normal,
+        hidden: false,
     }
 }
 
@@ -538,6 +564,54 @@ mod tests {
         ];
         assert_eq!(outline(&model), expected);
         assert_eq!(model.cursor, 1, "the cursor skips the header");
+    }
+
+    #[test]
+    fn show_hidden_adds_a_mode_row_and_marks_the_hidden_prs() {
+        let mut state = seeded();
+        state.data.filters.max_age = Some(chrono::TimeDelta::weeks(2));
+        for pr in state.data.prs.values_mut() {
+            pr.head.value.created_at = Some(state.data.now);
+        }
+        state
+            .data
+            .prs
+            .get_mut(&testdata::pr_key("codeview", 3))
+            .unwrap()
+            .head
+            .value
+            .created_at = None;
+        let areas = layout(SIZE);
+        let cx = KeyCx {
+            data: &state.data,
+            target: None,
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let mut ts = Mine.init_state();
+        ts.filter = "top".into();
+        Mine.rescore(&cx, &mut ts);
+        assert_eq!(Mine.model(&cx, &ts, SIZE).rows.len(), 2);
+        ts.show_hidden = true;
+        Mine.rescore(&cx, &mut ts);
+        let model = Mine.model(&cx, &ts, SIZE);
+        let marked: Vec<(String, bool)> = model
+            .rows
+            .iter()
+            .map(|row| (row.cells[0].text.clone(), row.hidden))
+            .collect();
+        let expected: Vec<(String, bool)> = vec![
+            ("everything · 4 · T for the normal view".into(), false),
+            ("Fix the export".into(), true),
+            ("stack #12 -> main · 3 PRs".into(), false),
+            ("Add the top".into(), false),
+            ("Add the middle".into(), true),
+            ("Add the base".into(), true),
+        ];
+        assert_eq!(marked, expected);
+        assert_eq!(model.rows[1].style, RowStyle::Dim);
+        assert_eq!(model.rows[3].style, RowStyle::Normal);
+        assert_eq!(model.rows[1].glyph, Some('─'), "the tree stays");
     }
 
     /// The mine fixtures with the jj scan.

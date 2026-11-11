@@ -2129,6 +2129,13 @@ mod tests {
     }
 
     #[test]
+    fn team_list_show_hidden_100() {
+        let mut app = team_app(100, 12);
+        press(&mut app, 'T');
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
+    #[test]
     fn author_picker_100() {
         let mut app = team_app(100, 16);
         press(&mut app, 'a');
@@ -2170,7 +2177,7 @@ mod tests {
     fn help_overlay_symbols_100() {
         let mut app = seeded_app(100, 40, crate::app::testdata::mine_snapshot());
         press(&mut app, '?');
-        for _ in 0..31 {
+        for _ in 0..32 {
             press(&mut app, 'j');
         }
         let screen = screen(&mut app);
