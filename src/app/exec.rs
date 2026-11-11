@@ -1,9 +1,9 @@
 //! The runtime that executes commands.
 //!
 //! Each `Cmd` has one executor. This runtime sends the interest and the
-//! session to the workers through watch channels, sends sync and jj
-//! requests through their request channels, writes `ui_state` through the
-//! store handle, and runs the clipboard and the browser on blocking
+//! session to the workers through watch channels, sends sync, detail and
+//! jj requests through their request channels, writes `ui_state` through
+//! the store handle, and runs the clipboard and the browser on blocking
 //! threads. It runs the action tasks in a `JoinSet`, each with a child
 //! token of the root token, and sends `ActionEvent::Done` with the result
 //! of each task. With a launcher, it runs terminal commands in detached
@@ -24,8 +24,8 @@ use crate::actions::{Action, Services};
 use crate::agent::run::Job;
 use crate::agent::store::Store;
 use crate::bus::{
-    ActionEvent, ActionInput, AgentJob, Cmd, Interest, JjReq, LaunchRequest, Msg, Selection,
-    Session, SyncReq, TargetKey,
+    ActionEvent, ActionInput, AgentJob, Cmd, DetailReq, Interest, JjReq, LaunchRequest, Msg,
+    Selection, Session, SyncReq, TargetKey,
 };
 use crate::config::schema::AgentConfig;
 use crate::domain::keys::PrKey;
@@ -53,6 +53,7 @@ pub(crate) struct Senders {
     pub interest: watch::Sender<Interest>,
     pub session: watch::Sender<Session>,
     pub sync: mpsc::Sender<SyncReq>,
+    pub detail: mpsc::Sender<DetailReq>,
     pub jj: mpsc::Sender<JjReq>,
     pub store: StoreHandle,
 }
@@ -165,6 +166,9 @@ impl Runtime {
             Cmd::SyncNow(scope) => self.request(&self.senders.sync, SyncReq::Full(scope)),
             Cmd::RefreshPr(refs) => self.request(&self.senders.sync, SyncReq::Refresh(refs)),
             Cmd::LoadPr(key) => self.request(&self.senders.sync, SyncReq::Load(key)),
+            Cmd::ReloadDetail(refs) => {
+                self.request(&self.senders.detail, DetailReq::Reload(refs));
+            }
             Cmd::ScanJj(repo) => self.request(&self.senders.jj, JjReq::Scan(repo)),
             Cmd::Persist(persist) => self.senders.store.try_persist(persist),
             Cmd::Copy(text) => {
@@ -580,6 +584,7 @@ mod tests {
         interest: watch::Receiver<Interest>,
         session: watch::Receiver<Session>,
         sync: mpsc::Receiver<SyncReq>,
+        detail: mpsc::Receiver<DetailReq>,
         jj: mpsc::Receiver<JjReq>,
         store: mpsc::Receiver<StoreOp>,
         msgs: mpsc::Receiver<Msg>,
@@ -617,12 +622,14 @@ mod tests {
             repos: Vec::new(),
         });
         let (sync_tx, sync) = mpsc::channel(capacity);
+        let (detail_tx, detail) = mpsc::channel(capacity);
         let (jj_tx, jj) = mpsc::channel(capacity);
         let (store_tx, store) = mpsc::channel(4);
         let senders = Senders {
             interest: interest_tx,
             session: session_tx,
             sync: sync_tx,
+            detail: detail_tx,
             jj: jj_tx,
             store: StoreHandle::new(store_tx),
         };
@@ -646,6 +653,7 @@ mod tests {
             interest,
             session,
             sync,
+            detail,
             jj,
             store,
             msgs,
@@ -672,9 +680,11 @@ mod tests {
         assert_eq!(*f.session.borrow_and_update(), session);
         f.runtime.exec(Cmd::SyncNow(Scope::Team));
         f.runtime.exec(Cmd::RefreshPr(Vec::new()));
+        f.runtime.exec(Cmd::ReloadDetail(Vec::new()));
         f.runtime.exec(Cmd::ScanJj(repo()));
         assert_eq!(f.sync.recv().await, Some(SyncReq::Full(Scope::Team)));
         assert_eq!(f.sync.recv().await, Some(SyncReq::Refresh(Vec::new())));
+        assert_eq!(f.detail.recv().await, Some(DetailReq::Reload(Vec::new())));
         assert_eq!(f.jj.recv().await, Some(JjReq::Scan(repo())));
         let persist = Persist::UiState {
             key: "filter.mine".into(),

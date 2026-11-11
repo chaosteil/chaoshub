@@ -17,15 +17,22 @@
 //! only with the head or with a move of the base, so the longer age is
 //! safe. A load is done only when both parts succeed, so a failed part
 //! loads again at the next `Interest` change.
+//!
+//! The worker also serves `DetailReq::Reload`. A reload reads the
+//! conversation from GitHub at once, without the cache and without the
+//! debounce, and replaces the cache row. It does not read the files. A
+//! reload of a pull request whose reload runs now does nothing: the
+//! running reload reads GitHub after the request was made.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{TimeDelta, Utc};
 use futures::FutureExt;
-use tokio::task::{JoinError, JoinSet};
+use tokio::task::{self, JoinError, JoinSet};
 
-use crate::bus::{Msg, PrRef, SyncError};
+use crate::bus::{DetailReq, Msg, PrRef, SyncError};
 use crate::domain::detail::PrDetail;
 use crate::domain::files::PrFiles;
 use crate::domain::keys::PrKey;
@@ -55,8 +62,10 @@ const FILES_MAX_AGE: TimeDelta = TimeDelta::minutes(30);
 /// The key and head oid of a successful load, or `None`.
 type Loaded = Option<(PrKey, String)>;
 
-/// Serves `Interest` changes until `app` is gone.
+/// Serves `Interest` changes and reload requests until `app` is gone.
 async fn run(ctx: WorkerCtx) {
+    let detail_rx = Arc::clone(&ctx.detail_rx);
+    let mut requests = detail_rx.lock().await;
     let mut interest = ctx.interest.clone();
     // The first interest is the value of the watch, not a change. The
     // pinned mode can keep it for its whole life, so it loads too.
@@ -67,6 +76,9 @@ async fn run(ctx: WorkerCtx) {
     let mut background: JoinSet<Loaded> = JoinSet::new();
     let mut selected_loads: JoinSet<Loaded> = JoinSet::new();
     let mut last_selected: Option<PrRef> = None;
+    let mut reloads: JoinSet<()> = JoinSet::new();
+    // The pull request of each running reload, by task id.
+    let mut reloading: HashMap<task::Id, PrKey> = HashMap::new();
     loop {
         while background.len() < MAX_CONCURRENT {
             let Some(pr) = queue.pop_front() else {
@@ -97,8 +109,31 @@ async fn run(ctx: WorkerCtx) {
                     })
                     .collect();
             }
+            request = requests.recv() => {
+                let Some(DetailReq::Reload(refs)) = request else {
+                    return;
+                };
+                for pr in refs {
+                    if reloading.values().any(|key| *key == pr.key) {
+                        continue;
+                    }
+                    let key = pr.key.clone();
+                    let reload = fetch_conversation(ctx.clone(), pr).map(drop);
+                    reloading.insert(reloads.spawn(reload).id(), key);
+                }
+            }
             Some(done) = background.join_next() => record(&mut loaded, done),
             Some(done) = selected_loads.join_next() => record(&mut loaded, done),
+            Some(done) = reloads.join_next_with_id() => {
+                let id = match done {
+                    Ok((id, ())) => id,
+                    Err(err) => {
+                        tracing::warn!(%err, "detail reload task failed");
+                        err.id()
+                    }
+                };
+                reloading.remove(&id);
+            }
         }
     }
 }
@@ -134,6 +169,13 @@ async fn load_conversation(ctx: WorkerCtx, pr: PrRef) -> Loaded {
             .await;
         return Some((pr.key, pr.head_oid));
     }
+    fetch_conversation(ctx, pr).await
+}
+
+/// Reads the detail of `pr` from GitHub, sends `DetailLoading` and
+/// `DetailLoaded`, and writes the cache row. Returns the key and head oid
+/// on success.
+async fn fetch_conversation(ctx: WorkerCtx, pr: PrRef) -> Loaded {
     if ctx
         .tx
         .send(Msg::DetailLoading(pr.key.clone()))
@@ -386,6 +428,85 @@ mod tests {
         let cached = ctx.store.detail(old.key).await.unwrap().unwrap();
         assert_eq!(cached.value.head_oid, FIXTURE_OID);
         assert!(Utc::now() - cached.observed_at < TimeDelta::seconds(10));
+    }
+
+    #[tokio::test]
+    async fn a_reload_skips_a_fresh_cache_row_and_replaces_it() {
+        let server = MockServer::start().await;
+        serve(&server, Duration::ZERO).await;
+        let (ctx, mut harness) = testkit::ctx(&server.uri());
+        let pr = testkit::pr_ref(1, "PR_1", FIXTURE_OID);
+        ctx.store
+            .put_detail(pr.key.clone(), detail(FIXTURE_OID, TimeDelta::seconds(10)))
+            .await
+            .unwrap();
+        let store = ctx.store.clone();
+        let worker = tokio::spawn(run(ctx));
+
+        harness
+            .detail
+            .send(DetailReq::Reload(vec![pr.clone()]))
+            .await
+            .unwrap();
+        assert_eq!(harness.recv().await, Msg::DetailLoading(pr.key.clone()));
+        let Msg::DetailLoaded(key, Ok(loaded)) = harness.recv().await else {
+            panic!("no loaded detail");
+        };
+        assert_eq!(key, pr.key);
+        assert!(Utc::now() - loaded.observed_at < TimeDelta::seconds(5));
+        assert_eq!(requested(&server).await, [1]);
+        // A reload reads only the conversation.
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|request| request.url.path() == "/graphql")
+        );
+
+        let cached = store.detail(pr.key).await.unwrap().unwrap();
+        assert_eq!(cached, loaded);
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn a_reload_of_a_running_reload_does_nothing() {
+        let server = MockServer::start().await;
+        serve(&server, Duration::from_millis(300)).await;
+        let (ctx, mut harness) = testkit::ctx(&server.uri());
+        let worker = tokio::spawn(run(ctx));
+        let one = testkit::pr_ref(1, "PR_1", "h");
+        let two = testkit::pr_ref(2, "PR_2", "h");
+
+        harness
+            .detail
+            .send(DetailReq::Reload(vec![one.clone()]))
+            .await
+            .unwrap();
+        harness
+            .detail
+            .send(DetailReq::Reload(vec![one.clone(), two]))
+            .await
+            .unwrap();
+        let mut loaded = details(&mut harness, Duration::from_millis(600)).await;
+        loaded.sort_unstable();
+        assert_eq!(loaded, [(1, true), (2, true)]);
+
+        // The first reload ended, so a new request reads GitHub again.
+        harness
+            .detail
+            .send(DetailReq::Reload(vec![one]))
+            .await
+            .unwrap();
+        assert_eq!(
+            details(&mut harness, Duration::from_millis(600)).await,
+            [(1, true)]
+        );
+        let mut numbers = requested(&server).await;
+        numbers.sort_unstable();
+        assert_eq!(numbers, [1, 1, 2]);
+        worker.abort();
     }
 
     #[tokio::test]

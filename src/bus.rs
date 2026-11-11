@@ -221,6 +221,14 @@ pub(crate) enum SyncReq {
     Load(PrKey),
 }
 
+/// A request to the detail worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DetailReq {
+    /// Reads the conversation of each pull request from GitHub again. It
+    /// skips the cache and replaces the cache row.
+    Reload(Vec<PrRef>),
+}
+
 /// A request to the jj worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum JjReq {
@@ -610,6 +618,8 @@ pub(crate) enum Cmd {
     RefreshPr(Vec<PrRef>),
     /// Reads one pull request by number.
     LoadPr(PrKey),
+    /// Reads the conversation of each pull request from GitHub again.
+    ReloadDetail(Vec<PrRef>),
     ScanJj(RepoKey),
     RunAction {
         id: &'static str,
