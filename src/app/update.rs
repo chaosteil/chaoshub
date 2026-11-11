@@ -1599,14 +1599,16 @@ fn overlay_key(
 }
 
 /// The `refresh` key in the popup of `key`: a load by number when the
-/// pull request is not loaded, else a refresh of its stack group, a load
-/// of its codeview comments and a scan of its repo.
+/// pull request is not loaded, else a refresh of its stack group, a
+/// reload of its detail, a load of its codeview comments and a scan of
+/// its repo.
 fn refresh_popup(data: &AppData, key: &PrKey) -> Vec<Cmd> {
-    if !data.prs.contains_key(key) {
+    let Some(pr) = data.prs.get(key) else {
         return vec![Cmd::LoadPr(key.clone())];
-    }
+    };
     vec![
         Cmd::RefreshPr(stack_group_refs(data, key)),
+        Cmd::ReloadDetail(vec![pr_ref(pr)]),
         Cmd::LoadCodeview(key.clone()),
         Cmd::ScanJj(key.repo.clone()),
     ]
@@ -2774,14 +2776,19 @@ fn cap(lines: &mut Vec<String>) {
 }
 
 /// The follow-up rule after an action or a pane: scan the repo of the
-/// target, and refresh the stack group of a pull request (or the pull
-/// request alone when it has no stack).
+/// target, refresh the stack group of a pull request (or the pull
+/// request alone when it has no stack), and reload the detail of the
+/// pull request. The action can change the reviews, so the detail must
+/// not wait for the cache age.
 fn follow_up(data: &AppData, key: &TargetKey) -> Vec<Cmd> {
     let TargetKey::Pr(pr) = key;
     let mut cmds = vec![Cmd::ScanJj(pr.repo.clone())];
     let refs = stack_group_refs(data, pr);
     if !refs.is_empty() {
         cmds.push(Cmd::RefreshPr(refs));
+    }
+    if let Some(target) = data.prs.get(pr) {
+        cmds.push(Cmd::ReloadDetail(vec![pr_ref(target)]));
     }
     cmds
 }
@@ -3903,10 +3910,16 @@ mod tests {
         };
         let stack_refs = refs(&[11, 12, 13]);
         let single_refs = refs(&[5]);
+        let target_refs = refs(&[12]);
         let key = |n| TargetKey::Pr(testdata::pr_key("chaoshub", n));
+        // The detail of the target reloads: the action can add a review.
         assert_eq!(
             run(&mut state, &tabs, done(key(12))),
-            vec![Cmd::ScanJj(repo.clone()), Cmd::RefreshPr(stack_refs)]
+            vec![
+                Cmd::ScanJj(repo.clone()),
+                Cmd::RefreshPr(stack_refs),
+                Cmd::ReloadDetail(target_refs),
+            ]
         );
         assert_eq!(
             run(
@@ -3919,7 +3932,8 @@ mod tests {
             ),
             vec![
                 Cmd::ScanJj(repo.clone()),
-                Cmd::RefreshPr(single_refs),
+                Cmd::RefreshPr(single_refs.clone()),
+                Cmd::ReloadDetail(single_refs),
                 Cmd::LoadCodeview(testdata::pr_key("chaoshub", 5)),
             ]
         );
@@ -5618,7 +5632,7 @@ mod tests {
             press(KeyCode::Enter, KeyModifiers::NONE),
         );
         key(&mut state, '6');
-        assert_eq!(key(&mut state, 'r').len(), 3, "r refreshes");
+        assert_eq!(key(&mut state, 'r').len(), 4, "r refreshes");
         assert_eq!(key(&mut state, 'i'), vec![], "i is in the menu");
         key(&mut state, ' ');
         assert_eq!(
@@ -5864,7 +5878,8 @@ mod tests {
             run_msg(&mut state, &actions, ended),
             vec![
                 Cmd::ScanJj(testdata::repo_key("chaoshub")),
-                Cmd::RefreshPr(refs),
+                Cmd::RefreshPr(refs.clone()),
+                Cmd::ReloadDetail(refs),
                 Cmd::LoadCodeview(testdata::pr_key("chaoshub", 99)),
             ]
         );
@@ -5987,6 +6002,9 @@ mod tests {
                 &state.data,
                 &testdata::pr_key("chaoshub", 102),
             )),
+            Cmd::ReloadDetail(vec![pr_ref(
+                &state.data.prs[&testdata::pr_key("chaoshub", 102)],
+            )]),
         ];
         let ok = event(
             "rerun_checks",
@@ -7058,6 +7076,7 @@ mod tests {
             key(&mut state, 'r'),
             vec![
                 Cmd::RefreshPr(vec![pr_ref(&pr)]),
+                Cmd::ReloadDetail(vec![pr_ref(&pr)]),
                 Cmd::LoadCodeview(pr.key.clone()),
                 Cmd::ScanJj(testdata::repo_key("chaoshub")),
             ]
@@ -7075,10 +7094,12 @@ mod tests {
         );
         let refs = stack_group_refs(&state.data, &testdata::pr_key("chaoshub", 103));
         assert_eq!(refs.len(), 3);
+        let target = vec![pr_ref(&state.data.prs[&testdata::pr_key("chaoshub", 103)])];
         assert_eq!(
             key(&mut state, 'r'),
             vec![
                 Cmd::RefreshPr(refs),
+                Cmd::ReloadDetail(target),
                 Cmd::LoadCodeview(testdata::pr_key("chaoshub", 103)),
                 Cmd::ScanJj(testdata::repo_key("chaoshub")),
             ]
