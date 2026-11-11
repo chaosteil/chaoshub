@@ -21,8 +21,8 @@
 #   BENCH_CONFIG   full (the Neovim configuration of the user) or plugin
 #                  (codeview alone). Default full.
 #   BENCH_CODEVIEW Directory of codeview for the plugin configuration.
-#   BENCH_ENV      Extra NAME=VALUE words for the nvim process, for example
-#                  the pull request data of chaoshub.
+#   BENCH_PRDATA   1 gives nvim the pull request data in $CODEVIEW_PR, as
+#                  chaoshub does. Default 0.
 #   BENCH_WAIT     Events that end a run: comments, or comments,checked.
 set -euo pipefail
 
@@ -58,15 +58,16 @@ nvim_args() {
   printf '%s\0' "${args[@]}"
 }
 
-# The env words of one run: the chaoshub env, the probe, and BENCH_ENV.
+# The env words of one run: the chaoshub env, the probe, and the pull
+# request data.
 env_words() {
   local out=$1 t0=$2
   local words=("CHAOSHUB_AGENT_ROOT=$BENCH_DIR/agent" "BENCH_OUT=$out" "BENCH_WAIT=$WAIT")
   if [[ -n $t0 ]]; then
     words+=("BENCH_T0=$t0")
   fi
-  if [[ -n ${BENCH_ENV:-} ]]; then
-    words+=("$BENCH_ENV")
+  if [[ ${BENCH_PRDATA:-0} == 1 ]]; then
+    words+=("CODEVIEW_PR=$(cat "$BENCH_DIR/prdata.json")")
   fi
   printf '%s\0' "${words[@]}"
 }
@@ -129,6 +130,11 @@ cmd_setup() {
     echo "the template still holds the base $base" >&2
     exit 1
   fi
+  # The fields that chaoshub gives, in the form of gh.
+  gh pr view "$PR" --repo "$REPO" --json \
+    number,title,state,isDraft,url,author,headRefName,baseRefName,headRefOid,baseRefOid,headRepository,isCrossRepository,body \
+    --jq '.author = {login: .author.login} | .headRepository = {nameWithOwner: .headRepository.nameWithOwner}' \
+    >"$BENCH_DIR/prdata.json"
   echo "warm clone: $WARM"
   echo "stale template: $STALE (base $base missing, merge base $merge)"
 }
