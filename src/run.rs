@@ -2674,7 +2674,7 @@ mod tests {
     }
 
     /// The popup of #99, the first row. #99 has no stack, so the Stack
-    /// tab is dim, and `4` selects nothing.
+    /// tab is dim, and `5` selects nothing.
     #[test]
     fn popup_without_a_stack_100() {
         let mut app = seeded_app(100, 30, crate::app::testdata::mine_snapshot());
@@ -2683,14 +2683,14 @@ mod tests {
             crossterm::event::KeyModifiers::NONE,
         );
         app.update(Msg::Key(enter));
-        press(&mut app, '4');
+        press(&mut app, '5');
         insta::assert_snapshot!(screen(&mut app));
     }
 
     #[test]
     fn popup_stack_100() {
         let mut app = popup_app(100, 30);
-        press(&mut app, '4');
+        press(&mut app, '5');
         insta::assert_snapshot!(screen(&mut app));
     }
 
@@ -2706,7 +2706,7 @@ mod tests {
             observed_at: crate::domain::test_time(),
         };
         app.update(Msg::FilesLoaded(key, Ok(observed)));
-        press(&mut app, '5');
+        press(&mut app, '4');
         for _ in 0..8 {
             press(&mut app, 'j');
         }

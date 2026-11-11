@@ -34,7 +34,7 @@ impl Pane for FilesPane {
     }
 
     fn key(&self) -> char {
-        '5'
+        '4'
     }
 
     fn applies(&self, target: &Target) -> bool {

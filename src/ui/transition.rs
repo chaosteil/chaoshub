@@ -1699,10 +1699,10 @@ mod tests {
 
     #[test]
     fn pane_tabs_on_two_rows_and_animations_off_switch_at_once() {
-        let extra = [('5', "Files"), ('6', "Agent")];
+        let extra = [('5', "Stack"), ('6', "Agent")];
         let model = popup_frame(5, &extra);
         let tabs = pane_spans(&model);
-        assert_ne!(tabs[4].2, tabs[5].2, "Files and Agent are on two rows");
+        assert_ne!(tabs[4].2, tabs[5].2, "Stack and Agent are on two rows");
         let mut terminal = testdata::terminal(WIDTH, HEIGHT);
         let mut fx = new();
         draw_view(&mut terminal, &mut fx, &popup_frame(4, &extra), 0);

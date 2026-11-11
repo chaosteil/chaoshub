@@ -424,7 +424,7 @@ pub(crate) fn popup_overlay() -> OverlayModel {
                 },
                 PaneTab {
                     key: '4',
-                    title: "Stack",
+                    title: "Files",
                     pane: 3,
                     dim: false,
                 },

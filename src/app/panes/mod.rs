@@ -111,8 +111,8 @@ pub(crate) static PANES: LazyLock<Vec<Box<dyn Pane>>> = LazyLock::new(|| {
         Box::new(description::DescriptionPane),
         Box::new(checks::Checks),
         Box::new(conversation::Conversation),
-        Box::new(stack::StackPane),
         Box::new(files::FilesPane),
+        Box::new(stack::StackPane),
         Box::new(agent::AgentPane),
     ]
 });
@@ -245,8 +245,8 @@ mod tests {
                 ('1', "description"),
                 ('2', "checks"),
                 ('3', "conversation"),
-                ('4', "stack"),
-                ('5', "files"),
+                ('4', "files"),
+                ('5', "stack"),
                 ('6', "agent"),
             ]
         );
