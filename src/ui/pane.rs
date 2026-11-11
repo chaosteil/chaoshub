@@ -296,6 +296,7 @@ mod tests {
     use super::*;
     use crate::app::models::CellStyle;
     use crate::ui::testdata;
+    use ratatui::style::Color;
 
     fn draw(model: &PaneModel, cursor: usize, width: u16, height: u16) -> String {
         draw_at(model, cursor, 0, width, height)
@@ -470,6 +471,42 @@ mod tests {
         assert_eq!(texts, ["alice ", "wrote a ", "long line"]);
         assert_eq!(rows[0].spans[0].style.fg, Some(p.info));
         assert_eq!(rows[1].spans[0].style.fg, Some(p.fg));
+    }
+
+    #[test]
+    fn a_merge_badge_fills_its_cells_with_the_pulse_color() {
+        let model = PaneModel::Lines {
+            lines: [0, 128, 255]
+                .into_iter()
+                .map(|mix| vec![testdata::cell(" MERGING ", CellStyle::MergeBadge(mix))])
+                .collect(),
+            wrap: true,
+        };
+        let pierre = testdata::pierre();
+        let ansi16 = testdata::ansi16();
+        let cases = [
+            (
+                &pierre,
+                [
+                    pierre.palette.success,
+                    Color::Rgb(0x52, 0x97, 0xbe),
+                    pierre.palette.purple,
+                ],
+            ),
+            (&ansi16, [Color::Green, Color::Magenta, Color::Magenta]),
+        ];
+        for (theme, colors) in cases {
+            let area = Rect::new(0, 0, 12, 3);
+            let mut buf = Buffer::empty(area);
+            render(&model, 0, 0, area, &mut buf, theme, &mut HitMap::default());
+            for (y, color) in (0..).zip(colors) {
+                for x in 0..9 {
+                    assert_eq!(buf[(x, y)].bg, color, "{x}, {y}");
+                    assert_eq!(buf[(x, y)].fg, theme.palette.bg, "{x}, {y}");
+                }
+                assert_ne!(buf[(9, y)].bg, color, "the badge ends at its text");
+            }
+        }
     }
 
     #[test]

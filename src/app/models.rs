@@ -147,6 +147,10 @@ pub(crate) enum CellStyle {
     Html,
     /// A badge: bold text in the background color on the tone color.
     Badge(Tone),
+    /// The badge of a running merge: bold text in the background color on
+    /// a mix of the success color and the purple. The mix is 0 for the
+    /// success color and 255 for the purple.
+    MergeBadge(u8),
 }
 
 /// The color of a badge.
