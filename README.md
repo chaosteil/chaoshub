@@ -992,6 +992,15 @@ codeview session, codeview sends `User CodeViewSessionClosed`, and nvim
 quits. nvim gets `CHAOSHUB_AGENT_ROOT=<state dir>/agent`, so codeview
 finds the pr-agent results.
 
+nvim also gets `CODEVIEW_PR`: the pull request data that chaoshub has,
+as the JSON of `gh pr view --json` (number, title, state, draft, url,
+author, branches, head and base commits, head repo and body). codeview
+then shows the review without a wait for `gh pr view`, and checks the
+data with gh in the background. When the head moved, codeview reads the
+review again and shows a short message. An older codeview ignores the
+variable. chaoshub leaves the variable out when it does not know the
+base commit yet, or when the data is longer than 100 KiB.
+
 Inside Rex, chaoshub opens a pane beside its own block with
 `rex split -b $REX_BLOCK --split=<split> [--ratio <ratio>] -c <repo path>
 --label <label> --json -- nvim ...`. With `zoom`, it runs
