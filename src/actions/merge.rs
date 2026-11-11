@@ -21,8 +21,8 @@ use futures::future::BoxFuture;
 use tokio::time::Instant;
 
 use crate::bus::{
-    ActionEvent, ActionInput, ConfirmSpec, KeyChord, KeyCode, KeyModifiers, MergeProgress, Msg,
-    Selection, Target, TargetKey,
+    ActionEvent, ActionInput, ConfirmSpec, KeyChord, KeyCode, KeyModifiers, MergeProgress,
+    MergeStep, Msg, Selection, Target, TargetKey,
 };
 use crate::config::schema::{MergeConfig, RepoMerge, parse_repo_name};
 use crate::domain::merge::{
@@ -286,9 +286,10 @@ struct Run<'a> {
 
 /// Merges the target, and fetches the repo after a merge. A stack with
 /// more than one merged entry and the `Sequential` strategy merges one
-/// entry after the other. Every state goes to `app` as
-/// `ActionEvent::MergeStatus`, with the action `id` and the row `key`. A
-/// cancel stops the poll, not the merge on GitHub.
+/// entry after the other. Every step goes to `app` as
+/// `ActionEvent::MergeStep`, and every state as `ActionEvent::MergeStatus`,
+/// with the action `id` and the row `key`. A cancel stops the poll, not
+/// the merge on GitHub.
 async fn merge(
     sel: Selection,
     key: TargetKey,
@@ -320,6 +321,12 @@ async fn merge(
             .await;
     }
     let number = pr.key.number;
+    let step = MergeStep::Entry {
+        number,
+        index: 1,
+        total: 1,
+    };
+    run.send(ActionEvent::MergeStep(step)).await;
     match run.merge_one(pr).await? {
         Final::Merged => Ok(run.fetch(repo, format!("merged #{number}")).await),
         Final::Enqueued => Ok(format!("#{number} in merge queue")),
@@ -329,7 +336,9 @@ async fn merge(
 impl Run<'_> {
     /// Requests the async merge of `pr` with its own squash message and
     /// polls its state up to a final state. A failure sends
-    /// `MergeStatus(Failed)` and gives the message.
+    /// `MergeStatus(Failed)` and gives the message. A merge that is still
+    /// pending at the poll limit sends no `Failed`, like a cancel: the
+    /// merge can still land on GitHub.
     async fn merge_one(&self, pr: &PullRequest) -> Result<Final, String> {
         let number = pr.key.number;
         let (title, body) = squash_message(pr);
@@ -352,8 +361,7 @@ impl Run<'_> {
                 return self.fail("GitHub gave no merge id".to_owned()).await;
             };
             let Some(delay) = self.schedule.delay(start.elapsed()) else {
-                let text = format!("merge of #{number} still pending, see GitHub");
-                return self.fail(text).await;
+                return Err(format!("merge of #{number} still pending, see GitHub"));
             };
             tokio::select! {
                 () = self.svc.cancel.cancelled() => {
@@ -378,7 +386,9 @@ impl Run<'_> {
     /// Merges `entries` one by one, position 1 first, each with its own
     /// squash message. Before each entry above position 1 it waits until
     /// GitHub moves the entry to `base`, the base of the stack. Sends
-    /// `Progress("merged #N (k of n)")` per merged entry. A failure stops
+    /// `MergeStep::Retarget` before each wait, `MergeStep::Entry` before
+    /// each merge request and `Progress("merged #N (k of n)")` per merged
+    /// entry. A failure stops
     /// the sequence, and the error names the entries that merged.
     async fn sequence(
         &self,
@@ -394,10 +404,18 @@ impl Run<'_> {
             let current = if index == 0 {
                 entry.clone()
             } else {
+                let step = MergeStep::Retarget { number };
+                self.send(ActionEvent::MergeStep(step)).await;
                 self.retargeted(entry, base, me)
                     .await
                     .map_err(|err| stopped(number, &err, &merged))?
             };
+            let step = MergeStep::Entry {
+                number,
+                index: index + 1,
+                total,
+            };
+            self.send(ActionEvent::MergeStep(step)).await;
             match self.merge_one(&current).await {
                 Ok(Final::Merged) => {
                     merged.push(number);
@@ -1046,6 +1064,21 @@ mod tests {
         }
     }
 
+    /// The step event of the merge of #`number`, the entry `index` of
+    /// `total`.
+    fn step(number: u64, index: usize, total: usize) -> ActionEvent {
+        ActionEvent::MergeStep(MergeStep::Entry {
+            number,
+            index,
+            total,
+        })
+    }
+
+    /// The step event of the wait for the retarget of #`number`.
+    fn retarget(number: u64) -> ActionEvent {
+        ActionEvent::MergeStep(MergeStep::Retarget { number })
+    }
+
     fn pending(uuid: &str) -> serde_json::Value {
         serde_json::json!({
             "status": "pending",
@@ -1077,6 +1110,15 @@ mod tests {
         server: &wiremock::MockServer,
         sel: Selection,
     ) -> (Result<String, String>, Vec<ActionEvent>) {
+        run_scheduled(server, sel, FAST).await
+    }
+
+    /// `run_selection` with the poll schedule `schedule`.
+    async fn run_scheduled(
+        server: &wiremock::MockServer,
+        sel: Selection,
+        schedule: Schedule,
+    ) -> (Result<String, String>, Vec<ActionEvent>) {
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
         let client = crate::github::GithubClient::new(
             crate::github::TokenSource::command("echo", &["tok"]),
@@ -1090,7 +1132,7 @@ mod tests {
             tx,
         };
         let target = sel.target.key();
-        let result = merge(sel, target.clone(), ID, svc, FAST, FAST_RETARGET).await;
+        let result = merge(sel, target.clone(), ID, svc, schedule, FAST_RETARGET).await;
         let mut events = Vec::new();
         while let Ok(msg) = rx.try_recv() {
             let Msg::ActionEvent { id, key, event } = msg else {
@@ -1140,6 +1182,7 @@ mod tests {
         assert_eq!(
             events,
             [
+                step(7, 1, 1),
                 ActionEvent::MergeStatus(MergeProgress::Pending),
                 ActionEvent::MergeStatus(MergeProgress::Pending),
                 ActionEvent::MergeStatus(MergeProgress::Merged {
@@ -1182,6 +1225,7 @@ mod tests {
         assert_eq!(
             events,
             [
+                step(7, 1, 1),
                 ActionEvent::MergeStatus(MergeProgress::Pending),
                 ActionEvent::MergeStatus(MergeProgress::Failed(message)),
             ]
@@ -1204,9 +1248,40 @@ mod tests {
         assert_eq!(result, Err(message.to_owned()));
         assert_eq!(
             events,
-            [ActionEvent::MergeStatus(MergeProgress::Failed(
-                message.to_owned()
-            ))]
+            [
+                step(7, 1, 1),
+                ActionEvent::MergeStatus(MergeProgress::Failed(message.to_owned())),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merge_pending_at_the_poll_limit_sends_no_failure() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, ResponseTemplate};
+        let server = wiremock::MockServer::start().await;
+        mount_put(&server, 202, pending("u-3")).await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pending("u-3")))
+            .mount(&server)
+            .await;
+        let schedule = Schedule {
+            limit: Duration::from_millis(20),
+            ..FAST
+        };
+
+        let sel = select(entry(7, 0), Vec::new(), None);
+        let (result, events) = run_scheduled(&server, sel, schedule).await;
+
+        assert_eq!(
+            result,
+            Err("merge of #7 still pending, see GitHub".to_owned())
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event, ActionEvent::MergeStatus(MergeProgress::Failed(_)))),
+            "{events:?}"
         );
     }
 
@@ -1227,9 +1302,12 @@ mod tests {
         assert!(text.starts_with("merged #7, git fetch failed"), "{text}");
         assert_eq!(
             events,
-            [ActionEvent::MergeStatus(MergeProgress::Merged {
-                sha: "def456".into()
-            })]
+            [
+                step(7, 1, 1),
+                ActionEvent::MergeStatus(MergeProgress::Merged {
+                    sha: "def456".into()
+                }),
+            ]
         );
     }
 
@@ -1277,6 +1355,7 @@ mod tests {
         assert_eq!(
             events,
             [
+                step(7, 1, 1),
                 ActionEvent::MergeStatus(MergeProgress::Merged {
                     sha: "def456".into()
                 }),
@@ -1438,9 +1517,12 @@ mod tests {
         assert_eq!(
             events,
             [
+                step(1, 1, 2),
                 ActionEvent::MergeStatus(MergeProgress::Pending),
                 merged("sha1"),
                 ActionEvent::Progress("merged #1 (1 of 2)".into()),
+                retarget(2),
+                step(2, 2, 2),
                 merged("sha2"),
                 ActionEvent::Progress("merged #2 (2 of 2)".into()),
             ]
@@ -1519,8 +1601,11 @@ mod tests {
         assert_eq!(
             events,
             [
+                step(1, 1, 2),
                 ActionEvent::MergeStatus(MergeProgress::Merged { sha: "sha1".into() }),
                 ActionEvent::Progress("merged #1 (1 of 2)".into()),
+                retarget(2),
+                step(2, 2, 2),
                 ActionEvent::MergeStatus(MergeProgress::Merged { sha: "sha2".into() }),
                 ActionEvent::Progress("merged #2 (2 of 2)".into()),
             ]
@@ -1559,8 +1644,11 @@ mod tests {
         assert_eq!(
             events,
             [
+                step(1, 1, 3),
                 ActionEvent::MergeStatus(MergeProgress::Merged { sha: "sha1".into() }),
                 ActionEvent::Progress("merged #1 (1 of 3)".into()),
+                retarget(2),
+                step(2, 2, 3),
                 ActionEvent::MergeStatus(MergeProgress::Failed(message.to_owned())),
             ]
         );

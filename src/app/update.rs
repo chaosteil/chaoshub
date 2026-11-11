@@ -2703,7 +2703,7 @@ fn action_event(
             }
             cmds
         }
-        ActionEvent::Popup(_) | ActionEvent::MergeStatus(_) => {
+        ActionEvent::Popup(_) | ActionEvent::MergeStatus(_) | ActionEvent::MergeStep(_) => {
             tracing::trace!(id, "action event not handled yet");
             Vec::new()
         }
