@@ -1,5 +1,5 @@
 //! The help model: the key bindings of the app, of each tab and of each
-//! action, and the symbols of the list, in sections.
+//! action, the filter syntax and the symbols of the list, in sections.
 //!
 //! `app` builds the model from the key map, `TABS` and `REGISTRY`, so `ui`
 //! renders it without a look at the tabs or the actions.
@@ -32,6 +32,25 @@ const APP_KEYS: &[(&[&str], &str)] = &[
     (&["quit"], "quit"),
 ];
 
+/// The title of the section of the filter syntax.
+const FILTER_TITLE: &str = "filter";
+
+/// The filter syntax after the first row, which names the filter key and
+/// what the filter searches. The keys are examples of filter text. The
+/// labels are short, so that they fit the help overlay at its minimum
+/// width.
+const FILTER_SYNTAX: &[(&str, &str)] = &[
+    ("a b", "every word must match (AND)"),
+    ("abc", "fuzzy: letters in this order"),
+    ("'exact", "exact text, not fuzzy"),
+    ("^start", "the title starts with it"),
+    ("end$", "the branch ends with it"),
+    ("!not", "does not contain it"),
+    ("Abc", "upper case: case must match"),
+    ("enter", "keep the filter"),
+    ("esc", "clear the filter"),
+];
+
 /// The title of the section of the list symbols.
 const SYMBOLS_TITLE: &str = "list symbols";
 
@@ -42,7 +61,8 @@ const ACTIONS_TITLE: &str = "actions (in the actions menu)";
 /// list and in the pull request detail.
 const DETAIL_TITLE: &str = "actions in the list and the detail";
 
-/// The help model: the app keys, the list symbols, the keys of each tab
+/// The help model: the app keys, the filter syntax, the list symbols, the
+/// keys of each tab
 /// that has its own, the actions, and the direct action keys of the list
 /// and the pull request detail. A binding without a chord is not in the
 /// help. The titles of the action sections tell where the action keys
@@ -52,7 +72,11 @@ pub(crate) fn help_model(
     tabs: &[Box<dyn Tab>],
     actions: &[Box<dyn Action>],
 ) -> HelpModel {
-    let mut sections = vec![app_section(keymap, tabs), symbols_section()];
+    let mut sections = vec![
+        app_section(keymap, tabs),
+        filter_section(keymap),
+        symbols_section(),
+    ];
     for tab in tabs {
         let entries: Vec<(String, String)> = tab
             .help()
@@ -117,6 +141,25 @@ fn app_section(keymap: &Keymap, tabs: &[Box<dyn Tab>]) -> HelpSection {
     HelpSection {
         title: "keys".to_owned(),
         entries,
+        symbols: Vec::new(),
+    }
+}
+
+/// The filter syntax: the filter key and what the filter searches, then
+/// `FILTER_SYNTAX`.
+fn filter_section(keymap: &Keymap) -> HelpSection {
+    let keys: Vec<String> = keymap
+        .chords("filter")
+        .iter()
+        .map(|&chord| keymap::chord_text(chord))
+        .collect();
+    let first = (keys.join(" "), "title, number, author, branch".to_owned());
+    let syntax = FILTER_SYNTAX
+        .iter()
+        .map(|&(key, label)| (key.to_owned(), label.to_owned()));
+    HelpSection {
+        title: FILTER_TITLE.to_owned(),
+        entries: std::iter::once(first).chain(syntax).collect(),
         symbols: Vec::new(),
     }
 }
@@ -213,7 +256,16 @@ mod tests {
         let keymap = Keymap::with_actions(&actions, &overrides).unwrap();
         let model = help_model(&keymap, &tabs, &actions);
         let titles: Vec<&str> = model.sections.iter().map(|s| s.title.as_str()).collect();
-        assert_eq!(titles, ["keys", SYMBOLS_TITLE, ACTIONS_TITLE, DETAIL_TITLE]);
+        assert_eq!(
+            titles,
+            [
+                "keys",
+                FILTER_TITLE,
+                SYMBOLS_TITLE,
+                ACTIONS_TITLE,
+                DETAIL_TITLE
+            ]
+        );
         let keys = &model.sections[0].entries;
         assert_eq!(keys[0], entry("1", "tab one"));
         assert_eq!(keys[1], entry("tab", "next tab"));
@@ -227,11 +279,16 @@ mod tests {
         );
         assert!(!keys.iter().any(|(_, label)| label == "tab two"));
         assert_eq!(
-            model.sections[2].entries,
+            model.sections[1].entries[0],
+            entry("/", "title, number, author, branch")
+        );
+        assert_eq!(model.sections[1].entries.len(), FILTER_SYNTAX.len() + 1);
+        assert_eq!(
+            model.sections[3].entries,
             [entry("m", "merge"), entry("v", "review")]
         );
         assert_eq!(
-            model.sections[3].entries,
+            model.sections[4].entries,
             [entry("v", "review")],
             "only review works directly in the list and the detail"
         );
@@ -239,7 +296,7 @@ mod tests {
         let keymap = Keymap::with_actions(&actions, &overrides).unwrap();
         let model = help_model(&keymap, &tabs, &actions);
         assert_eq!(
-            model.sections[3].entries,
+            model.sections[4].entries,
             [entry("m", "merge"), entry("v", "review")],
             "a detail binding adds a direct key"
         );

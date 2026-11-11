@@ -132,6 +132,15 @@ mod tests {
             ("chaosteil/2", vec![2], "branch"),
             ("fx exp", vec![2], "fuzzy words"),
             ("zzz", vec![], "no match"),
+            ("mne", vec![1], "fuzzy: the letters in order"),
+            ("'mne", vec![], "exact: no fuzzy match"),
+            ("'mine", vec![1], "exact text"),
+            ("!export", vec![1, 31], "not"),
+            ("fix !alice", vec![], "not, with another word"),
+            ("^fix", vec![2], "the start of the title"),
+            ("^export", vec![], "the start only"),
+            ("1$", vec![1, 31], "the end of the branch"),
+            ("31$", vec![31], "the end only"),
         ];
         for (text, expected, name) in cases {
             let mut filter = Filter::default();

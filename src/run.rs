@@ -2173,7 +2173,7 @@ mod tests {
     fn help_overlay_symbols_100() {
         let mut app = seeded_app(100, 40, crate::app::testdata::mine_snapshot());
         press(&mut app, '?');
-        for _ in 0..19 {
+        for _ in 0..31 {
             press(&mut app, 'j');
         }
         let screen = screen(&mut app);

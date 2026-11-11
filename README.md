@@ -563,6 +563,54 @@ By default, the Review and the Team tab show only the pull requests that
 are ready for review: open, not a draft, and CI green. `t` shows all open
 pull requests.
 
+## Filter
+
+Press `/` to type a filter for the active tab. The list shows only the
+pull requests that match the filter. Each tab has its own filter.
+
+The filter searches this text of each pull request: the title, the number
+with `#`, the author and the head branch, in this order. For example:
+
+```text
+fix(store): reopen the connection #99 alice alice/reopen
+```
+
+The filter does not search the repo, the base branch or the labels.
+
+| Key | What it does |
+|---|---|
+| `enter` | Keeps the filter. chaoshub saves it in the cache. |
+| `esc` | Clears the filter. |
+| `backspace` | Deletes the last character. |
+| `down`, `up` | Moves the cursor while you type. |
+
+### Syntax
+
+A space separates two words. A pull request must match every word (AND).
+There is no OR.
+
+| Word | Matches | Example | Example matches |
+|---|---|---|---|
+| `abc` | The letters of `abc` in this order, with other characters between them (fuzzy). | `fx conn` | `fix(store): reopen the connection` |
+| `'abc` | The exact text `abc`. | `'reopen` | `reopen`, not `re-open` |
+| `^abc` | Text that starts with `abc`. The text starts with the title. | `^fix` | `fix(store): ...`, not `docs: fix ...` |
+| `abc$` | Text that ends with `abc`. The text ends with the branch. | `reopen$` | the branch `alice/reopen` |
+| `!abc` | Text that does not contain `abc`. | `!draft` | every title without `draft` |
+| `\` | Escapes a special character: `\!`, `\^` or `\'` at the start, `\$` at the end, and `\ ` for a space in a word. | `fix\ the` | `fix the` as one word |
+
+Each word has smart case. A word with only lower case letters ignores the
+case. A word with an upper case letter matches the case. For example,
+`store` matches `Store` and `store`, but `Store` matches only `Store`.
+
+More examples:
+
+| Filter | Shows |
+|---|---|
+| `#99` | The pull request #99. The match is fuzzy, so other numbers can match too, for example #199. |
+| `alice` | The pull requests of `alice`, and other text with these letters. |
+| `^feat !wip` | The titles that start with `feat` and do not contain `wip`. |
+| `ui 'popup` | The pull requests with `ui` (fuzzy) and the exact text `popup`. |
+
 ## Keymap
 
 The default bindings. The name in the first column is the binding name
