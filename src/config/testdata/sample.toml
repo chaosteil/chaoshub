@@ -10,7 +10,7 @@ path = "~/code/chaoshub"
 name = "pierredotco/deploy"
 
 [filters]
-created_since = "2026-09-01"
+max_age = "2 weeks"
 
 [refresh]
 mine_secs = 30

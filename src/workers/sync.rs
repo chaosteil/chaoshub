@@ -356,7 +356,13 @@ impl Syncer {
             return true;
         };
         self.seed(scope).await;
-        let query = search(scope, &login, &repos, None, &self.ctx.config.filters);
+        let query = search(
+            scope,
+            &login,
+            &repos,
+            None,
+            self.ctx.config.filters.created_since(Utc::now()),
+        );
         let mut pages = match self.pages(scope, &query, &login, true).await {
             Ok(Some(pages)) => pages,
             Ok(None) => return false,
@@ -425,7 +431,7 @@ impl Syncer {
             &login,
             &repos,
             Some(last_delta - DELTA_OVERLAP),
-            &self.ctx.config.filters,
+            self.ctx.config.filters.created_since(Utc::now()),
         );
         let mut pages = match self.pages(scope, &query, &login, false).await {
             Ok(Some(pages)) => pages,
@@ -860,11 +866,15 @@ fn repo_set_hash(names: &[String]) -> String {
 /// A filter change must not reuse the delta progress of another list.
 /// With no cutoff, the existing repo set key stays valid.
 fn sync_set_hash(names: &[String], filters: &FiltersConfig) -> String {
-    let Some(since) = filters.created_since else {
+    let Some(age) = filters.max_age else {
         return repo_set_hash(names);
     };
     let mut names = names.to_vec();
-    names.push(format!("created:>={since}T00:00:00Z"));
+    names.push(format!(
+        "max_age:{}.{:09}s",
+        age.num_seconds(),
+        age.subsec_nanos()
+    ));
     repo_set_hash(&names)
 }
 
@@ -877,7 +887,7 @@ fn search(
     login: &str,
     repos: &[String],
     since: Option<DateTime<Utc>>,
-    filters: &FiltersConfig,
+    created_since: Option<DateTime<Utc>>,
 ) -> String {
     let mut query = String::from("is:pr");
     if since.is_none() {
@@ -891,8 +901,8 @@ fn search(
     for repo in repos {
         let _ = write!(query, " repo:{repo}");
     }
-    if let Some(created) = filters.created_since {
-        let _ = write!(query, " created:>={created}T00:00:00Z");
+    if let Some(created) = created_since {
+        let _ = write!(query, " created:>={}", created.format("%Y-%m-%dT%H:%M:%SZ"));
     }
     if let Some(since) = since {
         let _ = write!(query, " updated:>={}", since.format("%Y-%m-%dT%H:%M:%SZ"));
@@ -1889,23 +1899,11 @@ mod tests {
         let repos = ["a/b".to_owned()];
         let since = "2026-10-30T11:58:00Z".parse::<DateTime<Utc>>().unwrap();
         assert_eq!(
-            search(
-                Scope::Mine,
-                "me",
-                &repos,
-                Some(since),
-                &FiltersConfig::default()
-            ),
+            search(Scope::Mine, "me", &repos, Some(since), None),
             "is:pr author:me repo:a/b updated:>=2026-10-30T11:58:00Z"
         );
         assert_eq!(
-            search(
-                Scope::Team,
-                "me",
-                &repos,
-                Some(since),
-                &FiltersConfig::default()
-            ),
+            search(Scope::Team, "me", &repos, Some(since), None),
             "is:pr -author:me repo:a/b updated:>=2026-10-30T11:58:00Z"
         );
     }
@@ -1938,11 +1936,11 @@ mod tests {
     fn full_search_strings() {
         let repos = ["a/b".to_owned(), "c/d".to_owned()];
         assert_eq!(
-            search(Scope::Mine, "me", &repos, None, &FiltersConfig::default()),
+            search(Scope::Mine, "me", &repos, None, None),
             "is:pr is:open author:me repo:a/b repo:c/d"
         );
         assert_eq!(
-            search(Scope::Team, "me", &repos, None, &FiltersConfig::default()),
+            search(Scope::Team, "me", &repos, None, None),
             "is:pr is:open -author:me repo:a/b repo:c/d"
         );
     }
@@ -1953,9 +1951,10 @@ mod tests {
         serve_pages(&server, true).await;
         let (mut ctx, mut harness) = logged_in(&server);
         let mut config = (*ctx.config).clone();
-        config.filters.created_since = Some("2026-09-01".parse().unwrap());
+        config.filters.max_age = Some(TimeDelta::weeks(2));
         ctx.config = Arc::new(config);
         let mut syncer = Syncer::new(ctx);
+        let earliest = Utc::now() - TimeDelta::weeks(2) - TimeDelta::seconds(1);
         for scope in [Scope::Mine, Scope::Team] {
             assert!(syncer.full(scope).await);
             synced(&mut harness).await;
@@ -1964,8 +1963,14 @@ mod tests {
         }
         let queries = searches(&server).await;
         assert_eq!(queries.len(), 8);
+        let latest = Utc::now() - TimeDelta::weeks(2);
         for (query, _) in &queries {
-            assert!(query.contains(" created:>=2026-09-01T00:00:00Z"), "{query}");
+            let created = query
+                .split_whitespace()
+                .find_map(|word| word.strip_prefix("created:>="))
+                .unwrap();
+            let created: DateTime<Utc> = created.parse().unwrap();
+            assert!(created >= earliest && created <= latest, "{query}");
         }
         for chunk in queries.as_chunks::<4>().0 {
             assert!(chunk[0].0.contains(" is:open "));
@@ -1980,7 +1985,7 @@ mod tests {
         let (mut ctx, mut harness) = logged_in(&server);
         let repos = ["acme/deploy".to_owned()];
         let mut config = (*ctx.config).clone();
-        config.filters.created_since = Some("2026-09-01".parse().unwrap());
+        config.filters.max_age = Some(TimeDelta::weeks(2));
         ctx.store
             .put_sync_state(
                 Scope::Mine,
@@ -2001,15 +2006,15 @@ mod tests {
     }
 
     #[test]
-    fn sync_keys_change_with_the_creation_cutoff() {
+    fn sync_keys_depend_on_the_duration_not_the_current_time() {
         let repos = ["a/b".to_owned()];
         let filters = FiltersConfig::default();
         assert_eq!(sync_set_hash(&repos, &filters), repo_set_hash(&repos));
         let first = FiltersConfig {
-            created_since: Some("2026-09-01".parse().unwrap()),
+            max_age: Some(TimeDelta::weeks(2)),
         };
         let second = FiltersConfig {
-            created_since: Some("2026-08-01".parse().unwrap()),
+            max_age: Some(TimeDelta::weeks(1)),
         };
         assert_ne!(
             sync_set_hash(&repos, &first),
@@ -2043,5 +2048,38 @@ mod tests {
         assert!(syncer.full(Scope::Mine).await);
         assert_eq!(synced(&mut harness).await.1, [1589, 1587, 1586]);
         assert_eq!(by_ids(&server).await, [[ID_1589, ID_1587, ID_1586]]);
+    }
+
+    #[test]
+    fn the_search_window_moves_while_the_duration_key_stays_the_same() {
+        let repos = ["a/b".to_owned()];
+        let first = crate::config::Config::parse("[filters]\nmax_age = \"2 weeks\"", None).unwrap();
+        let equivalent =
+            crate::config::Config::parse("[filters]\nmax_age = \"14 days\"", None).unwrap();
+        let now: DateTime<Utc> = "2026-11-13T12:34:56Z".parse().unwrap();
+        assert_eq!(
+            sync_set_hash(&repos, &first.filters),
+            sync_set_hash(&repos, &equivalent.filters)
+        );
+        assert_eq!(
+            search(
+                Scope::Mine,
+                "me",
+                &repos,
+                None,
+                first.filters.created_since(now)
+            ),
+            "is:pr is:open author:me repo:a/b created:>=2026-10-30T12:34:56Z"
+        );
+        assert_eq!(
+            search(
+                Scope::Mine,
+                "me",
+                &repos,
+                None,
+                first.filters.created_since(now + TimeDelta::days(1))
+            ),
+            "is:pr is:open author:me repo:a/b created:>=2026-10-31T12:34:56Z"
+        );
     }
 }

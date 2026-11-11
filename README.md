@@ -158,26 +158,28 @@ name = "my-org/deploy"
 
 ### `[filters]`
 
-Set a creation date cutoff for the Mine, Review and Team lists:
+Set the maximum age of pull requests in the Mine, Review and Team lists:
 
 ```toml
 [filters]
-created_since = "2026-09-01"
+max_age = "2 weeks"
 ```
 
-`created_since` includes pull requests created on or after midnight UTC
-on that date. Use a quoted `YYYY-MM-DD` date. The default has no cutoff.
-A later update does not bring an older pull request back into the lists.
+`max_age` measures the time since a pull request was created. For example,
+`2 weeks` keeps PRs created within the last 14 days. The window moves with
+the current time. A later update does not reset the age of a PR.
 
-The cutoff applies to GitHub searches and cached lists, including the
-author picker and the `t` switch. Restart chaoshub after a change. An old
-cache without creation dates hides those rows until the next sync reads
-their creation dates. No cache reset is needed.
+Use a positive duration such as `14 days`, `2 weeks` or `48 hours`.
+The default has no age limit. Invalid durations and unknown filter keys
+stop configuration loading. Restart chaoshub after a configuration change.
 
-The cutoff changes list membership. It does not change a stack on GitHub
-or prevent `chaoshub pr OWNER/NAME NUMBER` from opening a specific pull
-request. The existing author and text filters still apply within the
-included pull requests.
+The limit applies to GitHub searches and cached lists, including the
+author picker and the `t` switch. Old cache rows without creation times
+stay hidden until a sync reads that field. No cache reset is needed.
+
+The limit changes list membership. It does not change a stack on GitHub
+or prevent `chaoshub pr OWNER/NAME NUMBER` from opening a specific PR.
+The existing author and text filters apply within the included PRs.
 
 ### `[refresh]`
 

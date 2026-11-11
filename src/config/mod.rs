@@ -221,10 +221,7 @@ mod tests {
     fn sample_file_parses() {
         let config = Config::parse(SAMPLE, Some(Path::new("/home/me"))).unwrap();
         assert_eq!(config.login.as_deref(), Some("chaosteil"));
-        assert_eq!(
-            config.filters.created_since,
-            Some("2026-09-01".parse().unwrap())
-        );
+        assert_eq!(config.filters.max_age, Some(chrono::TimeDelta::weeks(2)));
         assert_eq!(config.teams, ["pierredotco/platform"]);
         assert_eq!(config.launcher.as_deref(), Some("rex"));
         assert_eq!(
@@ -442,11 +439,31 @@ mod tests {
     }
 
     #[test]
-    fn invalid_creation_dates_stop_configuration_loading() {
-        for date in ["2026-02-30", "yesterday", "", "2026-10-30T12:00:00Z"] {
-            let text = format!("[filters]\ncreated_since = {date:?}");
+    fn invalid_max_ages_stop_configuration_loading() {
+        for age in [
+            "2026-09-01",
+            "",
+            "0",
+            "0 seconds",
+            "-2 weeks",
+            "two weeks",
+            "100000000000000000000 years",
+        ] {
+            let text = format!("[filters]\nmax_age = {age:?}");
             let err = Config::parse(&text, None).unwrap_err();
-            assert!(err.to_string().contains("created_since"), "{err}");
+            assert!(err.to_string().contains("max_age"), "{err}");
+        }
+        assert!(Config::parse("[filters]\ncreated_since = \"2026-09-01\"", None).is_err());
+    }
+
+    #[test]
+    fn equivalent_durations_give_the_same_age_limit() {
+        for age in ["2 weeks", "14 days", "336h"] {
+            let text = format!("[filters]\nmax_age = {age:?}");
+            assert_eq!(
+                Config::parse(&text, None).unwrap().filters.max_age,
+                Some(chrono::TimeDelta::weeks(2))
+            );
         }
     }
 }

@@ -181,7 +181,7 @@ fn mine_prs<'a>(cx: &KeyCx<'a>) -> Vec<&'a PullRequest> {
         .values()
         .filter(|pr| data.scopes.get(&pr.key) == Some(&Scope::Mine))
         .filter(|pr| pr.head.value.state == PrState::Open)
-        .filter(|pr| data.filters.matches(pr))
+        .filter(|pr| data.filters.matches(pr, data.now))
         .collect();
     prs.sort_by(|a, b| {
         b.head

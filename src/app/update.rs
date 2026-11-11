@@ -2891,11 +2891,25 @@ fn resize(state: &mut AppState, size: Size) -> Vec<Cmd> {
 /// only when a rendered string changed since the last frame: at a new
 /// minute (ages have minute granularity), or when the status bar or the
 /// terminal status changed. While a merge runs, it moves on every tick:
-/// its badge changes color with the time.
+/// its badge changes color with the time. The age limit also updates
+/// list membership and worker interest as time passes.
 fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<Cmd> {
     let minute = |time: DateTime<Utc>| time.timestamp().div_euclid(60);
-    let new_minute = minute(now) != minute(state.data.now);
+    let previous = state.data.now;
+    let new_minute = minute(now) != minute(previous);
+    let filter_changed = state.data.filters.max_age.is_some()
+        && state.data.prs.values().any(|pr| {
+            pr.head.value.state == PrState::Open
+                && state.data.filters.matches(pr, previous) != state.data.filters.matches(pr, now)
+        });
     state.data.now = now;
+    let cmds = if filter_changed {
+        state.data.revision += 1;
+        state.bump();
+        after_change(state, tabs)
+    } else {
+        Vec::new()
+    };
     let sync = &mut state.data.sync;
     if sync.condition.as_ref().is_some_and(|c| !c.holds(now)) {
         sync.condition = None;
@@ -2909,10 +2923,10 @@ fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<
         state.ui.status = state.data.sync.condition.as_ref().map(Condition::message);
         state.ui.ui_events.push(UiEvent::StatusExpired);
         state.bump();
-        return Vec::new();
+        return cmds;
     }
     let Some((status, term)) = frame::built_status(state) else {
-        return Vec::new();
+        return cmds;
     };
     if new_minute
         || state.data.merging().is_some()
@@ -2921,7 +2935,7 @@ fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<
     {
         state.bump();
     }
-    Vec::new()
+    cmds
 }
 
 /// How long an info message stays in the status bar.
@@ -8113,5 +8127,81 @@ mod tests {
             status_text(&state),
             Some("posted 1 comment as a comment review")
         );
+    }
+
+    #[test]
+    fn the_age_window_updates_rows_filters_and_interest_without_a_sync() {
+        let now = crate::domain::test_time();
+        let age = TimeDelta::weeks(2);
+        for filter in ["", "Ages out"] {
+            let mut state = AppState::new(Size {
+                width: 100,
+                height: 30,
+            });
+            state.data.now = now;
+            state.data.filters.max_age = Some(age);
+            let mut old = crate::app::testdata::pr("chaoshub", 1, "Ages out");
+            old.head.value.created_at = Some(now - age);
+            let recent = crate::app::testdata::pr("chaoshub", 2, "Keep this");
+            state.load(
+                crate::store::Snapshot {
+                    prs: vec![(Scope::Mine, old.clone()), (Scope::Mine, recent)],
+                    ..crate::store::Snapshot::default()
+                },
+                Vec::new(),
+            );
+            state.ui.tabs[0].filter = filter.into();
+            state.message("Done", CellStyle::Normal, TimeDelta::seconds(1));
+            start(&mut state);
+            let numbers = |state: &mut AppState| {
+                frame::frame_model(state)
+                    .list
+                    .rows
+                    .iter()
+                    .filter_map(|row| match &row.item {
+                        RowItem::Pr(pr) => Some(pr.key.number),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert!(numbers(&mut state).contains(&1));
+            assert_eq!(
+                state
+                    .ui
+                    .interest
+                    .as_ref()
+                    .unwrap()
+                    .selected
+                    .as_ref()
+                    .unwrap()
+                    .key,
+                old.key
+            );
+            let revision = state.data.revision;
+            let cmds = tick(&mut state, &TABS, now + TimeDelta::seconds(1));
+            let expected = if filter.is_empty() { vec![2] } else { vec![] };
+            assert_eq!(numbers(&mut state), expected);
+            assert_eq!(state.data.revision, revision + 1);
+            assert!(state.ui.status.is_none());
+            assert!(cmds.iter().any(|cmd| matches!(cmd, Cmd::SetInterest(_))));
+            let interest = state.ui.interest.as_ref().unwrap();
+            assert!(interest.visible.iter().all(|pr| pr.key != old.key));
+            assert!(
+                interest
+                    .selected
+                    .as_ref()
+                    .is_none_or(|pr| pr.key != old.key)
+            );
+            assert!(state.data.prs.contains_key(&old.key));
+            let generation = state.generation;
+            tick(&mut state, &TABS, now + TimeDelta::seconds(2));
+            assert_eq!(state.data.revision, revision + 1);
+            assert_eq!(state.generation, generation);
+            tick(&mut state, &TABS, now);
+            assert!(
+                numbers(&mut state).contains(&1),
+                "a clock correction updates the window"
+            );
+        }
     }
 }

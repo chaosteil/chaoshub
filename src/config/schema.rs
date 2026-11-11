@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Deserializer};
 
 use crate::domain::keys::RepoKey;
@@ -24,24 +24,47 @@ pub(crate) struct RepoEntry {
 
 /// The `[filters]` section: which pull requests appear in the lists.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct FiltersConfig {
-    /// Includes pull requests created on or after this UTC date.
-    pub created_since: Option<NaiveDate>,
+    /// The maximum time since a pull request was created.
+    #[serde(default, deserialize_with = "max_age")]
+    pub max_age: Option<TimeDelta>,
 }
 
 impl FiltersConfig {
-    /// True when the pull request passes the configured list filters.
+    /// The lower edge of the age window at `now`. None when no limit is
+    /// set or the window covers every supported timestamp.
+    pub(crate) fn created_since(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        self.max_age.and_then(|age| now.checked_sub_signed(age))
+    }
+
+    /// True when the pull request passes the age limit at `now`.
     /// An old cache without a creation time waits for a sync when a
-    /// cutoff is set.
-    pub(crate) fn matches(&self, pr: &PullRequest) -> bool {
-        self.created_since.is_none_or(|since| {
+    /// limit is set.
+    pub(crate) fn matches(&self, pr: &PullRequest, now: DateTime<Utc>) -> bool {
+        self.created_since(now).is_none_or(|since| {
             pr.head
                 .value
                 .created_at
-                .is_some_and(|created| created.date_naive() >= since)
+                .is_some_and(|created| created >= since)
         })
     }
+}
+
+/// Reads a positive duration such as `2 weeks` or `14 days`.
+fn max_age<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<TimeDelta>, D::Error> {
+    let Some(text) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    let duration = humantime::parse_duration(&text).map_err(serde::de::Error::custom)?;
+    if duration.is_zero() {
+        return Err(serde::de::Error::custom(
+            "max_age must be greater than zero",
+        ));
+    }
+    TimeDelta::from_std(duration)
+        .map(Some)
+        .map_err(|_| serde::de::Error::custom("max_age is too large"))
 }
 
 /// The `[refresh]` section: the poll intervals in seconds.

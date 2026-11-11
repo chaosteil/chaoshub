@@ -186,7 +186,7 @@ impl Team {
             .values()
             .filter(|pr| data.scopes.get(&pr.key) == Some(&Scope::Team))
             .filter(|pr| pr.head.value.state == PrState::Open)
-            .filter(|pr| data.filters.matches(pr))
+            .filter(|pr| data.filters.matches(pr, data.now))
             .filter(|pr| pr.head.value.review_requested == requested)
             .filter(|pr| all_open || is_ready(pr))
             .collect();
@@ -394,7 +394,8 @@ mod tests {
     #[test]
     fn the_cutoff_applies_to_both_modes_authors_and_worker_interest() {
         let mut state = seeded();
-        state.data.filters.created_since = Some("2026-10-30".parse().unwrap());
+        state.data.filters.max_age = Some(chrono::TimeDelta::weeks(2));
+        state.data.now = "2026-11-13T00:00:00Z".parse().unwrap();
         for pr in state.data.prs.values_mut() {
             pr.head.value.created_at = Some("2026-10-29T23:59:59Z".parse().unwrap());
         }

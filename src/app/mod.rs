@@ -229,11 +229,11 @@ mod tests {
             true,
             snapshot,
             Vec::new(),
-            test_time(),
+            "2026-11-13T00:00:00Z".parse().unwrap(),
         );
         assert_eq!(numbers(&mut app), [1, 2, 3]);
         app = app.with_filters(FiltersConfig {
-            created_since: Some("2026-10-30".parse().unwrap()),
+            max_age: Some(chrono::TimeDelta::weeks(2)),
         });
         assert_eq!(numbers(&mut app), [2]);
         assert_eq!(
@@ -270,23 +270,23 @@ mod tests {
         );
     }
     #[test]
-    fn creation_cutoff_uses_the_utc_date_and_includes_the_boundary() {
+    fn the_age_limit_uses_elapsed_time_and_includes_the_boundary() {
         let config =
-            crate::config::Config::parse("[filters]\ncreated_since = \"2026-10-30\"", None)
-                .unwrap();
-        let mut pr = crate::app::testdata::pr("chaoshub", 1, "Old pull request");
-        pr.head.value.updated_at = "2026-11-10T12:00:00Z".parse().unwrap();
+            crate::config::Config::parse("[filters]\nmax_age = \"2 weeks\"", None).unwrap();
+        let now = "2026-11-13T12:34:56Z".parse().unwrap();
+        let mut pr = testdata::pr("chaoshub", 1, "Old pull request");
+        pr.head.value.updated_at = now;
         for (created, included) in [
-            (Some("2026-10-29T23:59:59.999999999Z"), false),
-            (Some("2026-10-30T00:00:00Z"), true),
-            (Some("2026-10-29T17:00:00-07:00"), true),
+            (Some("2026-10-30T12:34:55.999999999Z"), false),
+            (Some("2026-10-30T12:34:56Z"), true),
+            (Some("2026-10-30T05:34:56-07:00"), true),
             (Some("2026-10-30T23:59:59Z"), true),
             (Some("2026-11-01T00:00:00Z"), true),
             (None, false),
         ] {
             pr.head.value.created_at = created.map(|value| value.parse().unwrap());
-            assert_eq!(config.filters.matches(&pr), included, "{created:?}");
-            assert!(FiltersConfig::default().matches(&pr));
+            assert_eq!(config.filters.matches(&pr, now), included, "{created:?}");
+            assert!(FiltersConfig::default().matches(&pr, now));
         }
     }
 }
