@@ -90,6 +90,9 @@ pub(crate) struct PrRef {
     pub node_id: String,
     pub head_oid: String,
     pub base_ref: String,
+    /// The base commit that GitHub reports. Empty in a cache from before
+    /// the field.
+    pub base_oid: String,
 }
 
 /// What the user looks at. Selection-driven workers read only this.
