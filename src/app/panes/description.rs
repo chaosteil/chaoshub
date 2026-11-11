@@ -10,8 +10,9 @@
 //! `MERGE FAILED` badge with the reason, and a merge into the merge queue
 //! shows `IN QUEUE`.
 //!
-//! The reviews, the threads and the activity come from the conversation
-//! detail, which loads in the background. The pane does not start a load.
+//! The reviews come from the pull request, as in the REV column of the
+//! list. The threads and the activity come from the conversation detail,
+//! which loads in the background. The pane does not start a load.
 //!
 //! When the head has codeview comments that went to GitHub not yet, one
 //! dim line between the block and the body counts them, for example
@@ -28,7 +29,7 @@ use crate::app::panes::agent::head;
 use crate::app::panes::checks::failed;
 use crate::app::panes::{Pane, PaneState};
 use crate::app::state::{AppData, MergeState};
-use crate::app::tabs::cells::cell;
+use crate::app::tabs::cells::{self, cell};
 use crate::app::tabs::{Handled, KeyCx};
 use crate::bus::{KeyChord, MergeProgress, MergeStep, Size, Target};
 use crate::domain::check::{Check, CheckConclusion, CheckStatus};
@@ -353,7 +354,7 @@ const GROUP_GAP: &str = "   ";
 fn signals(head: &PrHead, checks: &[Check], detail: Option<&PrDetail>) -> Vec<Cell> {
     let groups = [
         check_signal(checks),
-        review_signal(head, detail),
+        review_signal(head),
         thread_signal(detail),
         size(head),
     ];
@@ -392,37 +393,27 @@ fn check_signal(checks: &[Check]) -> Vec<Cell> {
     out
 }
 
-/// `REVIEWS ✓1 ✗1 · @bob requested`: the latest review of each author
-/// that is not pending and not a comment, then the requested reviewers.
-/// `REVIEWS none` without both; `REVIEWS …` before the detail loads.
-fn review_signal(head: &PrHead, detail: Option<&PrDetail>) -> Vec<Cell> {
+/// `REVIEWS ✓1 ✗1 · @bob requested`: the counts of the REV column of the
+/// list, then the requested reviewers. The counts are the latest
+/// opinionated review of each author on GitHub, also of the user. Without
+/// counts, the glyph of the review decision shows, as in the list.
+/// `REVIEWS none` without counts, decision and requested reviewers.
+fn review_signal(head: &PrHead) -> Vec<Cell> {
     let mut out = vec![cell("REVIEWS", CellStyle::Dim)];
-    let mut counted = false;
-    if let Some(detail) = detail {
-        let mut latest: Vec<(&str, ReviewState, Option<DateTime<Utc>>)> = Vec::new();
-        for review in &detail.reviews {
-            if matches!(review.state, ReviewState::Pending | ReviewState::Commented) {
-                continue;
-            }
-            let entry = (review.author.as_str(), review.state, review.submitted_at);
-            match latest.iter_mut().find(|(author, _, _)| *author == entry.0) {
-                Some(old) if entry.2 >= old.2 => *old = entry,
-                Some(_) => {}
-                None => latest.push(entry),
-            }
-        }
-        let count = |state| latest.iter().filter(|(_, s, _)| *s == state).count();
-        let counts = [
-            ("✓", count(ReviewState::Approved), CellStyle::Success),
-            ("✗", count(ReviewState::ChangesRequested), CellStyle::Danger),
-        ];
-        for (glyph, count, style) in counts {
-            if count > 0 {
-                out.push(cell(format!(" {glyph}{count}"), style));
-                counted = true;
-            }
+    let counts = [
+        ("✓", head.approvals, CellStyle::Success),
+        ("✗", head.changes_requested, CellStyle::Danger),
+    ];
+    for (glyph, count, style) in counts {
+        if count > 0 {
+            out.push(cell(format!(" {glyph}{count}"), style));
         }
     }
+    if out.len() == 1 && head.review_decision.is_some() {
+        let decision = cells::review(head.review_decision);
+        out.push(cell(format!(" {}", decision.text), decision.style));
+    }
+    let counted = out.len() > 1;
     if !head.reviewers.is_empty() {
         let logins: Vec<String> = head.reviewers.iter().map(|r| format!("@{r}")).collect();
         let lead = if counted { " · " } else { " " };
@@ -431,8 +422,7 @@ fn review_signal(head: &PrHead, detail: Option<&PrDetail>) -> Vec<Cell> {
             CellStyle::Dim,
         ));
     } else if !counted {
-        let text = if detail.is_some() { " none" } else { " …" };
-        out.push(cell(text, CellStyle::Dim));
+        out.push(cell(" none", CellStyle::Dim));
     }
     out
 }
@@ -722,14 +712,14 @@ mod tests {
             lines[..3].iter().map(|line| text(line)).collect::<Vec<_>>(),
             [
                 " CHECKING ",
-                "CHECKS none   REVIEWS …   THREADS …   3 files +42 −7",
+                "CHECKS none   REVIEWS none   THREADS …   3 files +42 −7",
                 "loading the activity…",
             ]
         );
         let lines = lines_with("Body", Some(testdata::detail()), None);
         assert_eq!(
             text(&lines[1]),
-            "CHECKS none   REVIEWS ✗1   THREADS 1 open   3 files +42 −7"
+            "CHECKS none   REVIEWS none   THREADS 1 open   3 files +42 −7"
         );
         assert_eq!(text(&lines[2]), "bob requested changes 1h ago");
     }
@@ -923,19 +913,12 @@ mod tests {
     }
 
     #[test]
-    fn the_reviews_count_the_latest_review_of_each_author() {
-        let mut detail = empty_detail();
-        detail.reviews = vec![
-            review("alice", ReviewState::Approved, Some(0)),
-            review("alice", ReviewState::ChangesRequested, Some(10)),
-            review("alice", ReviewState::Commented, Some(20)),
-            review("bob", ReviewState::Approved, Some(5)),
-            review("carol", ReviewState::Commented, Some(5)),
-            review("dave", ReviewState::Pending, None),
-        ];
+    fn the_reviews_show_the_counts_of_the_list() {
         let mut head = ready();
+        head.approvals = 1;
+        head.changes_requested = 1;
         assert_eq!(
-            review_signal(&head, Some(&detail)),
+            review_signal(&head),
             [
                 cell("REVIEWS", CellStyle::Dim),
                 cell(" ✓1", CellStyle::Success),
@@ -944,34 +927,55 @@ mod tests {
         );
         head.reviewers = vec!["bob".into(), "erin".into()];
         assert_eq!(
-            text(&review_signal(&head, Some(&detail))),
+            text(&review_signal(&head)),
             "REVIEWS ✓1 ✗1 · @bob @erin requested"
         );
         assert_eq!(
-            review_signal(&head, Some(&detail)).last(),
+            review_signal(&head).last(),
             Some(&cell(" · @bob @erin requested", CellStyle::Dim))
         );
-        detail.reviews.truncate(1);
+        head.changes_requested = 0;
         assert_eq!(
-            text(&review_signal(&head, Some(&detail))),
+            text(&review_signal(&head)),
             "REVIEWS ✓1 · @bob @erin requested"
         );
     }
 
     #[test]
-    fn the_reviews_without_reviews_or_a_detail() {
+    fn the_reviews_need_no_detail() {
+        // The review of the user went out: GitHub counts it and drops the
+        // request. An old detail with no reviews changes nothing.
         let mut head = ready();
+        head.approvals = 1;
+        let mut detail = empty_detail();
         assert_eq!(
-            text(&review_signal(&head, Some(&empty_detail()))),
-            "REVIEWS none"
+            text(&signals(&head, &[], Some(&detail))),
+            "CHECKS none   REVIEWS ✓1   THREADS 0 open   3 files +42 −7"
         );
-        assert_eq!(text(&review_signal(&head, None)), "REVIEWS …");
+        detail.reviews = vec![review("alice", ReviewState::ChangesRequested, Some(0))];
+        assert_eq!(text(&review_signal(&head)), "REVIEWS ✓1");
+    }
+
+    #[test]
+    fn the_reviews_without_counts_show_the_decision_or_none() {
+        let mut head = ready();
+        assert_eq!(text(&review_signal(&head)), "REVIEWS none");
         head.reviewers = vec!["bob".into()];
-        assert_eq!(text(&review_signal(&head, None)), "REVIEWS @bob requested");
+        assert_eq!(text(&review_signal(&head)), "REVIEWS @bob requested");
+        head.review_decision = Some(ReviewDecision::ReviewRequired);
         assert_eq!(
-            text(&review_signal(&head, Some(&empty_detail()))),
-            "REVIEWS @bob requested"
+            review_signal(&head),
+            [
+                cell("REVIEWS", CellStyle::Dim),
+                cell(" ○", CellStyle::Dim),
+                cell(" · @bob requested", CellStyle::Dim),
+            ]
         );
+        head.reviewers.clear();
+        head.review_decision = Some(ReviewDecision::Approved);
+        assert_eq!(review_signal(&head)[1], cell(" ✓", CellStyle::Success));
+        head.review_decision = Some(ReviewDecision::ChangesRequested);
+        assert_eq!(review_signal(&head)[1], cell(" ✗", CellStyle::Danger));
     }
 
     #[test]
@@ -1020,8 +1024,8 @@ mod tests {
     fn the_signals_join_the_groups_with_three_spaces() {
         let mut head = ready();
         head.reviewers = vec!["bob".into()];
+        head.approvals = 1;
         let mut detail = empty_detail();
-        detail.reviews = vec![review("alice", ReviewState::Approved, Some(0))];
         detail.threads = vec![thread("a.rs", false, Vec::new())];
         let checks = [
             done(CheckConclusion::Success),

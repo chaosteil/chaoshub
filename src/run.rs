@@ -2719,6 +2719,41 @@ mod tests {
         insta::assert_snapshot!(screen(&mut app));
     }
 
+    #[test]
+    fn popup_reviews_after_an_approval_160() {
+        // GitHub counts the approval of the user and drops the review
+        // request. The detail is from before the approval and has no
+        // reviews.
+        let mut snapshot = crate::app::testdata::mine_snapshot();
+        let key = crate::app::testdata::pr_key("chaoshub", 101);
+        for (_, pr) in &mut snapshot.prs {
+            if pr.key == key {
+                pr.head.value.review_decision = Some(crate::domain::pr::ReviewDecision::Approved);
+                pr.head.value.approvals = 1;
+                pr.head.value.changes_requested = 0;
+                pr.head.value.reviewers.clear();
+            }
+        }
+        let mut app = seeded_app(160, 40, snapshot);
+        for _ in 0..3 {
+            press(&mut app, 'j');
+        }
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(enter));
+        let mut detail = crate::app::testdata::detail();
+        detail.reviews.clear();
+        detail.head_oid = "oid101".into();
+        let observed = crate::domain::observed::Observed {
+            value: detail,
+            observed_at: crate::domain::test_time(),
+        };
+        app.update(Msg::DetailLoaded(key, Ok(observed)));
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
     /// The seeded mine app in the pinned mode of #101.
     fn detail_pane_app(width: u16, height: u16) -> App {
         seeded_app(width, height, crate::app::testdata::mine_snapshot())
