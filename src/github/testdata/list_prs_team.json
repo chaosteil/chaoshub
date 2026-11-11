@@ -20,6 +20,11 @@
           "updatedAt": "2026-10-29T19:12:57Z",
           "headRefName": "feature/branch-1",
           "headRefOid": "00000000000000000000000000000000c0de0003",
+          "baseRefOid": "00000000000000000000000000000000ba5e1015",
+          "isCrossRepository": false,
+          "headRepository": {
+            "nameWithOwner": "None"
+          },
           "additions": 12,
           "deletions": 3,
           "changedFiles": 2,
@@ -438,6 +443,11 @@
           "updatedAt": "2026-10-08T06:53:32Z",
           "headRefName": "feature/branch-2",
           "headRefOid": "00000000000000000000000000000000c0de0005",
+          "baseRefOid": "00000000000000000000000000000000ba5e1016",
+          "isCrossRepository": false,
+          "headRepository": {
+            "nameWithOwner": "None"
+          },
           "additions": 22,
           "deletions": 6,
           "changedFiles": 3,

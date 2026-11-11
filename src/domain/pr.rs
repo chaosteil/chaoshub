@@ -34,6 +34,17 @@ pub(crate) struct PrHead {
     pub head_ref: String,
     pub head_oid: String,
     pub base_ref: String,
+    /// The base commit that GitHub reports. Empty in a cache from before
+    /// the field.
+    #[serde(default)]
+    pub base_oid: String,
+    /// The `owner/name` of the repo of the head branch. Empty when that
+    /// repo is gone.
+    #[serde(default)]
+    pub head_repo: String,
+    /// True when the head branch is in another repo, a fork.
+    #[serde(default)]
+    pub cross_repo: bool,
     pub additions: u32,
     pub deletions: u32,
     pub changed_files: u32,
@@ -152,6 +163,9 @@ mod tests {
                 head_ref: "chaosteil/kxyzkxyzkxyz".into(),
                 head_oid: "abc123".into(),
                 base_ref: "main".into(),
+                base_oid: "def456".into(),
+                head_repo: "octo/chaoshub".into(),
+                cross_repo: true,
                 additions: 10,
                 deletions: 2,
                 changed_files: 3,

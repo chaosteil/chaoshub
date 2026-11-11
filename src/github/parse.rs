@@ -301,6 +301,12 @@ macro_rules! pr_fields_parser {
                 head_ref: fields.head_ref_name,
                 head_oid: fields.head_ref_oid,
                 base_ref: fields.base_ref_name,
+                base_oid: fields.base_ref_oid,
+                head_repo: fields
+                    .head_repository
+                    .map(|repo| repo.name_with_owner)
+                    .unwrap_or_default(),
+                cross_repo: fields.is_cross_repository,
                 additions: uint(fields.additions, "additions")?,
                 deletions: uint(fields.deletions, "deletions")?,
                 changed_files: uint(fields.changed_files, "changedFiles")?,
@@ -864,6 +870,12 @@ mod tests {
         assert_eq!(numbers, [1550, 1549]);
         assert_eq!(prs[0].head.value.state, PrState::Open);
         assert_eq!(prs[0].head.value.stack, None);
+        assert_eq!(
+            prs[0].head.value.base_oid,
+            "00000000000000000000000000000000ba5e0001"
+        );
+        assert_eq!(prs[0].head.value.head_repo, "acme/deploy");
+        assert!(!prs[0].head.value.cross_repo);
     }
 
     #[test]
@@ -879,6 +891,18 @@ mod tests {
         assert_eq!(pr.key.repo.name, "deploy");
         assert_eq!(pr.head.value.state, PrState::Open);
         assert_eq!(pr.head.observed_at, test_time());
+        assert_eq!(pr.head.value.head_repo, "octo/deploy");
+        assert!(pr.head.value.cross_repo);
+    }
+
+    #[test]
+    fn a_pull_request_without_a_head_repo_has_an_empty_head_repo() {
+        let mut json: serde_json::Value =
+            serde_json::from_str(include_str!("testdata/pr_by_number.json")).unwrap();
+        json["data"]["repository"]["pullRequest"]["headRepository"] = serde_json::Value::Null;
+        let data = serde_json::from_value(json["data"].clone()).unwrap();
+        let pr = pr_by_number::pr(data, &ME, test_time()).unwrap().unwrap();
+        assert_eq!(pr.head.value.head_repo, "");
     }
 
     #[test]

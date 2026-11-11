@@ -26,6 +26,11 @@ fragment PrFields on PullRequest {
   headRefName
   headRefOid
   baseRefName
+  baseRefOid
+  isCrossRepository
+  headRepository {
+    nameWithOwner
+  }
   additions
   deletions
   changedFiles

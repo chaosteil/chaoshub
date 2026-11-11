@@ -14,6 +14,11 @@
         "updatedAt": "2026-10-30T05:09:51Z",
         "headRefName": "feature/branch-1",
         "headRefOid": "00000000000000000000000000000000c0de0002",
+        "baseRefOid": "00000000000000000000000000000000ba5e00c9",
+        "isCrossRepository": true,
+        "headRepository": {
+          "nameWithOwner": "octo/deploy"
+        },
         "additions": 12,
         "deletions": 3,
         "changedFiles": 2,
