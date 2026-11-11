@@ -196,6 +196,7 @@ pub(crate) mod tests {
                 mergeable: Mergeable::Unknown,
                 merge_state: MergeStateStatus::Unknown,
                 url: String::new(),
+                created_at: Some(test_time()),
                 updated_at: test_time(),
                 repo_settings: RepoSettings {
                     squash: true,

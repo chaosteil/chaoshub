@@ -156,6 +156,29 @@ name = "my-org/deploy"
 | `name` | required | The repo in the `owner/name` form. |
 | `path` | none | The local checkout, a jj repo or a git repo. Without a path, chaoshub shows no local data for the repo, and the review action is disabled. |
 
+### `[filters]`
+
+Set a creation date cutoff for the Mine, Review and Team lists:
+
+```toml
+[filters]
+created_since = "2026-09-01"
+```
+
+`created_since` includes pull requests created on or after midnight UTC
+on that date. Use a quoted `YYYY-MM-DD` date. The default has no cutoff.
+A later update does not bring an older pull request back into the lists.
+
+The cutoff applies to GitHub searches and cached lists, including the
+author picker and the `t` switch. Restart chaoshub after a change. An old
+cache without creation dates hides those rows until the next sync reads
+their creation dates. No cache reset is needed.
+
+The cutoff changes list membership. It does not change a stack on GitHub
+or prevent `chaoshub pr OWNER/NAME NUMBER` from opening a specific pull
+request. The existing author and text filters still apply within the
+included pull requests.
+
 ### `[refresh]`
 
 The poll intervals, in seconds.

@@ -4,10 +4,12 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use chrono::NaiveDate;
 use serde::{Deserialize, Deserializer};
 
 use crate::domain::keys::RepoKey;
 use crate::domain::merge::{MergeMethod, StackOverride};
+use crate::domain::pr::PullRequest;
 
 /// One `[[repo]]` entry: a repo to track and its local checkout.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -18,6 +20,28 @@ pub(crate) struct RepoEntry {
     /// The local checkout. `~` expands to the home directory.
     #[serde(default)]
     pub path: Option<PathBuf>,
+}
+
+/// The `[filters]` section: which pull requests appear in the lists.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub(crate) struct FiltersConfig {
+    /// Includes pull requests created on or after this UTC date.
+    pub created_since: Option<NaiveDate>,
+}
+
+impl FiltersConfig {
+    /// True when the pull request passes the configured list filters.
+    /// An old cache without a creation time waits for a sync when a
+    /// cutoff is set.
+    pub(crate) fn matches(&self, pr: &PullRequest) -> bool {
+        self.created_since.is_none_or(|since| {
+            pr.head
+                .value
+                .created_at
+                .is_some_and(|created| created.date_naive() >= since)
+        })
+    }
 }
 
 /// The `[refresh]` section: the poll intervals in seconds.

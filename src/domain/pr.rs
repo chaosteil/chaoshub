@@ -57,6 +57,9 @@ pub(crate) struct PrHead {
     pub mergeable: Mergeable,
     pub merge_state: MergeStateStatus,
     pub url: String,
+    /// `None` in caches written before creation times were stored.
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
     pub repo_settings: RepoSettings,
 }
@@ -169,6 +172,7 @@ mod tests {
                 mergeable: Mergeable::Unknown,
                 merge_state: MergeStateStatus::Unknown,
                 url: "https://github.com/chaosteil/chaoshub/pull/42".into(),
+                created_at: Some(test_time()),
                 updated_at: test_time(),
                 repo_settings: RepoSettings {
                     squash: true,
@@ -209,5 +213,17 @@ mod tests {
         assert_eq!(pr.head.value.approvals, 0);
         assert_eq!(pr.head.value.changes_requested, 0);
         assert_eq!(pr.head.value.reviewers, ["colleague"]);
+    }
+
+    #[test]
+    fn an_old_cache_without_a_creation_time_still_loads() {
+        let mut json = serde_json::to_value(pull_request()).unwrap();
+        json["head"]["value"]
+            .as_object_mut()
+            .unwrap()
+            .remove("created_at");
+        let pr: PullRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(pr.head.value.created_at, None);
+        assert_eq!(pr.head.value.updated_at, test_time());
     }
 }

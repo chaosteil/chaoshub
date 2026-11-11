@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::config::schema::{
-    AgentConfig, CodeviewConfig, DetailConfig, MergeConfig, PrefetchConfig, RefreshConfig,
-    RepoEntry, RepoMerge, TerminalConfig, ThemeConfig, WorkspacesConfig,
+    AgentConfig, CodeviewConfig, DetailConfig, FiltersConfig, MergeConfig, PrefetchConfig,
+    RefreshConfig, RepoEntry, RepoMerge, TerminalConfig, ThemeConfig, WorkspacesConfig,
 };
 use crate::domain::keys::RepoKey;
 use crate::domain::repo::Repo;
@@ -34,6 +34,7 @@ pub(crate) struct Config {
     /// The repos to track, from the `[[repo]]` entries.
     #[serde(rename = "repo")]
     pub repos: Vec<RepoEntry>,
+    pub filters: FiltersConfig,
     pub refresh: RefreshConfig,
     pub prefetch: PrefetchConfig,
     pub codeview: CodeviewConfig,
@@ -188,6 +189,7 @@ mod tests {
         let config = Config::parse("", Some(Path::new("/home/me"))).unwrap();
         assert_eq!(config.login, None);
         assert_eq!(config.repos, []);
+        assert_eq!(config.filters, FiltersConfig::default());
         assert_eq!(config.refresh, RefreshConfig::default());
         assert_eq!(config.refresh.mine_secs, 60);
         assert_eq!(config.refresh.team_secs, 90);
@@ -219,6 +221,10 @@ mod tests {
     fn sample_file_parses() {
         let config = Config::parse(SAMPLE, Some(Path::new("/home/me"))).unwrap();
         assert_eq!(config.login.as_deref(), Some("chaosteil"));
+        assert_eq!(
+            config.filters.created_since,
+            Some("2026-09-01".parse().unwrap())
+        );
         assert_eq!(config.teams, ["pierredotco/platform"]);
         assert_eq!(config.launcher.as_deref(), Some("rex"));
         assert_eq!(
@@ -433,5 +439,14 @@ mod tests {
         let err = load(&path).unwrap_err();
         assert!(matches!(err, ConfigError::Parse { .. }));
         assert!(err.to_string().contains("config.toml"), "{err}");
+    }
+
+    #[test]
+    fn invalid_creation_dates_stop_configuration_loading() {
+        for date in ["2026-02-30", "yesterday", "", "2026-10-30T12:00:00Z"] {
+            let text = format!("[filters]\ncreated_since = {date:?}");
+            let err = Config::parse(&text, None).unwrap_err();
+            assert!(err.to_string().contains("created_since"), "{err}");
+        }
     }
 }

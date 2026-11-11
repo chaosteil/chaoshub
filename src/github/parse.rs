@@ -339,6 +339,7 @@ macro_rules! pr_fields_parser {
                     }
                 },
                 url: fields.url,
+                created_at: Some(fields.created_at),
                 updated_at: fields.updated_at,
                 repo_settings: repo_settings(&fields.repository),
             };
@@ -735,6 +736,10 @@ mod tests {
         assert!(pr.node_id.starts_with("PR_"));
         let head = &pr.head.value;
         assert_eq!(head.author, "chaosteil");
+        assert_eq!(
+            head.created_at,
+            Some("2026-09-01T12:00:00Z".parse().unwrap())
+        );
         assert_eq!(head.state, PrState::Merged);
         assert!(!head.is_draft);
         assert_eq!(head.head_ref, "dominykas/vsvzovrwyuss");
@@ -866,6 +871,10 @@ mod tests {
         let data = fixture(include_str!("testdata/pr_by_number.json"));
         let pr = pr_by_number::pr(data, &ME, test_time()).unwrap().unwrap();
         assert_eq!(pr.key.number, 1550);
+        assert_eq!(
+            pr.head.value.created_at,
+            Some("2026-09-01T12:00:00Z".parse().unwrap())
+        );
         assert_eq!(pr.key.repo.owner, "acme");
         assert_eq!(pr.key.repo.name, "deploy");
         assert_eq!(pr.head.value.state, PrState::Open);

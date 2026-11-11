@@ -194,6 +194,7 @@ mod tests {
                     mergeable: Mergeable::Unknown,
                     merge_state: MergeStateStatus::Unknown,
                     url: format!("https://github.com/o/r/pull/{number}"),
+                    created_at: Some(observed_at),
                     updated_at: observed_at,
                     repo_settings: RepoSettings {
                         squash: true,
@@ -685,5 +686,18 @@ mod tests {
             elapsed < Duration::from_millis(150),
             "startup load took {elapsed:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn cached_rows_without_creation_times_are_not_known_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.db");
+        let (_, handle) = Store::open(&path).unwrap();
+        let mut pr = sample_pr(1, PrState::Open, test_time());
+        pr.head.value.created_at = None;
+        handle.put_prs(Scope::Mine, vec![pr.clone()]).await.unwrap();
+        assert!(handle.pr_versions(Scope::Mine).await.unwrap().is_empty());
+        let (snapshot, _) = Store::open(&path).unwrap();
+        assert_eq!(snapshot.prs, [(Scope::Mine, pr)]);
     }
 }

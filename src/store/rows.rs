@@ -197,7 +197,8 @@ pub(crate) fn put_sync_state(
 }
 
 /// The versions of the open pull requests of `scope`. A row that does not
-/// parse is skipped and logged.
+/// parse is skipped and logged. Rows without a creation time are read
+/// again from GitHub on the next sync.
 pub(crate) fn pr_versions(
     conn: &Connection,
     scope: Scope,
@@ -210,7 +211,7 @@ pub(crate) fn pr_versions(
     let mut versions = Vec::new();
     for row in rows {
         match serde_json::from_slice::<PullRequest>(&row?) {
-            Ok(pr) => versions.push((
+            Ok(pr) if pr.head.value.created_at.is_some() => versions.push((
                 pr.key,
                 PrVersion {
                     updated_at: pr.head.value.updated_at,
@@ -218,6 +219,7 @@ pub(crate) fn pr_versions(
                     observed_at: pr.head.observed_at,
                 },
             )),
+            Ok(_) => {}
             Err(err) => tracing::warn!(%err, "cached pull request does not parse, skipped"),
         }
     }
