@@ -2187,13 +2187,20 @@ fn refresh_interest(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Option<Cmd> 
             areas: &areas,
             keys: &keymap::DEFAULT,
         };
-        tab.interest(&cx, ts)
+        let mut interest = tab.interest(&cx, ts);
+        interest.show_hidden = any_show_hidden(state);
+        interest
     };
     if state.ui.interest.as_ref() == Some(&interest) {
         return None;
     }
     state.ui.interest = Some(interest.clone());
     Some(Cmd::SetInterest(interest))
+}
+
+/// True while the `show_hidden` switch of any tab is on.
+fn any_show_hidden(state: &AppState) -> bool {
+    state.ui.tabs.iter().any(|ts| ts.show_hidden)
 }
 
 /// The interest of the pinned mode: the pinned pull request is selected
@@ -2209,6 +2216,7 @@ fn pinned_interest(data: &AppData, key: &PrKey) -> crate::bus::Interest {
             .into_iter()
             .filter(|other| other.key != *key)
             .collect(),
+        show_hidden: false,
     }
 }
 
@@ -2354,7 +2362,17 @@ fn prs_synced(
     let reload = detail_reload(state, moved);
     if let Some(seen) = seen {
         let seen: BTreeSet<PrKey> = seen.into_iter().chain(page).collect();
-        let candidates = gone_candidates(&state.data, scope, &seen, started_at);
+        let mut candidates = gone_candidates(&state.data, scope, &seen, started_at);
+        if any_show_hidden(state) {
+            // A sync with the age limit does not return the old pull
+            // requests that the `show_hidden` switch shows.
+            let data = &state.data;
+            candidates.retain(|key| {
+                data.prs
+                    .get(key)
+                    .is_some_and(|pr| data.filters.matches(pr, data.now))
+            });
+        }
         tracing::debug!(
             candidates = candidates.len(),
             ?scope,
@@ -3265,6 +3283,7 @@ mod tests {
             wants_local: true,
             selected: None,
             visible: Vec::new(),
+            show_hidden: false,
         };
         assert_eq!(
             run(&mut state, &tabs, j.clone()),
@@ -3697,6 +3716,7 @@ mod tests {
             wants_local: false,
             selected: None,
             visible: Vec::new(),
+            show_hidden: false,
         })
     }
 
@@ -3864,6 +3884,24 @@ mod tests {
         let keys: Vec<_> = state.data.prs.keys().map(|key| key.number).collect();
         assert_eq!(keys, [2], "#2 was refreshed after the sync started");
         assert_eq!(state.data.scopes.len(), 1);
+    }
+
+    #[test]
+    fn gone_keeps_the_prs_past_the_age_limit_while_show_hidden_is_on() {
+        let (tabs, mut state) = setup(None);
+        state.data.filters.max_age = Some(chrono::TimeDelta::weeks(2));
+        let mut old = pr_at(1, "Old", 0);
+        old.head.value.created_at = Some(state.data.now - chrono::TimeDelta::weeks(3));
+        let mut new = pr_at(2, "New", 0);
+        new.head.value.created_at = Some(state.data.now);
+        run(&mut state, &tabs, synced(vec![old, new], None, 0));
+        state.ui.tabs[0].show_hidden = true;
+        run(&mut state, &tabs, synced(Vec::new(), Some(Vec::new()), 20));
+        let keys: Vec<_> = state.data.prs.keys().map(|key| key.number).collect();
+        assert_eq!(keys, [1], "a sync with the age limit does not return #1");
+        state.ui.tabs[0].show_hidden = false;
+        run(&mut state, &tabs, synced(Vec::new(), Some(Vec::new()), 30));
+        assert_eq!(state.data.prs.len(), 0);
     }
 
     #[test]
@@ -4209,6 +4247,7 @@ mod tests {
                 wants_local: false,
                 selected: None,
                 visible: Vec::new(),
+                show_hidden: false,
             })
         };
         let two = press(KeyCode::Char('2'), KeyModifiers::NONE);
@@ -4400,6 +4439,7 @@ mod tests {
             panic!("no interest: {cmds:?}");
         };
         assert_eq!(interest.visible.len(), 5, "the hidden rows are visible");
+        assert!(interest.show_hidden, "the syncs skip the age limit");
         key(&mut state, 'T');
         assert!(!state.ui.tabs[0].show_hidden);
         assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 2);
@@ -7179,6 +7219,7 @@ mod tests {
                 wants_local: false,
                 selected: Some(pr_ref(&pr)),
                 visible: Vec::new(),
+                show_hidden: false,
             })]
         );
     }

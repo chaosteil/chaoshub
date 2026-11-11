@@ -597,6 +597,7 @@ mod tests {
             wants_local: false,
             selected: None,
             visible: Vec::new(),
+            show_hidden: false,
         }
     }
 

@@ -103,6 +103,9 @@ pub(crate) struct Interest {
     pub wants_local: bool,
     pub selected: Option<PrRef>,
     pub visible: Vec<PrRef>,
+    /// True while the `show_hidden` switch (`T`) of any tab is on. The
+    /// syncs then search GitHub without the age limit.
+    pub show_hidden: bool,
 }
 
 /// The login of the user and the set of repos.

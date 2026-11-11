@@ -162,6 +162,7 @@ pub(crate) fn list_interest(tab: &dyn Tab, model: &ListModel, height: u16) -> In
             .take(usize::from(height))
             .filter_map(|row| pr(&row.item))
             .collect(),
+        show_hidden: false,
     }
 }
 
@@ -264,6 +265,7 @@ pub(crate) mod fake {
                 wants_local: ts.cursor > 0,
                 selected: None,
                 visible: Vec::new(),
+                show_hidden: false,
             }
         }
 
