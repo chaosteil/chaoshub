@@ -1206,3 +1206,24 @@ cargo nextest run
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
+
+### Benchmark of the review open
+
+`bench/bench.sh` times the open of a pull request in codeview, from the
+start of nvim (or of the Rex split) to the first file on the screen and
+to the review comments. It runs in scratch clones under `$BENCH_DIR`,
+because codeview writes refs there. The Rex case starts a private Rex
+server, so the panes of the benchmark never reach your own Rex session.
+
+```sh
+export BENCH_DIR=/tmp/chaoshub-bench
+bench/bench.sh setup     # clone the repo: a warm clone and a stale base template
+bench/bench.sh headless  # nvim without a terminal
+BENCH_CASE=stale bench/bench.sh headless
+bench/bench.sh rex       # rex split and rex zoom, as chaoshub runs them
+bench/bench.sh network   # the GitHub calls alone
+bench/bench.sh clean
+```
+
+Each case runs 5 times (`BENCH_RUNS`) and prints the median of each stage
+in milliseconds. `bench/bench.sh` lists all options.
