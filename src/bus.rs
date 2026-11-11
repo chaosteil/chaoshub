@@ -410,6 +410,21 @@ pub(crate) enum MergeProgress {
     Failed(String),
 }
 
+/// The step of a merge run. The verdict badge and the status bar show it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MergeStep {
+    /// The run merges #`number`: the entry `index` of the `total` entries
+    /// of the run. The first entry has the index 1.
+    Entry {
+        number: u64,
+        index: usize,
+        total: usize,
+    },
+    /// The run waits until GitHub moves #`number` to the base of the
+    /// stack.
+    Retarget { number: u64 },
+}
+
 /// A fire-and-forget write to the store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Persist {
@@ -458,6 +473,8 @@ pub(crate) enum ActionEvent {
     Output(Vec<String>),
     Popup(PopupSpec),
     MergeStatus(MergeProgress),
+    /// The next step of a merge run.
+    MergeStep(MergeStep),
     Done(Result<String, String>),
 }
 
