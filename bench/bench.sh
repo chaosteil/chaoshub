@@ -123,7 +123,7 @@ cmd_setup() {
   git -C "$STALE" update-ref refs/remotes/origin/main "$merge"
   git -C "$STALE" update-ref refs/heads/main "$merge"
   git -C "$STALE" for-each-ref --format='%(refname)' refs/remotes/origin |
-    grep -v '^refs/remotes/origin/main$' | while read -r ref; do git -C "$STALE" update-ref -d "$ref"; done
+    grep -v '^refs/remotes/origin/main$' | while read -r ref; do git -C "$STALE" update-ref --no-deref -d "$ref"; done
   git -C "$STALE" reflog expire --expire=now --all
   git -C "$STALE" gc -q --prune=now
   if git -C "$STALE" cat-file -e "$base^{commit}" 2>/dev/null; then
