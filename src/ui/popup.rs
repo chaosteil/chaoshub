@@ -210,8 +210,8 @@ mod tests {
             ('1', "Description"),
             ('2', "Checks"),
             ('3', "Conversation"),
-            ('4', "Stack"),
-            ('5', "Files"),
+            ('4', "Files"),
+            ('5', "Stack"),
             ('6', "Agent"),
         ]
         .into_iter()
@@ -248,7 +248,7 @@ mod tests {
         let first = row(&buf, 3);
         let second = row(&buf, 4);
         assert!(first.contains("1 Description") && first.contains("3 Conversation"));
-        assert!(second.contains("4 Stack") && second.contains("6 Agent"));
+        assert!(second.contains("4 Files") && second.contains("6 Agent"));
         let agent = find(&buf, 4, "Agent");
         assert_eq!(hits.at(agent, 4), Some(Hit::PaneTab(5)));
         assert!(row(&buf, 5).contains('─'), "the rule is under the tabs");
@@ -261,8 +261,8 @@ mod tests {
 
         let tabs: Vec<PaneTab> = [
             ('3', "Conversation", false),
-            ('4', "Stack", true),
-            ('5', "Files", false),
+            ('4', "Files", false),
+            ('5', "Stack", true),
         ]
         .into_iter()
         .enumerate()
@@ -491,8 +491,8 @@ mod tests {
         let tabs_y = area.y + 3;
         let checks = find(&buf, tabs_y, "Checks");
         assert_eq!(hits.at(checks, tabs_y), Some(Hit::PaneTab(1)));
-        let stack = find(&buf, tabs_y, "Stack");
-        assert_eq!(hits.at(stack, tabs_y), Some(Hit::PaneTab(3)));
+        let files = find(&buf, tabs_y, "Files");
+        assert_eq!(hits.at(files, tabs_y), Some(Hit::PaneTab(3)));
         let test_y = (0..30)
             .find(|&y| row(&buf, y).contains("ci / test"))
             .unwrap();

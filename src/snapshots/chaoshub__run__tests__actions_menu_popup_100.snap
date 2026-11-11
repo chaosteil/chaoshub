@@ -6,7 +6,7 @@ expression: screen(&mut app)
 " TITLE              ◢━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱╱╱━◥"
 " ready for review · ▌ #88 docs(readme): keymap table                                               ┃"
 "▶ docs(readme): keym▌ alice · chaosteil/88 -> main · open                                          ┃"
-"                    ▌ ◢ 1 Desc ◤ ◢ 2 Checks ◤ ◢ 3 Convo ◤   4 Stack   ◢ 5 Files ◤   6 Agent        ┃"
+"                    ▌ ◢ 1 Desc ◤ ◢ 2 Checks ◤ ◢ 3 Convo ◤ ◢ 4 Files ◤   5 Stack     6 Agent        ┃"
 "                    ▌ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱ ┃"
 "                    ▌  BLOCKED  ╱ review required                                                  ┃"
 "                    ▌ CHECKS none   REVIEWS ○   THREADS …   3 files +42 −7                         ┃"

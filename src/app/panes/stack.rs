@@ -23,7 +23,7 @@ impl Pane for StackPane {
     }
 
     fn key(&self) -> char {
-        '4'
+        '5'
     }
 
     fn applies(&self, target: &Target) -> bool {
