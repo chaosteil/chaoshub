@@ -4,6 +4,12 @@
 //! open threads and the size; and the latest activity. A blank line and
 //! the body of the pull request as markdown come after the block.
 //!
+//! While a merge of the pull request runs, the verdict is the progress of
+//! the merge: a spinner and `MERGING` on a badge that pulses between the
+//! success green and the merge purple. A failed merge shows a red
+//! `MERGE FAILED` badge with the reason, and a merge into the merge queue
+//! shows `IN QUEUE`.
+//!
 //! The reviews, the threads and the activity come from the conversation
 //! detail, which loads in the background. The pane does not start a load.
 //!
@@ -12,17 +18,19 @@
 //! `3 unsent codeview comments · space r to review`. The Review popup
 //! lists and sends them. Without such comments, the pane shows no line.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::app::age::age;
+use crate::app::frame::spinner;
 use crate::app::keymap::{Keymap, chord_text};
 use crate::app::models::{Cell, CellStyle, PaneModel, Tone};
 use crate::app::panes::agent::head;
 use crate::app::panes::checks::failed;
 use crate::app::panes::{Pane, PaneState};
+use crate::app::state::{AppData, MergeState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx};
-use crate::bus::{KeyChord, Size, Target};
+use crate::bus::{KeyChord, MergeProgress, MergeStep, Size, Target};
 use crate::domain::check::{Check, CheckConclusion, CheckStatus};
 use crate::domain::detail::{PrDetail, ReviewState};
 use crate::domain::pr::{
@@ -126,7 +134,7 @@ fn readiness(cx: &KeyCx<'_>, pr: &PullRequest) -> Vec<Vec<Cell>> {
     let detail = cx.data.details.get(&pr.key).map(|d| &d.value);
     let error = cx.data.detail_errors.contains_key(&pr.key);
     vec![
-        verdict(head, pr.ci_state.value, checks),
+        merge_verdict(cx.data, pr).unwrap_or_else(|| verdict(head, pr.ci_state.value, checks)),
         signals(head, checks, detail),
         activity(head, detail, error, cx.data.now),
     ]
@@ -265,6 +273,77 @@ fn verdict(head: &PrHead, ci: CiState, checks: &[Check]) -> Vec<Cell> {
         out.push(reason);
     }
     out
+}
+
+/// Line 1 while a merge run of `pr` goes on, after it failed, or after it
+/// put `pr` in the merge queue. `None` without a run of `pr`, and when
+/// `pr` is no longer open: line 1 is then the verdict, for example
+/// MERGED.
+fn merge_verdict(data: &AppData, pr: &PullRequest) -> Option<Vec<Cell>> {
+    let merge = data.merge.as_ref().filter(|merge| merge.key == pr.key)?;
+    if pr.head.value.state != PrState::Open {
+        return None;
+    }
+    let line = match &merge.progress {
+        MergeProgress::Failed(reason) => vec![
+            cell(" MERGE FAILED ", CellStyle::Badge(Tone::Danger)),
+            cell(" ╱ ", CellStyle::Danger),
+            cell(reason.as_str(), CellStyle::Danger),
+        ],
+        MergeProgress::Enqueued => vec![cell(" IN QUEUE ", CellStyle::Badge(Tone::Merge))],
+        MergeProgress::Pending | MergeProgress::Merged { .. } => {
+            let text = format!(" {} {} ", spinner(data.now), merging_text(merge));
+            let mix = pulse(data.now - merge.started, data.animations);
+            vec![cell(text, CellStyle::MergeBadge(mix))]
+        }
+    };
+    Some(line)
+}
+
+/// The badge text of a merge run: `MERGING`, `MERGING 2/3 #12` for an
+/// entry of a stack, `MERGING · waiting for #13 to retarget` between two
+/// entries, and `MERGING · fetching` after GitHub merged the last entry,
+/// until the refreshed pull request shows the merge.
+fn merging_text(merge: &MergeState) -> String {
+    let merged = matches!(merge.progress, MergeProgress::Merged { .. });
+    match merge.step {
+        MergeStep::Retarget { number } => format!("MERGING · waiting for #{number} to retarget"),
+        MergeStep::Entry { index, total, .. } if merged && index == total => {
+            "MERGING · fetching".to_owned()
+        }
+        MergeStep::Entry { total: 1, .. } => "MERGING".to_owned(),
+        MergeStep::Entry {
+            number,
+            index,
+            total,
+        } => format!("MERGING {index}/{total} #{number}"),
+    }
+}
+
+/// The time of one pulse of the merge badge: from green to purple and back
+/// to green.
+const PULSE: TimeDelta = TimeDelta::milliseconds(1500);
+
+/// The color mix of the merge badge `elapsed` after the start of the run:
+/// 0 is the success green, 255 the merge purple. The mix follows a cosine,
+/// so it starts on green and slows down at both colors. With `animations`
+/// off, it stays on green.
+fn pulse(elapsed: TimeDelta, animations: bool) -> u8 {
+    if !animations {
+        return 0;
+    }
+    let period = PULSE.num_milliseconds();
+    let phase = elapsed.num_milliseconds().rem_euclid(period);
+    let phase = f64::from(u32::try_from(phase).unwrap_or(0))
+        / f64::from(u32::try_from(period).unwrap_or(1));
+    let mix = (1.0 - (std::f64::consts::TAU * phase).cos()) / 2.0 * 255.0;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "mix is rounded and between 0 and 255"
+    )]
+    let mix = mix.round() as u8;
+    mix
 }
 
 /// The space between two groups of the signals line.
@@ -1166,5 +1245,145 @@ mod tests {
             let lines = codeview_texts(&state, &crate::app::keymap::DEFAULT);
             assert_eq!(lines.len(), 5, "{lines:?}");
         }
+    }
+
+    /// The state of #7 with the merge run `merge` of #7, `elapsed` after
+    /// the start of the run.
+    fn merge_state(merge: Option<MergeState>, elapsed: TimeDelta) -> AppState {
+        let mut state = codeview_state(None);
+        state.data.now = test_time() + elapsed;
+        state.data.merge = merge;
+        state
+    }
+
+    /// A merge run of #7 that started at the test time.
+    fn run_of_7() -> MergeState {
+        MergeState::new(testdata::pr_key("chaoshub", 7), test_time())
+    }
+
+    /// Line 1 of the pane of #7 in `state`.
+    fn line_1(state: &AppState) -> Vec<Cell> {
+        let (lines, ..) = codeview_pane(state, &crate::app::keymap::DEFAULT);
+        lines[0].clone()
+    }
+
+    #[test]
+    fn a_merge_shows_merging_on_a_badge_that_pulses() {
+        let ms = TimeDelta::milliseconds;
+        for (elapsed, mix) in [(0, 0), (250, 64), (750, 255), (1250, 64), (1500, 0)] {
+            let state = merge_state(Some(run_of_7()), ms(elapsed));
+            let text = format!(" {} MERGING ", spinner(state.data.now));
+            assert_eq!(
+                line_1(&state),
+                [cell(text, CellStyle::MergeBadge(mix))],
+                "{elapsed} ms"
+            );
+        }
+    }
+
+    #[test]
+    fn without_animations_the_merge_badge_stays_green() {
+        let mut state = merge_state(Some(run_of_7()), TimeDelta::milliseconds(750));
+        state.data.animations = false;
+        assert_eq!(line_1(&state)[0].style, CellStyle::MergeBadge(0));
+    }
+
+    #[test]
+    fn the_merge_badge_shows_the_step_of_the_run() {
+        let merged = MergeProgress::Merged { sha: "abc".into() };
+        let entry = |number, index, total| MergeStep::Entry {
+            number,
+            index,
+            total,
+        };
+        let cases = [
+            (
+                entry(12, 2, 3),
+                MergeProgress::Pending,
+                false,
+                "MERGING 2/3 #12",
+            ),
+            (entry(12, 2, 3), merged.clone(), false, "MERGING 2/3 #12"),
+            (
+                MergeStep::Retarget { number: 13 },
+                merged.clone(),
+                false,
+                "MERGING · waiting for #13 to retarget",
+            ),
+            (entry(13, 3, 3), merged.clone(), false, "MERGING · fetching"),
+            (entry(7, 1, 1), merged.clone(), false, "MERGING · fetching"),
+            (entry(7, 1, 1), merged, true, "MERGING · fetching"),
+        ];
+        for (step, progress, done, text) in cases {
+            let merge = MergeState {
+                progress,
+                step,
+                done,
+                ..run_of_7()
+            };
+            let state = merge_state(Some(merge), TimeDelta::zero());
+            let line = line_1(&state);
+            assert_eq!(line.len(), 1, "{text}");
+            assert_eq!(
+                line[0].text,
+                format!(" {} {text} ", spinner(state.data.now))
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_merge_shows_the_reason_on_a_red_badge() {
+        let merge = MergeState {
+            progress: MergeProgress::Failed("checks failing".into()),
+            done: true,
+            ..run_of_7()
+        };
+        let state = merge_state(Some(merge), TimeDelta::zero());
+        assert_eq!(
+            line_1(&state),
+            [
+                cell(" MERGE FAILED ", CellStyle::Badge(Tone::Danger)),
+                cell(" ╱ ", CellStyle::Danger),
+                cell("checks failing", CellStyle::Danger),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_merge_into_the_queue_ends_on_the_queue_badge() {
+        let merge = MergeState {
+            progress: MergeProgress::Enqueued,
+            done: true,
+            ..run_of_7()
+        };
+        let state = merge_state(Some(merge), TimeDelta::zero());
+        assert_eq!(
+            line_1(&state),
+            [cell(" IN QUEUE ", CellStyle::Badge(Tone::Merge))]
+        );
+    }
+
+    #[test]
+    fn a_merged_pull_request_shows_merged_over_the_run() {
+        let merge = MergeState {
+            progress: MergeProgress::Merged { sha: "abc".into() },
+            done: true,
+            ..run_of_7()
+        };
+        let mut state = merge_state(Some(merge), TimeDelta::zero());
+        let key = testdata::pr_key("chaoshub", 7);
+        state.data.prs.get_mut(&key).unwrap().head.value.state = PrState::Merged;
+        assert_eq!(
+            line_1(&state),
+            [cell(" MERGED ", CellStyle::Badge(Tone::Merge))]
+        );
+    }
+
+    #[test]
+    fn the_run_of_another_pull_request_does_not_change_the_verdict() {
+        let other = MergeState::new(testdata::pr_key("chaoshub", 8), test_time());
+        let state = merge_state(Some(other), TimeDelta::zero());
+        let plain = merge_state(None, TimeDelta::zero());
+        assert_eq!(line_1(&state), line_1(&plain));
     }
 }

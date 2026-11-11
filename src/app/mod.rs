@@ -101,6 +101,14 @@ impl App {
         self
     }
 
+    /// Sets the `[theme] animations` switch. With `false`, the merge badge
+    /// does not pulse.
+    pub(crate) fn with_animations(mut self, on: bool) -> Self {
+        self.state.data.animations = on;
+        self.state.bump();
+        self
+    }
+
     /// Pins the pull request `key`: the pinned mode of `chaoshub pr`. The
     /// popup of `key` is in place from the first frame, without a slide,
     /// and the interest is the one of the pinned pull request.
@@ -126,8 +134,9 @@ impl App {
         self.state.ui.interest.as_ref()
     }
 
-    /// True while a requested sync or a prefetch batch runs: the status
-    /// bar shows a spinner, and `run` ticks every `SPINNER_FRAME`.
+    /// True while a requested sync, a prefetch batch or a merge runs (see
+    /// `AppData::busy`): the status bar shows a spinner, and `run` ticks
+    /// every `SPINNER_FRAME`.
     pub(crate) fn busy(&self) -> bool {
         self.state.data.busy()
     }

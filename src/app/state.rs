@@ -117,6 +117,9 @@ pub(crate) struct AppData {
     /// right (`Selection::shift`). The tree rows of a pane are measured
     /// without these cells, as `ui` draws them.
     pub selection_shift: u16,
+    /// False when `[theme] animations = false`. The merge badge then does
+    /// not pulse.
+    pub animations: bool,
 }
 
 /// The review draft of a pull request. It stays when the popups close.
@@ -843,6 +846,7 @@ impl AppState {
                 codeview: BTreeMap::new(),
                 reviews: BTreeMap::new(),
                 selection_shift: 0,
+                animations: true,
             },
             ui: UiState {
                 active: 0,
