@@ -186,6 +186,7 @@ impl Team {
             .values()
             .filter(|pr| data.scopes.get(&pr.key) == Some(&Scope::Team))
             .filter(|pr| pr.head.value.state == PrState::Open)
+            .filter(|pr| data.filters.matches(pr, data.now))
             .filter(|pr| pr.head.value.review_requested == requested)
             .filter(|pr| all_open || is_ready(pr))
             .collect();
@@ -387,6 +388,57 @@ mod tests {
                 rest.selected.map(|pr| pr.key.number)
             ),
             ("review", "team", Some(87))
+        );
+    }
+
+    #[test]
+    fn the_cutoff_applies_to_both_modes_authors_and_worker_interest() {
+        let mut state = seeded();
+        state.data.filters.max_age = Some(chrono::TimeDelta::weeks(2));
+        state.data.now = "2026-11-13T00:00:00Z".parse().unwrap();
+        for pr in state.data.prs.values_mut() {
+            pr.head.value.created_at = Some("2026-10-29T23:59:59Z".parse().unwrap());
+        }
+        let set = |state: &mut AppState, number, date: Option<&str>| {
+            state
+                .data
+                .prs
+                .values_mut()
+                .find(|pr| pr.key.number == number)
+                .unwrap()
+                .head
+                .value
+                .created_at = date.map(|value| value.parse().unwrap());
+        };
+        set(&mut state, 85, Some("2026-10-30T00:00:00Z"));
+        set(&mut state, 87, Some("2026-10-31T00:00:00Z"));
+        set(&mut state, 86, None);
+        let areas = layout(SIZE);
+        let cx = KeyCx {
+            data: &state.data,
+            target: None,
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let mut ts = Team::Review.init_state();
+        assert!(numbers(&Team::Review.model(&cx, &ts, SIZE)).is_empty());
+        ts.ext.downcast_mut::<TeamState>().unwrap().all_open = true;
+        assert_eq!(numbers(&Team::Review.model(&cx, &ts, SIZE)), [85]);
+        assert_eq!(Team::Review.authors(&cx), ["carol"]);
+        let mut ts = Team::Rest.init_state();
+        assert_eq!(numbers(&Team::Rest.model(&cx, &ts, SIZE)), [87]);
+        ts.ext.downcast_mut::<TeamState>().unwrap().all_open = true;
+        assert_eq!(numbers(&Team::Rest.model(&cx, &ts, SIZE)), [87]);
+        assert_eq!(Team::Rest.authors(&cx), ["bob"]);
+        let interest = Team::Rest.interest(&cx, &ts);
+        assert_eq!(interest.selected.unwrap().key.number, 87);
+        assert_eq!(
+            interest
+                .visible
+                .iter()
+                .map(|pr| pr.key.number)
+                .collect::<Vec<_>>(),
+            [87]
         );
     }
 }

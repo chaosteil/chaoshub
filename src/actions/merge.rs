@@ -1378,6 +1378,7 @@ mod tests {
             "url": format!("https://github.com/o/r/pull/{number}"),
             "isDraft": false,
             "state": "OPEN",
+            "createdAt": "2026-09-01T12:00:00Z",
             "updatedAt": "2026-10-30T05:09:51Z",
             "headRefName": format!("me/{number}"),
             "headRefOid": format!("fresh{number}"),

@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::config::schema::{
-    AgentConfig, CodeviewConfig, DetailConfig, MergeConfig, PrefetchConfig, RefreshConfig,
-    RepoEntry, RepoMerge, TerminalConfig, ThemeConfig, WorkspacesConfig,
+    AgentConfig, CodeviewConfig, DetailConfig, FiltersConfig, MergeConfig, PrefetchConfig,
+    RefreshConfig, RepoEntry, RepoMerge, TerminalConfig, ThemeConfig, WorkspacesConfig,
 };
 use crate::domain::keys::RepoKey;
 use crate::domain::repo::Repo;
@@ -34,6 +34,7 @@ pub(crate) struct Config {
     /// The repos to track, from the `[[repo]]` entries.
     #[serde(rename = "repo")]
     pub repos: Vec<RepoEntry>,
+    pub filters: FiltersConfig,
     pub refresh: RefreshConfig,
     pub prefetch: PrefetchConfig,
     pub codeview: CodeviewConfig,
@@ -188,6 +189,7 @@ mod tests {
         let config = Config::parse("", Some(Path::new("/home/me"))).unwrap();
         assert_eq!(config.login, None);
         assert_eq!(config.repos, []);
+        assert_eq!(config.filters, FiltersConfig::default());
         assert_eq!(config.refresh, RefreshConfig::default());
         assert_eq!(config.refresh.mine_secs, 60);
         assert_eq!(config.refresh.team_secs, 90);
@@ -219,6 +221,7 @@ mod tests {
     fn sample_file_parses() {
         let config = Config::parse(SAMPLE, Some(Path::new("/home/me"))).unwrap();
         assert_eq!(config.login.as_deref(), Some("chaosteil"));
+        assert_eq!(config.filters.max_age, Some(chrono::TimeDelta::weeks(2)));
         assert_eq!(config.teams, ["acme/platform"]);
         assert_eq!(config.launcher.as_deref(), Some("rex"));
         assert_eq!(
@@ -433,5 +436,34 @@ mod tests {
         let err = load(&path).unwrap_err();
         assert!(matches!(err, ConfigError::Parse { .. }));
         assert!(err.to_string().contains("config.toml"), "{err}");
+    }
+
+    #[test]
+    fn invalid_max_ages_stop_configuration_loading() {
+        for age in [
+            "2026-09-01",
+            "",
+            "0",
+            "0 seconds",
+            "-2 weeks",
+            "two weeks",
+            "100000000000000000000 years",
+        ] {
+            let text = format!("[filters]\nmax_age = {age:?}");
+            let err = Config::parse(&text, None).unwrap_err();
+            assert!(err.to_string().contains("max_age"), "{err}");
+        }
+        assert!(Config::parse("[filters]\ncreated_since = \"2026-09-01\"", None).is_err());
+    }
+
+    #[test]
+    fn equivalent_durations_give_the_same_age_limit() {
+        for age in ["2 weeks", "14 days", "336h"] {
+            let text = format!("[filters]\nmax_age = {age:?}");
+            assert_eq!(
+                Config::parse(&text, None).unwrap().filters.max_age,
+                Some(chrono::TimeDelta::weeks(2))
+            );
+        }
     }
 }
