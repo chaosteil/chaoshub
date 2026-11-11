@@ -421,7 +421,10 @@ mod tests {
             keys: &crate::app::keymap::DEFAULT,
         };
         let mut ts = Team::Review.init_state();
-        assert!(numbers(&Team::Review.model(&cx, &ts, SIZE)).is_empty());
+        assert_eq!(
+            numbers(&Team::Review.model(&cx, &ts, SIZE)),
+            Vec::<u64>::new()
+        );
         ts.ext.downcast_mut::<TeamState>().unwrap().all_open = true;
         assert_eq!(numbers(&Team::Review.model(&cx, &ts, SIZE)), [85]);
         assert_eq!(Team::Review.authors(&cx), ["carol"]);
