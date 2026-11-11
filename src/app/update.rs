@@ -103,8 +103,13 @@ pub(crate) fn update_full(
         }
         Msg::PrRefreshed(pr) => {
             back_online(state);
+            let key = pr.key.clone();
+            let before = updated_at(&state.data, &key);
             if pr_refreshed(state, *pr) {
-                after_change(state, tabs)
+                let mut cmds: Vec<Cmd> =
+                    detail_reload(state, [(key, before)]).into_iter().collect();
+                cmds.extend(after_change(state, tabs));
+                cmds
             } else {
                 Vec::new()
             }
@@ -2313,7 +2318,8 @@ fn files_loading(state: &mut AppState, key: PrKey) -> Vec<Cmd> {
 /// is `Some`), the open pull requests of the scope that the sync did not
 /// return leave the data, under the gone rule. Only the end (`last`) sets
 /// the sync time and ends a requested sync. Each repo of the result with
-/// a local path gets a jj scan.
+/// a local path gets a jj scan. A pull request that GitHub changed gets a
+/// detail reload (see `detail_reload`).
 fn prs_synced(
     state: &mut AppState,
     scope: Scope,
@@ -2325,10 +2331,13 @@ fn prs_synced(
     let repos: BTreeSet<_> = prs.iter().map(|pr| pr.key.repo.clone()).collect();
     let page: BTreeSet<PrKey> = prs.iter().map(|pr| pr.key.clone()).collect();
     let mut changed = false;
+    let mut moved = Vec::new();
     for pr in prs {
         state.data.scopes.insert(pr.key.clone(), scope);
+        moved.push((pr.key.clone(), updated_at(&state.data, &pr.key)));
         changed |= merge_pr(&mut state.data, pr);
     }
+    let reload = detail_reload(state, moved);
     if let Some(seen) = seen {
         let seen: BTreeSet<PrKey> = seen.into_iter().chain(page).collect();
         let candidates = gone_candidates(&state.data, scope, &seen, started_at);
@@ -2361,7 +2370,40 @@ fn prs_synced(
                 .is_some_and(|repo| repo.path.is_some())
         })
         .map(Cmd::ScanJj)
+        .chain(reload)
         .collect()
+}
+
+/// The `updatedAt` of the pull request `key` in the data.
+fn updated_at(data: &AppData, key: &PrKey) -> Option<DateTime<Utc>> {
+    data.prs.get(key).map(|pr| pr.head.value.updated_at)
+}
+
+/// A detail reload of the pull requests that GitHub changed. Each entry
+/// of `before` is a key and its `updatedAt` before a sync. A pull request
+/// gets a reload when its `updatedAt` moved and its detail is loaded or it
+/// is selected. A new pull request gets none. `None` without such a pull
+/// request.
+fn detail_reload(
+    state: &AppState,
+    before: impl IntoIterator<Item = (PrKey, Option<DateTime<Utc>>)>,
+) -> Option<Cmd> {
+    let selected = state
+        .ui
+        .interest
+        .as_ref()
+        .and_then(|interest| interest.selected.as_ref())
+        .map(|selected| &selected.key);
+    let refs: Vec<PrRef> = before
+        .into_iter()
+        .filter_map(|(key, before)| {
+            let pr = state.data.prs.get(&key)?;
+            let moved = before.is_some_and(|before| before != pr.head.value.updated_at);
+            let shown = selected == Some(&key) || state.data.details.contains_key(&key);
+            (moved && shown).then(|| pr_ref(pr))
+        })
+        .collect();
+    (!refs.is_empty()).then_some(Cmd::ReloadDetail(refs))
 }
 
 /// A pull request that the sync worker read again by id. True when it
@@ -4707,6 +4749,41 @@ mod tests {
             selected_checks: None,
         };
         assert_eq!(send(&mut state, poll), vec![glow(103)]);
+    }
+
+    #[test]
+    fn a_sync_that_moves_updated_at_reloads_a_loaded_detail() {
+        let (tabs, mut state) = setup(None);
+        let prs = vec![pr_at(1, "One", 0), pr_at(2, "Two", 0), pr_at(3, "Three", 0)];
+        run(&mut state, &tabs, synced(prs, None, 0));
+        for number in [1, 3] {
+            state.data.details.insert(
+                testdata::pr_key("chaoshub", number),
+                testdata::observed(testdata::detail()),
+            );
+        }
+        let moved = |number, title| {
+            let mut pr = pr_at(number, title, 10);
+            pr.head.value.updated_at += TimeDelta::minutes(1);
+            pr
+        };
+        // 1 moved with a detail, 2 moved without a detail, 3 has a detail
+        // and a new title but the same updatedAt.
+        let one = moved(1, "One");
+        let page = vec![one.clone(), moved(2, "Two"), pr_at(3, "Three again", 10)];
+        assert_eq!(
+            run(&mut state, &tabs, synced(page, None, 10)),
+            vec![Cmd::ReloadDetail(vec![pr_ref(&one)])]
+        );
+        assert_eq!(
+            run(
+                &mut state,
+                &tabs,
+                synced(vec![pr_at(1, "One", 5)], None, 20)
+            ),
+            vec![],
+            "an older page changes nothing"
+        );
     }
 
     #[test]
@@ -7080,6 +7157,44 @@ mod tests {
                 Cmd::LoadCodeview(pr.key.clone()),
                 Cmd::ScanJj(testdata::repo_key("chaoshub")),
             ]
+        );
+    }
+
+    #[test]
+    fn a_pinned_refresh_that_moves_updated_at_reloads_the_detail() {
+        let mut state = pinned(not_cached());
+        let refreshed = |state: &mut AppState, pr: &PullRequest| {
+            update(
+                state,
+                &Keymap::default(),
+                Msg::PrRefreshed(Box::new(pr.clone())),
+            )
+        };
+        let reloads = |cmds: Vec<Cmd>| -> Vec<Cmd> {
+            cmds.into_iter()
+                .filter(|cmd| matches!(cmd, Cmd::ReloadDetail(_)))
+                .collect()
+        };
+        let mut pr = testdata::pr("chaoshub", 500, "Loaded");
+        assert_eq!(
+            reloads(refreshed(&mut state, &pr)),
+            [],
+            "a new pull request"
+        );
+        pr.head.observed_at += TimeDelta::minutes(1);
+        pr.head.value.title = "Renamed".into();
+        assert_eq!(
+            reloads(refreshed(&mut state, &pr)),
+            [],
+            "the same updatedAt"
+        );
+        pr.head.observed_at += TimeDelta::minutes(1);
+        pr.head.value.updated_at += TimeDelta::minutes(1);
+        pr.head.value.approvals = 1;
+        assert_eq!(
+            reloads(refreshed(&mut state, &pr)),
+            [Cmd::ReloadDetail(vec![pr_ref(&pr)])],
+            "the selected pull request changed on GitHub"
         );
     }
 
