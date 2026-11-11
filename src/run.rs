@@ -68,6 +68,13 @@ const CHANNEL_CAPACITY: usize = 256;
 const MAX_ELAPSED: Duration = Duration::from_millis(32);
 /// The poll timeout of the reader thread.
 const READER_POLL: Duration = Duration::from_millis(100);
+/// The poll timeout of the reader thread for `READER_ACTIVE` after an
+/// event. A key that starts a foreground command pauses the reader, and
+/// the pause waits for the poll that runs. A short poll after a key keeps
+/// that wait short.
+const READER_POLL_ACTIVE: Duration = Duration::from_millis(10);
+/// How long the reader polls with `READER_POLL_ACTIVE` after an event.
+const READER_ACTIVE: Duration = Duration::from_secs(1);
 /// The longest wait for the reader thread to confirm a pause.
 const PAUSE_TIMEOUT: Duration = Duration::from_secs(1);
 /// The interval of the OSC 9;4 keep-alive while a progress is active.
@@ -1326,6 +1333,15 @@ impl Reader {
     }
 }
 
+/// The poll timeout of the reader thread, `since_event` after the last
+/// event: `READER_POLL_ACTIVE` within `READER_ACTIVE`, else `READER_POLL`.
+fn poll_timeout(since_event: Option<Duration>) -> Duration {
+    match since_event {
+        Some(since) if since < READER_ACTIVE => READER_POLL_ACTIVE,
+        _ => READER_POLL,
+    }
+}
+
 /// The loop of the reader thread. It checks the flags on every poll.
 fn read_loop(
     tx: &mpsc::Sender<Msg>,
@@ -1335,6 +1351,7 @@ fn read_loop(
     source: &mut impl EventSource,
 ) {
     let mut acked = false;
+    let mut last_event: Option<Instant> = None;
     while !stop.load(Ordering::Acquire) {
         if pause.load(Ordering::Acquire) {
             if !acked {
@@ -1347,7 +1364,7 @@ fn read_loop(
             continue;
         }
         acked = false;
-        match source.poll(READER_POLL) {
+        match source.poll(poll_timeout(last_event.map(|at| at.elapsed()))) {
             Ok(true) => {}
             Ok(false) => continue,
             Err(err) => {
@@ -1355,6 +1372,7 @@ fn read_loop(
                 break;
             }
         }
+        last_event = Some(Instant::now());
         let msg = match source.read() {
             Ok(Event::Key(key)) => Msg::Key(key),
             Ok(Event::Resize(width, height)) => Msg::Resize(Size { width, height }),
@@ -3081,6 +3099,65 @@ mod tests {
             crossterm::event::KeyCode::Char(c),
             crossterm::event::KeyModifiers::NONE,
         ))
+    }
+
+    #[test]
+    fn the_reader_polls_shortly_after_an_event() {
+        assert_eq!(poll_timeout(None), READER_POLL);
+        assert_eq!(poll_timeout(Some(Duration::ZERO)), READER_POLL_ACTIVE);
+        assert_eq!(
+            poll_timeout(Some(Duration::from_millis(999))),
+            READER_POLL_ACTIVE
+        );
+        assert_eq!(poll_timeout(Some(READER_ACTIVE)), READER_POLL);
+    }
+
+    /// One key event, then nothing. It keeps the timeout of each poll.
+    struct OneKey {
+        timeouts: Arc<std::sync::Mutex<Vec<Duration>>>,
+        sent: bool,
+    }
+
+    impl EventSource for OneKey {
+        fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
+            self.timeouts.lock().unwrap().push(timeout);
+            if self.sent {
+                thread::sleep(Duration::from_millis(1));
+                return Ok(false);
+            }
+            Ok(true)
+        }
+
+        fn read(&mut self) -> io::Result<Event> {
+            self.sent = true;
+            Ok(Event::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('v'),
+                crossterm::event::KeyModifiers::NONE,
+            )))
+        }
+    }
+
+    #[test]
+    fn the_polls_after_a_key_are_short_so_a_pause_is_quick() {
+        let (tx, mut rx) = mpsc::channel(1024);
+        let timeouts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let source = OneKey {
+            timeouts: Arc::clone(&timeouts),
+            sent: false,
+        };
+        let reader = Reader::spawn_with(tx, source).unwrap();
+        assert!(matches!(rx.blocking_recv(), Some(Msg::Key(_))));
+        assert!(reader.pause(), "the reader confirms the pause");
+        reader.stop();
+        let timeouts = timeouts.lock().unwrap();
+        assert_eq!(timeouts[0], READER_POLL, "the first poll is long");
+        assert!(timeouts.len() > 1, "{timeouts:?}");
+        assert!(
+            timeouts[1..]
+                .iter()
+                .all(|timeout| *timeout == READER_POLL_ACTIVE),
+            "{timeouts:?}"
+        );
     }
 
     #[test]
