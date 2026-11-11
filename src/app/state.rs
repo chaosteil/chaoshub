@@ -25,6 +25,7 @@ use crate::bus::{
     ReviewSpec, Scope, Selection, Session, Size, SyncError, Target, TargetKey, UiEvent,
 };
 use crate::bus::{MergeProgress, MergeStep};
+use crate::config::schema::FiltersConfig;
 use crate::domain::agent::{AgentResults, ToolKind};
 use crate::domain::codeview::{Comment, Comments};
 use crate::domain::detail::PrDetail;
@@ -55,6 +56,7 @@ pub(crate) struct AppData {
     pub size: Size,
     pub session: Session,
     pub prs: BTreeMap<PrKey, PullRequest>,
+    pub filters: FiltersConfig,
     /// The sync scope of each pull request.
     pub scopes: BTreeMap<PrKey, Scope>,
     /// The jj scan of each repo.
@@ -822,6 +824,7 @@ impl AppState {
                     repos: Vec::new(),
                 },
                 prs: BTreeMap::new(),
+                filters: FiltersConfig::default(),
                 scopes: BTreeMap::new(),
                 local: BTreeMap::new(),
                 details: BTreeMap::new(),

@@ -20,6 +20,7 @@ fragment PrFields on PullRequest {
   url
   isDraft
   state
+  createdAt
   updatedAt
   headRefName
   headRefOid

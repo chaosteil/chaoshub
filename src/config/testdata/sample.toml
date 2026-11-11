@@ -9,6 +9,9 @@ path = "~/code/chaoshub"
 [[repo]]
 name = "pierredotco/deploy"
 
+[filters]
+max_age = "2 weeks"
+
 [refresh]
 mine_secs = 30
 full_secs = 600

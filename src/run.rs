@@ -162,6 +162,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         settings.repos.clone(),
         chrono::Utc::now(),
     )
+    .with_filters(settings.config.filters.clone())
     .with_action_config(action_tables(&settings.config))
     .with_column_headers(settings.config.theme.column_headers)
     .with_detail_pane(detail)

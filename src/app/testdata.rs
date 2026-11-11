@@ -60,6 +60,7 @@ pub(crate) fn pr(repo: &str, number: u64, title: &str) -> PullRequest {
             mergeable: Mergeable::Unknown,
             merge_state: MergeStateStatus::Unknown,
             url: format!("https://github.com/chaosteil/{repo}/pull/{number}"),
+            created_at: Some(test_time()),
             updated_at: test_time(),
             repo_settings: RepoSettings {
                 squash: true,
