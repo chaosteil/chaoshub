@@ -189,6 +189,14 @@ impl MergeState {
         }
     }
 
+    /// The pull request of the step: the entry that merges, or the entry
+    /// that waits for its retarget.
+    pub(crate) fn number(&self) -> u64 {
+        match self.step {
+            MergeStep::Entry { number, .. } | MergeStep::Retarget { number } => number,
+        }
+    }
+
     /// True while the run goes on: from the start until a failure, the
     /// merge queue, or the end of the run with the pull request `pr` no
     /// longer open. After a merge, the run goes on until the refreshed
@@ -234,14 +242,23 @@ pub(crate) struct PrefetchBatch {
 
 impl AppData {
     /// True while a sync, a prefetch batch, a conversation load, a files
-    /// load or a pr-agent run runs. The status bar then shows a spinner.
+    /// load, a pr-agent run or a merge runs. The status bar then shows a
+    /// spinner.
     pub(crate) fn busy(&self) -> bool {
-        !self.sync.pending.is_empty()
+        self.merging().is_some()
+            || !self.sync.pending.is_empty()
             || !self.sync.running.is_empty()
             || self.prefetch.is_some()
             || !self.details_loading.is_empty()
             || !self.files_loading.is_empty()
             || !self.agent_jobs.is_empty()
+    }
+
+    /// The merge run that goes on now (`MergeState::running`).
+    pub(crate) fn merging(&self) -> Option<&MergeState> {
+        self.merge
+            .as_ref()
+            .filter(|merge| merge.running(self.prs.get(&merge.key)))
     }
 
     /// True while a pane of any action is open for `key`.

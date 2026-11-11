@@ -809,11 +809,14 @@ pub(crate) fn spinner(now: DateTime<Utc>) -> &'static str {
 }
 
 /// The work that runs, for example `syncing team · prefetch 2`: the
-/// syncs, the pull requests that the prefetch batch has left, the
-/// conversation loads, the files loads, and one `agent review #7` item
-/// per pr-agent run. `None` when no work runs.
+/// merge of a pull request, the syncs, the pull requests that the
+/// prefetch batch has left, the conversation loads, the files loads, and
+/// one `agent review #7` item per pr-agent run. `None` when no work runs.
 fn activity(data: &AppData) -> Option<String> {
     let mut parts = Vec::new();
+    if let Some(merge) = data.merging() {
+        parts.push(format!("merging #{}", merge.number()));
+    }
     let scopes: Vec<&str> = [(Scope::Mine, "mine"), (Scope::Team, "team")]
         .into_iter()
         .filter(|(scope, _)| data.sync.pending.contains(scope) || data.sync.running.contains(scope))
@@ -1085,6 +1088,57 @@ mod tests {
             right(&state)[1],
             " agent review #7 · agent ask #7 · agent improve #9   "
         );
+    }
+
+    #[test]
+    fn the_right_shows_a_running_merge() {
+        use crate::app::state::MergeState;
+        use crate::bus::{MergeProgress, MergeStep};
+        let mut state = AppState::with_tabs(SIZE, &TABS);
+        state.load(crate::app::testdata::mine_snapshot(), Vec::new());
+        state.data.now = crate::domain::test_time();
+        let key = crate::app::testdata::pr_key("chaoshub", 102);
+        let mut merge = MergeState::new(key.clone(), state.data.now);
+        state.data.merge = Some(merge.clone());
+        assert_eq!(right(&state)[1], " merging #102   ");
+        assert!(state.data.busy());
+
+        merge.step = MergeStep::Entry {
+            number: 101,
+            index: 1,
+            total: 2,
+        };
+        state.data.merge = Some(merge.clone());
+        assert_eq!(
+            right(&state)[1],
+            " merging #101   ",
+            "the entry that merges"
+        );
+        merge.step = MergeStep::Retarget { number: 102 };
+        state.data.merge = Some(merge.clone());
+        assert_eq!(right(&state)[1], " merging #102   ");
+
+        merge.progress = MergeProgress::Merged { sha: "abc".into() };
+        merge.done = true;
+        state.data.merge = Some(merge.clone());
+        assert_eq!(
+            right(&state)[1],
+            " merging #102   ",
+            "the refresh is not in"
+        );
+        let pr = state.data.prs.get_mut(&key).unwrap();
+        pr.head.value.state = PrState::Merged;
+        assert_eq!(
+            right(&state),
+            ["? help"],
+            "the pull request shows the merge"
+        );
+        assert!(!state.data.busy());
+
+        merge.progress = MergeProgress::Failed("checks failing".into());
+        merge.done = false;
+        state.data.merge = Some(merge);
+        assert_eq!(right(&state), ["? help"], "a failure ends the run");
     }
 
     #[test]

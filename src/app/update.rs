@@ -2890,7 +2890,8 @@ fn resize(state: &mut AppState, size: Size) -> Vec<Cmd> {
 /// state that still holds takes its place. Else the generation moves
 /// only when a rendered string changed since the last frame: at a new
 /// minute (ages have minute granularity), or when the status bar or the
-/// terminal status changed.
+/// terminal status changed. While a merge runs, it moves on every tick:
+/// its badge changes color with the time.
 fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<Cmd> {
     let minute = |time: DateTime<Utc>| time.timestamp().div_euclid(60);
     let new_minute = minute(now) != minute(state.data.now);
@@ -2913,7 +2914,11 @@ fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<
     let Some((status, term)) = frame::built_status(state) else {
         return Vec::new();
     };
-    if new_minute || *status != frame::status_model(state, tabs) || *term != term_status(state) {
+    if new_minute
+        || state.data.merging().is_some()
+        || *status != frame::status_model(state, tabs)
+        || *term != term_status(state)
+    {
         state.bump();
     }
     Vec::new()
@@ -3240,6 +3245,24 @@ mod tests {
         assert_eq!(state.generation, 1);
         tick(&mut state, &tabs, at(60));
         assert_eq!(state.generation, 2, "a new minute");
+    }
+
+    #[test]
+    fn tick_moves_the_generation_on_every_tick_while_a_merge_runs() {
+        let (tabs, mut state) = setup(None);
+        state.data.now = at(0);
+        let key = testdata::pr_key("chaoshub", 7);
+        state.data.merge = Some(MergeState::new(key, at(0)));
+        frame::frame_model_with(&mut state, &tabs);
+        let generation = state.generation;
+        let soon = at(0) + TimeDelta::milliseconds(10);
+        tick(&mut state, &tabs, soon);
+        assert_eq!(state.generation, generation + 1, "the badge pulses");
+        let merge = state.data.merge.as_mut().unwrap();
+        merge.progress = MergeProgress::Failed("checks failing".into());
+        frame::frame_model_with(&mut state, &tabs);
+        tick(&mut state, &tabs, soon + TimeDelta::milliseconds(10));
+        assert_eq!(state.generation, generation + 1, "a failure does not pulse");
     }
 
     #[test]
