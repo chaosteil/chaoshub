@@ -70,6 +70,7 @@ impl Pane for Checks {
                     depth: 0,
                     glyph: None,
                     style: RowStyle::Normal,
+                    hidden: false,
                 }
             })
             .collect();

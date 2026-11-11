@@ -112,6 +112,9 @@ pub(crate) struct Row {
     /// The tree glyph, for example `┌`.
     pub glyph: Option<char>,
     pub style: RowStyle,
+    /// True when only the `show_hidden` key (`T`) shows the row. `ui`
+    /// draws a `?` before the title.
+    pub hidden: bool,
 }
 
 /// What a row shows. `update` turns the selected item into a `Target`.

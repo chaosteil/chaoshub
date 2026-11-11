@@ -1158,6 +1158,12 @@ mod tests {
             actions.map(|hint| (hint.key.as_str(), hint.primary)),
             Some(("Space", true))
         );
+        assert!(
+            !hints
+                .iter()
+                .any(|hint| hint.chord == keymap::parse_chord("T")),
+            "show_hidden is only in the help"
+        );
         let browser = hints.iter().find(|hint| hint.label == "browser");
         assert_eq!(
             browser.map(|hint| (hint.key.as_str(), hint.primary)),

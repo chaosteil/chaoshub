@@ -80,12 +80,14 @@ fn cell_style(cell: &Cell, row: &Row, theme: &Theme) -> Style {
     style::cell_style(semantic, &theme.palette)
 }
 
-/// The tree prefix of a row: the indent, the glyph and one space.
+/// The tree prefix of a row: `? ` for a hidden row, the indent, the
+/// glyph and one space.
 fn tree_prefix(row: &Row) -> String {
+    let mark = if row.hidden { "? " } else { "" };
     let indent = " ".repeat(INDENT * usize::from(row.depth));
     match row.glyph {
-        Some(glyph) => format!("{indent}{glyph} "),
-        None => indent,
+        Some(glyph) => format!("{mark}{indent}{glyph} "),
+        None => format!("{mark}{indent}"),
     }
 }
 
@@ -446,6 +448,20 @@ mod tests {
     }
 
     #[test]
+    fn a_hidden_row_is_dim_with_a_question_mark_before_the_glyph() {
+        let theme = testdata::pierre();
+        let mut model = testdata::mine_list();
+        model.rows[2].style = RowStyle::Dim;
+        model.rows[2].hidden = true;
+        let buf = draw(&model, 100, 9, &theme);
+        let row = lines(&buf).lines().nth(2).unwrap().to_owned();
+        assert!(row.starts_with(" ? ├ feat(app): checks pane"), "{row}");
+        assert_eq!(buf[(5, 2)].fg, theme.palette.fg_mute, "the title is dim");
+        let other = lines(&buf).lines().nth(3).unwrap().to_owned();
+        assert!(other.starts_with(" └ "), "{other}");
+    }
+
+    #[test]
     fn separator_spans_the_row() {
         let mut model = testdata::mine_list();
         model.rows.truncate(1);
@@ -455,6 +471,7 @@ mod tests {
             depth: 0,
             glyph: None,
             style: RowStyle::Dim,
+            hidden: false,
         });
         model.cursor = 9;
         let text = lines(&draw(&model, 20, 2, &testdata::ansi16()));

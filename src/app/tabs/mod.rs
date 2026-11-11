@@ -37,6 +37,11 @@ pub(crate) struct TabState {
     /// The author filter from the author picker. `None` shows every
     /// author.
     pub author: Option<String>,
+    /// True while the `show_hidden` key (`T`) shows every open pull
+    /// request of the tab: no age limit, no ready rule, no author filter
+    /// and no text filter. The rows that the normal view hides are
+    /// marked. The switch is not saved.
+    pub show_hidden: bool,
     /// The own state of the tab, for example its toggles.
     pub ext: Box<dyn Any + Send + Sync>,
 }
@@ -50,6 +55,7 @@ impl Default for TabState {
             selected: None,
             filter: String::new(),
             author: None,
+            show_hidden: false,
             ext: Box::new(()),
         }
     }
@@ -157,6 +163,12 @@ pub(crate) fn list_interest(tab: &dyn Tab, model: &ListModel, height: u16) -> In
             .filter_map(|row| pr(&row.item))
             .collect(),
     }
+}
+
+/// The text of the mode row while the `show_hidden` key (`T`) shows
+/// `count` pull requests.
+pub(crate) fn show_hidden_text(count: usize) -> String {
+    format!("everything · {count} · T for the normal view")
 }
 
 /// The tab registry, in tab bar order.

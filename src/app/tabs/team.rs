@@ -4,7 +4,8 @@
 //! user. The Team tab shows the other pull requests of colleagues. By
 //! default, each tab shows the ready pull requests
 //! (`domain::team::is_ready`). The `toggle_all` key (`t`) shows every open
-//! pull request.
+//! pull request. The `show_hidden` key (`T`) also shows the pull requests
+//! past the age limit, of other authors and that the filter text hides.
 
 use crate::app::age::age;
 use crate::app::filter::{Filter, ItemKey, pr_candidate};
@@ -13,7 +14,7 @@ use crate::app::models::{
 };
 use crate::app::nav::place;
 use crate::app::tabs::cells::{self, cell};
-use crate::app::tabs::{Handled, KeyCx, Tab, TabState, list_interest, pr_ref};
+use crate::app::tabs::{Handled, KeyCx, Tab, TabState, list_interest, pr_ref, show_hidden_text};
 use crate::bus::{Interest, KeyChord, Scope, Size, TargetKey};
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::team::{is_ready, team_order};
@@ -71,20 +72,32 @@ impl Tab for Team {
     fn model(&self, cx: &KeyCx<'_>, ts: &TabState, size: Size) -> ListModel {
         let ext = ts.ext.downcast_ref::<TeamState>();
         let all_open = ext.is_some_and(|ext| ext.all_open);
-        let mut prs = self.team_prs(cx, all_open);
-        if let Some(author) = &ts.author {
-            prs.retain(|pr| pr.head.value.author == *author);
-        }
-        if let Some(ext) = ext {
-            prs.retain(|pr| ext.filter.keeps(&ItemKey::Pr(pr.key.clone())));
-        }
-        let mut rows = vec![mode_row(
-            self.id(),
-            all_open,
-            ts.author.as_deref(),
-            prs.len(),
-        )];
-        rows.extend(prs.into_iter().map(|pr| pr_row(pr, cx)));
+        let data = cx.data;
+        let normal = |pr: &PullRequest| {
+            data.filters.matches(pr, data.now)
+                && (all_open || is_ready(pr))
+                && ts
+                    .author
+                    .as_ref()
+                    .is_none_or(|author| pr.head.value.author == *author)
+                && ext.is_none_or(|ext| ext.filter.keeps(&ItemKey::Pr(pr.key.clone())))
+        };
+        let mut prs = self.team_prs(cx, all_open, ts.show_hidden);
+        let mode = if ts.show_hidden {
+            header_row(self.id(), show_hidden_text(prs.len()))
+        } else {
+            prs.retain(|pr| normal(pr));
+            mode_row(self.id(), all_open, ts.author.as_deref(), prs.len())
+        };
+        let mut rows = vec![mode];
+        rows.extend(prs.into_iter().map(|pr| {
+            let mut row = pr_row(pr, cx);
+            if ts.show_hidden && !normal(pr) {
+                row.style = RowStyle::Dim;
+                row.hidden = true;
+            }
+            row
+        }));
         let (cursor, scroll) = place(
             &rows,
             ts.selected.as_ref(),
@@ -114,16 +127,17 @@ impl Tab for Team {
             return;
         };
         let candidates: Vec<_> = self
-            .team_prs(cx, true)
+            .team_prs(cx, true, ts.show_hidden)
             .into_iter()
             .map(pr_candidate)
             .collect();
-        ext.filter.rescore(&ts.filter, cx.data.revision, candidates);
+        ext.filter
+            .rescore(&ts.filter, cx.data.revision, ts.show_hidden, candidates);
     }
 
     fn authors(&self, cx: &KeyCx<'_>) -> Vec<String> {
         let mut authors: Vec<String> = self
-            .team_prs(cx, true)
+            .team_prs(cx, true, false)
             .into_iter()
             .map(|pr| pr.head.value.author.clone())
             .collect();
@@ -177,8 +191,14 @@ fn columns() -> Vec<Column> {
 
 impl Team {
     /// The open pull requests of the Team scope that belong to this tab,
-    /// in team order. Only the ready ones unless `all_open`.
-    fn team_prs<'a>(&self, cx: &KeyCx<'a>, all_open: bool) -> Vec<&'a PullRequest> {
+    /// in team order. Only the ready ones unless `all_open`, and only the
+    /// ones in the age limit. `show_hidden` skips both rules.
+    fn team_prs<'a>(
+        &self,
+        cx: &KeyCx<'a>,
+        all_open: bool,
+        show_hidden: bool,
+    ) -> Vec<&'a PullRequest> {
         let requested = matches!(self, Self::Review);
         let data = cx.data;
         let mut prs: Vec<&PullRequest> = data
@@ -186,9 +206,9 @@ impl Team {
             .values()
             .filter(|pr| data.scopes.get(&pr.key) == Some(&Scope::Team))
             .filter(|pr| pr.head.value.state == PrState::Open)
-            .filter(|pr| data.filters.matches(pr, data.now))
+            .filter(|pr| show_hidden || data.filters.matches(pr, data.now))
             .filter(|pr| pr.head.value.review_requested == requested)
-            .filter(|pr| all_open || is_ready(pr))
+            .filter(|pr| show_hidden || all_open || is_ready(pr))
             .collect();
         prs.sort_by(|a, b| team_order(a, b));
         prs
@@ -204,6 +224,11 @@ fn mode_row(stack_id: &str, all_open: bool, author: Option<&str>, count: usize) 
     } else {
         format!("ready for review · {count}{by} · t shows all open")
     };
+    header_row(stack_id, text)
+}
+
+/// A header row with `text`.
+fn header_row(stack_id: &str, text: String) -> Row {
     Row {
         item: RowItem::StackHeader {
             stack_id: stack_id.into(),
@@ -212,6 +237,7 @@ fn mode_row(stack_id: &str, all_open: bool, author: Option<&str>, count: usize) 
         depth: 0,
         glyph: None,
         style: RowStyle::Header,
+        hidden: false,
     }
 }
 
@@ -234,6 +260,7 @@ fn pr_row(pr: &PullRequest, cx: &KeyCx<'_>) -> Row {
         depth: 0,
         glyph: None,
         style: RowStyle::Normal,
+        hidden: false,
     }
 }
 
@@ -324,6 +351,82 @@ mod tests {
         );
         let model = Team::Review.model(&cx, &ts, SIZE);
         assert_eq!(numbers(&model), [85, 88]);
+    }
+
+    #[test]
+    fn show_hidden_shows_every_open_pr_and_marks_the_hidden_ones() {
+        let mut state = seeded();
+        state.data.filters.max_age = Some(chrono::TimeDelta::weeks(2));
+        for pr in state.data.prs.values_mut() {
+            pr.head.value.created_at = Some(state.data.now);
+        }
+        let old = state
+            .data
+            .prs
+            .values_mut()
+            .find(|pr| pr.key.number == 86)
+            .unwrap();
+        old.head.value.created_at = Some(state.data.now - chrono::TimeDelta::weeks(3));
+        let areas = layout(SIZE);
+        let cx = KeyCx {
+            data: &state.data,
+            target: None,
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let hidden = |model: &ListModel| -> Vec<(u64, bool, RowStyle)> {
+            model
+                .rows
+                .iter()
+                .filter_map(|row| match &row.item {
+                    RowItem::Pr(pr) => Some((pr.key.number, row.hidden, row.style)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut ts = Team::Rest.init_state();
+        assert_eq!(numbers(&Team::Rest.model(&cx, &ts, SIZE)), [87]);
+        ts.show_hidden = true;
+        Team::Rest.rescore(&cx, &mut ts);
+        let model = Team::Rest.model(&cx, &ts, SIZE);
+        assert_eq!(
+            model.rows[0].cells[0].text,
+            "everything · 3 · T for the normal view"
+        );
+        assert_eq!(
+            hidden(&model),
+            [
+                (87, false, RowStyle::Normal),
+                (84, true, RowStyle::Dim),
+                (86, true, RowStyle::Dim),
+            ],
+            "84 is not ready, 86 is past the age limit"
+        );
+        ts.author = Some("dave".into());
+        ts.filter = "zzz".into();
+        Team::Rest.rescore(&cx, &mut ts);
+        let model = Team::Rest.model(&cx, &ts, SIZE);
+        assert_eq!(
+            numbers(&model),
+            [87, 84, 86],
+            "T skips the author and the text"
+        );
+        assert!(hidden(&model).iter().all(|(_, hidden, _)| *hidden));
+        let interest = Team::Rest.interest(&cx, &ts);
+        assert_eq!(
+            interest.visible.len(),
+            3,
+            "the hidden rows are visible rows"
+        );
+        ts.show_hidden = false;
+        Team::Rest.rescore(&cx, &mut ts);
+        let model = Team::Rest.model(&cx, &ts, SIZE);
+        assert_eq!(numbers(&model), Vec::<u64>::new());
+        assert!(
+            model.rows[0].cells[0]
+                .text
+                .starts_with("ready for review · 0")
+        );
     }
 
     #[test]

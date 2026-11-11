@@ -277,6 +277,7 @@ mod tests {
             depth: 0,
             glyph: None,
             style: RowStyle::Normal,
+            hidden: false,
         }
     }
 

@@ -285,6 +285,9 @@ fn key(
         open_authors(state, tabs);
         return Vec::new();
     }
+    if keymap.matches("show_hidden", chord) {
+        return toggle_show_hidden(state, tabs);
+    }
     if keymap.matches("column_headers", chord) {
         return toggle_column_headers(state, tabs);
     }
@@ -2015,6 +2018,17 @@ fn filter_key(state: &mut AppState, tabs: &[Box<dyn Tab>], chord: KeyChord) -> V
     state.bump();
     cmds.extend(after_change(state, tabs));
     cmds
+}
+
+/// Turns the `show_hidden` switch of the active tab on or off. The
+/// filter of the tab scores again for the new set of pull requests.
+fn toggle_show_hidden(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
+    let Some(ts) = state.ui.tabs.get_mut(state.ui.active) else {
+        return Vec::new();
+    };
+    ts.show_hidden = !ts.show_hidden;
+    state.bump();
+    after_change(state, tabs)
 }
 
 /// Shows or hides the header row of the list for the session, and
@@ -4360,6 +4374,35 @@ mod tests {
         let generation = state.generation;
         key(&mut state, 't');
         assert_eq!(state.generation, generation, "the mine tab has no toggle");
+    }
+
+    #[test]
+    fn shift_t_shows_the_hidden_rows_of_the_active_tab_only() {
+        let mut state = mine_state(10);
+        key(&mut state, '/');
+        typed(&mut state, "pane tab");
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 2);
+        let generation = state.generation;
+        let cmds = key(&mut state, 'T');
+        assert_eq!(state.generation, generation + 1);
+        assert!(state.ui.tabs[0].show_hidden);
+        assert!(!state.ui.tabs[1].show_hidden, "a switch for each tab");
+        let model = frame::active_list(&mut state, &TABS);
+        assert_eq!(model.rows.len(), 7, "the mode row and every row");
+        let hidden = model.rows.iter().filter(|row| row.hidden).count();
+        assert_eq!(hidden, 4, "the rows that do not match the text");
+        let Some(Cmd::SetInterest(interest)) = cmds.last() else {
+            panic!("no interest: {cmds:?}");
+        };
+        assert_eq!(interest.visible.len(), 5, "the hidden rows are visible");
+        key(&mut state, 'T');
+        assert!(!state.ui.tabs[0].show_hidden);
+        assert_eq!(frame::active_list(&mut state, &TABS).rows.len(), 2);
     }
 
     fn team_state() -> AppState {
