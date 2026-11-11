@@ -696,7 +696,7 @@ mod tests {
         let mut pr = sample_pr(1, PrState::Open, test_time());
         pr.head.value.created_at = None;
         handle.put_prs(Scope::Mine, vec![pr.clone()]).await.unwrap();
-        assert!(handle.pr_versions(Scope::Mine).await.unwrap().is_empty());
+        assert_eq!(handle.pr_versions(Scope::Mine).await.unwrap(), Vec::new());
         let (snapshot, _) = Store::open(&path).unwrap();
         assert_eq!(snapshot.prs, [(Scope::Mine, pr)]);
     }

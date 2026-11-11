@@ -2002,7 +2002,7 @@ mod tests {
         let mut syncer = Syncer::new(ctx);
         assert!(syncer.delta(Scope::Mine).await);
         assert!(harness.quiet_for(Duration::from_millis(50)).await);
-        assert!(searches(&server).await.is_empty());
+        assert_eq!(searches(&server).await, Vec::<(String, u64)>::new());
     }
 
     #[test]
