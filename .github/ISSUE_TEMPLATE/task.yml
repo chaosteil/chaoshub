@@ -1,0 +1,11 @@
+name: Task
+description: A change or a bug fix for chaoshub.
+labels: ["not started"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What should change?
+      description: Tell what you want and why. For a bug, tell what you did, what you saw, and what you expected.
+    validations:
+      required: true
