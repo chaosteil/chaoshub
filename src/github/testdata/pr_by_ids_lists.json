@@ -15,6 +15,11 @@
         "updatedAt": "2026-10-31T02:20:36Z",
         "headRefName": "dominykas/tlwnrkkqqoxt",
         "headRefOid": "8e9331ce8165fed71e2139a77a0520707ce7464b",
+        "baseRefOid": "00000000000000000000000000000000ba5e0065",
+        "isCrossRepository": false,
+        "headRepository": {
+          "nameWithOwner": "acme/deploy"
+        },
         "additions": 12,
         "deletions": 3,
         "changedFiles": 2,
@@ -123,6 +128,11 @@
         "updatedAt": "2026-10-30T23:09:37Z",
         "headRefName": "feature/branch-1",
         "headRefOid": "42eb09f52bdc1473ad5cf0579705ae110befbbaf",
+        "baseRefOid": "00000000000000000000000000000000ba5e0066",
+        "isCrossRepository": false,
+        "headRepository": {
+          "nameWithOwner": "acme/deploy"
+        },
         "additions": 22,
         "deletions": 6,
         "changedFiles": 3,
@@ -231,6 +241,11 @@
         "updatedAt": "2026-10-31T02:31:28Z",
         "headRefName": "dominykas/vsvzovrwyuss",
         "headRefOid": "10f611fd037df4fd0df079686723f69663044f90",
+        "baseRefOid": "00000000000000000000000000000000ba5e0067",
+        "isCrossRepository": false,
+        "headRepository": {
+          "nameWithOwner": "acme/deploy"
+        },
         "additions": 32,
         "deletions": 9,
         "changedFiles": 4,
@@ -346,6 +361,11 @@
         "updatedAt": "2026-10-29T19:12:57Z",
         "headRefName": "feature/branch-1",
         "headRefOid": "1e2defa1ebcdb1cb5232604e4ba6000c00d2d0e2",
+        "baseRefOid": "00000000000000000000000000000000ba5e0068",
+        "isCrossRepository": false,
+        "headRepository": {
+          "nameWithOwner": "None"
+        },
         "additions": 12,
         "deletions": 3,
         "changedFiles": 2,
@@ -764,6 +784,11 @@
         "updatedAt": "2026-10-08T06:53:32Z",
         "headRefName": "feature/branch-2",
         "headRefOid": "8b54d4ec035d4dfb2f940468d2dce5b58a666fd1",
+        "baseRefOid": "00000000000000000000000000000000ba5e0069",
+        "isCrossRepository": false,
+        "headRepository": {
+          "nameWithOwner": "None"
+        },
         "additions": 22,
         "deletions": 6,
         "changedFiles": 3,

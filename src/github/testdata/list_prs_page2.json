@@ -20,6 +20,11 @@
           "updatedAt": "2026-10-30T21:29:07Z",
           "headRefName": "dominykas/unyolyssntvq",
           "headRefOid": "cc20e92537eb10736706db26d67c30a5616d9474",
+          "baseRefOid": "00000000000000000000000000000000ba5e100b",
+          "isCrossRepository": false,
+          "headRepository": {
+            "nameWithOwner": "acme/deploy"
+          },
           "additions": 12,
           "deletions": 3,
           "changedFiles": 2,
@@ -135,6 +140,11 @@
           "updatedAt": "2026-10-30T21:27:30Z",
           "headRefName": "dominykas/srnlqllrorkr",
           "headRefOid": "f6adf9bef370e925d558ab6453ad925dc33877d7",
+          "baseRefOid": "00000000000000000000000000000000ba5e100c",
+          "isCrossRepository": false,
+          "headRepository": {
+            "nameWithOwner": "acme/deploy"
+          },
           "additions": 22,
           "deletions": 6,
           "changedFiles": 3,
@@ -256,6 +266,11 @@
           "updatedAt": "2026-10-30T21:25:14Z",
           "headRefName": "dominykas/vrunuloypzxz",
           "headRefOid": "9fd8a10fb2d4768449ae568d80d2c3b56e167390",
+          "baseRefOid": "00000000000000000000000000000000ba5e100d",
+          "isCrossRepository": false,
+          "headRepository": {
+            "nameWithOwner": "acme/deploy"
+          },
           "additions": 32,
           "deletions": 9,
           "changedFiles": 4,
