@@ -125,5 +125,6 @@ pub(crate) fn pr_ref(number: u64, node_id: &str, head_oid: &str) -> PrRef {
         node_id: node_id.to_owned(),
         head_oid: head_oid.to_owned(),
         base_ref: "main".to_owned(),
+        base_oid: String::new(),
     }
 }

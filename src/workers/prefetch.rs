@@ -5,9 +5,11 @@
 //! without a further change.
 //! It fetches the head of the selected pull request first, then the
 //! heads of the visible ones. Before the first head of a base ref, it
-//! fetches that base ref once per sync period (`refresh.full_secs`). Each
-//! git process runs under the lock of its repo. A head is fetched again
-//! only when its oid changes. The worker sends `PrefetchDone` per pull
+//! fetches that base ref once per sync period (`refresh.full_secs`). It
+//! fetches the base ref again when a sync reports a new base commit
+//! (`baseRefOid`) for a pull request, so a review of codeview finds the
+//! new base. Each git process runs under the lock of its repo. A head is
+//! fetched again only when its oid changes. The worker sends `PrefetchDone` per pull
 //! request, and `PrefetchBatch` at the start of a batch and after each
 //! pull request of it. A batch is the pull requests of one `Interest`
 //! that need a fetch. It does nothing when `prefetch.enabled` is false.
@@ -37,8 +39,10 @@ const DEBOUNCE: Duration = Duration::from_millis(250);
 /// The refs that the worker fetched.
 #[derive(Debug, Default)]
 struct Fetched {
-    /// The base refs of this sync period, per repo.
-    bases: HashSet<(RepoKey, String)>,
+    /// The base refs of this sync period, per repo, with the base commit
+    /// of the pull request that caused the fetch. A new base commit
+    /// fetches the base ref again.
+    bases: HashSet<(RepoKey, String, String)>,
     /// The head oid of the last fetch of each pull request, and whether
     /// that fetch succeeded.
     heads: HashMap<PrKey, (String, bool)>,
@@ -53,17 +57,26 @@ impl Fetched {
     }
 
     /// The pull requests of `order` that need a fetch of the base ref or
-    /// of the head, in order. A base ref counts once.
+    /// of the head, in order. A base ref with one base commit counts once.
     fn pending(&self, order: impl Iterator<Item = PrRef>) -> Vec<PrRef> {
         let mut bases = self.bases.clone();
         order
             .filter(|pr| {
-                let base = bases.insert((pr.key.repo.clone(), pr.base_ref.clone()));
+                let base = bases.insert(base_key(pr));
                 let known = self.heads.get(&pr.key).map(|(oid, _)| oid);
                 base || known != Some(&pr.head_oid)
             })
             .collect()
     }
+}
+
+/// The key of the base ref of `pr` in `Fetched::bases`.
+fn base_key(pr: &PrRef) -> (RepoKey, String, String) {
+    (
+        pr.key.repo.clone(),
+        pr.base_ref.clone(),
+        pr.base_oid.clone(),
+    )
 }
 
 /// Serves `Interest` changes until `app` is gone.
@@ -142,10 +155,7 @@ async fn send_batch(ctx: &WorkerCtx, done: usize, total: usize) -> bool {
 async fn prefetch(ctx: &WorkerCtx, fetched: &mut Fetched, path: &Path, pr: &PrRef) -> bool {
     let mut ran = false;
     let mut errors = Vec::new();
-    if fetched
-        .bases
-        .insert((pr.key.repo.clone(), pr.base_ref.clone()))
-    {
+    if fetched.bases.insert(base_key(pr)) {
         ran = true;
         if let Err(err) = git::prefetch_base(&ctx.locks, path, &pr.base_ref).await {
             tracing::warn!(key = ?pr.key, base = %pr.base_ref, %err, "base prefetch failed");
@@ -324,6 +334,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_new_base_commit_fetches_the_base_ref_again() {
+        if git_missing() {
+            eprintln!("skipped: git is missing");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let (path, commit) = origin_repo(tmp.path());
+        let (ctx, mut harness) = testkit::ctx("http://127.0.0.1:1");
+        harness
+            .session
+            .send(Session {
+                login: None,
+                repos: vec![Repo {
+                    key: testkit::repo(),
+                    path: Some(path.clone()),
+                    settings: None,
+                }],
+            })
+            .unwrap();
+        let worker = tokio::spawn(run(ctx));
+
+        let mut seven = testkit::pr_ref(7, "PR_7", &commit);
+        seven.base_oid = commit.clone();
+        harness
+            .interest
+            .send(testkit::interest(Some(seven.clone()), Vec::new()))
+            .unwrap();
+        for _ in 0..3 {
+            harness.recv().await;
+        }
+
+        // A push to the base branch on origin, then a sync that reports
+        // the new base commit.
+        let work = tmp.path().join("work");
+        let origin = tmp.path().join("origin.git");
+        git_setup(&[
+            "-C",
+            s(&work),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "second",
+        ]);
+        let base = git_setup(&["-C", s(&work), "rev-parse", "HEAD"]);
+        git_setup(&[
+            "-C",
+            s(&work),
+            "push",
+            "--quiet",
+            s(&origin),
+            "HEAD:refs/heads/main",
+        ]);
+        seven.base_oid = base.clone();
+        harness
+            .interest
+            .send(testkit::interest(Some(seven.clone()), Vec::new()))
+            .unwrap();
+        assert_eq!(
+            harness.recv().await,
+            Msg::PrefetchBatch { done: 0, total: 1 }
+        );
+        assert_eq!(
+            harness.recv().await,
+            Msg::PrefetchDone(seven.key.clone(), Ok(()))
+        );
+        assert_eq!(
+            harness.recv().await,
+            Msg::PrefetchBatch { done: 1, total: 1 }
+        );
+        assert_eq!(
+            git_setup(&[
+                "-C",
+                s(&path),
+                "rev-parse",
+                "--verify",
+                "refs/chaoshub/base/main"
+            ]),
+            base
+        );
+        assert_eq!(
+            git_setup(&[
+                "-C",
+                s(&path),
+                "rev-parse",
+                "--verify",
+                "refs/chaoshub/pr/7/head"
+            ]),
+            commit
+        );
+        worker.abort();
+    }
+
+    #[tokio::test]
     async fn the_first_interest_is_fetched_without_a_change() {
         if git_missing() {
             eprintln!("skipped: git is missing");
@@ -377,9 +487,7 @@ mod tests {
         let known = testkit::pr_ref(1, "PR_1", "a");
         let moved = testkit::pr_ref(2, "PR_2", "b");
         let fresh = testkit::pr_ref(3, "PR_3", "c");
-        fetched
-            .bases
-            .insert((testkit::repo(), known.base_ref.clone()));
+        fetched.bases.insert(base_key(&known));
         fetched.heads.insert(known.key.clone(), ("a".into(), true));
         fetched
             .heads
@@ -395,9 +503,30 @@ mod tests {
     }
 
     #[test]
+    fn pending_fetches_the_base_again_for_a_new_base_commit() {
+        let mut fetched = Fetched::default();
+        let mut known = testkit::pr_ref(1, "PR_1", "a");
+        known.base_oid = "base1".into();
+        fetched.bases.insert(base_key(&known));
+        fetched.heads.insert(known.key.clone(), ("a".into(), true));
+        assert_eq!(fetched.pending([known.clone()].into_iter()), []);
+
+        let mut moved = known.clone();
+        moved.base_oid = "base2".into();
+        let mut other = testkit::pr_ref(2, "PR_2", "b");
+        other.base_oid = "base2".into();
+        fetched.heads.insert(other.key.clone(), ("b".into(), true));
+        // The second pull request with the same new base commit counts
+        // once.
+        assert_eq!(fetched.pending([moved.clone(), other].into_iter()), [moved]);
+    }
+
+    #[test]
     fn a_new_period_keeps_only_good_heads() {
         let mut fetched = Fetched::default();
-        fetched.bases.insert((testkit::repo(), "main".into()));
+        fetched
+            .bases
+            .insert((testkit::repo(), "main".into(), String::new()));
         let good = testkit::pr_ref(1, "PR_1", "a");
         let bad = testkit::pr_ref(2, "PR_2", "b");
         fetched.heads.insert(good.key.clone(), ("a".into(), true));

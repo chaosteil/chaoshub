@@ -192,7 +192,7 @@ The poll intervals, in seconds.
 |---|---|---|
 | `mine_secs` | `60` | The sync of your own pull requests (only the changes since the last sync). |
 | `team_secs` | `90` | The sync of the pull requests of your colleagues (only the changes). |
-| `full_secs` | `900` | The full sync of both lists. The prefetch also fetches each base branch once in this period. |
+| `full_secs` | `900` | The full sync of both lists. The prefetch also fetches each base branch once in this period, and again when a sync reports a new base commit of a pull request. |
 | `ci_secs` | `45` | The CI poll of the visible pull requests. |
 | `jj_secs` | `30` | The local scan with jj or git, while the active tab shows local data. |
 

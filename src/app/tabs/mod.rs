@@ -140,6 +140,7 @@ pub(crate) fn pr_ref(pr: &PullRequest) -> PrRef {
         node_id: pr.node_id.clone(),
         head_oid: pr.head.value.head_oid.clone(),
         base_ref: pr.head.value.base_ref.clone(),
+        base_oid: pr.head.value.base_oid.clone(),
     }
 }
 

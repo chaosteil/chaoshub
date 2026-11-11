@@ -267,6 +267,7 @@ mod tests {
             node_id: String::new(),
             head_oid: oid.into(),
             base_ref: "main".into(),
+            base_oid: String::new(),
         })
     }
 

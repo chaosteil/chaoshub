@@ -87,6 +87,7 @@ fn pr_ref(number: u64) -> PrRef {
         node_id: format!("PR_{number}"),
         head_oid: format!("{number:040}"),
         base_ref: "main".to_owned(),
+        base_oid: String::new(),
     }
 }
 
