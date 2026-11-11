@@ -103,6 +103,7 @@ pub(crate) fn interest(selected: Option<PrRef>, visible: Vec<PrRef>) -> Interest
         wants_local: false,
         selected,
         visible,
+        show_hidden: false,
     }
 }
 

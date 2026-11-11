@@ -393,6 +393,7 @@ fn first_interest(app: &App) -> Interest {
         wants_local: true,
         selected: None,
         visible: Vec::new(),
+        show_hidden: false,
     })
 }
 

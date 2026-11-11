@@ -340,6 +340,15 @@ impl Syncer {
         }
     }
 
+    /// The age limit of a search: `None` while the interest has the
+    /// `show_hidden` switch on, so the old pull requests arrive too.
+    fn created_since(&self) -> Option<DateTime<Utc>> {
+        if self.ctx.interest.borrow().show_hidden {
+            return None;
+        }
+        self.ctx.config.filters.created_since(Utc::now())
+    }
+
     /// The login and the sorted repo names of the session. `None` without
     /// a login or without repos.
     fn target(&self) -> Option<(String, Vec<String>)> {
@@ -356,13 +365,7 @@ impl Syncer {
             return true;
         };
         self.seed(scope).await;
-        let query = search(
-            scope,
-            &login,
-            &repos,
-            None,
-            self.ctx.config.filters.created_since(Utc::now()),
-        );
+        let query = search(scope, &login, &repos, None, self.created_since());
         let mut pages = match self.pages(scope, &query, &login, true).await {
             Ok(Some(pages)) => pages,
             Ok(None) => return false,
@@ -431,7 +434,7 @@ impl Syncer {
             &login,
             &repos,
             Some(last_delta - DELTA_OVERLAP),
-            self.ctx.config.filters.created_since(Utc::now()),
+            self.created_since(),
         );
         let mut pages = match self.pages(scope, &query, &login, false).await {
             Ok(Some(pages)) => pages,
@@ -1977,6 +1980,34 @@ mod tests {
             assert!(!chunk[2].0.contains("is:open"));
             assert!(chunk[2].0.contains(" updated:>="));
         }
+    }
+
+    #[tokio::test]
+    async fn show_hidden_searches_without_the_creation_cutoff() {
+        let server = MockServer::start().await;
+        serve_pages(&server, true).await;
+        let (mut ctx, mut harness) = logged_in(&server);
+        let mut config = (*ctx.config).clone();
+        config.filters.max_age = Some(TimeDelta::weeks(2));
+        ctx.config = Arc::new(config);
+        let mut syncer = Syncer::new(ctx);
+        let mut interest = testkit::interest(None, Vec::new());
+        interest.show_hidden = true;
+        harness.interest.send(interest.clone()).unwrap();
+        assert!(syncer.full(Scope::Team).await);
+        synced(&mut harness).await;
+        assert!(syncer.delta(Scope::Team).await);
+        synced(&mut harness).await;
+        interest.show_hidden = false;
+        harness.interest.send(interest).unwrap();
+        assert!(syncer.full(Scope::Team).await);
+        synced(&mut harness).await;
+        let queries = searches(&server).await;
+        assert_eq!(queries.len(), 6);
+        for (query, _) in &queries[..4] {
+            assert!(!query.contains("created:"), "{query}");
+        }
+        assert!(queries[4].0.contains(" created:>="), "{}", queries[4].0);
     }
 
     #[tokio::test]
