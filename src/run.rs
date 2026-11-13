@@ -399,6 +399,7 @@ fn first_interest(app: &App) -> Interest {
         selected: None,
         visible: Vec::new(),
         show_hidden: false,
+        ci_watch: Vec::new(),
     })
 }
 

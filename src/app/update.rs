@@ -2213,6 +2213,7 @@ fn refresh_interest(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Option<Cmd> 
         };
         let mut interest = tab.interest(&cx, ts);
         interest.show_hidden = any_show_hidden(state);
+        interest.ci_watch = notify::ci_watch(&state.data);
         interest
     };
     if state.ui.interest.as_ref() == Some(&interest) {
@@ -2241,6 +2242,7 @@ fn pinned_interest(data: &AppData, key: &PrKey) -> crate::bus::Interest {
             .filter(|other| other.key != *key)
             .collect(),
         show_hidden: false,
+        ci_watch: Vec::new(),
     }
 }
 
@@ -3332,6 +3334,7 @@ mod tests {
             selected: None,
             visible: Vec::new(),
             show_hidden: false,
+            ci_watch: Vec::new(),
         };
         assert_eq!(
             run(&mut state, &tabs, j.clone()),
@@ -3765,6 +3768,7 @@ mod tests {
             selected: None,
             visible: Vec::new(),
             show_hidden: false,
+            ci_watch: Vec::new(),
         })
     }
 
@@ -4296,6 +4300,7 @@ mod tests {
                 selected: None,
                 visible: Vec::new(),
                 show_hidden: false,
+                ci_watch: Vec::new(),
             })
         };
         let two = press(KeyCode::Char('2'), KeyModifiers::NONE);
@@ -7272,6 +7277,7 @@ mod tests {
                 selected: Some(pr_ref(&pr)),
                 visible: Vec::new(),
                 show_hidden: false,
+                ci_watch: Vec::new(),
             })]
         );
     }
@@ -8599,5 +8605,22 @@ mod tests {
         key(&mut state, 'j');
         assert_eq!(notice_msg(&state), None);
         assert!(state.generation > generation);
+    }
+
+    #[test]
+    fn the_interest_watches_the_ci_of_the_pull_requests_that_can_turn_green() {
+        let state = notify_state(0);
+        let watched: Vec<u64> = state
+            .ui
+            .interest
+            .as_ref()
+            .unwrap()
+            .ci_watch
+            .iter()
+            .map(|pr| pr.key.number)
+            .collect();
+        assert_eq!(watched, [84], "the failing one of the Team tab");
+        let off = team_state();
+        assert_eq!(off.ui.interest.as_ref().unwrap().ci_watch, []);
     }
 }

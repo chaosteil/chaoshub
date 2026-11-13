@@ -109,6 +109,10 @@ pub(crate) struct Interest {
     /// True while the `show_hidden` switch (`T`) of any tab is on. The
     /// syncs then search GitHub without the age limit.
     pub show_hidden: bool,
+    /// The pull requests whose CI the CI worker also polls, when the
+    /// notification of new pull requests is on: the ones of the watched
+    /// tabs that can become ready when CI turns green.
+    pub ci_watch: Vec<PrRef>,
 }
 
 /// The login of the user and the set of repos.

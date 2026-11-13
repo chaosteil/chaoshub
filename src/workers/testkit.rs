@@ -104,6 +104,7 @@ pub(crate) fn interest(selected: Option<PrRef>, visible: Vec<PrRef>) -> Interest
         selected,
         visible,
         show_hidden: false,
+        ci_watch: Vec::new(),
     }
 }
 

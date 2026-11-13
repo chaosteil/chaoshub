@@ -3,7 +3,9 @@
 //!
 //! Every `refresh.ci_secs` (45 s by default) it sends one `ci_poll`
 //! request with the node ids of `Interest.visible` and
-//! `Interest.selected`. It sends `CiUpdated`, or `SyncFailed` with the
+//! `Interest.selected`, and of at most `WATCH_PER_POLL` pull requests of
+//! `Interest.ci_watch`. When `ci_watch` holds more, each poll takes the
+//! next ones, so each one gets a turn. It sends `CiUpdated`, or `SyncFailed` with the
 //! source `ci`. Check runs do not change `updatedAt`, so the list sync
 //! does not see them; this poll does.
 
@@ -19,6 +21,10 @@ use crate::workers::ctx::WorkerCtx;
 use crate::workers::supervisor::Worker;
 use crate::workers::sync_error;
 
+/// The maximum number of pull requests of `Interest.ci_watch` in one
+/// poll.
+const WATCH_PER_POLL: usize = 20;
+
 /// The CI worker.
 pub(crate) const WORKER: Worker = Worker {
     name: "ci",
@@ -30,10 +36,13 @@ async fn run(ctx: WorkerCtx) {
     let period = Duration::from_secs(ctx.config.refresh.ci_secs.max(1));
     let mut ticker = tokio::time::interval(period);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut offset = 0;
     loop {
         ticker.tick().await;
         let interest = ctx.interest.borrow().clone();
-        if let Some(msg) = poll(&ctx, &interest).await
+        let (watch, next) = watch_round(&interest.ci_watch, offset);
+        offset = next;
+        if let Some(msg) = poll(&ctx, &interest, &watch).await
             && ctx.tx.send(msg).await.is_err()
         {
             return;
@@ -41,15 +50,34 @@ async fn run(ctx: WorkerCtx) {
     }
 }
 
-/// One poll for `interest`. Returns the message for `app`, or `None` when
-/// nothing is visible or selected. It sends `Rate` after a response.
-async fn poll(ctx: &WorkerCtx, interest: &Interest) -> Option<Msg> {
-    if interest.visible.is_empty() && interest.selected.is_none() {
+/// The pull requests of `watch` for one poll, from the place `offset`,
+/// and the place for the next poll. All of them when they are at most
+/// `WATCH_PER_POLL`.
+fn watch_round(watch: &[PrRef], offset: usize) -> (Vec<PrRef>, usize) {
+    if watch.len() <= WATCH_PER_POLL {
+        return (watch.to_vec(), 0);
+    }
+    let start = offset % watch.len();
+    let round = watch
+        .iter()
+        .cycle()
+        .skip(start)
+        .take(WATCH_PER_POLL)
+        .cloned()
+        .collect();
+    (round, (start + WATCH_PER_POLL) % watch.len())
+}
+
+/// One poll for `interest` and the watched pull requests `watch`. Returns
+/// the message for `app`, or `None` when nothing is visible, selected or
+/// watched. It sends `Rate` after a response.
+async fn poll(ctx: &WorkerCtx, interest: &Interest, watch: &[PrRef]) -> Option<Msg> {
+    if interest.visible.is_empty() && interest.selected.is_none() && watch.is_empty() {
         return None;
     }
     let mut keys: HashMap<&str, &PrRef> = HashMap::new();
     let mut visible = Vec::new();
-    for pr in &interest.visible {
+    for pr in interest.visible.iter().chain(watch) {
         if keys.insert(pr.node_id.as_str(), pr).is_none() {
             visible.push(pr.node_id.clone());
         }
@@ -187,10 +215,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn watched_pull_requests_are_polled_with_the_visible_ones() {
+        let server = MockServer::start().await;
+        serve(
+            &server,
+            ResponseTemplate::new(200).set_body_raw(CI_POLL.as_bytes(), "application/json"),
+        )
+        .await;
+        let (ctx, _harness) = testkit::ctx(&server.uri());
+        let green = testkit::pr_ref(1, GREEN, "a");
+        let red = testkit::pr_ref(2, RED, "b");
+        let interest = testkit::interest(None, vec![green.clone()]);
+        let Some(Msg::CiUpdated { states, .. }) =
+            poll(&ctx, &interest, &[green, red.clone()]).await
+        else {
+            panic!("expected CiUpdated");
+        };
+        assert!(
+            states
+                .iter()
+                .any(|(key, _, ci)| *key == red.key && ci.value == CiState::Failure)
+        );
+        let requests = server.received_requests().await.unwrap();
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["variables"]["visible"], json!([GREEN, RED]));
+    }
+
+    #[tokio::test]
+    async fn only_watched_pull_requests_send_a_request() {
+        let server = MockServer::start().await;
+        serve(
+            &server,
+            ResponseTemplate::new(200).set_body_raw(CI_POLL.as_bytes(), "application/json"),
+        )
+        .await;
+        let (ctx, _harness) = testkit::ctx(&server.uri());
+        let interest = testkit::interest(None, Vec::new());
+        let watch = [testkit::pr_ref(2, RED, "b")];
+        assert!(matches!(
+            poll(&ctx, &interest, &watch).await,
+            Some(Msg::CiUpdated { .. })
+        ));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn watch_round_takes_turns_and_is_bounded() {
+        let watch: Vec<PrRef> = (0..45)
+            .map(|n| testkit::pr_ref(n, &format!("PR_{n}"), "a"))
+            .collect();
+        let numbers = |prs: &[PrRef]| prs.iter().map(|pr| pr.key.number).collect::<Vec<_>>();
+        let (first, next) = watch_round(&watch, 0);
+        assert_eq!(numbers(&first), (0..20).collect::<Vec<_>>());
+        let (second, next) = watch_round(&watch, next);
+        assert_eq!(numbers(&second), (20..40).collect::<Vec<_>>());
+        let (third, next) = watch_round(&watch, next);
+        assert_eq!(
+            numbers(&third),
+            (40..45).chain(0..15).collect::<Vec<_>>(),
+            "the list wraps"
+        );
+        assert_eq!(next, 15);
+
+        let (few, next) = watch_round(&watch[..3], 7);
+        assert_eq!(numbers(&few), [0, 1, 2]);
+        assert_eq!(next, 0);
+        assert_eq!(watch_round(&[], 3), (Vec::new(), 0));
+    }
+
+    #[tokio::test]
     async fn nothing_visible_sends_no_request() {
         let server = MockServer::start().await;
         let (ctx, mut harness) = testkit::ctx(&server.uri());
-        assert_eq!(poll(&ctx, &testkit::interest(None, Vec::new())).await, None);
+        assert_eq!(
+            poll(&ctx, &testkit::interest(None, Vec::new()), &[]).await,
+            None
+        );
         assert!(harness.quiet_for(Duration::from_millis(50)).await);
         assert!(server.received_requests().await.unwrap().is_empty());
     }
@@ -202,7 +302,7 @@ mod tests {
         let (ctx, _harness) = testkit::ctx(&server.uri());
         let interest = testkit::interest(None, vec![testkit::pr_ref(1, GREEN, "a")]);
         assert!(matches!(
-            poll(&ctx, &interest).await,
+            poll(&ctx, &interest, &[]).await,
             Some(Msg::SyncFailed {
                 source: "ci",
                 scope: None,
@@ -216,7 +316,7 @@ mod tests {
         let (ctx, _harness) = testkit::ctx("http://127.0.0.1:1");
         let interest = testkit::interest(None, vec![testkit::pr_ref(1, GREEN, "a")]);
         assert_eq!(
-            poll(&ctx, &interest).await,
+            poll(&ctx, &interest, &[]).await,
             Some(Msg::SyncFailed {
                 source: "ci",
                 scope: None,

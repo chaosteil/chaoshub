@@ -164,6 +164,7 @@ pub(crate) fn list_interest(tab: &dyn Tab, model: &ListModel, height: u16) -> In
             .filter_map(|row| pr(&row.item))
             .collect(),
         show_hidden: false,
+        ci_watch: Vec::new(),
     }
 }
 
@@ -267,6 +268,7 @@ pub(crate) mod fake {
                 selected: None,
                 visible: Vec::new(),
                 show_hidden: false,
+                ci_watch: Vec::new(),
             }
         }
 

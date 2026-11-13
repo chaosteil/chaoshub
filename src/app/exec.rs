@@ -598,6 +598,7 @@ mod tests {
             selected: None,
             visible: Vec::new(),
             show_hidden: false,
+            ci_watch: Vec::new(),
         }
     }
 

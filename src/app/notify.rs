@@ -20,10 +20,11 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::app::state::AppData;
-use crate::bus::{Cmd, Persist, Scope};
+use crate::app::tabs::pr_ref;
+use crate::bus::{Cmd, Persist, PrRef, Scope};
 use crate::config::schema::NOTIFY_TABS;
 use crate::domain::keys::PrKey;
-use crate::domain::pr::{PrState, PullRequest};
+use crate::domain::pr::{CiState, PrState, PullRequest};
 use crate::domain::team::is_ready;
 
 /// The `ui_state` key of the announced pull requests: a JSON list of
@@ -233,6 +234,24 @@ pub(crate) fn dismiss(data: &mut AppData) -> bool {
     data.notify.notice.take().is_some()
 }
 
+/// The pull requests of the watched tabs whose CI the CI worker polls in
+/// the background: open, not drafts, in the age limit, CI not green, and
+/// not announced. Such a pull request becomes new when its CI turns
+/// green, and check runs do not change `updatedAt`, so the list sync does
+/// not see it soon. Empty while the notification is off.
+pub(crate) fn ci_watch(data: &AppData) -> Vec<PrRef> {
+    let Some(settings) = &data.notify.settings else {
+        return Vec::new();
+    };
+    data.prs
+        .values()
+        .filter(|pr| settings.tabs.iter().any(|tab| in_tab(data, tab, pr)))
+        .filter(|pr| !pr.head.value.is_draft && pr.ci_state.value != CiState::Success)
+        .filter(|pr| !data.notify.announced.contains(&pr.key))
+        .map(pr_ref)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -241,7 +260,6 @@ mod tests {
     use crate::app::state::AppState;
     use crate::app::testdata;
     use crate::bus::Size;
-    use crate::domain::pr::CiState;
     use crate::domain::test_time;
     use crate::store::Snapshot;
 
@@ -576,6 +594,58 @@ mod tests {
         announce_at(&mut state, 0);
         assert!(dismiss(&mut state.data));
         assert_eq!(state.data.notify.notice, None);
+    }
+
+    #[test]
+    fn ci_watch_holds_the_pull_requests_that_can_turn_green() {
+        let mut state = synced(&["team", "review"], 0);
+        let with_ci = |mut pr: PullRequest, ci| {
+            pr.ci_state.value = ci;
+            pr
+        };
+        put(
+            &mut state,
+            Scope::Team,
+            with_ci(team_pr(2, "Pending"), CiState::Pending),
+        );
+        put(
+            &mut state,
+            Scope::Team,
+            with_ci(review_pr(3, "Failing"), CiState::Failure),
+        );
+        put(
+            &mut state,
+            Scope::Team,
+            with_ci(team_pr(4, "No checks"), CiState::None),
+        );
+        let mut draft = with_ci(team_pr(5, "Draft"), CiState::Pending);
+        draft.head.value.is_draft = true;
+        put(&mut state, Scope::Team, draft);
+        let mut closed = with_ci(team_pr(6, "Closed"), CiState::Pending);
+        closed.head.value.state = PrState::Closed;
+        put(&mut state, Scope::Team, closed);
+        put(
+            &mut state,
+            Scope::Mine,
+            with_ci(team_pr(7, "Mine"), CiState::Pending),
+        );
+        put(
+            &mut state,
+            Scope::Team,
+            with_ci(team_pr(8, "Announced"), CiState::Pending),
+        );
+        state
+            .data
+            .notify
+            .announced
+            .insert(testdata::pr_key("chaoshub", 8));
+        let numbers: Vec<u64> = ci_watch(&state.data)
+            .into_iter()
+            .map(|pr| pr.key.number)
+            .collect();
+        assert_eq!(numbers, [2, 3, 4], "not green, not #1 (green)");
+        state.data.notify.settings = None;
+        assert_eq!(ci_watch(&state.data), []);
     }
 
     #[test]
