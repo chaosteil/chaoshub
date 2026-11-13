@@ -19,8 +19,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::config::schema::{
-    AgentConfig, CodeviewConfig, DetailConfig, FiltersConfig, MergeConfig, PrefetchConfig,
-    RefreshConfig, RepoEntry, RepoMerge, TerminalConfig, ThemeConfig, WorkspacesConfig,
+    AgentConfig, CodeviewConfig, DetailConfig, FiltersConfig, MergeConfig, NotifyConfig,
+    PrefetchConfig, RefreshConfig, RepoEntry, RepoMerge, TerminalConfig, ThemeConfig,
+    WorkspacesConfig,
 };
 use crate::domain::keys::RepoKey;
 use crate::domain::repo::Repo;
@@ -45,6 +46,8 @@ pub(crate) struct Config {
     pub agent: AgentConfig,
     pub theme: ThemeConfig,
     pub terminal: TerminalConfig,
+    /// The terminal notification of new pull requests.
+    pub notify: NotifyConfig,
     /// Key binding overrides: an action id or app key name to a key.
     pub keys: BTreeMap<String, String>,
     /// The `[actions.<id>]` tables. Each action reads its own table.
@@ -207,6 +210,9 @@ mod tests {
         assert_eq!(config.theme.animation_ms, 120);
         assert!(config.theme.column_headers);
         assert_eq!(config.terminal, TerminalConfig::default());
+        assert_eq!(config.notify.enabled, None);
+        assert_eq!(config.notify.tabs, ["team", "review"]);
+        assert_eq!(config.notify.debounce, chrono::TimeDelta::seconds(15));
         assert!(config.keys.is_empty());
         assert!(config.actions.is_empty());
         assert_eq!(
@@ -454,6 +460,42 @@ mod tests {
             assert!(err.to_string().contains("max_age"), "{err}");
         }
         assert!(Config::parse("[filters]\ncreated_since = \"2026-09-01\"", None).is_err());
+    }
+
+    #[test]
+    fn notify_section_parses() {
+        let text = "[notify]\nenabled = true\ntabs = [\"mine\"]\ndebounce = \"2m\"\n";
+        let config = Config::parse(text, None).unwrap();
+        assert_eq!(
+            config.notify,
+            NotifyConfig {
+                enabled: Some(true),
+                tabs: vec!["mine".to_owned()],
+                debounce: chrono::TimeDelta::minutes(2),
+            }
+        );
+    }
+
+    #[test]
+    fn notify_debounce_of_zero_is_valid() {
+        let config = Config::parse("[notify]\ndebounce = \"0s\"\n", None).unwrap();
+        assert_eq!(config.notify.debounce, chrono::TimeDelta::zero());
+    }
+
+    #[test]
+    fn notify_rejects_an_unknown_tab() {
+        let err = Config::parse("[notify]\ntabs = [\"team\", \"teams\"]\n", None).unwrap_err();
+        assert!(err.to_string().contains("\"teams\""), "{err}");
+        assert!(err.to_string().contains("notify.tabs"), "{err}");
+    }
+
+    #[test]
+    fn notify_rejects_an_invalid_debounce() {
+        for debounce in ["", "soon", "-5s", "100000000000000000000 years"] {
+            let text = format!("[notify]\ndebounce = {debounce:?}");
+            let err = Config::parse(&text, None).unwrap_err();
+            assert!(err.to_string().contains("debounce"), "{err}");
+        }
     }
 
     #[test]

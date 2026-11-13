@@ -338,6 +338,58 @@ impl Default for TerminalConfig {
     }
 }
 
+/// The tab ids that `[notify] tabs` accepts.
+pub(crate) const NOTIFY_TABS: &[&str] = &["mine", "review", "team"];
+
+/// The `[notify]` section: the terminal notification of new pull
+/// requests that are ready for review.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub(crate) struct NotifyConfig {
+    /// `None` turns the notification on inside Rex and Ghostty only, the
+    /// same as `[terminal] program_status`. `Some` forces it on or off.
+    pub enabled: Option<bool>,
+    /// The ids of the tabs whose new ready pull requests are announced.
+    #[serde(deserialize_with = "notify_tabs")]
+    pub tabs: Vec<String>,
+    /// How long chaoshub waits after a new pull request before it
+    /// announces the new pull requests. Each new pull request starts the
+    /// wait again, up to 5 times this value. Zero announces at once.
+    #[serde(deserialize_with = "debounce")]
+    pub debounce: TimeDelta,
+}
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: None,
+            tabs: vec!["team".to_owned(), "review".to_owned()],
+            debounce: TimeDelta::seconds(15),
+        }
+    }
+}
+
+/// Reads tab ids and checks each one against `NOTIFY_TABS`.
+fn notify_tabs<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    let tabs = Vec::<String>::deserialize(deserializer)?;
+    if let Some(tab) = tabs.iter().find(|tab| !NOTIFY_TABS.contains(&tab.as_str())) {
+        return Err(serde::de::Error::custom(format!(
+            "unknown tab {tab:?} in notify.tabs, expected one of {}",
+            NOTIFY_TABS.join(", ")
+        )));
+    }
+    Ok(tabs)
+}
+
+/// Reads a duration such as `15s` or `2 minutes`. Zero is valid.
+fn debounce<'de, D: Deserializer<'de>>(deserializer: D) -> Result<TimeDelta, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    let duration = humantime::parse_duration(&text)
+        .map_err(|err| serde::de::Error::custom(format!("invalid notify.debounce: {err}")))?;
+    TimeDelta::from_std(duration)
+        .map_err(|_| serde::de::Error::custom("notify.debounce is too large"))
+}
+
 /// The `[workspaces]` section.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
