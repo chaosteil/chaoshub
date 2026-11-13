@@ -2,7 +2,39 @@
 name = "chaoshub"
 version = "0.1.0"
 edition = "2024"
-publish = false
+rust-version = "1.91"
+description = "A terminal app that tracks your GitHub pull requests, with jj or git"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/chaosteil/chaoshub"
+homepage = "https://github.com/chaosteil/chaoshub"
+readme = "README.md"
+keywords = ["github", "pull-request", "tui", "jujutsu", "git"]
+categories = ["command-line-utilities", "development-tools"]
+# The crate holds only what the build needs. The test data, the snapshots
+# and the files of the repo tools stay in the repo.
+exclude = [
+    "/.github/",
+    "/.config/",
+    "/bench/",
+    "/tests/",
+    "/src/**/testdata/",
+    "/src/**/snapshots/",
+    "/AGENTS.md",
+    "/CLAUDE.md",
+    "/clippy.toml",
+    "/rust-toolchain.toml",
+    "/.goreleaser.yaml",
+    "/flake.nix",
+    "/flake.lock",
+    "/RELEASING.md",
+]
+
+# cargo-binstall downloads the archive of the GitHub release (see
+# .goreleaser.yaml for the archive names).
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }_{ version }_{ target }{ archive-suffix }"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -40,6 +72,11 @@ tracing-subscriber = "0.3.23"
 # the transitions stay fast. The crate itself keeps the dev level.
 [profile.dev.package."*"]
 opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
 
 [dev-dependencies]
 insta = "1.49.0"
