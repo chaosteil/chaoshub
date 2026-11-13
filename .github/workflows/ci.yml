@@ -1,0 +1,47 @@
+# The four required checks of AGENTS.md. release.yml also calls this
+# workflow before it builds a release.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux runs the tests without jj, and macOS runs them with jj.
+        # Thus CI tests the git-only path and the jj path.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      # With no arguments, rustup installs the toolchain and the
+      # components of rust-toolchain.toml.
+      - name: Install the Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Install jj
+        if: runner.os == 'macOS'
+        run: brew install jj
+      - name: Build
+        run: cargo build
+      - name: Test
+        run: cargo nextest run
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Format
+        run: cargo fmt --check
