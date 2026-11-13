@@ -60,11 +60,173 @@ an error in the status line.
 
 ## Install
 
+chaoshub runs on macOS and Linux. It does not run on Windows, because it
+uses Unix-only APIs. Each method below installs the `chaoshub` binary.
+You must also install the programs of [Requirements](#requirements):
+`git` and `gh` are necessary, and jj, nvim and Rex are optional. The
+Homebrew cask, the AUR package and the `.deb` and `.rpm` packages also
+install `git` and `gh`.
+
+The releases are on the
+[release page](https://github.com/chaosteil/chaoshub/releases).
+[RELEASING.md](RELEASING.md) tells how a release is made.
+
+### Homebrew
+
 ```sh
-cargo install --path .
+brew install chaosteil/tap/chaoshub
 ```
 
-The repo pins the Rust toolchain in `rust-toolchain.toml`.
+The cask is in
+[chaosteil/homebrew-tap](https://github.com/chaosteil/homebrew-tap). The
+macOS binary is not signed. The cask removes the quarantine flag of
+macOS after the install, so that macOS starts the binary
+([GoReleaser](https://goreleaser.com/customization/homebrew_casks/#signing-and-notarizing)).
+
+### Cargo
+
+From crates.io:
+
+```sh
+cargo install --locked chaoshub
+```
+
+From the main branch on GitHub:
+
+```sh
+cargo install --locked --git https://github.com/chaosteil/chaoshub
+```
+
+Cargo compiles chaoshub. You need Rust 1.91 or later. `--locked` uses
+the dependency versions of `Cargo.lock`
+([cargo install](https://doc.rust-lang.org/cargo/commands/cargo-install.html)).
+
+### cargo-binstall
+
+```sh
+cargo binstall chaoshub
+```
+
+[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) downloads
+the prebuilt archive of the GitHub release, and does not compile.
+
+### Arch Linux (AUR)
+
+Install [`chaoshub-bin`](https://aur.archlinux.org/packages/chaoshub-bin)
+with an AUR helper, for example paru:
+
+```sh
+paru -S chaoshub-bin
+```
+
+The package depends on `git` and `github-cli`. `jujutsu` and `neovim`
+are optional dependencies.
+
+### Nix
+
+Run chaoshub without an install:
+
+```sh
+nix run github:chaosteil/chaoshub
+```
+
+Install it in your profile:
+
+```sh
+nix profile install github:chaosteil/chaoshub
+```
+
+Or add the flake as an input of your own flake, for example in a NixOS
+configuration:
+
+```nix
+{
+  inputs.chaoshub.url = "github:chaosteil/chaoshub";
+
+  outputs = { nixpkgs, chaoshub, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        {
+          environment.systemPackages = [
+            chaoshub.packages.x86_64-linux.default
+          ];
+        }
+      ];
+    };
+  };
+}
+```
+
+The flake has packages for `x86_64-linux`, `aarch64-linux` and
+`aarch64-darwin`. It does not install `git` and `gh`. Add them to your
+packages too.
+
+### Debian, Ubuntu and Fedora
+
+Download the `.deb` or `.rpm` file for your CPU from the
+[release page](https://github.com/chaosteil/chaoshub/releases/latest).
+Then install it with your package manager:
+
+```sh
+sudo apt install ./chaoshub_X.Y.Z_amd64.deb         # Debian, Ubuntu
+sudo dnf install ./chaoshub-X.Y.Z-1.x86_64.rpm      # Fedora
+```
+
+The packages depend on `git` and `gh`, and recommend `jujutsu` and
+`neovim`. If your distribution has no `gh` package, install `gh` first
+([GitHub CLI install](https://github.com/cli/cli#installation)).
+
+### Prebuilt archives
+
+The [release page](https://github.com/chaosteil/chaoshub/releases/latest)
+has an archive `chaoshub_X.Y.Z_<target>.tar.gz` for each target:
+
+| Target | System |
+|---|---|
+| `aarch64-apple-darwin` | macOS on Apple silicon |
+| `x86_64-apple-darwin` | macOS on Intel |
+| `x86_64-unknown-linux-musl` | Linux on x86_64 (static binary) |
+| `aarch64-unknown-linux-musl` | Linux on ARM64 (static binary) |
+
+Each archive has the binary, the README and the license files.
+`checksums.txt` has the SHA-256 sum of each file.
+
+1. Download the archive and `checksums.txt`.
+2. Make sure that the sum is correct:
+
+   ```sh
+   sha256sum --check --ignore-missing checksums.txt         # Linux
+   shasum -a 256 --check --ignore-missing checksums.txt     # macOS
+   ```
+
+3. Extract the binary to a directory on your `PATH`:
+
+   ```sh
+   tar -xzf chaoshub_X.Y.Z_aarch64-apple-darwin.tar.gz -C ~/.local/bin chaoshub
+   ```
+
+4. If you downloaded the archive with a browser on macOS, remove the
+   quarantine flag:
+
+   ```sh
+   xattr -d com.apple.quarantine ~/.local/bin/chaoshub
+   ```
+
+### Build from source
+
+```sh
+git clone https://github.com/chaosteil/chaoshub
+cd chaoshub
+cargo build --release
+```
+
+The binary is `target/release/chaoshub`. To install it in
+`~/.cargo/bin`, run `cargo install --locked --path .`.
+
+The repo pins the Rust toolchain in `rust-toolchain.toml`. rustup
+installs this toolchain when you build in the repo. The minimum Rust
+version is 1.91 (`rust-version` in `Cargo.toml`).
 
 ## Start
 
@@ -1393,3 +1555,17 @@ bench/bench.sh clean
 
 Each case runs 5 times (`BENCH_RUNS`) and prints the median of each stage
 in milliseconds. `bench/bench.sh` lists all options.
+
+## License
+
+chaoshub is licensed under either of these licenses, at your option:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <https://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or
+  <https://opensource.org/licenses/MIT>)
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the
+Apache-2.0 license, shall be dual licensed as above, without any
+additional terms or conditions.
