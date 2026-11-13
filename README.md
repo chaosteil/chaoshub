@@ -193,7 +193,7 @@ The poll intervals, in seconds.
 | `mine_secs` | `60` | The sync of your own pull requests (only the changes since the last sync). |
 | `team_secs` | `90` | The sync of the pull requests of your colleagues (only the changes). |
 | `full_secs` | `900` | The full sync of both lists. The prefetch also fetches each base branch once in this period, and again when a sync reports a new base commit of a pull request. |
-| `ci_secs` | `45` | The CI poll of the visible pull requests. |
+| `ci_secs` | `45` | The CI poll of the visible pull requests, and of the watched pull requests of `[notify]` (see "Notice of new pull requests"). |
 | `jj_secs` | `30` | The local scan with jj or git, while the active tab shows local data. |
 
 When the GitHub rate budget runs low, the sync intervals double.
@@ -486,6 +486,23 @@ mouse (see "Mouse").
 When `program_status` or `progress` is not set, chaoshub writes the
 sequence only inside Rex (`REX_BLOCK` is set) and Ghostty
 (`TERM_PROGRAM=ghostty`). `true` forces it on, `false` forces it off.
+
+### `[notify]`
+
+The terminal notice of new pull requests that are ready for review (see
+"Notice of new pull requests").
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | detected | Sends the notice. When it is not set, chaoshub sends the notice only inside Rex and Ghostty, the same as `[terminal] program_status`. |
+| `tabs` | `["team", "review"]` | The tabs to watch: `"mine"`, `"review"` or `"team"`. Another value stops chaoshub with an error. |
+| `debounce` | `"15s"` | The wait before the notice, for example `"15s"` or `"2m"`. `"0s"` sends the notice at once. |
+
+```toml
+[notify]
+tabs = ["review"]
+debounce = "1m"
+```
 
 ### `[workspaces]`
 
@@ -1178,10 +1195,59 @@ and OSC 9;4 is the progress bar. Every OSC 7501 record has
 | Merge failed, sync failed, worker died | `state=error`, the reason | error for 5 s, then off |
 | Rate limited | `state=error`, `rate limited until HH:MM` | paused |
 | Review pane open | `state=idle` | unchanged |
+| Review in the same terminal while a notice shows | `state=idle` | off |
 | Quit, review in the same terminal, crash | `state=clear` | off |
 
 The `done` and `error` states clear on the next key press or the next
 successful sync.
+
+### Notice of new pull requests
+
+chaoshub tells you when new pull requests are ready for review. The
+terminal shows a notice, for example `3 new PRs in team`. Rex shows the
+notice as a tab message, a Dock badge and a sound. When Rex is in the
+background, Rex also shows a macOS notification.
+
+A pull request is new when it becomes ready in a watched tab (`[notify]
+tabs`) for the first time. Ready means open, not a draft, CI green, and
+in the `max_age` limit. These changes make a pull request new:
+
+- A colleague opens it.
+- It leaves draft.
+- Its CI turns green.
+
+The author filter, the `/` filter and the `t` and `T` keys do not change
+which pull requests are new. When chaoshub starts, the cache and the
+first sync only give the start state, so they send no notice.
+chaoshub keeps the announced pull requests in the cache. A restart
+does not announce them again.
+
+Check runs do not change the update time of a pull request, so the
+list sync does not see CI that turns green. For this reason, the CI poll
+also reads the CI of the watched pull requests that are not green yet,
+at most 20 in each poll (`[refresh] ci_secs`).
+
+The notice waits for `[notify] debounce` (15 s by default) after a new
+pull request. Each new pull request starts the wait again, so one
+notice tells you about all of them. A steady stream gets a notice at
+the latest 5 debounce times after the first new pull request. The text
+of the notice is one of these:
+
+- `#123 <title> (<author>)` for one pull request.
+- `3 new PRs in team` for more pull requests of one tab.
+- `2 new PRs in review, 1 in team` for pull requests of more tabs.
+
+The status bar shows the same text. The notice stays until the next key
+press in chaoshub. A quit removes it too.
+
+chaoshub sends the notice with OSC 7501 as its own record, so the
+program status stays: `state=done`, `id=new-prs`, `app=chaoshub`, the
+title `chaoshub` and the text as `msg`. Ghostty shows OSC 7501 too.
+chaoshub does not send OSC 9, OSC 777 or OSC 99.
+
+chaoshub does not support tmux for the notice yet. tmux does not pass
+OSC 7501 to the terminal, and chaoshub does not wrap the sequence for
+tmux. Inside tmux, the notice does not show.
 
 ### Status bar
 
