@@ -3,6 +3,8 @@
 //!
 //! - OSC 7501 (program status):
 //!   `ESC ] 7501 ; state=<state>[:kind=<kind>]:app=chaoshub[:msg=<base64>] ESC \`.
+//!   A child record also has an `id` and a `title`:
+//!   `ESC ] 7501 ; state=done:id=<id>:app=chaoshub:title=<base64>:msg=<base64> ESC \`.
 //! - OSC 9;4 (progress bar): `ESC ] 9 ; 4 ; <s>[;<v>] ESC \`.
 //! - OSC 52 (clipboard): `ESC ] 52 ; c ; <base64> ESC \`.
 
@@ -14,6 +16,10 @@ const OSC: &[u8] = b"\x1b]";
 const ST: &[u8] = b"\x1b\\";
 /// The `app` field of every OSC 7501 record.
 const APP: &str = "chaoshub";
+/// The maximum length of a decoded `title`, in bytes.
+const TITLE_MAX: usize = 192;
+/// The maximum length of a decoded `msg`, in bytes.
+const MSG_MAX: usize = 2048;
 
 /// The OSC 7501 sequence for a program status. `msg` is base64 without
 /// line breaks.
@@ -42,6 +48,39 @@ pub(crate) fn program_status(status: &TermStatus) -> Vec<u8> {
         body.push_str(&base64(msg.as_bytes()));
     }
     sequence(&body)
+}
+
+/// The OSC 7501 sequence that sets the child record `id` to `done`, with
+/// a `title` and a `msg`. A control character becomes a space, and a
+/// text that is too long is cut at a character boundary, because the
+/// terminal discards a report with such a text.
+#[allow(dead_code, reason = "the notification of new pull requests writes it")]
+pub(crate) fn record_done(id: &str, title: &str, msg: &str) -> Vec<u8> {
+    sequence(&format!(
+        "7501;state=done:id={id}:app={APP}:title={}:msg={}",
+        base64(field_text(title, TITLE_MAX).as_bytes()),
+        base64(field_text(msg, MSG_MAX).as_bytes()),
+    ))
+}
+
+/// The OSC 7501 sequence that removes the child record `id` and the
+/// records below it.
+#[allow(dead_code, reason = "the notification of new pull requests writes it")]
+pub(crate) fn record_clear(id: &str) -> Vec<u8> {
+    sequence(&format!("7501;state=clear:id={id}:app={APP}"))
+}
+
+/// `text` without control characters and with at most `max` bytes. The
+/// cut is at a character boundary.
+fn field_text(text: &str, max: usize) -> String {
+    let mut out = String::with_capacity(text.len().min(max));
+    for c in text.chars().map(|c| if c.is_control() { ' ' } else { c }) {
+        if out.len() + c.len_utf8() > max {
+            break;
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// The OSC 9;4 sequence for a progress state. A percent above 100 counts
@@ -203,6 +242,55 @@ mod tests {
         let out = program_status(&status(TermState::Working, Some(&long)));
         assert!(!out.contains(&b'\n'));
         assert!(!out.contains(&b'\r'));
+    }
+
+    #[test]
+    fn record_done_has_an_id_a_title_and_a_msg() {
+        assert_eq!(
+            record_done("new-prs", "chaoshub", "3 new PRs in team"),
+            b"\x1b]7501;state=done:id=new-prs:app=chaoshub:title=Y2hhb3NodWI=:msg=MyBuZXcgUFJzIGluIHRlYW0=\x1b\\"
+        );
+    }
+
+    #[test]
+    fn record_clear_names_the_id() {
+        assert_eq!(
+            record_clear("new-prs"),
+            b"\x1b]7501;state=clear:id=new-prs:app=chaoshub\x1b\\"
+        );
+    }
+
+    #[test]
+    fn field_text_replaces_control_characters() {
+        assert_eq!(field_text("a\tb\nc\u{7f}d", 100), "a b c d");
+    }
+
+    #[test]
+    fn field_text_cuts_at_a_character_boundary() {
+        assert_eq!(field_text("abc", 3), "abc");
+        assert_eq!(field_text("abcd", 3), "abc");
+        // "é" is 2 bytes: a cut after 3 bytes keeps "aé" only.
+        assert_eq!(field_text("aéé", 4), "aé");
+        assert_eq!(field_text("aéé", 3), "aé");
+        assert_eq!(field_text("aéé", 2), "a");
+    }
+
+    #[test]
+    fn record_done_respects_the_length_limits() {
+        let title = "ü".repeat(200);
+        let msg = "€".repeat(1000);
+        let out = record_done("new-prs", &title, &msg);
+        let text = String::from_utf8(out.clone()).unwrap();
+        let field = |key: &str| {
+            text.split(':')
+                .find_map(|pair| pair.strip_prefix(key))
+                .unwrap()
+                .trim_end_matches("\x1b\\")
+                .to_owned()
+        };
+        assert_eq!(field("title="), base64("ü".repeat(96).as_bytes()));
+        assert_eq!(field("msg="), base64("€".repeat(682).as_bytes()));
+        assert!(out.len() <= 4096);
     }
 
     #[test]
