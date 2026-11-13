@@ -37,13 +37,13 @@ use crate::actions::REGISTRY;
 use crate::agent::store::Store as AgentStore;
 use crate::app::exec::{ActionEnv, AgentEnv, Runtime, Senders};
 use crate::app::keymap::Keymap;
-use crate::app::{App, DetailPane, SPINNER_FRAME};
+use crate::app::{App, DetailPane, Notice, NotifySettings, SPINNER_FRAME};
 use crate::bus::{
     Cmd, DetailReq, Hit, Interest, JjReq, LaunchRequest, MouseKind, Msg, Progress, Scope, Session,
     Size, SyncReq, TargetKey, TermState, TermStatus,
 };
 use crate::cli::{CacheAction, Cli, Command};
-use crate::config::schema::{DetailMode, parse_repo_name};
+use crate::config::schema::{DetailMode, NotifyConfig, parse_repo_name};
 use crate::config::{self, Config, paths};
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::repo::Repo;
@@ -80,6 +80,8 @@ const PAUSE_TIMEOUT: Duration = Duration::from_secs(1);
 /// The interval of the OSC 9;4 keep-alive while a progress is active.
 /// Ghostty resets a progress bar after about 15 s without an update.
 const PROGRESS_KEEP_ALIVE: Duration = Duration::from_secs(1);
+/// The `id` of the OSC 7501 record of the notice of new pull requests.
+const NOTICE_ID: &str = "new-prs";
 
 /// A frame whose render takes longer than this is slow.
 const SLOW_FRAME: Duration = Duration::from_millis(12);
@@ -120,9 +122,11 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     let transitions =
         Transitions::new(config.theme.animations, config.theme.animation_ms).with_theme(theme);
     let detected = term_status_detected();
+    let notify = notify_settings(&config.notify, detected, pinned.is_some());
     let term = TermWriter::new(
         config.terminal.program_status.unwrap_or(detected),
         config.terminal.progress.unwrap_or(detected),
+        notify.is_some(),
     );
     let launcher = launcher(&config, RexLauncher::from_env())?;
     let detail = detail_pane(&DetailArgs {
@@ -174,7 +178,8 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     .with_column_headers(settings.config.theme.column_headers)
     .with_detail_pane(detail)
     .with_selection_shift(theme.selected_row().shift)
-    .with_animations(settings.config.theme.animations);
+    .with_animations(settings.config.theme.animations)
+    .with_notify(notify);
     // The pinned app comes before the first interest, so the workers
     // start with the pinned interest.
     let app = match &pinned {
@@ -761,8 +766,12 @@ impl EventLoop {
                 self.update(Msg::TransitionsDone);
             }
             self.was_active = active;
-            let status = &self.app.frame().term;
-            if let Err(err) = self.term.write(&mut io::stdout(), status, Instant::now()) {
+            let status = self.app.frame().term.clone();
+            let notice = self.app.notice().cloned();
+            if let Err(err) =
+                self.term
+                    .write(&mut io::stdout(), &status, notice.as_ref(), Instant::now())
+            {
                 tracing::warn!(%err, "cannot write the terminal status");
             }
 
@@ -912,7 +921,7 @@ impl EventLoop {
                 key: key.clone(),
             });
             self.drop_transitions();
-            if let Err(err) = self.term.clear(&mut io::stdout()) {
+            if let Err(err) = self.term.hand_over(&mut io::stdout()) {
                 tracing::warn!(%err, "cannot clear the terminal status");
             }
             restore_terminal();
@@ -950,7 +959,7 @@ impl EventLoop {
                 tracing::warn!("the reader thread did not confirm the pause");
             }
             self.drop_transitions();
-            if let Err(err) = self.term.clear(&mut io::stdout()) {
+            if let Err(err) = self.term.hand_over(&mut io::stdout()) {
                 tracing::warn!(%err, "cannot clear the terminal status");
             }
             restore_terminal();
@@ -1153,34 +1162,67 @@ fn term_status_detected() -> bool {
         || std::env::var("TERM_PROGRAM").is_ok_and(|term| term == "ghostty")
 }
 
+/// The settings of the notification of new pull requests, or `None` when
+/// it is off. `[notify] enabled` wins over the terminal detection. The
+/// pinned mode (`chaoshub pr`) syncs no lists, so it has no
+/// notification.
+fn notify_settings(config: &NotifyConfig, detected: bool, pinned: bool) -> Option<NotifySettings> {
+    (!pinned && config.enabled.unwrap_or(detected)).then(|| NotifySettings {
+        tabs: config.tabs.clone(),
+        debounce: config.debounce,
+    })
+}
+
 /// Writes the terminal status: OSC 7501 when the state or the message
 /// changed, OSC 9;4 when the progress changed or once per second while a
-/// progress is active.
+/// progress is active. The notice of new pull requests is the OSC 7501
+/// record `NOTICE_ID`: `done` when a new notice comes, `clear` when it
+/// goes.
 #[derive(Debug)]
 struct TermWriter {
     /// The `[terminal] program_status` switch.
     program_status: bool,
     /// The `[terminal] progress` switch.
     progress: bool,
+    /// True when the notification of new pull requests is on.
+    notify: bool,
     /// The state and the message of the last OSC 7501 write.
     last_status: Option<(TermState, Option<String>)>,
     /// The progress and the time of the last OSC 9;4 write.
     last_progress: Option<(Progress, Instant)>,
+    /// The number of the notice that the terminal shows, if any.
+    last_notice: Option<u64>,
 }
 
 impl TermWriter {
-    fn new(program_status: bool, progress: bool) -> Self {
+    fn new(program_status: bool, progress: bool, notify: bool) -> Self {
         Self {
             program_status,
             progress,
+            notify,
             last_status: None,
             last_progress: None,
+            last_notice: None,
         }
     }
 
     /// Writes what changed or what is due. Runs on every loop pass.
-    fn write(&mut self, out: &mut impl Write, status: &TermStatus, now: Instant) -> io::Result<()> {
+    fn write(
+        &mut self,
+        out: &mut impl Write,
+        status: &TermStatus,
+        notice: Option<&Notice>,
+        now: Instant,
+    ) -> io::Result<()> {
         let mut bytes = Vec::new();
+        let seq = notice.map(|notice| notice.seq);
+        if self.notify && seq != self.last_notice {
+            bytes.extend(match notice {
+                Some(notice) => osc::record_done(NOTICE_ID, &notice.title, &notice.msg),
+                None => osc::record_clear(NOTICE_ID),
+            });
+            self.last_notice = seq;
+        }
         if self.program_status
             && self
                 .last_status
@@ -1207,23 +1249,45 @@ impl TermWriter {
         out.flush()
     }
 
-    /// Writes `state=clear` and `9;4;0`, on quit and before the terminal
-    /// is handed to a foreground process. The next `write` sends the
-    /// status again.
+    /// Writes `state=clear` and `9;4;0` on quit. `state=clear` without an
+    /// `id` also removes the notice. The next `write` sends the status
+    /// again.
     fn clear(&mut self, out: &mut impl Write) -> io::Result<()> {
         self.last_status = None;
         self.last_progress = None;
+        self.last_notice = None;
         let bytes = self.clear_sequence();
-        if bytes.is_empty() {
-            return Ok(());
+        flush(out, &bytes)
+    }
+
+    /// Clears the status before the terminal is handed to a foreground
+    /// process, for example a review in the same terminal. The notice
+    /// stays: while it shows, an `idle` root record replaces the status,
+    /// because `state=clear` without an `id` also removes the notice.
+    /// The next `write` sends the status again.
+    fn hand_over(&mut self, out: &mut impl Write) -> io::Result<()> {
+        if self.last_notice.is_none() {
+            return self.clear(out);
         }
-        out.write_all(&bytes)?;
-        out.flush()
+        self.last_status = None;
+        self.last_progress = None;
+        let mut bytes = Vec::new();
+        if self.program_status {
+            bytes.extend(osc::program_status(&TermStatus {
+                state: TermState::Idle,
+                msg: None,
+                progress: Progress::Off,
+            }));
+        }
+        if self.progress {
+            bytes.extend(osc::progress(Progress::Off));
+        }
+        flush(out, &bytes)
     }
 
     /// The clear sequences of the switches that are on.
     fn clear_sequence(&self) -> Vec<u8> {
-        match (self.program_status, self.progress) {
+        match (self.program_status || self.notify, self.progress) {
             (true, true) => osc::clear(),
             (true, false) => osc::program_status(&TermStatus {
                 state: TermState::Clear,
@@ -1234,6 +1298,15 @@ impl TermWriter {
             (false, false) => Vec::new(),
         }
     }
+}
+
+/// Writes `bytes` and flushes. Nothing for no bytes.
+fn flush(out: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    out.write_all(bytes)?;
+    out.flush()
 }
 
 /// Clears the terminal status and restores the terminal before the panic
@@ -1789,13 +1862,13 @@ mod tests {
     /// The bytes of one `write` call.
     fn written(writer: &mut TermWriter, status: &TermStatus, now: Instant) -> Vec<u8> {
         let mut out = Vec::new();
-        writer.write(&mut out, status, now).unwrap();
+        writer.write(&mut out, status, None, now).unwrap();
         out
     }
 
     #[test]
     fn term_writer_writes_a_status_once() {
-        let mut writer = TermWriter::new(true, true);
+        let mut writer = TermWriter::new(true, true, false);
         let t0 = Instant::now();
         let mut first = osc::program_status(&idle());
         first.extend(osc::progress(Progress::Off));
@@ -1810,7 +1883,7 @@ mod tests {
 
     #[test]
     fn term_writer_writes_only_what_changed() {
-        let mut writer = TermWriter::new(true, true);
+        let mut writer = TermWriter::new(true, true, false);
         let t0 = Instant::now();
         written(&mut writer, &idle(), t0);
         let busy = working(Progress::Off);
@@ -1832,7 +1905,7 @@ mod tests {
 
     #[test]
     fn term_writer_keeps_an_active_progress_alive() {
-        let mut writer = TermWriter::new(true, true);
+        let mut writer = TermWriter::new(true, true, false);
         let t0 = Instant::now();
         let busy = working(Progress::Percent(40));
         written(&mut writer, &busy, t0);
@@ -1856,7 +1929,7 @@ mod tests {
 
     #[test]
     fn term_writer_clear_resets_the_dedupe() {
-        let mut writer = TermWriter::new(true, true);
+        let mut writer = TermWriter::new(true, true, false);
         let t0 = Instant::now();
         let first = written(&mut writer, &idle(), t0);
         let mut out = Vec::new();
@@ -1869,18 +1942,18 @@ mod tests {
     fn term_writer_follows_the_switches() {
         let t0 = Instant::now();
         let busy = working(Progress::Indeterminate);
-        let mut off = TermWriter::new(false, false);
+        let mut off = TermWriter::new(false, false, false);
         assert_eq!(written(&mut off, &busy, t0), b"");
         let mut out = Vec::new();
         off.clear(&mut out).unwrap();
         assert_eq!(out, b"");
 
-        let mut status_only = TermWriter::new(true, false);
+        let mut status_only = TermWriter::new(true, false, false);
         assert_eq!(
             written(&mut status_only, &busy, t0),
             osc::program_status(&busy)
         );
-        let mut progress_only = TermWriter::new(false, true);
+        let mut progress_only = TermWriter::new(false, true, false);
         assert_eq!(
             written(&mut progress_only, &busy, t0),
             osc::progress(Progress::Indeterminate)
@@ -1888,6 +1961,118 @@ mod tests {
         let mut out = Vec::new();
         progress_only.clear(&mut out).unwrap();
         assert_eq!(out, osc::progress(Progress::Off));
+    }
+
+    fn notice(seq: u64, msg: &str) -> Notice {
+        Notice {
+            seq,
+            title: "chaoshub".into(),
+            msg: msg.into(),
+        }
+    }
+
+    /// The bytes of one `write` call with a notice.
+    fn written_notice(writer: &mut TermWriter, notice: Option<&Notice>) -> Vec<u8> {
+        let mut out = Vec::new();
+        writer
+            .write(&mut out, &idle(), notice, Instant::now())
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn term_writer_writes_a_notice_once_and_clears_it() {
+        let mut writer = TermWriter::new(false, false, true);
+        assert_eq!(written_notice(&mut writer, None), b"");
+        let first = notice(1, "3 new PRs in team");
+        assert_eq!(
+            written_notice(&mut writer, Some(&first)),
+            osc::record_done("new-prs", "chaoshub", "3 new PRs in team")
+        );
+        assert_eq!(written_notice(&mut writer, Some(&first)), b"");
+        let same_text = notice(2, "3 new PRs in team");
+        assert_eq!(
+            written_notice(&mut writer, Some(&same_text)),
+            osc::record_done("new-prs", "chaoshub", "3 new PRs in team"),
+            "a new notice with the same text is a new write"
+        );
+        assert_eq!(
+            written_notice(&mut writer, None),
+            osc::record_clear("new-prs")
+        );
+        assert_eq!(written_notice(&mut writer, None), b"");
+    }
+
+    #[test]
+    fn term_writer_writes_no_notice_when_the_notification_is_off() {
+        let mut writer = TermWriter::new(false, false, false);
+        assert_eq!(written_notice(&mut writer, Some(&notice(1, "x"))), b"");
+    }
+
+    #[test]
+    fn hand_over_keeps_the_notice() {
+        let mut writer = TermWriter::new(true, true, true);
+        written_notice(&mut writer, Some(&notice(1, "x")));
+        let mut out = Vec::new();
+        writer.hand_over(&mut out).unwrap();
+        let mut expected = osc::program_status(&idle());
+        expected.extend(osc::progress(Progress::Off));
+        assert_eq!(out, expected, "no clear without an id");
+        let mut again = osc::program_status(&idle());
+        again.extend(osc::progress(Progress::Off));
+        assert_eq!(
+            written_notice(&mut writer, Some(&notice(1, "x"))),
+            again,
+            "the status comes again, the notice does not"
+        );
+    }
+
+    #[test]
+    fn hand_over_without_a_notice_clears() {
+        let mut writer = TermWriter::new(true, true, true);
+        written_notice(&mut writer, None);
+        let mut out = Vec::new();
+        writer.hand_over(&mut out).unwrap();
+        assert_eq!(out, osc::clear());
+    }
+
+    #[test]
+    fn quit_clears_the_notice() {
+        let mut writer = TermWriter::new(false, false, true);
+        written_notice(&mut writer, Some(&notice(1, "x")));
+        let mut out = Vec::new();
+        writer.clear(&mut out).unwrap();
+        assert_eq!(out, b"\x1b]7501;state=clear:app=chaoshub\x1b\\");
+        assert_eq!(writer.clear_sequence(), out, "the panic hook too");
+    }
+
+    #[test]
+    fn notify_settings_follow_the_switch_and_the_detection() {
+        let config = |enabled| NotifyConfig {
+            enabled,
+            ..NotifyConfig::default()
+        };
+        let cases = [
+            (None, true, false, true),
+            (None, false, false, false),
+            (Some(true), false, false, true),
+            (Some(false), true, false, false),
+            (Some(true), true, true, false),
+        ];
+        for (enabled, detected, pinned, on) in cases {
+            assert_eq!(
+                notify_settings(&config(enabled), detected, pinned).is_some(),
+                on,
+                "{enabled:?} {detected} {pinned}"
+            );
+        }
+        assert_eq!(
+            notify_settings(&NotifyConfig::default(), true, false),
+            Some(NotifySettings {
+                tabs: vec!["team".into(), "review".into()],
+                debounce: chrono::TimeDelta::seconds(15),
+            })
+        );
     }
 
     /// The app at a size with a snapshot, 5 minutes after the cache was

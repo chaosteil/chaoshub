@@ -3,7 +3,7 @@
 //! There is one function per message family. Commands are plain data, so
 //! the tests compare them with `assert_eq!`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -16,6 +16,7 @@ use crate::app::layout::Areas;
 use crate::app::measure;
 use crate::app::models::{Cell, CellStyle, PaneModel, RowItem, TreeNode, review_list_rows};
 use crate::app::nav::{self, Motion, TreeRows};
+use crate::app::notify;
 use crate::app::panes::{PANES, Pane, PaneAction, PaneState, applicable, init_states, items};
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
@@ -75,7 +76,12 @@ pub(crate) fn update_full(
     msg: Msg,
 ) -> Vec<Cmd> {
     match msg {
-        Msg::Key(event) => key(state, keymap, tabs, panes, actions, &event),
+        Msg::Key(event) => {
+            if event.kind != KeyEventKind::Release && notify::dismiss(&mut state.data) {
+                state.bump();
+            }
+            key(state, keymap, tabs, panes, actions, &event)
+        }
         Msg::Mouse { kind, hit, .. } => mouse(state, keymap, tabs, panes, actions, kind, hit),
         Msg::Resize(size) => resize(state, size),
         Msg::Tick => tick(state, tabs, Utc::now()),
@@ -95,19 +101,23 @@ pub(crate) fn update_full(
             last,
         } => {
             back_online(state);
+            let synced = synced_scopes(state);
             let before = glow_before(state, tabs, state.data.synced.contains_key(&scope));
             let mut cmds = prs_synced(state, scope, prs, seen, started_at, last);
             push_glows(state, &before);
+            cmds.extend(notify_new(state, &synced));
             cmds.extend(after_change(state, tabs));
             cmds
         }
         Msg::PrRefreshed(pr) => {
             back_online(state);
+            let synced = synced_scopes(state);
             let key = pr.key.clone();
             let before = updated_at(&state.data, &key);
             if pr_refreshed(state, *pr) {
                 let mut cmds: Vec<Cmd> =
                     detail_reload(state, [(key, before)]).into_iter().collect();
+                cmds.extend(notify_new(state, &synced));
                 cmds.extend(after_change(state, tabs));
                 cmds
             } else {
@@ -126,10 +136,13 @@ pub(crate) fn update_full(
             selected_checks,
         } => {
             back_online(state);
+            let synced = synced_scopes(state);
             let before = glow_before(state, tabs, !state.data.synced.is_empty());
             if ci_updated(state, states, selected_checks) {
                 push_glows(state, &before);
-                after_change(state, tabs)
+                let mut cmds: Vec<Cmd> = notify_new(state, &synced).into_iter().collect();
+                cmds.extend(after_change(state, tabs));
+                cmds
             } else {
                 Vec::new()
             }
@@ -2995,13 +3008,14 @@ fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<
                 && state.data.filters.matches(pr, previous) != state.data.filters.matches(pr, now)
         });
     state.data.now = now;
-    let cmds = if filter_changed {
+    let mut cmds = if filter_changed {
         state.data.revision += 1;
         state.bump();
         after_change(state, tabs)
     } else {
         Vec::new()
     };
+    cmds.extend(announce(state, now));
     let sync = &mut state.data.sync;
     if sync.condition.as_ref().is_some_and(|c| !c.holds(now)) {
         sync.condition = None;
@@ -3028,6 +3042,29 @@ fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<
         state.bump();
     }
     cmds
+}
+
+/// The scopes that had a sync, before a change of the data.
+fn synced_scopes(state: &AppState) -> HashSet<Scope> {
+    state.data.synced.keys().copied().collect()
+}
+
+/// After a change of the pull requests: the new ready pull requests of
+/// the watched tabs wait for the notice, and the notice comes when the
+/// debounce wait ended. `synced` holds the scopes that had a sync before
+/// the change (see `notify::detect`).
+fn notify_new(state: &mut AppState, synced: &HashSet<Scope>) -> Option<Cmd> {
+    notify::detect(&mut state.data, synced);
+    announce(state, state.data.now)
+}
+
+/// The notice of the new pull requests when the debounce wait ended at
+/// `now`. Its text also goes to the status bar. Returns the write of
+/// the announced pull requests into `ui_state`.
+fn announce(state: &mut AppState, now: DateTime<Utc>) -> Option<Cmd> {
+    let (text, cmd) = notify::announce(&mut state.data, now)?;
+    state.message(text, CellStyle::Info, INFO_TTL);
+    Some(cmd)
 }
 
 /// How long an info message stays in the status bar.
@@ -8439,5 +8476,128 @@ mod tests {
                 "a clock correction updates the window"
             );
         }
+    }
+
+    /// A state with the Team tab data of `team_snapshot`, the
+    /// notification on for the Team tab with a debounce of `debounce`
+    /// seconds, and the first sync of both scopes done at `at(0)`.
+    fn notify_state(debounce: i64) -> AppState {
+        let mut state = team_state();
+        state.data.now = at(0);
+        state.data.notify.settings = Some(crate::app::notify::NotifySettings {
+            tabs: vec!["team".into()],
+            debounce: TimeDelta::seconds(debounce),
+        });
+        for scope in [Scope::Mine, Scope::Team] {
+            update(
+                &mut state,
+                &Keymap::default(),
+                Msg::PrsSynced {
+                    scope,
+                    prs: Vec::new(),
+                    seen: None,
+                    started_at: at(0),
+                    last: true,
+                },
+            );
+        }
+        state
+    }
+
+    /// A team sync with a new ready pull request #90 of `erin`.
+    fn new_team_pr() -> Msg {
+        let mut pr = testdata::pr("chaoshub", 90, "feat(ui): add a notice");
+        pr.head.value.author = "erin".into();
+        pr.ci_state.value = CiState::Success;
+        Msg::PrsSynced {
+            scope: Scope::Team,
+            prs: vec![pr],
+            seen: None,
+            started_at: at(1),
+            last: true,
+        }
+    }
+
+    fn notice_msg(state: &AppState) -> Option<&str> {
+        state
+            .data
+            .notify
+            .notice
+            .as_ref()
+            .map(|notice| notice.msg.as_str())
+    }
+
+    #[test]
+    fn the_first_sync_of_a_scope_announces_nothing() {
+        let mut state = team_state();
+        state.data.now = at(0);
+        state.data.notify.settings = Some(crate::app::notify::NotifySettings {
+            tabs: vec!["team".into()],
+            debounce: TimeDelta::zero(),
+        });
+        let cmds = update(&mut state, &Keymap::default(), new_team_pr());
+        assert!(!cmds.iter().any(|cmd| matches!(cmd, Cmd::Persist(_))));
+        assert_eq!(notice_msg(&state), None);
+    }
+
+    #[test]
+    fn a_new_ready_pull_request_shows_a_notice_and_a_status_message() {
+        let mut state = notify_state(0);
+        let cmds = update(&mut state, &Keymap::default(), new_team_pr());
+        let text = "#90 feat(ui): add a notice (erin)";
+        assert_eq!(notice_msg(&state), Some(text));
+        assert_eq!(
+            state.ui.status.as_ref().map(|msg| msg.text.as_str()),
+            Some(text)
+        );
+        assert!(cmds.iter().any(|cmd| matches!(
+            cmd,
+            Cmd::Persist(Persist::UiState { key, .. }) if key == crate::app::notify::ANNOUNCED_KEY
+        )));
+    }
+
+    #[test]
+    fn the_notice_comes_on_the_tick_after_the_debounce_wait() {
+        let mut state = notify_state(15);
+        update(&mut state, &Keymap::default(), new_team_pr());
+        assert_eq!(notice_msg(&state), None);
+        assert_eq!(tick(&mut state, &TABS, at(14)), []);
+        assert_eq!(notice_msg(&state), None);
+        let cmds = tick(&mut state, &TABS, at(15));
+        assert!(matches!(cmds.as_slice(), [Cmd::Persist(_)]));
+        assert_eq!(
+            notice_msg(&state),
+            Some("#90 feat(ui): add a notice (erin)")
+        );
+    }
+
+    #[test]
+    fn a_ci_update_that_turns_a_pull_request_green_shows_a_notice() {
+        let mut state = notify_state(0);
+        let failing = testdata::pr_key("chaoshub", 84);
+        let head = state.data.prs[&failing].head.value.head_oid.clone();
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::CiUpdated {
+                states: vec![(failing, head, testdata::observed(CiState::Success))],
+                selected_checks: None,
+            },
+        );
+        assert_eq!(
+            notice_msg(&state),
+            Some("#84 fix(vcs): parse empty bookmarks (dave)")
+        );
+    }
+
+    #[test]
+    fn the_next_key_press_clears_the_notice() {
+        let mut state = notify_state(0);
+        update(&mut state, &Keymap::default(), new_team_pr());
+        assert!(notice_msg(&state).is_some());
+        let generation = state.generation;
+        key(&mut state, 'j');
+        assert_eq!(notice_msg(&state), None);
+        assert!(state.generation > generation);
     }
 }

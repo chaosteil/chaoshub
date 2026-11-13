@@ -12,6 +12,7 @@ pub(crate) mod measure;
 mod merge;
 pub(crate) mod models;
 pub(crate) mod nav;
+mod notify;
 mod panes;
 mod state;
 mod tabs;
@@ -29,6 +30,7 @@ pub(crate) use crate::app::frame::SPINNER_FRAME;
 use crate::app::keymap::Keymap;
 use crate::app::layout::Areas;
 use crate::app::models::FrameModel;
+pub(crate) use crate::app::notify::{Notice, NotifySettings};
 use crate::app::state::AppState;
 pub(crate) use crate::app::state::DetailPane;
 use crate::bus::{Cmd, Interest, Msg, Size, UiEvent};
@@ -120,6 +122,19 @@ impl App {
         self.state.data.animations = on;
         self.state.bump();
         self
+    }
+
+    /// Turns the notification of new pull requests on with `Some`.
+    pub(crate) fn with_notify(mut self, settings: Option<NotifySettings>) -> Self {
+        self.state.data.notify.settings = settings;
+        update::start(&mut self.state);
+        self
+    }
+
+    /// The notice of new pull requests that the terminal shows, until
+    /// the next key press.
+    pub(crate) fn notice(&self) -> Option<&Notice> {
+        self.state.data.notify.notice.as_ref()
     }
 
     /// Pins the pull request `key`: the pinned mode of `chaoshub pr`. The

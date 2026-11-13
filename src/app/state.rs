@@ -17,6 +17,7 @@ use crate::actions::{Action, Applicability};
 use crate::app::frame::{self, ModelCache};
 use crate::app::keymap::Keymap;
 use crate::app::models::{CellStyle, HelpModel};
+use crate::app::notify::{ANNOUNCED_KEY, NotifyState};
 use crate::app::panes::agent::head;
 use crate::app::panes::{PaneAction, PaneState};
 use crate::app::tabs::{TABS, Tab, TabState};
@@ -122,6 +123,8 @@ pub(crate) struct AppData {
     /// False when `[theme] animations = false`. The merge badge then does
     /// not pulse.
     pub animations: bool,
+    /// The notification of new pull requests.
+    pub notify: NotifyState,
 }
 
 /// The review draft of a pull request. It stays when the popups close.
@@ -850,6 +853,7 @@ impl AppState {
                 reviews: BTreeMap::new(),
                 selection_shift: 0,
                 animations: true,
+                notify: NotifyState::default(),
             },
             ui: UiState {
                 active: 0,
@@ -935,6 +939,9 @@ impl AppState {
         };
         if let Some(on) = self.ui.saved_column_headers {
             self.ui.column_headers = on;
+        }
+        if let Some(value) = snapshot.ui_state.get(ANNOUNCED_KEY) {
+            self.data.notify.load_announced(value);
         }
         self.bump();
     }

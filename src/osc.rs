@@ -54,7 +54,6 @@ pub(crate) fn program_status(status: &TermStatus) -> Vec<u8> {
 /// a `title` and a `msg`. A control character becomes a space, and a
 /// text that is too long is cut at a character boundary, because the
 /// terminal discards a report with such a text.
-#[allow(dead_code, reason = "the notification of new pull requests writes it")]
 pub(crate) fn record_done(id: &str, title: &str, msg: &str) -> Vec<u8> {
     sequence(&format!(
         "7501;state=done:id={id}:app={APP}:title={}:msg={}",
@@ -65,7 +64,6 @@ pub(crate) fn record_done(id: &str, title: &str, msg: &str) -> Vec<u8> {
 
 /// The OSC 7501 sequence that removes the child record `id` and the
 /// records below it.
-#[allow(dead_code, reason = "the notification of new pull requests writes it")]
 pub(crate) fn record_clear(id: &str) -> Vec<u8> {
     sequence(&format!("7501;state=clear:id={id}:app={APP}"))
 }
