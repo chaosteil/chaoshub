@@ -29,6 +29,8 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("next_tab", &["tab"]),
     ("down", &["j"]),
     ("up", &["k"]),
+    ("list_down", &["down"]),
+    ("list_up", &["up"]),
     ("top", &["g"]),
     ("bottom", &["G"]),
     ("page_down", &["ctrl-d"]),

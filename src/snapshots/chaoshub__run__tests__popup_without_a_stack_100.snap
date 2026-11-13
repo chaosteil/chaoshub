@@ -30,5 +30,5 @@ expression: screen(&mut app)
 "                    ▌                                                                              ┃"
 "                    ▌                                                                              ┃"
 "                    ◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◣"
-"╱ 1/2/3/4/Tab pane tabs  Enter expand  Esc close  Space actions                                     "
+"╱ 1/2/3/4/Tab pane tabs  Up/Down PR  Enter expand  Esc close  Space actions                         "
 " [MINE] 0 repos · cache from 5m ago ◤                                                        ? help "

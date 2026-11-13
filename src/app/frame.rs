@@ -339,7 +339,13 @@ fn hints_model(
     }
     let keymap = &state.cache.keymap;
     let hints = match state.ui.overlays.iter().rev().find(|o| !o.closing) {
-        Some(overlay) => overlay_hints(&state.data, keymap, panes, &overlay.state),
+        Some(overlay) => overlay_hints(
+            &state.data,
+            keymap,
+            panes,
+            &overlay.state,
+            state.ui.pinned.is_none(),
+        ),
         None if state.ui.filter_edit => filter_hints(),
         None => list_hints(state, keymap, tabs, &REGISTRY, list),
     };
@@ -479,6 +485,7 @@ fn overlay_hints(
     keymap: &Keymap,
     panes: &[Box<dyn Pane>],
     overlay: &OverlayState,
+    has_list: bool,
 ) -> Vec<KeyHint> {
     let hints = match overlay {
         OverlayState::Popup(popup) => {
@@ -495,6 +502,9 @@ fn overlay_hints(
             keys.extend(first_chords(keymap, &["next_tab"]));
             vec![
                 hint(&keys, "pane tabs"),
+                has_list
+                    .then(|| app_hint(keymap, &["list_up", "list_down"], "PR", true))
+                    .flatten(),
                 app_hint(keymap, &["open"], "expand", true),
                 app_hint(keymap, &["close_overlay"], "close", true),
                 target.and_then(|_| app_hint(keymap, &["actions"], "actions", true)),

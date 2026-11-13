@@ -272,7 +272,7 @@ fn key(
         switch_tab(state, to);
         return after_change(state, tabs);
     }
-    if let Some(motion) = motion(keymap, chord) {
+    if let Some(motion) = list_motion(keymap, chord).or_else(|| motion(keymap, chord)) {
         navigate(state, tabs, motion);
         return after_change(state, tabs);
     }
@@ -1514,51 +1514,17 @@ fn overlay_key(
     if keymap.matches("close_overlay", chord) {
         return close_top(state);
     }
-    let areas = frame::areas(state);
-    let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
+    let Some(index) = top_overlay(state) else {
         return Vec::new();
     };
+    let overlay = &mut state.ui.overlays[index];
     if matches!(overlay.state, OverlayState::Help { .. }) && keymap.matches("help", chord) {
         close_overlay(state);
         return Vec::new();
     }
     match &mut overlay.state {
-        OverlayState::Popup(popup) => {
-            let Some(handled) = popup_key(&state.data, &areas, keymap, panes, popup, chord) else {
-                if keymap.matches("refresh", chord) {
-                    return refresh_popup(&state.data, &popup.key);
-                }
-                if keymap.matches("help", chord) {
-                    let help = help_model(keymap, tabs, actions);
-                    open_overlay(
-                        state,
-                        OverlayKind::Help,
-                        OverlayState::Help { help, scroll: 0 },
-                    );
-                    return Vec::new();
-                }
-                let Some(target) = pr_target(&state.data, &popup.key) else {
-                    return Vec::new();
-                };
-                if keymap.matches("actions", chord) {
-                    let active = panes.get(popup.active).map(|pane| pane.id());
-                    let pane = in_pane(
-                        &state.data,
-                        &areas,
-                        keymap,
-                        panes,
-                        popup,
-                        |pane, cx, ps, _| pane.actions(cx, ps),
-                    )
-                    .unwrap_or_default();
-                    open_menu(state, actions, target, pane, active);
-                    return Vec::new();
-                }
-                return run_detail_key(state, keymap, panes, actions, target, chord)
-                    .unwrap_or_default();
-            };
-            let key = popup.key.clone();
-            popup_handled(state, panes, &key, handled)
+        OverlayState::Popup(_) => {
+            popup_overlay_key(state, keymap, tabs, panes, actions, index, chord)
         }
         OverlayState::Authors(picker) => {
             if let Some(motion) = motion(keymap, chord) {
@@ -1604,6 +1570,107 @@ fn overlay_key(
         OverlayState::Review(_) => review_key(state, keymap, chord),
         OverlayState::Prompt { .. } | OverlayState::ReviewText { .. } => Vec::new(),
     }
+}
+
+/// A key for the top PR summary. List keys select a PR. Pane keys
+/// control its panes. Other keys run app or action commands.
+fn popup_overlay_key(
+    state: &mut AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
+    index: usize,
+    chord: KeyChord,
+) -> Vec<Cmd> {
+    if state.ui.pinned.is_none()
+        && let Some(motion) = list_motion(keymap, chord)
+    {
+        return navigate_popup(state, tabs, panes, index, motion);
+    }
+    let areas = frame::areas(state);
+    let OverlayState::Popup(popup) = &mut state.ui.overlays[index].state else {
+        return Vec::new();
+    };
+    let Some(handled) = popup_key(&state.data, &areas, keymap, panes, popup, chord) else {
+        if keymap.matches("refresh", chord) {
+            return refresh_popup(&state.data, &popup.key);
+        }
+        if keymap.matches("help", chord) {
+            let help = help_model(keymap, tabs, actions);
+            open_overlay(
+                state,
+                OverlayKind::Help,
+                OverlayState::Help { help, scroll: 0 },
+            );
+            return Vec::new();
+        }
+        let Some(target) = pr_target(&state.data, &popup.key) else {
+            return Vec::new();
+        };
+        if keymap.matches("actions", chord) {
+            let active = panes.get(popup.active).map(|pane| pane.id());
+            let pane = in_pane(
+                &state.data,
+                &areas,
+                keymap,
+                panes,
+                popup,
+                |pane, cx, ps, _| pane.actions(cx, ps),
+            )
+            .unwrap_or_default();
+            open_menu(state, actions, target, pane, active);
+            return Vec::new();
+        }
+        return run_detail_key(state, keymap, panes, actions, target, chord).unwrap_or_default();
+    };
+    let key = popup.key.clone();
+    popup_handled(state, panes, &key, handled)
+}
+
+/// Moves the outer list and replaces the open summary with its selected
+/// pull request. Keep the active pane when it applies to the new PR.
+/// Reset the cursor, scroll position and pane state for each new PR.
+fn navigate_popup(
+    state: &mut AppState,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    index: usize,
+    motion: Motion,
+) -> Vec<Cmd> {
+    if !navigate(state, tabs, motion) {
+        return Vec::new();
+    }
+    let target = state.ui.tabs[state.ui.active]
+        .selected
+        .as_ref()
+        .and_then(|item| row_target(&state.data, item));
+    let Some(target) = target else {
+        return after_change(state, tabs);
+    };
+    let Target::Pr { pr, repo, .. } = &target;
+    let OverlayState::Popup(popup) = &mut state.ui.overlays[index].state else {
+        return after_change(state, tabs);
+    };
+    if popup.key == pr.key {
+        return after_change(state, tabs);
+    }
+    let order = applicable(panes, &target);
+    popup.active = if order.contains(&popup.active) {
+        popup.active
+    } else {
+        order.first().copied().unwrap_or(0)
+    };
+    popup.key = pr.key.clone();
+    popup.panes = init_states(panes, Some(&target));
+    let mut cmds = after_change(state, tabs);
+    if repo.path.is_some() {
+        cmds.extend([
+            Cmd::LoadAgent(pr.key.clone()),
+            Cmd::LoadCodeview(pr.key.clone()),
+        ]);
+    }
+    cmds
 }
 
 /// The `refresh` key in the popup of `key`: a load by number when the
@@ -2011,8 +2078,12 @@ fn filter_key(state: &mut AppState, tabs: &[Box<dyn Tab>], chord: KeyChord) -> V
         {
             ts.filter.push(c);
         }
-        KeyCode::Down => navigate(state, tabs, Motion::Down),
-        KeyCode::Up => navigate(state, tabs, Motion::Up),
+        KeyCode::Down => {
+            navigate(state, tabs, Motion::Down);
+        }
+        KeyCode::Up => {
+            navigate(state, tabs, Motion::Up);
+        }
         _ => return Vec::new(),
     }
     state.bump();
@@ -2137,6 +2208,17 @@ fn switch_tab(state: &mut AppState, to: usize) {
     state.bump();
 }
 
+/// The bindings that move the outer list, also while its summary is open.
+fn list_motion(keymap: &Keymap, chord: KeyChord) -> Option<Motion> {
+    if keymap.matches("list_down", chord) {
+        Some(Motion::Down)
+    } else if keymap.matches("list_up", chord) {
+        Some(Motion::Up)
+    } else {
+        None
+    }
+}
+
 /// The navigation binding of a chord, if any.
 fn motion(keymap: &Keymap, chord: KeyChord) -> Option<Motion> {
     [
@@ -2154,24 +2236,25 @@ fn motion(keymap: &Keymap, chord: KeyChord) -> Option<Motion> {
 
 /// Moves the cursor of the active tab. A move that scrolls the list pushes
 /// `UiEvent::ScrollTo`; a move inside the visible rows is immediate.
-fn navigate(state: &mut AppState, tabs: &[Box<dyn Tab>], motion: Motion) {
+/// Returns true when the cursor or scroll moved.
+fn navigate(state: &mut AppState, tabs: &[Box<dyn Tab>], motion: Motion) -> bool {
     let Some(tab) = tabs.get(state.ui.active) else {
-        return;
+        return false;
     };
     let height = usize::from(frame::list_size(state).height);
     let model = frame::active_list(state, tabs);
     let Some(cursor) = nav::step(&model.rows, model.cursor, motion, height) else {
-        return;
+        return false;
     };
     let scroll = nav::keep_visible(model.rows.len(), cursor, model.scroll, height);
     let Some(ts) = state.ui.tabs.get_mut(state.ui.active) else {
-        return;
+        return false;
     };
     ts.cursor = cursor;
     ts.scroll = scroll;
     ts.selected = model.rows.get(cursor).map(|row| row.item.clone());
     if cursor == model.cursor && scroll == model.scroll {
-        return;
+        return false;
     }
     if scroll != model.scroll {
         state.ui.ui_events.push(UiEvent::ScrollTo {
@@ -2181,6 +2264,7 @@ fn navigate(state: &mut AppState, tabs: &[Box<dyn Tab>], motion: Motion) {
         });
     }
     state.bump();
+    true
 }
 
 /// `Cmd::SetInterest` when the interest of the active tab, or of the
@@ -4716,6 +4800,256 @@ mod tests {
             Some(&UiEvent::OverlayClosed(OverlayKind::Popup))
         );
         assert_eq!(send(&mut state, x), vec![], "a closing popup takes no keys");
+    }
+
+    #[test]
+    fn arrows_move_the_outer_list_while_j_and_k_move_the_summary() {
+        let panes = fake_panes();
+        let mut state = mine_state(3);
+        let send = |state: &mut AppState, code| {
+            update_full(
+                state,
+                &Keymap::default(),
+                &TABS,
+                &panes,
+                &REGISTRY,
+                press(code, KeyModifiers::NONE),
+            )
+        };
+        send(&mut state, KeyCode::Enter);
+        send(&mut state, KeyCode::Char('2'));
+        send(&mut state, KeyCode::Char('j'));
+        send(&mut state, KeyCode::Char('j'));
+        send(&mut state, KeyCode::Char('k'));
+        assert_eq!(sidebar(&state).unwrap().panes[1].cursor, 1);
+        assert_eq!(selected_number(&mut state), Some(99));
+        state.ui.ui_events.clear();
+        let cmds = send(&mut state, KeyCode::Down);
+        assert_eq!(
+            selected_number(&mut state),
+            Some(103),
+            "skip the stack header"
+        );
+        let popup = sidebar(&state).unwrap();
+        assert_eq!(popup.key.number, 103);
+        assert_eq!(popup.active, 1);
+        assert_eq!((popup.panes[1].cursor, popup.panes[1].scroll), (0, 0));
+        assert_eq!(state.ui.overlays.len(), 1);
+        assert!(
+            cmds.iter()
+                .any(|cmd| matches!(cmd, Cmd::SetInterest(interest)
+            if interest.selected.as_ref().is_some_and(|pr| pr.key.number == 103)))
+        );
+        assert!(
+            !state
+                .ui
+                .ui_events
+                .iter()
+                .any(|event| matches!(event, UiEvent::OverlayOpened(_)))
+        );
+        send(&mut state, KeyCode::Down);
+        assert_eq!(selected_number(&mut state), Some(102));
+        assert_eq!(sidebar(&state).unwrap().key.number, 102);
+        assert!(
+            state
+                .ui
+                .ui_events
+                .iter()
+                .any(|event| matches!(event, UiEvent::ScrollTo { tab: "mine", .. }))
+        );
+        send(&mut state, KeyCode::Up);
+        assert_eq!(sidebar(&state).unwrap().key.number, 103);
+        send(&mut state, KeyCode::Esc);
+        assert!(sidebar(&state).is_none());
+        assert_eq!(selected_number(&mut state), Some(103));
+    }
+
+    #[test]
+    fn the_summary_keeps_checks_and_falls_back_from_an_unavailable_pane() {
+        let mut state = mine_state(10);
+        key(&mut state, 'j');
+        let send = |state: &mut AppState, code| {
+            update(state, &Keymap::default(), press(code, KeyModifiers::NONE))
+        };
+        send(&mut state, KeyCode::Enter);
+        key(&mut state, '2');
+        send(&mut state, KeyCode::Down);
+        let popup = sidebar(&state).unwrap();
+        assert_eq!(popup.key.number, 102);
+        assert_eq!(PANES[popup.active].id(), "checks");
+        key(&mut state, '5');
+        send(&mut state, KeyCode::Down);
+        let popup = sidebar(&state).unwrap();
+        assert_eq!(popup.key.number, 101);
+        assert_eq!(PANES[popup.active].id(), "stack");
+        send(&mut state, KeyCode::Down);
+        let popup = sidebar(&state).unwrap();
+        assert_eq!(popup.key.number, 7);
+        assert_eq!(PANES[popup.active].id(), "description");
+    }
+
+    #[test]
+    fn list_arrows_stop_at_the_edges_without_resetting_the_summary() {
+        let panes = fake_panes();
+        let mut state = mine_state(10);
+        let send = |state: &mut AppState, code| {
+            update_full(
+                state,
+                &Keymap::default(),
+                &TABS,
+                &panes,
+                &REGISTRY,
+                press(code, KeyModifiers::NONE),
+            )
+        };
+        send(&mut state, KeyCode::Enter);
+        send(&mut state, KeyCode::Char('j'));
+        let generation = state.generation;
+        assert!(send(&mut state, KeyCode::Up).is_empty());
+        assert_eq!(state.generation, generation);
+        assert_eq!(sidebar(&state).unwrap().panes[0].cursor, 1);
+        for number in [103, 102, 101, 7] {
+            send(&mut state, KeyCode::Down);
+            assert_eq!(sidebar(&state).unwrap().key.number, number);
+        }
+        send(&mut state, KeyCode::Char('j'));
+        let generation = state.generation;
+        assert!(send(&mut state, KeyCode::Down).is_empty());
+        assert_eq!(state.generation, generation);
+        assert_eq!(sidebar(&state).unwrap().panes[0].cursor, 1);
+    }
+
+    #[test]
+    fn list_arrows_use_the_filtered_order_with_and_without_the_summary() {
+        let mut state = mine_state(10);
+        key(&mut state, '/');
+        typed(&mut state, "^feat");
+        let send = |state: &mut AppState, code| {
+            update(state, &Keymap::default(), press(code, KeyModifiers::NONE))
+        };
+        send(&mut state, KeyCode::Enter);
+        assert_eq!(selected_number(&mut state), Some(103));
+        send(&mut state, KeyCode::Down);
+        assert_eq!(selected_number(&mut state), Some(102));
+        send(&mut state, KeyCode::Up);
+        assert_eq!(selected_number(&mut state), Some(103));
+        send(&mut state, KeyCode::Enter);
+        send(&mut state, KeyCode::Down);
+        send(&mut state, KeyCode::Down);
+        assert_eq!(sidebar(&state).unwrap().key.number, 101);
+        assert!(send(&mut state, KeyCode::Down).is_empty());
+        assert_eq!(sidebar(&state).unwrap().key.number, 101);
+    }
+
+    #[test]
+    fn list_bindings_can_change_or_be_removed_without_changing_pane_bindings() {
+        let panes = fake_panes();
+        let mut state = mine_state(10);
+        let keymap = Keymap::new(&std::collections::BTreeMap::from([
+            ("list_down".into(), "ctrl-n".into()),
+            ("list_up".into(), "ctrl-p".into()),
+            ("down".into(), "j down".into()),
+        ]))
+        .unwrap();
+        let send = |state: &mut AppState, code, mods| {
+            update_full(state, &keymap, &TABS, &panes, &REGISTRY, press(code, mods))
+        };
+        send(&mut state, KeyCode::Enter, KeyModifiers::NONE);
+        send(&mut state, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(sidebar(&state).unwrap().panes[0].cursor, 1);
+        assert_eq!(selected_number(&mut state), Some(99));
+        send(&mut state, KeyCode::Char('n'), KeyModifiers::CONTROL);
+        assert_eq!(sidebar(&state).unwrap().key.number, 103);
+        send(&mut state, KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert_eq!(sidebar(&state).unwrap().key.number, 99);
+        let keymap = Keymap::new(&std::collections::BTreeMap::from([
+            ("list_down".into(), String::new()),
+            ("list_up".into(), String::new()),
+        ]))
+        .unwrap();
+        for code in [KeyCode::Down, KeyCode::Up] {
+            assert!(
+                update_full(
+                    &mut state,
+                    &keymap,
+                    &TABS,
+                    &panes,
+                    &REGISTRY,
+                    press(code, KeyModifiers::NONE)
+                )
+                .is_empty()
+            );
+        }
+        assert_eq!(sidebar(&state).unwrap().key.number, 99);
+    }
+
+    #[test]
+    fn list_arrows_do_not_change_the_target_of_a_dialog() {
+        let spec = ConfirmSpec {
+            title: "merge #102?".into(),
+            lines: Vec::new(),
+            danger: true,
+        };
+        let mut merge = FakeAction::new("merge", 'm');
+        merge.prepare = Prepare::Confirm(spec);
+        let actions = fake(merge);
+        let mut state = sidebar_state(102, &actions);
+        act_menu(&mut state, &actions, KeyCode::Char('m'));
+        for code in [KeyCode::Up, KeyCode::Down] {
+            assert!(act(&mut state, &actions, code).is_empty());
+            assert_eq!(selected_number(&mut state), Some(102));
+        }
+        let cmds = act(&mut state, &actions, KeyCode::Char('y'));
+        assert!(matches!(cmds.as_slice(), [Cmd::RunAction { selection, .. }]
+            if selection.target.key() == TargetKey::Pr(testdata::pr_key("chaoshub", 102))));
+        act(&mut state, &actions, KeyCode::Char('?'));
+        assert!(act(&mut state, &actions, KeyCode::Down).is_empty());
+        assert_eq!(selected_number(&mut state), Some(102));
+    }
+
+    #[test]
+    fn the_standalone_pr_view_does_not_move_an_outer_list() {
+        let mut state = pinned(testdata::pr_key("chaoshub", 102));
+        let before = state.ui.tabs[0].selected.clone();
+        for code in [KeyCode::Up, KeyCode::Down] {
+            assert!(
+                update(
+                    &mut state,
+                    &Keymap::default(),
+                    press(code, KeyModifiers::NONE)
+                )
+                .is_empty()
+            );
+        }
+        assert_eq!(state.ui.tabs[0].selected, before);
+        assert_eq!(sidebar(&state).unwrap().key.number, 102);
+    }
+
+    #[test]
+    fn the_new_summary_loads_local_results_for_the_selected_pr() {
+        let mut state = sidebar_state(99, &REGISTRY);
+        let next = testdata::pr_key("chaoshub", 103);
+        state.data.repos.insert(
+            next.repo.clone(),
+            Repo {
+                key: next.repo.clone(),
+                path: Some("/code/chaoshub".into()),
+                settings: None,
+            },
+        );
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Down, KeyModifiers::NONE),
+        );
+        assert_eq!(sidebar(&state).unwrap().key, next);
+        assert!(cmds.contains(&Cmd::LoadAgent(next.clone())));
+        assert!(cmds.contains(&Cmd::LoadCodeview(next.clone())));
+        assert!(
+            cmds.iter()
+                .any(|cmd| matches!(cmd, Cmd::SetInterest(interest)
+            if interest.selected.as_ref().is_some_and(|pr| pr.key == next)))
+        );
     }
 
     #[test]

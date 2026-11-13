@@ -665,6 +665,7 @@ for `[keys]`.
 | `tab_1` to `tab_9` | `1` to `9` | Selects a tab. In the pull request detail, the number keys select a pane. |
 | `next_tab` | `tab` | The next tab. In the detail, the next pane. |
 | `down`, `up` | `j`, `k` | Moves the cursor. |
+| `list_down`, `list_up` | `down`, `up` | Selects the next or previous PR in the outer list. An open sidebar follows the selection. |
 | `top`, `bottom` | `g`, `G` | Moves to the first or the last row. |
 | `page_down`, `page_up` | `ctrl-d`, `ctrl-u` | Moves half a page. In the pull request detail, moves half the height of the active pane. |
 | `scroll_down`, `scroll_up` | `D`, `U` | In the pull request detail, scrolls the active pane down or up by half its height. The cursor stays. When the cursor leaves the pane, it moves to the first visible row. |
@@ -702,6 +703,16 @@ Outside Rex, `enter` opens the sidebar. The sidebar slides in from the
 right and covers 80% of the width, over the list rows. The tab bar, the
 key hint bar and the status bar stay visible. `esc` or `q` closes the
 sidebar.
+
+With the sidebar open, the Down and Up arrow keys select the next or
+previous PR in the outer list. The sidebar follows the selection and
+keeps the active pane, such as Checks. If that pane does not apply to
+the new PR, it switches to Description. The cursor and scroll position
+reset for each new PR. The arrows stop at the first and last PR in the
+current list, including its active filters. They do not move the outer
+list while a dialog is on top. The `list_down` and `list_up` bindings
+in `[keys]` change these controls. The standalone `chaoshub pr` view has
+no outer list.
 
 The detail has five panes. The number keys select a pane, and `tab`
 selects the next pane:

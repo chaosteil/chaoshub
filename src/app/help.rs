@@ -18,6 +18,7 @@ use crate::domain::pr::{CiState, ReviewDecision};
 const APP_KEYS: &[(&[&str], &str)] = &[
     (&["next_tab"], "next tab"),
     (&["down", "up"], "down, up"),
+    (&["list_down", "list_up"], "next PR, previous PR"),
     (&["top", "bottom"], "top, bottom"),
     (&["page_down", "page_up"], "half a page down, up"),
     (&["scroll_down", "scroll_up"], "scroll down, up"),
