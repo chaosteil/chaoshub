@@ -111,29 +111,3 @@ nfpms:
         packager: rpm
       - src: README.md
         dst: /usr/share/doc/chaoshub/README.md
-
-aurs:
-  - name: chaoshub-bin
-    homepage: https://github.com/chaosteil/chaoshub
-    description: A terminal app that tracks your GitHub pull requests, with jj or git
-    maintainers:
-      - Dominykas Djacenko <chaosteil at gmail dot com>
-    license: MIT OR Apache-2.0
-    private_key: "{{ .Env.AUR_KEY }}"
-    git_url: ssh://aur@aur.archlinux.org/chaoshub-bin.git
-    # A prerelease tag (for example v0.2.0-rc1) does not change the AUR.
-    skip_upload: auto
-    provides:
-      - chaoshub
-    conflicts:
-      - chaoshub
-    depends:
-      - git
-      - github-cli
-    optdepends:
-      - "jujutsu: read local changes and workspaces of jj repos"
-      - "neovim: review pull requests with the codeview plugin"
-    package: |-
-      install -Dm755 "./chaoshub" "${pkgdir}/usr/bin/chaoshub"
-      install -Dm644 "./LICENSE-MIT" "${pkgdir}/usr/share/licenses/chaoshub/LICENSE-MIT"
-      install -Dm644 "./LICENSE-APACHE" "${pkgdir}/usr/share/licenses/chaoshub/LICENSE-APACHE"

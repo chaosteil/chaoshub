@@ -27,34 +27,6 @@ default `GITHUB_TOKEN` of the workflow cannot write to another repo
    gh secret set HOMEBREW_TAP_TOKEN --repo chaosteil/chaoshub
    ```
 
-### The AUR key: `AUR_KEY`
-
-GoReleaser pushes the `PKGBUILD` of `chaoshub-bin` to the AUR (Arch User
-Repository) with SSH. The key must not have a passphrase
-([GoReleaser](https://goreleaser.com/customization/aur/)).
-
-1. If you do not have an AUR account, make one at
-   <https://aur.archlinux.org/register>.
-2. Make a new SSH key without a passphrase:
-
-   ```sh
-   ssh-keygen -t ed25519 -N '' -C 'chaoshub release' -f ~/.ssh/aur_chaoshub
-   ```
-
-3. Add the public key `~/.ssh/aur_chaoshub.pub` to "My Account" on the
-   AUR ([AUR submission guidelines](https://wiki.archlinux.org/title/AUR_submission_guidelines#Authentication)).
-4. Save the private key as a secret of chaoshub:
-
-   ```sh
-   gh secret set AUR_KEY --repo chaosteil/chaoshub < ~/.ssh/aur_chaoshub
-   ```
-
-The first push to `ssh://aur@aur.archlinux.org/chaoshub-bin.git` makes
-the package `chaoshub-bin` on the AUR
-([AUR submission guidelines](https://wiki.archlinux.org/title/AUR_submission_guidelines#Creating_package_repositories)).
-Thus the first release makes the package. The package belongs to the
-AUR account of the SSH key.
-
 ### crates.io
 
 The release workflow publishes to crates.io with Trusted Publishing. With
@@ -144,13 +116,12 @@ The tag starts three jobs:
   `x86_64-apple-darwin` and `aarch64-apple-darwin`. Then it makes the
   GitHub release with the archives, the `.deb` and `.rpm` packages,
   `checksums.txt` and the changelog. Then it pushes
-  `Casks/chaoshub.rb` to `chaosteil/homebrew-tap` and the `PKGBUILD` to
-  the AUR package `chaoshub-bin`.
+  `Casks/chaoshub.rb` to `chaosteil/homebrew-tap`.
 - `crates-io` starts after `checks`. It publishes the crate to crates.io,
   if crates.io does not have the version yet.
 
 A tag with a prerelease part, for example `v0.2.0-rc.1`, makes a GitHub
-prerelease. This tag does not change the Homebrew tap and the AUR. The
+prerelease. This tag does not change the Homebrew tap. The
 `crates-io` job publishes a prerelease version too.
 
 ## Make sure that the release works
@@ -175,11 +146,9 @@ prerelease. This tag does not change the Homebrew tap and the AUR. The
    chaoshub --version
    ```
 
-4. Make sure that <https://aur.archlinux.org/packages/chaoshub-bin> shows
-   the new version.
-5. Make sure that <https://crates.io/crates/chaoshub> shows the new
+4. Make sure that <https://crates.io/crates/chaoshub> shows the new
    version.
-6. Make sure that cargo-binstall finds the archive:
+5. Make sure that cargo-binstall finds the archive:
 
    ```sh
    cargo binstall --dry-run chaoshub

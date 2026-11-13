@@ -64,7 +64,7 @@ chaoshub runs on macOS and Linux. It does not run on Windows, because it
 uses Unix-only APIs. Each method below installs the `chaoshub` binary.
 You must also install the programs of [Requirements](#requirements):
 `git` and `gh` are necessary, and jj, nvim and Rex are optional. The
-Homebrew cask, the AUR package and the `.deb` and `.rpm` packages also
+Homebrew cask and the `.deb` and `.rpm` packages also
 install `git` and `gh`.
 
 The releases are on the
@@ -109,18 +109,6 @@ cargo binstall chaoshub
 
 [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) downloads
 the prebuilt archive of the GitHub release, and does not compile.
-
-### Arch Linux (AUR)
-
-Install [`chaoshub-bin`](https://aur.archlinux.org/packages/chaoshub-bin)
-with an AUR helper, for example paru:
-
-```sh
-paru -S chaoshub-bin
-```
-
-The package depends on `git` and `github-cli`. `jujutsu` and `neovim`
-are optional dependencies.
 
 ### Nix
 
