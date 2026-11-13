@@ -1,0 +1,78 @@
+# A tag v* starts a release. See RELEASING.md.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  goreleaser:
+    needs: checks
+    runs-on: ubuntu-latest
+    # The image has rustup, cargo-zigbuild, zig and the macOS SDK.
+    container:
+      image: ghcr.io/goreleaser/goreleaser-rust-cross:v2.13.3
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Mark the checkout as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # With no arguments, rustup installs the toolchain of
+      # rust-toolchain.toml.
+      - name: Install the Rust toolchain
+        run: rustup toolchain install
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.20.2
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+
+  crates-io:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the Rust toolchain
+        run: rustup toolchain install
+      # The owner publishes the first version by hand. If crates.io has the
+      # version of Cargo.toml, this job does nothing.
+      - name: Look for the version on crates.io
+        id: version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --user-agent 'chaoshub release workflow (https://github.com/chaosteil/chaoshub)' \
+            "https://crates.io/api/v1/crates/chaoshub/$version")
+          case "$status" in
+            200) echo "chaoshub $version is on crates.io: no publish."; echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+            404) echo "chaoshub $version is not on crates.io: publish."; echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "crates.io sent HTTP $status."; exit 1 ;;
+          esac
+      - uses: rust-lang/crates-io-auth-action@v1
+        if: steps.version.outputs.publish == 'true'
+        id: auth
+      - name: Publish to crates.io
+        if: steps.version.outputs.publish == 'true'
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
