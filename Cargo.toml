@@ -6,7 +6,6 @@ rust-version = "1.91"
 description = "A terminal app that tracks your GitHub pull requests, with jj or git"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/chaosteil/chaoshub"
-homepage = "https://github.com/chaosteil/chaoshub"
 readme = "README.md"
 keywords = ["github", "pull-request", "tui", "jujutsu", "git"]
 categories = ["command-line-utilities", "development-tools"]

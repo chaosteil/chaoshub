@@ -52,7 +52,9 @@
           # At run time, chaoshub needs git and gh (logged in) on the PATH.
           # jj and nvim are optional. See the README.
           meta = {
-            inherit (cargoToml.package) description homepage;
+            inherit (cargoToml.package) description;
+            # Cargo.toml has no homepage field: the repository is the homepage.
+            homepage = cargoToml.package.repository;
             license = with lib.licenses; [
               mit
               asl20
