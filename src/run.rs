@@ -3344,6 +3344,12 @@ mod tests {
         };
         let reader = Reader::spawn_with(tx, source).unwrap();
         assert!(matches!(rx.blocking_recv(), Some(Msg::Key(_))));
+        // The pause can come before the next poll of the reader. Thus
+        // wait for one poll after the key, at most 1 s.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while timeouts.lock().unwrap().len() < 2 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
         assert!(reader.pause(), "the reader confirms the pause");
         reader.stop();
         let timeouts = timeouts.lock().unwrap();
