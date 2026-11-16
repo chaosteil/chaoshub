@@ -31,6 +31,8 @@ use crate::bus::{
 use crate::github::GithubClient;
 use crate::vcs::lock::RepoLocks;
 
+pub(crate) use merge::STACK_NOT_LOADED;
+
 /// What a running action can use. There is no launcher: panes come only
 /// from `Prepare::Terminal`.
 #[derive(Clone)]

@@ -4,6 +4,10 @@
 //! A merge of the pull request at position k of a stack includes the
 //! positions 1 to k, so the blockers and the confirm lines cover every
 //! entry up to k. A merged entry needs no merge, so the merge skips it.
+//! The stack of each pull request names the merged positions, so a
+//! merged entry does not have to be loaded. When the entries below the
+//! lowest open entry merged, and GitHub did not move that entry to the
+//! stack base yet, the merge waits for the move first.
 //! The stack strategy picks how: `Atomic` sends one
 //! request for position k, and GitHub merges the entries below it with
 //! the default squash message of the repo. `Sequential` merges position 1
@@ -43,6 +47,10 @@ pub(crate) const ID: &str = "merge";
 /// The id of the stack merge action.
 pub(crate) const STACK_ID: &str = "merge_stack";
 
+/// The reason of a merge that needs an entry of the stack that is not
+/// loaded. The app then refreshes the stack, so the next try can work.
+pub(crate) const STACK_NOT_LOADED: &str = "stack not loaded yet, refreshing the stack";
+
 /// The merge action.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MergeAction;
@@ -57,7 +65,7 @@ impl MergeAction {
             return Applicability::Disabled("invalid [actions.merge] configuration");
         }
         let Some(entries) = merged_entries(pr, stack) else {
-            return Applicability::Disabled("stack not loaded");
+            return Applicability::Disabled(STACK_NOT_LOADED);
         };
         if merge_blockers(&entries).hard.is_empty() {
             Applicability::Enabled
@@ -179,7 +187,7 @@ impl Action for MergeStackAction {
     fn applies(&self, sel: &Selection) -> Applicability {
         match top_selection(sel) {
             Top::NoStack => Applicability::Hidden,
-            Top::NotLoaded => Applicability::Disabled("stack not loaded"),
+            Top::NotLoaded => Applicability::Disabled(STACK_NOT_LOADED),
             Top::Loaded(top) => MergeAction::applies(&top),
         }
     }
@@ -208,7 +216,7 @@ impl Action for MergeStackAction {
     ) -> BoxFuture<'static, Result<String, String>> {
         let key = sel.target.key();
         let Top::Loaded(top) = top_selection(&sel) else {
-            return Box::pin(async { Err("stack not loaded".to_owned()) });
+            return Box::pin(async { Err(STACK_NOT_LOADED.to_owned()) });
         };
         Box::pin(merge(*top, key, STACK_ID, svc, SCHEDULE, RETARGET))
     }
@@ -321,6 +329,23 @@ async fn merge(
             .sequence(&entries, &stack_ref.base_ref, repo, &sel.me)
             .await;
     }
+    // The entries below the lowest entry merged. When GitHub did not move
+    // that entry to the base of the stack yet, a merge now goes into the
+    // branch of a merged entry. Thus wait for the move first.
+    let mut target = pr.clone();
+    if let Some(stack_ref) = &pr.head.value.stack
+        && let Some(lowest) = entries.first()
+        && lowest.head.value.base_ref != stack_ref.base_ref
+    {
+        let step = MergeStep::Retarget {
+            number: lowest.key.number,
+        };
+        run.send(ActionEvent::MergeStep(step)).await;
+        let fresh = run.retargeted(lowest, &stack_ref.base_ref, &sel.me).await?;
+        if fresh.key == pr.key {
+            target = fresh;
+        }
+    }
     let number = pr.key.number;
     let step = MergeStep::Entry {
         number,
@@ -328,7 +353,7 @@ async fn merge(
         total: 1,
     };
     run.send(ActionEvent::MergeStep(step)).await;
-    match run.merge_one(pr).await? {
+    match run.merge_one(&target).await? {
         Final::Merged => Ok(run.fetch(repo, format!("merged #{number}")).await),
         Final::Enqueued => Ok(format!("#{number} in merge queue")),
     }
@@ -599,11 +624,15 @@ fn strategy(pr: &PullRequest, repo: &Repo, settings: &RepoMerge) -> StackStrateg
 /// The pull requests that a merge of `pr` includes: the stack entries
 /// with a position up to the position of `pr`, position 1 first, or `pr`
 /// alone without a stack. A merged entry below `pr` needs no merge, so
-/// it is not in the result. When the entries below an open entry merge,
-/// GitHub moves the open entry to the base of the stack. Thus, when the
-/// lowest loaded open entry has the base of the stack as its base, the
-/// entries below it merged, and they do not have to be loaded. `None`
-/// when an entry that the merge needs is not loaded.
+/// it is not in the result, and it does not have to be loaded. An entry
+/// is merged when its loaded pull request is merged, or when the stack
+/// of `pr` names its position as merged. The second source is as new as
+/// `pr`, and it covers the entries that are not loaded, for example in
+/// the detail pane, which reads only the open pull requests from the
+/// cache. When the lowest loaded open entry has the base of the stack as
+/// its base, the entries below it are also merged: GitHub moves an entry
+/// to the base when the entries below it merge. `None` when an entry
+/// that the merge needs is not loaded.
 fn merged_entries(pr: &PullRequest, stack: &[PullRequest]) -> Option<Vec<PullRequest>> {
     let Some(stack_ref) = &pr.head.value.stack else {
         return Some(vec![pr.clone()]);
@@ -614,10 +643,15 @@ fn merged_entries(pr: &PullRequest, stack: &[PullRequest]) -> Option<Vec<PullReq
         .filter(|entry| position(entry).is_some_and(|p| p <= top))
         .collect();
     loaded.sort_by_key(|entry| position(entry));
+    let known_merged = |p: u32| stack_ref.merged.contains(&p);
     let open: Vec<&PullRequest> = loaded
         .iter()
         .copied()
-        .filter(|entry| entry.head.value.state != PrState::Merged || entry.key == pr.key)
+        .filter(|entry| {
+            entry.key == pr.key
+                || (entry.head.value.state != PrState::Merged
+                    && !position(entry).is_some_and(known_merged))
+        })
         .collect();
     let from = match open.first() {
         Some(first) if first.head.value.base_ref == stack_ref.base_ref => {
@@ -625,12 +659,13 @@ fn merged_entries(pr: &PullRequest, stack: &[PullRequest]) -> Option<Vec<PullReq
         }
         _ => 1,
     };
-    let from_bottom = |entry: &PullRequest| position(entry).is_some_and(|p| p >= from);
-    let wanted = usize::try_from(top.saturating_sub(from) + 1).unwrap_or(usize::MAX);
-    let have = loaded.iter().filter(|entry| from_bottom(entry)).count();
-    (have >= wanted).then(|| {
+    let needed = (from..=top).filter(|&p| !known_merged(p));
+    let missing = needed
+        .filter(|&p| !loaded.iter().any(|entry| position(entry) == Some(p)))
+        .count();
+    (missing == 0).then(|| {
         open.into_iter()
-            .filter(|entry| from_bottom(entry))
+            .filter(|entry| position(entry).is_some_and(|p| p >= from))
             .cloned()
             .collect()
     })
@@ -981,7 +1016,7 @@ mod tests {
             (
                 "stack not loaded",
                 select(entry(3, 3), vec![entry(1, 1), entry(3, 3)], None),
-                "stack not loaded",
+                STACK_NOT_LOADED,
             ),
             (
                 "draft below in the stack",
@@ -1052,7 +1087,7 @@ mod tests {
             (
                 "top entry not loaded",
                 select(entry(1, 1), vec![entry(1, 1), entry(2, 2)], None),
-                Applicability::Disabled("stack not loaded"),
+                Applicability::Disabled(STACK_NOT_LOADED),
             ),
             (
                 "draft at the top",
@@ -1750,9 +1785,41 @@ mod tests {
         let sel = select(stale[1].clone(), stale[1..].to_vec(), None);
         assert_eq!(
             MergeAction::applies(&sel),
-            Applicability::Disabled("stack not loaded"),
+            Applicability::Disabled(STACK_NOT_LOADED),
             "an entry below that is not loaded and not known as merged"
         );
+    }
+
+    #[test]
+    fn the_merged_positions_of_the_stack_replace_the_missing_entries() {
+        let only_2 = confirm(
+            "merge #2?",
+            &["  2 #2 Change 2  CI passed, approved", "method: squash"],
+        );
+        let with_merged = |stack: &mut Vec<PullRequest>| {
+            for entry in stack.iter_mut() {
+                entry.head.value.stack.as_mut().unwrap().merged = vec![1];
+            }
+        };
+        let mut missing = after_bottom_merge(false)[1..].to_vec();
+        with_merged(&mut missing);
+        let mut stale = after_bottom_merge(false);
+        with_merged(&mut stale);
+        stale[0].head.value.state = PrState::Open;
+        let cases = [
+            (
+                "the merged entry is not loaded and #2 did not move",
+                select(missing[0].clone(), missing, None),
+            ),
+            (
+                "an old cache row says that the merged entry is open",
+                select(stale[1].clone(), stale, None),
+            ),
+        ];
+        for (name, sel) in cases {
+            assert_eq!(MergeAction::applies(&sel), Applicability::Enabled, "{name}");
+            assert_eq!(MergeAction::prepare(&sel), only_2, "{name}");
+        }
     }
 
     #[tokio::test]
@@ -1785,5 +1852,39 @@ mod tests {
                 ActionEvent::Progress("merged #3 (2 of 2)".into()),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn a_single_merge_waits_until_the_entry_moves_to_the_base() {
+        let server = wiremock::MockServer::start().await;
+        let merged = serde_json::json!({ "status": "merged", "details": { "sha": "sha2" } });
+        mount_merge(&server, 1, 200, merged.clone(), 0).await;
+        mount_by_id(&server, 2, "me/1", Some(1)).await;
+        mount_by_id(&server, 2, "main", None).await;
+        mount_merge(&server, 2, 200, merged, 1).await;
+        let mut stack = after_bottom_merge(false)[1..].to_vec();
+        for entry in &mut stack {
+            entry.head.value.stack.as_mut().unwrap().merged = vec![1];
+        }
+        let sel = select(stack[0].clone(), stack, None);
+        assert_eq!(MergeAction::applies(&sel), Applicability::Enabled);
+
+        let (result, events) = run_selection(&server, sel).await;
+
+        assert_eq!(result, Ok("merged #2".to_owned()));
+        assert_eq!(
+            events,
+            [
+                retarget(2),
+                step(2, 1, 1),
+                ActionEvent::MergeStatus(MergeProgress::Merged { sha: "sha2".into() }),
+            ]
+        );
+        let titles: Vec<_> = merge_bodies(&server)
+            .await
+            .iter()
+            .map(|body| body["commit_title"].clone())
+            .collect();
+        assert_eq!(titles, ["Fresh 2 (#2)"], "the merge uses the moved entry");
     }
 }

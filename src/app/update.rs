@@ -619,6 +619,15 @@ fn run_action(
         Applicability::Hidden => return None,
         Applicability::Disabled(reason) => {
             state.message(reason, CellStyle::Warn, INFO_TTL);
+            // The cached stack can be old, for example after a restart.
+            // A refresh by id gives the merged entries of the stack.
+            if reason == crate::actions::STACK_NOT_LOADED {
+                let TargetKey::Pr(key) = selection.target.key();
+                let refs = stack_group_refs(&state.data, &key);
+                if !refs.is_empty() {
+                    return Some(vec![Cmd::RefreshPr(refs)]);
+                }
+            }
             return Some(Vec::new());
         }
     }
@@ -7202,6 +7211,145 @@ mod tests {
             vec![Cmd::Quit],
             "the pinned popup is on top again"
         );
+    }
+
+    /// The cache after the merge of #101, the bottom entry of the stack
+    /// `S_1`. The cache gives only open pull requests, so #101 is not in
+    /// it. GitHub did not move #102 to `main` yet: its base is still the
+    /// branch of #101. `merged` is the merged positions that GitHub gave
+    /// with #102 and #103. A cache row of an older version has none.
+    fn after_bottom_merge(merged: &[u32]) -> crate::store::Snapshot {
+        let mut next = testdata::stacked(102, 2, "feat(app): checks pane");
+        next.head.value.base_ref = "chaosteil/101".into();
+        next.head.value.mergeable = crate::domain::pr::Mergeable::Mergeable;
+        next.head.value.merge_state = crate::domain::pr::MergeStateStatus::Clean;
+        let mut top = testdata::stacked(103, 3, "feat(ui): popup frame with pane tabs");
+        top.head.value.base_ref = "chaosteil/102".into();
+        let mut prs = vec![next, top];
+        for pr in &mut prs {
+            pr.head.value.stack.as_mut().unwrap().merged = merged.to_vec();
+        }
+        crate::store::Snapshot {
+            prs: prs
+                .into_iter()
+                .map(|pr| (crate::bus::Scope::Mine, pr))
+                .collect(),
+            synced_at: Some(test_time()),
+            ..crate::store::Snapshot::default()
+        }
+    }
+
+    /// The lines of the confirm popup on top, or `None` without one.
+    fn confirm_lines(state: &AppState) -> Option<Vec<String>> {
+        match state.ui.overlays.iter().rev().find(|o| !o.closing) {
+            Some(Overlay {
+                state: OverlayState::Confirm { spec, .. },
+                ..
+            }) => Some(spec.lines.clone()),
+            _ => None,
+        }
+    }
+
+    /// The confirm lines of the merge of #102 alone.
+    fn merge_102_lines() -> Vec<String> {
+        vec![
+            "  2 #102 feat(app): checks pane  no CI, no review needed".to_owned(),
+            "method: squash".to_owned(),
+        ]
+    }
+
+    /// The real merge action from the actions menu, `space` then `m`, in
+    /// the list or in the popup.
+    fn press_merge(state: &mut AppState) -> Vec<Cmd> {
+        let keymap = Keymap::default();
+        let menu = update(
+            state,
+            &keymap,
+            press(KeyCode::Char(' '), KeyModifiers::NONE),
+        );
+        assert_eq!(menu, vec![]);
+        update(
+            state,
+            &keymap,
+            press(KeyCode::Char('m'), KeyModifiers::NONE),
+        )
+    }
+
+    /// The list of `snapshot` with the cursor on #102.
+    fn list_on_102(snapshot: crate::store::Snapshot) -> AppState {
+        let mut state = AppState::new(SIZE);
+        state.load(snapshot, Vec::new());
+        state.data.session.login = Some("chaosteil".into());
+        state.ui.tabs[0].selected = Some(pr_row(102)(&state.data));
+        state.bump();
+        state
+    }
+
+    /// The detail pane (`chaoshub pr`) of #102 on `snapshot`.
+    fn pinned_on_102(snapshot: crate::store::Snapshot) -> AppState {
+        let mut state = AppState::new(SIZE);
+        state.load(snapshot, Vec::new());
+        state.data.session.login = Some("chaosteil".into());
+        pin(&mut state, testdata::pr_key("chaoshub", 102));
+        state
+    }
+
+    #[test]
+    fn the_next_entry_merges_from_the_list_after_the_bottom_merged() {
+        let mut state = list_on_102(after_bottom_merge(&[1]));
+        assert_eq!(press_merge(&mut state), vec![]);
+        assert_eq!(confirm_lines(&state), Some(merge_102_lines()));
+    }
+
+    #[test]
+    fn the_next_entry_merges_from_the_detail_pane_after_the_bottom_merged() {
+        let mut state = pinned_on_102(after_bottom_merge(&[1]));
+        assert_eq!(press_merge(&mut state), vec![]);
+        assert_eq!(confirm_lines(&state), Some(merge_102_lines()));
+    }
+
+    #[test]
+    fn an_old_cache_row_refreshes_the_stack_and_then_merges() {
+        for pinned in [false, true] {
+            let snapshot = after_bottom_merge(&[]);
+            let mut state = if pinned {
+                pinned_on_102(snapshot)
+            } else {
+                list_on_102(snapshot)
+            };
+            let fresh = |number: u64| {
+                let mut pr = state.data.prs[&testdata::pr_key("chaoshub", number)].clone();
+                pr.head.observed_at += TimeDelta::seconds(1);
+                pr.head.value.stack.as_mut().unwrap().merged = vec![1];
+                pr
+            };
+            let fresh_102 = fresh(102);
+            let refs = vec![pr_ref(&fresh_102), pr_ref(&fresh(103))];
+
+            assert_eq!(
+                press_merge(&mut state),
+                vec![Cmd::RefreshPr(refs)],
+                "pinned: {pinned}"
+            );
+            assert_eq!(
+                state.ui.status.as_ref().map(|msg| msg.text.as_str()),
+                Some(crate::actions::STACK_NOT_LOADED),
+                "pinned: {pinned}"
+            );
+            assert_eq!(confirm_lines(&state), None, "pinned: {pinned}");
+
+            update(
+                &mut state,
+                &Keymap::default(),
+                Msg::PrRefreshed(Box::new(fresh_102)),
+            );
+            assert_eq!(press_merge(&mut state), vec![], "pinned: {pinned}");
+            assert_eq!(
+                confirm_lines(&state),
+                Some(merge_102_lines()),
+                "pinned: {pinned}"
+            );
+        }
     }
 
     /// The repos `chaoshub` and `codeview`, both with a path.

@@ -1034,9 +1034,16 @@ the selected row or of the detail. These bindings have no default.
 | `codeview_send` | `r` | Opens the Review popup. There you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). |
 
 A merge of a stacked pull request includes every entry up to it. A
-merged entry needs no merge, so the merge skips it. To merge every entry, use `merge_stack` (`s`) from any entry. The
-`[merge] stack` key sets how chaoshub sends the merge. In `auto` mode,
-chaoshub reads the squash defaults of the repo. When they are the PR
+merged entry needs no merge, so the merge skips it. GitHub tells
+chaoshub which entries merged with each pull request of the stack, so a
+merged entry does not have to be in the cache. When an entry is not
+loaded, the status line shows "stack not loaded yet, refreshing the
+stack", and chaoshub reads the stack again. Try the merge again after
+the refresh. When the entries below an entry merged, but GitHub did not
+move the entry to the base of the stack yet, the merge waits for the
+move, up to 2 min. To merge every entry, use `merge_stack` (`s`) from
+any entry. The `[merge] stack` key sets how chaoshub sends the merge.
+In `auto` mode, chaoshub reads the squash defaults of the repo. When they are the PR
 title and the PR body, or when the method is `merge` or `rebase`,
 chaoshub sends one atomic request. Else chaoshub merges each entry
 itself, bottom first, each with its own title and body. Thus every
