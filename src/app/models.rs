@@ -166,6 +166,37 @@ pub(crate) enum CellStyle {
     /// The name of an open file above its diff. Its row gets the surface
     /// band.
     DiffFile,
+    /// A code token of a diff line: its role and the change of its line.
+    Code(Syntax, Change),
+}
+
+/// The role of a code token. The palette gives each role a color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Syntax {
+    /// A token without a role, in the text color.
+    Plain,
+    Comment,
+    String,
+    /// A number or a constant of the language, as `true`.
+    Number,
+    /// Another constant, as `MAX_LEN`.
+    Constant,
+    Keyword,
+    Operator,
+    Function,
+    Type,
+    Namespace,
+    Variable,
+    Parameter,
+    Punctuation,
+}
+
+/// The change of a diff line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Change {
+    Context,
+    Added,
+    Removed,
 }
 
 /// The color of a badge.

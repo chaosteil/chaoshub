@@ -3,7 +3,7 @@
 
 use ratatui::style::Color;
 
-use super::Palette;
+use super::{Palette, SyntaxColors};
 
 impl Palette {
     /// The Pierre palette, from `pierre-theme.nvim`.
@@ -33,6 +33,21 @@ impl Palette {
             diff_hunk_bg: Color::Rgb(0x0a, 0x1d, 0x21),
             // The line number color of the Pierre theme.
             diff_gutter: Color::Rgb(0x73, 0x73, 0x73),
+            // The token colors of the `pierre-dark` theme.
+            syntax: SyntaxColors {
+                comment: Color::Rgb(0x73, 0x73, 0x73),
+                string: Color::Rgb(0x5e, 0xcc, 0x71),
+                number: Color::Rgb(0x68, 0xcd, 0xf2),
+                constant: Color::Rgb(0xff, 0xd4, 0x52),
+                keyword: Color::Rgb(0xff, 0x67, 0x8d),
+                operator: Color::Rgb(0x08, 0xc0, 0xef),
+                function: Color::Rgb(0x9d, 0x6a, 0xfb),
+                type_name: Color::Rgb(0xd5, 0x68, 0xea),
+                namespace: Color::Rgb(0xff, 0xab, 0x16),
+                variable: Color::Rgb(0xff, 0xa3, 0x59),
+                parameter: Color::Rgb(0xa3, 0xa3, 0xa3),
+                punctuation: Color::Rgb(0x63, 0x63, 0x63),
+            },
         }
     }
 
@@ -61,6 +76,20 @@ impl Palette {
             diff_hunk: Color::Cyan,
             diff_hunk_bg: Color::Black,
             diff_gutter: Color::DarkGray,
+            syntax: SyntaxColors {
+                comment: Color::DarkGray,
+                string: Color::Green,
+                number: Color::Cyan,
+                constant: Color::Yellow,
+                keyword: Color::LightRed,
+                operator: Color::Cyan,
+                function: Color::Magenta,
+                type_name: Color::LightMagenta,
+                namespace: Color::Yellow,
+                variable: Color::LightYellow,
+                parameter: Color::Gray,
+                punctuation: Color::DarkGray,
+            },
         }
     }
 }
@@ -194,6 +223,18 @@ mod tests {
             p.diff_hunk,
             p.diff_hunk_bg,
             p.diff_gutter,
+            p.syntax.comment,
+            p.syntax.string,
+            p.syntax.number,
+            p.syntax.constant,
+            p.syntax.keyword,
+            p.syntax.operator,
+            p.syntax.function,
+            p.syntax.type_name,
+            p.syntax.namespace,
+            p.syntax.variable,
+            p.syntax.parameter,
+            p.syntax.punctuation,
         ];
         assert!(
             all.iter()

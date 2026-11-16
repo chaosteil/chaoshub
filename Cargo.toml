@@ -57,6 +57,8 @@ rusqlite = { version = "0.41.1", features = ["bundled", "chrono"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 signal-hook = "0.3.18"
+# The pure-Rust regex engine, so the build needs no C library.
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
 tachyonfx = "0.25.2"
 textwrap = "0.16.4"
 thiserror = "2.0.21"

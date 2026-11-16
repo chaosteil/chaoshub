@@ -53,6 +53,28 @@ pub(crate) struct Palette {
     pub diff_hunk_bg: Color,
     /// The line numbers in the gutter of a diff.
     pub diff_gutter: Color,
+    /// The colors of the code tokens in a diff.
+    pub syntax: SyntaxColors,
+}
+
+/// The colors of the code tokens, one per token role. A token without a
+/// role has the `fg` color of the palette.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SyntaxColors {
+    pub comment: Color,
+    pub string: Color,
+    /// Numbers and the constants of the language, as `true`.
+    pub number: Color,
+    /// Other constants, as `MAX_LEN`.
+    pub constant: Color,
+    pub keyword: Color,
+    pub operator: Color,
+    pub function: Color,
+    pub type_name: Color,
+    pub namespace: Color,
+    pub variable: Color,
+    pub parameter: Color,
+    pub punctuation: Color,
 }
 
 /// The look of the frames, headers, separators, fills, selections and

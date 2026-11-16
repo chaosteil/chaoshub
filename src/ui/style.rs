@@ -3,7 +3,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::app::models::{Cell, CellStyle, Tone};
+use crate::app::models::{Cell, CellStyle, Change, Syntax, Tone};
 use crate::theme::Palette;
 
 /// The style of a cell. Only the foreground and the modifiers; the
@@ -30,6 +30,9 @@ pub(crate) fn cell_style(cell: CellStyle, palette: &Palette) -> Style {
             .bg(bg)
             .add_modifier(Modifier::BOLD);
     }
+    if let CellStyle::Code(syntax, change) = cell {
+        return Style::new().fg(code_fg(syntax, change, palette));
+    }
     let fg = match cell {
         CellStyle::Normal | CellStyle::Markdown | CellStyle::Html | CellStyle::DiffFile => {
             palette.fg
@@ -44,7 +47,9 @@ pub(crate) fn cell_style(cell: CellStyle, palette: &Palette) -> Style {
         CellStyle::DiffGutter => palette.diff_gutter,
         // The merge color is too dark for text on the background, so merge
         // text uses the lighter purple.
-        CellStyle::Merge | CellStyle::Badge(_) | CellStyle::MergeBadge(_) => palette.purple,
+        CellStyle::Merge | CellStyle::Badge(_) | CellStyle::MergeBadge(_) | CellStyle::Code(..) => {
+            palette.purple
+        }
     };
     let style = Style::new().fg(fg);
     // Danger and warn carry a state, so they stand out from plain text.
@@ -57,6 +62,33 @@ pub(crate) fn cell_style(cell: CellStyle, palette: &Palette) -> Style {
         style.add_modifier(Modifier::BOLD)
     } else {
         style
+    }
+}
+
+/// The color of a code token. Without a tint for its change, as on the
+/// ANSI palette, an added or a removed line keeps the green or the red of
+/// its change, so the change stays visible.
+fn code_fg(syntax: Syntax, change: Change, palette: &Palette) -> Color {
+    match change {
+        Change::Added if palette.diff_add_bg == palette.bg => return palette.success,
+        Change::Removed if palette.diff_del_bg == palette.bg => return palette.danger,
+        _ => {}
+    }
+    let colors = &palette.syntax;
+    match syntax {
+        Syntax::Plain => palette.fg,
+        Syntax::Comment => colors.comment,
+        Syntax::String => colors.string,
+        Syntax::Number => colors.number,
+        Syntax::Constant => colors.constant,
+        Syntax::Keyword => colors.keyword,
+        Syntax::Operator => colors.operator,
+        Syntax::Function => colors.function,
+        Syntax::Type => colors.type_name,
+        Syntax::Namespace => colors.namespace,
+        Syntax::Variable => colors.variable,
+        Syntax::Parameter => colors.parameter,
+        Syntax::Punctuation => colors.punctuation,
     }
 }
 
@@ -127,6 +159,29 @@ mod tests {
         let del = cell_style(CellStyle::DiffDel, &p);
         assert!(!del.add_modifier.contains(Modifier::BOLD));
         assert_eq!(del.bg, None, "the row gives the tint");
+    }
+
+    #[test]
+    fn code_tokens_have_the_syntax_colors() {
+        let p = Palette::pierre();
+        let fg = |syntax, change| cell_style(CellStyle::Code(syntax, change), &p).fg;
+        assert_eq!(fg(Syntax::Plain, Change::Context), Some(p.fg));
+        assert_eq!(fg(Syntax::Keyword, Change::Context), Some(p.syntax.keyword));
+        assert_eq!(fg(Syntax::String, Change::Added), Some(p.syntax.string));
+        assert_eq!(fg(Syntax::Comment, Change::Removed), Some(p.syntax.comment));
+    }
+
+    #[test]
+    fn without_a_tint_changed_code_keeps_the_change_color() {
+        let p = Palette::ansi16();
+        let fg = |syntax, change| cell_style(CellStyle::Code(syntax, change), &p).fg;
+        assert_eq!(fg(Syntax::Keyword, Change::Added), Some(p.success));
+        assert_eq!(fg(Syntax::Keyword, Change::Removed), Some(p.danger));
+        assert_eq!(
+            fg(Syntax::Keyword, Change::Context),
+            Some(p.syntax.keyword),
+            "a context line keeps its syntax colors"
+        );
     }
 
     #[test]

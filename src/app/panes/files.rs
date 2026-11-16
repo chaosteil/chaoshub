@@ -1,11 +1,14 @@
 //! The files pane of the pull request popup: the changed files as a
 //! directory tree with `+N −M` counts per file and per directory. Enter
 //! opens and closes a directory or a file; an open file shows its patch
-//! under it. `o` opens the files page of the pull request.
+//! under it, with the syntax colors of its language. `o` opens the files
+//! page of the pull request.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
-use crate::app::models::{Cell, CellStyle, PaneModel, TreeNode};
+use crate::app::highlight::{self, Side, Tokens};
+use crate::app::models::{Cell, CellStyle, Change, PaneModel, TreeNode};
 use crate::app::panes::{Pane, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx, tree_toggled};
@@ -22,6 +25,44 @@ pub(crate) struct FilesPane;
 pub(crate) struct FilesState {
     pub closed_dirs: HashSet<String>,
     pub open_files: HashSet<String>,
+    /// The syntax tokens of each file that the pane showed open, by head
+    /// commit and path. The pane highlights a file when it first shows
+    /// the file, not on each draw. `None` for a file without a highlight.
+    highlights: Mutex<HashMap<(String, String), Highlight>>,
+}
+
+/// The syntax tokens of the code lines of one file, `None` for a file
+/// without a highlight.
+type Highlight = Option<Arc<Vec<Tokens>>>;
+
+impl FilesState {
+    /// The syntax tokens of the code lines of `file` at the head commit
+    /// `head`, from the cache or a new highlight. A new head drops the
+    /// tokens of the old head.
+    fn highlights(&self, head: &str, file: &ChangedFile) -> Highlight {
+        let patch = file.patch.as_deref()?;
+        let key = (head.to_owned(), file.path.clone());
+        if let Some(hit) = self.highlights.lock().ok()?.get(&key) {
+            return hit.clone();
+        }
+        let lines: Vec<(Side, &str)> = numbered(patch)
+            .into_iter()
+            .filter_map(|(kind, _, text)| {
+                let side = match kind {
+                    Kind::Added => Side::New,
+                    Kind::Removed => Side::Old,
+                    Kind::Context => Side::Both,
+                    Kind::Hunk | Kind::Note => return None,
+                };
+                Some((side, code(text)))
+            })
+            .collect();
+        let tokens = highlight::highlight(&file.path, &lines).map(Arc::new);
+        let mut cache = self.highlights.lock().ok()?;
+        cache.retain(|(h, _), _| h == head);
+        cache.insert(key, tokens.clone());
+        tokens
+    }
 }
 
 impl Pane for FilesPane {
@@ -184,7 +225,7 @@ fn nodes(cx: &KeyCx<'_>, state: &FilesState) -> Vec<(TreeNode, Option<Toggle>)> 
         out.push((line("no changed files", CellStyle::Dim), None));
         return out;
     }
-    emit(&tree(files), "", 0, state, &mut out);
+    emit(&tree(files), "", 0, &files.head_oid, state, &mut out);
     out
 }
 
@@ -216,11 +257,13 @@ fn summary(files: &PrFiles) -> TreeNode {
 
 /// The nodes of `dir` at `depth`: the subdirectories first, then the
 /// files, each group by name. `prefix` is the path of `dir` with a
-/// trailing `/`, or empty for the root.
+/// trailing `/`, or empty for the root. `head` is the head commit of the
+/// files.
 fn emit(
     dir: &Dir<'_>,
     prefix: &str,
     depth: u8,
+    head: &str,
     state: &FilesState,
     out: &mut Vec<(TreeNode, Option<Toggle>)>,
 ) {
@@ -243,7 +286,7 @@ fn emit(
             Some(Toggle::Dir(path.clone())),
         ));
         if open {
-            emit(child, &format!("{path}/"), deeper, state, out);
+            emit(child, &format!("{path}/"), deeper, head, state, out);
         }
     }
     let mut files = dir.files.clone();
@@ -255,7 +298,9 @@ fn emit(
             Some(Toggle::File(file.path.clone())),
         ));
         if open {
-            out.extend(patch(deeper, file).into_iter().map(|n| (n, None)));
+            let tokens = state.highlights(head, file);
+            let nodes = patch(deeper, file, tokens.as_deref().map(Vec::as_slice));
+            out.extend(nodes.into_iter().map(|n| (n, None)));
         }
     }
 }
@@ -333,6 +378,11 @@ fn numbered(patch: &str) -> Vec<(Kind, Option<u32>, &str)> {
         .collect()
 }
 
+/// The code of a patch line: the line without its `+`, `-` or space.
+fn code(line: &str) -> &str {
+    line.get(1..).unwrap_or_default()
+}
+
 /// The first old and new line numbers of a hunk header, as in
 /// `@@ -12,5 +14,7 @@ fn main`.
 fn hunk_starts(header: &str) -> Option<(u32, u32)> {
@@ -349,8 +399,10 @@ fn hunk_starts(header: &str) -> Option<(u32, u32)> {
 /// One leaf per patch line of `file` at `depth`, or one `no diff` leaf.
 /// Each line but a hunk header starts with its line number in a dim
 /// gutter. An added line is green and a removed line red, each on its
-/// tint. A hunk header is muted on its own tint.
-fn patch(depth: u8, file: &ChangedFile) -> Vec<TreeNode> {
+/// tint. A hunk header is muted on its own tint. With `tokens`, one per
+/// code line, the `+` or `-` keeps the color of the change and the code
+/// gets the syntax colors.
+fn patch(depth: u8, file: &ChangedFile, tokens: Option<&[Tokens]>) -> Vec<TreeNode> {
     let Some(patch) = &file.patch else {
         return vec![node(
             depth,
@@ -364,6 +416,7 @@ fn patch(depth: u8, file: &ChangedFile) -> Vec<TreeNode> {
         .filter_map(|(_, number, _)| *number)
         .max()
         .map_or(1, |max| max.to_string().len());
+    let mut tokens = tokens.map(<[Tokens]>::iter);
     lines
         .into_iter()
         .map(|(kind, number, text)| {
@@ -371,18 +424,30 @@ fn patch(depth: u8, file: &ChangedFile) -> Vec<TreeNode> {
                 Some(n) => format!("{n:>width$} "),
                 None => " ".repeat(width + 1),
             };
-            let style = match kind {
+            let (style, change) = match kind {
                 Kind::Hunk => return node(depth, None, vec![cell(text, CellStyle::DiffHunk)]),
-                Kind::Added => CellStyle::DiffAdd,
-                Kind::Removed => CellStyle::DiffDel,
-                Kind::Context => CellStyle::Normal,
-                Kind::Note => CellStyle::Dim,
+                Kind::Note => {
+                    let cells = vec![
+                        cell(gutter, CellStyle::DiffGutter),
+                        cell(text, CellStyle::Dim),
+                    ];
+                    return node(depth, None, cells);
+                }
+                Kind::Added => (CellStyle::DiffAdd, Change::Added),
+                Kind::Removed => (CellStyle::DiffDel, Change::Removed),
+                Kind::Context => (CellStyle::Normal, Change::Context),
             };
-            node(
-                depth,
-                None,
-                vec![cell(gutter, CellStyle::DiffGutter), cell(text, style)],
-            )
+            let mut cells = vec![cell(gutter, CellStyle::DiffGutter)];
+            match tokens.as_mut().and_then(Iterator::next) {
+                Some(line) => {
+                    cells.push(cell(text.get(..1).unwrap_or_default(), style));
+                    cells.extend(line.iter().map(|(syntax, piece)| {
+                        cell(piece.as_str(), CellStyle::Code(*syntax, change))
+                    }));
+                }
+                None => cells.push(cell(text, style)),
+            }
+            node(depth, None, cells)
         })
         .collect()
 }
@@ -392,6 +457,7 @@ mod tests {
     use super::*;
     use crate::app::keymap::Keymap;
     use crate::app::layout::layout;
+    use crate::app::models::Syntax;
     use crate::app::state::AppState;
     use crate::app::target::pr_target;
     use crate::app::testdata;
@@ -562,9 +628,10 @@ mod tests {
             CellStyle::DiffFile,
             "the open file is the header of its diff"
         );
-        let styles: Vec<Vec<CellStyle>> = tree_nodes(&model)[9..16]
+        let lines = &tree_nodes(&model)[9..16];
+        let styles: Vec<Vec<CellStyle>> = lines
             .iter()
-            .map(|n| n.cells.iter().map(|c| c.style).collect())
+            .map(|n| n.cells.iter().take(2).map(|c| c.style).collect())
             .collect();
         let gutter = CellStyle::DiffGutter;
         assert_eq!(
@@ -577,8 +644,20 @@ mod tests {
                 vec![gutter, CellStyle::DiffAdd],
                 vec![gutter, CellStyle::Normal],
                 vec![gutter, CellStyle::Dim],
-            ]
+            ],
+            "the gutter, then the +, - or space in the color of the change"
         );
+        // The code after the sign has the syntax colors of Rust.
+        let has = |index: usize, syntax, change, text: &str| {
+            lines[index].cells[2..]
+                .iter()
+                .any(|c| c.style == CellStyle::Code(syntax, change) && c.text.contains(text))
+        };
+        assert!(has(1, Syntax::Keyword, Change::Context, "fn"));
+        assert!(has(1, Syntax::Function, Change::Context, "main"));
+        assert!(has(2, Syntax::String, Change::Removed, "\"old\""));
+        assert!(has(3, Syntax::String, Change::Added, "\"new\""));
+        assert_eq!(lines[6].cells.len(), 2, "the note gets no syntax colors");
         assert!(tree_nodes(&model).iter().all(|n| {
             n.cells
                 .iter()
@@ -643,7 +722,7 @@ mod tests {
             deletions: 1,
             patch: Some(text.into()),
         };
-        let gutters: Vec<String> = patch(0, &file)
+        let gutters: Vec<String> = patch(0, &file, None)
             .iter()
             .map(|n| n.cells[0].text.clone())
             .collect();
@@ -651,6 +730,48 @@ mod tests {
             gutters[..3],
             ["@@ -8,2 +9,3 @@ fn main", "  9 ", "  9 "],
             "the widest number sets the gutter width"
+        );
+    }
+
+    #[test]
+    fn a_file_without_a_known_language_keeps_the_diff_colors() {
+        let file = ChangedFile {
+            path: "notes.unknown".into(),
+            previous_path: None,
+            status: FileStatus::Modified,
+            additions: 1,
+            deletions: 0,
+            patch: Some("@@ -1 +1,2 @@\n fn a\n+fn b".into()),
+        };
+        let state = FilesState::default();
+        assert_eq!(state.highlights("oid", &file), None);
+        let nodes = patch(0, &file, None);
+        let styles: Vec<CellStyle> = nodes[2].cells.iter().map(|c| c.style).collect();
+        assert_eq!(styles, [CellStyle::DiffGutter, CellStyle::DiffAdd]);
+        assert_eq!(nodes[2].cells[1].text, "+fn b");
+    }
+
+    #[test]
+    fn the_highlight_of_a_file_stays_until_a_new_head() {
+        let mut file = testdata::files()
+            .files
+            .into_iter()
+            .find(|f| f.path == "src/app/panes/files.rs")
+            .unwrap();
+        let state = FilesState::default();
+        let first = state.highlights("oid1", &file).unwrap();
+        file.patch = Some("@@ -1 +1 @@\n-let a = 1;\n+let b = 2;".into());
+        let cached = state.highlights("oid1", &file).unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &cached),
+            "the same head reads the cache"
+        );
+        let fresh = state.highlights("oid2", &file).unwrap();
+        assert_eq!(fresh.len(), 2, "a new head highlights the new patch");
+        assert_eq!(
+            state.highlights.lock().unwrap().len(),
+            1,
+            "the old head is gone"
         );
     }
 

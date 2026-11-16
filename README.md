@@ -938,6 +938,40 @@ pane. The ANSI palette has no light tints, so there the lines keep the
 background. Each line starts with its line number: the new number for
 an added line and a context line, the old number for a removed line.
 
+The code of each line has the syntax colors of its language. chaoshub
+finds the language from the file name or the extension, with the
+syntaxes that [syntect](https://github.com/trishume/syntect) bundles
+(for example Rust, Go, Python, JavaScript, C, Java, Markdown, YAML and
+shell). TypeScript, TOML, Nix and Dockerfile are not in the set. The
+`+` and the `-` keep the green and the red of the change. The token
+colors are the `syntax` keys of the palette, from the `pierre-dark`
+theme:
+
+| Token | Key | Pierre | ANSI 16 |
+|---|---|---|---|
+| Comment | `syntax.comment` | `#737373` | dark gray |
+| String | `syntax.string` | `#5ecc71` | green |
+| Number, `true` | `syntax.number` | `#68cdf2` | cyan |
+| Other constant | `syntax.constant` | `#ffd452` | yellow |
+| Keyword | `syntax.keyword` | `#ff678d` | light red |
+| Operator | `syntax.operator` | `#08c0ef` | cyan |
+| Function | `syntax.function` | `#9d6afb` | magenta |
+| Type | `syntax.type_name` | `#d568ea` | light magenta |
+| Namespace | `syntax.namespace` | `#ffab16` | yellow |
+| Variable | `syntax.variable` | `#ffa359` | light yellow |
+| Parameter | `syntax.parameter` | `#a3a3a3` | gray |
+| Punctuation | `syntax.punctuation` | `#636363` | dark gray |
+
+On the ANSI palette, an added or a removed line has no tint. Thus its
+code keeps the green or the red of the change, and only the context
+lines get the syntax colors.
+
+A file gets no syntax colors when no bundled syntax knows its
+language, when its patch is larger than 32 KiB, or when one of its
+lines is longer than 1000 characters. Its diff colors stay. chaoshub
+highlights a file when you open it, and keeps the result until the
+pull request gets a new head.
+
 #### Codeview comments
 
 You write review comments in codeview (`v`). The Review popup lists the
