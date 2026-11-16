@@ -1489,7 +1489,10 @@ press in chaoshub. A quit removes it too.
 
 chaoshub sends the notice with OSC 7501 as its own record, so the
 program status stays: `state=done`, `id=new-prs`, `app=chaoshub`, the
-title `chaoshub` and the text as `msg`. Ghostty shows OSC 7501 too.
+title `chaoshub` and the text as `msg`. When a new notice comes while
+the last one shows, chaoshub first removes the old record
+(`state=clear`, `id=new-prs`), so the terminal sees a new record.
+Ghostty shows OSC 7501 too.
 chaoshub does not send OSC 9, OSC 777 or OSC 99.
 
 chaoshub does not support tmux for the notice yet. tmux does not pass

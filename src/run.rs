@@ -1184,7 +1184,7 @@ fn notify_settings(config: &NotifyConfig, detected: bool, pinned: bool) -> Optio
 /// changed, OSC 9;4 when the progress changed or once per second while a
 /// progress is active. The notice of new pull requests is the OSC 7501
 /// record `NOTICE_ID`: `done` when a new notice comes, `clear` when it
-/// goes.
+/// goes. A new notice while one shows sends `clear` and then `done`.
 #[derive(Debug)]
 struct TermWriter {
     /// The `[terminal] program_status` switch.
@@ -1224,10 +1224,14 @@ impl TermWriter {
         let mut bytes = Vec::new();
         let seq = notice.map(|notice| notice.seq);
         if self.notify && seq != self.last_notice {
-            bytes.extend(match notice {
-                Some(notice) => osc::record_done(NOTICE_ID, &notice.title, &notice.msg),
-                None => osc::record_clear(NOTICE_ID),
-            });
+            // A notice that replaces a shown one removes the old record
+            // first, so each notice is a new `done` record.
+            if notice.is_none() || self.last_notice.is_some() {
+                bytes.extend(osc::record_clear(NOTICE_ID));
+            }
+            if let Some(notice) = notice {
+                bytes.extend(osc::record_done(NOTICE_ID, &notice.title, &notice.msg));
+            }
             self.last_notice = seq;
         }
         if self.program_status
@@ -1998,16 +2002,58 @@ mod tests {
         );
         assert_eq!(written_notice(&mut writer, Some(&first)), b"");
         let same_text = notice(2, "3 new PRs in team");
+        let mut renewed = osc::record_clear("new-prs");
+        renewed.extend(osc::record_done("new-prs", "chaoshub", "3 new PRs in team"));
         assert_eq!(
             written_notice(&mut writer, Some(&same_text)),
-            osc::record_done("new-prs", "chaoshub", "3 new PRs in team"),
-            "a new notice with the same text is a new write"
+            renewed,
+            "a new notice with the same text is a new record"
         );
         assert_eq!(
             written_notice(&mut writer, None),
             osc::record_clear("new-prs")
         );
         assert_eq!(written_notice(&mut writer, None), b"");
+    }
+
+    /// A notice that comes while the last one still shows, because no key
+    /// press cleared it, is a new record and not an update of the `done`
+    /// record. A terminal can show its activity only when a record becomes
+    /// `done`, and not for a new report of a `done` record.
+    #[test]
+    fn a_notice_while_one_shows_removes_the_old_record_first() {
+        let mut writer = TermWriter::new(true, true, true);
+        assert_eq!(written_notice(&mut writer, None), {
+            let mut first = osc::program_status(&idle());
+            first.extend(osc::progress(Progress::Off));
+            first
+        });
+        assert_eq!(
+            written_notice(&mut writer, Some(&notice(1, "#1 Old (alice)"))),
+            osc::record_done("new-prs", "chaoshub", "#1 Old (alice)"),
+            "the first notice is a new record"
+        );
+        let mut expected = osc::record_clear("new-prs");
+        expected.extend(osc::record_done("new-prs", "chaoshub", "#2 New (bob)"));
+        assert_eq!(
+            written_notice(&mut writer, Some(&notice(2, "#2 New (bob)"))),
+            expected,
+            "the old record goes before the new one"
+        );
+        assert_eq!(
+            written_notice(&mut writer, Some(&notice(2, "#2 New (bob)"))),
+            b"",
+            "the same notice is not written again"
+        );
+        assert_eq!(
+            written_notice(&mut writer, None),
+            osc::record_clear("new-prs")
+        );
+        assert_eq!(
+            written_notice(&mut writer, Some(&notice(3, "#3 Next (carol)"))),
+            osc::record_done("new-prs", "chaoshub", "#3 Next (carol)"),
+            "after a clear, no second clear"
+        );
     }
 
     #[test]
