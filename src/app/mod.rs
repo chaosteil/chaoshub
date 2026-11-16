@@ -6,7 +6,6 @@ pub(crate) mod exec;
 mod filter;
 mod frame;
 mod help;
-mod highlight;
 pub(crate) mod keymap;
 pub(crate) mod layout;
 pub(crate) mod measure;

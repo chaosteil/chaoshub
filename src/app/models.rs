@@ -3,6 +3,7 @@
 #![allow(dead_code, reason = "app and ui build on the models in later phases")]
 
 use crate::bus::{ConfirmSpec, KeyChord, OverlayKind, PrRef, PromptSpec, ReviewSpec, TermStatus};
+use crate::domain::diff::Syntax;
 
 /// Everything that `ui::view` draws in one frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,27 +169,6 @@ pub(crate) enum CellStyle {
     DiffFile,
     /// A code token of a diff line: its role and the change of its line.
     Code(Syntax, Change),
-}
-
-/// The role of a code token. The palette gives each role a color.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Syntax {
-    /// A token without a role, in the text color.
-    Plain,
-    Comment,
-    String,
-    /// A number or a constant of the language, as `true`.
-    Number,
-    /// Another constant, as `MAX_LEN`.
-    Constant,
-    Keyword,
-    Operator,
-    Function,
-    Type,
-    Namespace,
-    Variable,
-    Parameter,
-    Punctuation,
 }
 
 /// The change of a diff line.

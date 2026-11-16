@@ -8,6 +8,7 @@ pub(crate) mod agent;
 pub(crate) mod check;
 pub(crate) mod codeview;
 pub(crate) mod detail;
+pub(crate) mod diff;
 pub(crate) mod files;
 pub(crate) mod keys;
 pub(crate) mod local;

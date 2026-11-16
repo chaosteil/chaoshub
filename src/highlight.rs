@@ -12,7 +12,7 @@ use syntect::highlighting::{
 };
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
-use crate::app::models::Syntax;
+use crate::domain::diff::{Syntax, Tokens};
 
 /// A patch with more bytes than this gets no highlight, so the first
 /// draw of a large file stays fast. The highlight runs on the UI thread
@@ -34,10 +34,6 @@ pub(crate) enum Side {
     /// A context line: in both files.
     Both,
 }
-
-/// The tokens of one code line, each with its role. Two tokens next to
-/// each other have different roles.
-pub(crate) type Tokens = Vec<(Syntax, String)>;
 
 /// The syntaxes of bat that two-face bundles, loaded at the first
 /// highlight.

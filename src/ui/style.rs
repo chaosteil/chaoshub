@@ -3,7 +3,8 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::app::models::{Cell, CellStyle, Change, Syntax, Tone};
+use crate::app::models::{Cell, CellStyle, Change, Tone};
+use crate::domain::diff::Syntax;
 use crate::theme::Palette;
 
 /// The style of a cell. Only the foreground and the modifiers; the

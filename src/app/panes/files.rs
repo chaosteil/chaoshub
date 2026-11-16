@@ -7,14 +7,15 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use crate::app::highlight::{self, Side, Tokens};
 use crate::app::models::{Cell, CellStyle, Change, PaneModel, TreeNode};
 use crate::app::panes::{Pane, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx, tree_toggled};
 use crate::bus::{Cmd, KeyChord, Size, Target};
+use crate::domain::diff::{LineKind, Tokens, code, numbered};
 use crate::domain::files::{ChangedFile, FileStatus, PrFiles};
 use crate::domain::pr::PullRequest;
+use crate::highlight::{self, Side};
 
 /// The files pane.
 pub(crate) struct FilesPane;
@@ -49,10 +50,10 @@ impl FilesState {
             .into_iter()
             .filter_map(|(kind, _, text)| {
                 let side = match kind {
-                    Kind::Added => Side::New,
-                    Kind::Removed => Side::Old,
-                    Kind::Context => Side::Both,
-                    Kind::Hunk | Kind::Note => return None,
+                    LineKind::Added => Side::New,
+                    LineKind::Removed => Side::Old,
+                    LineKind::Context => Side::Both,
+                    LineKind::Hunk | LineKind::Note => return None,
                 };
                 Some((side, code(text)))
             })
@@ -336,66 +337,6 @@ fn file_node(depth: u8, open: bool, name: &str, file: &ChangedFile) -> TreeNode 
     node(depth, Some(open), cells)
 }
 
-/// The kind of a patch line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Hunk,
-    Added,
-    Removed,
-    Context,
-    /// `\ No newline at end of file`.
-    Note,
-}
-
-/// The kind of each line of `patch` and its line number: the new number
-/// for an added or a context line, the old number for a removed line,
-/// and `None` for a hunk header or a note.
-fn numbered(patch: &str) -> Vec<(Kind, Option<u32>, &str)> {
-    let (mut old, mut new) = (0_u32, 0_u32);
-    patch
-        .lines()
-        .map(|text| {
-            let (kind, number) = if text.starts_with("@@") {
-                if let Some((o, n)) = hunk_starts(text) {
-                    (old, new) = (o, n);
-                }
-                (Kind::Hunk, None)
-            } else if text.starts_with('+') {
-                new = new.saturating_add(1);
-                (Kind::Added, Some(new - 1))
-            } else if text.starts_with('-') {
-                old = old.saturating_add(1);
-                (Kind::Removed, Some(old - 1))
-            } else if text.starts_with('\\') {
-                (Kind::Note, None)
-            } else {
-                old = old.saturating_add(1);
-                new = new.saturating_add(1);
-                (Kind::Context, Some(new - 1))
-            };
-            (kind, number, text)
-        })
-        .collect()
-}
-
-/// The code of a patch line: the line without its `+`, `-` or space.
-fn code(line: &str) -> &str {
-    line.get(1..).unwrap_or_default()
-}
-
-/// The first old and new line numbers of a hunk header, as in
-/// `@@ -12,5 +14,7 @@ fn main`.
-fn hunk_starts(header: &str) -> Option<(u32, u32)> {
-    let mut parts = header.split_whitespace().skip(1);
-    let start = |part: Option<&str>, sign: char| -> Option<u32> {
-        let range = part?.strip_prefix(sign)?;
-        range.split(',').next()?.parse().ok()
-    };
-    let old = start(parts.next(), '-')?;
-    let new = start(parts.next(), '+')?;
-    Some((old, new))
-}
-
 /// One leaf per patch line of `file` at `depth`, or one `no diff` leaf.
 /// Each line but a hunk header starts with its line number in a dim
 /// gutter. An added line is green and a removed line red, each on its
@@ -425,17 +366,17 @@ fn patch(depth: u8, file: &ChangedFile, tokens: Option<&[Tokens]>) -> Vec<TreeNo
                 None => " ".repeat(width + 1),
             };
             let (style, change) = match kind {
-                Kind::Hunk => return node(depth, None, vec![cell(text, CellStyle::DiffHunk)]),
-                Kind::Note => {
+                LineKind::Hunk => return node(depth, None, vec![cell(text, CellStyle::DiffHunk)]),
+                LineKind::Note => {
                     let cells = vec![
                         cell(gutter, CellStyle::DiffGutter),
                         cell(text, CellStyle::Dim),
                     ];
                     return node(depth, None, cells);
                 }
-                Kind::Added => (CellStyle::DiffAdd, Change::Added),
-                Kind::Removed => (CellStyle::DiffDel, Change::Removed),
-                Kind::Context => (CellStyle::Normal, Change::Context),
+                LineKind::Added => (CellStyle::DiffAdd, Change::Added),
+                LineKind::Removed => (CellStyle::DiffDel, Change::Removed),
+                LineKind::Context => (CellStyle::Normal, Change::Context),
             };
             let mut cells = vec![cell(gutter, CellStyle::DiffGutter)];
             match tokens.as_mut().and_then(Iterator::next) {
@@ -457,11 +398,11 @@ mod tests {
     use super::*;
     use crate::app::keymap::Keymap;
     use crate::app::layout::layout;
-    use crate::app::models::Syntax;
     use crate::app::state::AppState;
     use crate::app::target::pr_target;
     use crate::app::testdata;
     use crate::bus::{KeyCode, KeyModifiers, UiEvent};
+    use crate::domain::diff::Syntax;
 
     /// The text of each node, with its depth and expand marker.
     fn outline(model: &PaneModel) -> Vec<String> {
@@ -697,23 +638,6 @@ mod tests {
     #[test]
     fn the_gutter_counts_from_each_hunk_header() {
         let text = "@@ -8,2 +9,3 @@ fn main\n a\n-b\n+c\n+d\n@@ -98 +100,2 @@\n e\n+f";
-        let numbers: Vec<(Kind, Option<u32>)> =
-            numbered(text).into_iter().map(|(k, n, _)| (k, n)).collect();
-        assert_eq!(
-            numbers,
-            [
-                (Kind::Hunk, None),
-                (Kind::Context, Some(9)),
-                (Kind::Removed, Some(9)),
-                (Kind::Added, Some(10)),
-                (Kind::Added, Some(11)),
-                (Kind::Hunk, None),
-                (Kind::Context, Some(100)),
-                (Kind::Added, Some(101)),
-            ]
-        );
-        assert_eq!(hunk_starts("@@ -98 +100,2 @@"), Some((98, 100)));
-        assert_eq!(hunk_starts("@@ broken @@"), None);
         let file = ChangedFile {
             path: "a.rs".into(),
             previous_path: None,
