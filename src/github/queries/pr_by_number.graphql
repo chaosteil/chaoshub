@@ -82,6 +82,14 @@ fragment PrFields on PullRequest {
     number
     size
     baseRefName
+    entries(first: 50) {
+      nodes {
+        position
+        pullRequest {
+          state
+        }
+      }
+    }
   }
   stackEntry {
     position

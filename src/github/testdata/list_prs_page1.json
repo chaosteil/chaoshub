@@ -338,7 +338,17 @@
             "id": "PRS_kwDOAAAABc4AAA02",
             "number": 1528,
             "size": 6,
-            "baseRefName": "main"
+            "baseRefName": "main",
+            "entries": {
+              "nodes": [
+                { "position": 1, "pullRequest": { "state": "MERGED" } },
+                { "position": 2, "pullRequest": { "state": "MERGED" } },
+                { "position": 3, "pullRequest": { "state": "MERGED" } },
+                { "position": 4, "pullRequest": { "state": "MERGED" } },
+                { "position": 5, "pullRequest": { "state": "MERGED" } },
+                { "position": 6, "pullRequest": { "state": "MERGED" } }
+              ]
+            }
           },
           "stackEntry": {
             "position": 6

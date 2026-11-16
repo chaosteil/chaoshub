@@ -112,7 +112,17 @@
             "id": "PRS_kwDOAAAABc4AAA01",
             "number": 1570,
             "size": 6,
-            "baseRefName": "main"
+            "baseRefName": "main",
+            "entries": {
+              "nodes": [
+                { "position": 1, "pullRequest": { "state": "MERGED" } },
+                { "position": 2, "pullRequest": { "state": "MERGED" } },
+                { "position": 3, "pullRequest": { "state": "MERGED" } },
+                { "position": 4, "pullRequest": { "state": "MERGED" } },
+                { "position": 5, "pullRequest": { "state": "MERGED" } },
+                { "position": 6, "pullRequest": { "state": "MERGED" } }
+              ]
+            }
           },
           "stackEntry": {
             "position": 6
@@ -238,7 +248,17 @@
             "id": "PRS_kwDOAAAABc4AAA01",
             "number": 1570,
             "size": 6,
-            "baseRefName": "main"
+            "baseRefName": "main",
+            "entries": {
+              "nodes": [
+                { "position": 1, "pullRequest": { "state": "MERGED" } },
+                { "position": 2, "pullRequest": { "state": "MERGED" } },
+                { "position": 3, "pullRequest": { "state": "MERGED" } },
+                { "position": 4, "pullRequest": { "state": "MERGED" } },
+                { "position": 5, "pullRequest": { "state": "MERGED" } },
+                { "position": 6, "pullRequest": { "state": "OPEN" } }
+              ]
+            }
           },
           "stackEntry": {
             "position": 5
@@ -370,7 +390,17 @@
             "id": "PRS_kwDOAAAABc4AAA01",
             "number": 1570,
             "size": 6,
-            "baseRefName": "main"
+            "baseRefName": "main",
+            "entries": {
+              "nodes": [
+                { "position": 1, "pullRequest": { "state": "MERGED" } },
+                { "position": 2, "pullRequest": { "state": "MERGED" } },
+                { "position": 3, "pullRequest": { "state": "MERGED" } },
+                { "position": 4, "pullRequest": { "state": "MERGED" } },
+                { "position": 5, "pullRequest": { "state": "OPEN" } },
+                { "position": 6, "pullRequest": { "state": "OPEN" } }
+              ]
+            }
           },
           "stackEntry": {
             "position": 4

@@ -397,6 +397,7 @@ mod tests {
             size: 3,
             position,
             base_ref: "main".into(),
+            merged: Vec::new(),
         });
         pr
     }

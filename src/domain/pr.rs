@@ -180,6 +180,7 @@ mod tests {
                     size: 2,
                     position: 1,
                     base_ref: "main".into(),
+                    merged: Vec::new(),
                 }),
                 auto_merge: false,
                 in_merge_queue: false,

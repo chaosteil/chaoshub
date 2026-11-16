@@ -15,6 +15,11 @@ pub(crate) struct StackRef {
     /// The position of the pull request. Position 1 is closest to the base.
     pub position: u32,
     pub base_ref: String,
+    /// The positions of the merged entries, position 1 first, as GitHub
+    /// gave them with this pull request. Empty when not known, for
+    /// example in a cache row of an older version.
+    #[serde(default)]
+    pub merged: Vec<u32>,
 }
 
 /// A stack with its loaded entries.
@@ -58,6 +63,7 @@ mod tests {
             size: 2,
             position: 2,
             base_ref: "main".into(),
+            merged: Vec::new(),
         }
     }
 

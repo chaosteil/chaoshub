@@ -1423,7 +1423,13 @@ mod tests {
             "reviewRequests": { "nodes": [] },
             "latestOpinionatedReviews": { "nodes": [] },
             "statusCheckRollup": null,
-            "stack": { "id": "s", "number": 1, "size": 3, "baseRefName": "main" },
+            "stack": {
+                "id": "s",
+                "number": 1,
+                "size": 3,
+                "baseRefName": "main",
+                "entries": { "nodes": [] }
+            },
             "stackEntry": { "position": number },
             "repository": {
                 "nameWithOwner": "o/r",

@@ -238,6 +238,22 @@ macro_rules! pr_fields_parser {
             (approvals, changes_requested)
         }
 
+        /// The positions of the merged entries of a stack, position 1
+        /// first. An entry without a pull request is not merged.
+        fn merged_positions(entries: q::PrFieldsStackEntries) -> Result<Vec<u32>, GithubError> {
+            let mut merged = Vec::new();
+            for node in entries.nodes.unwrap_or_default().into_iter().flatten() {
+                if node
+                    .pull_request
+                    .is_some_and(|pr| matches!(pr.state, q::PullRequestState::MERGED))
+                {
+                    merged.push(uint(node.position, "stack.entries.position")?);
+                }
+            }
+            merged.sort_unstable();
+            Ok(merged)
+        }
+
         /// A pull request from the `PrFields` fragment. Every field group
         /// carries `observed_at`, the start time of the request.
         #[allow(
@@ -277,6 +293,7 @@ macro_rules! pr_fields_parser {
             let (approvals, changes_requested) = review_counts(fields.latest_opinionated_reviews);
             let stack = match (fields.stack, fields.stack_entry) {
                 (Some(stack), Some(entry)) => Some(StackRef {
+                    merged: merged_positions(stack.entries)?,
                     id: stack.id,
                     number: uint(stack.number, "stack.number")?,
                     size: uint(stack.size, "stack.size")?,
@@ -768,6 +785,28 @@ mod tests {
         assert_eq!((stack.number, stack.size, stack.position), (1528, 6, 6));
         assert_eq!(stack.id, "PRS_kwDOAAAABc4AAA02");
         assert_eq!(stack.base_ref, "main");
+        assert_eq!(stack.merged, [1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn the_stack_names_the_merged_positions() {
+        let mut json: serde_json::Value = serde_json::from_str(LISTS).unwrap();
+        let node = json["data"]["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|node| node["number"] == 1586)
+            .unwrap();
+        node["stack"]["entries"]["nodes"] = serde_json::json!([
+            { "position": 3, "pullRequest": { "state": "OPEN" } },
+            { "position": 2, "pullRequest": { "state": "MERGED" } },
+            { "position": 4, "pullRequest": null },
+            { "position": 5, "pullRequest": { "state": "CLOSED" } },
+            { "position": 1, "pullRequest": { "state": "MERGED" } }
+        ]);
+        let prs = pr_by_ids::prs(fixture(&json.to_string()), &ME, test_time()).unwrap();
+        let pr = prs.iter().find(|pr| pr.key.number == 1586).unwrap();
+        assert_eq!(pr.head.value.stack.as_ref().unwrap().merged, [1, 2]);
     }
 
     #[test]
