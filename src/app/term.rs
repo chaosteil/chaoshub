@@ -1,4 +1,4 @@
-//! Derives the terminal status from the app state.
+//! Derives the terminal status and title from the app state.
 //!
 //! `term_status` is pure. It is part of the `FrameModel`, so it is rebuilt
 //! only with the generation. It follows the status table of section 1.14
@@ -26,6 +26,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::app::state::{AppState, MergeState, OverlayState};
 use crate::bus::{BlockedKind, MergeProgress, Progress, Scope, TermState, TermStatus};
+use crate::domain::team::is_ready;
 
 /// How long the progress bar shows an error after a failure.
 pub(crate) const ERROR_PROGRESS: TimeDelta = TimeDelta::seconds(5);
@@ -46,6 +47,59 @@ pub(crate) fn term_status(state: &AppState) -> TermStatus {
         },
         None => status,
     }
+}
+
+/// The title of the list or the standalone PR view. The review count
+/// follows the normal Review tab without its temporary view filters.
+/// Count once per frame generation, not on each terminal write.
+pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
+    let data = &state.data;
+    let mut title = if let Some(key) = &state.ui.pinned {
+        format!(
+            "chaoshub · {}/{}#{}",
+            key.repo.owner, key.repo.name, key.number
+        )
+    } else if !data.synced.contains_key(&Scope::Team) {
+        "chaoshub · ? review".to_owned()
+    } else {
+        let count = data
+            .prs
+            .values()
+            .filter(|pr| {
+                data.scopes.get(&pr.key) == Some(&Scope::Team)
+                    && pr.head.value.review_requested
+                    && is_ready(pr)
+                    && data.filters.matches(pr, data.now)
+            })
+            .count();
+        format!("chaoshub · {count} review")
+    };
+    let activity = match status.state {
+        TermState::Idle | TermState::Clear => None,
+        TermState::Blocked { .. } => Some("input".to_owned()),
+        TermState::Error => Some("error".to_owned()),
+        TermState::Done => status.msg.clone(),
+        TermState::Working if data.merge.is_some() => status.msg.clone(),
+        TermState::Working if state.ui.pinned.is_none() => Some(
+            if syncing(state) {
+                "syncing"
+            } else {
+                "prefetching"
+            }
+            .to_owned(),
+        ),
+        TermState::Working => state
+            .ui
+            .pinned
+            .as_ref()
+            .filter(|key| !data.prs.contains_key(key))
+            .map(|_| "loading".to_owned()),
+    };
+    if let Some(activity) = activity {
+        title.push_str(" · ");
+        title.push_str(&activity);
+    }
+    title
 }
 
 /// The terminal status without the overlays.
@@ -493,5 +547,153 @@ mod tests {
             setup(&mut state);
             assert_eq!(term_status(&state), expected, "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+    use crate::app::frame;
+    use crate::app::models::RowItem;
+    use crate::app::state::PrefetchBatch;
+    use crate::app::tabs::TABS;
+    use crate::app::testdata;
+    use crate::bus::Size;
+    use crate::domain::pr::{CiState, PrState};
+    use crate::domain::test_time;
+
+    fn state() -> AppState {
+        let mut state = AppState::new(Size {
+            width: 100,
+            height: 30,
+        });
+        state.data.now = test_time();
+        for scope in [Scope::Mine, Scope::Team] {
+            state.data.synced.insert(scope, test_time());
+        }
+        state
+    }
+
+    fn title(state: &AppState) -> String {
+        term_title(state, &term_status(state))
+    }
+
+    #[test]
+    fn the_title_count_matches_the_normal_review_tab() {
+        let mut state = state();
+        state.data.filters.max_age = Some(TimeDelta::weeks(2));
+        let mut prs: Vec<_> = (1..=13)
+            .map(|number| {
+                let mut pr = testdata::pr("chaoshub", number, "Review me");
+                pr.head.value.review_requested = true;
+                pr.ci_state.value = CiState::Success;
+                pr
+            })
+            .collect();
+        prs[1].head.value.review_requested = false;
+        prs[3].ci_state.value = CiState::Pending;
+        prs[4].ci_state.value = CiState::Failure;
+        prs[5].ci_state.value = CiState::None;
+        prs[6].head.value.is_draft = true;
+        prs[7].head.value.state = PrState::Closed;
+        prs[8].head.value.state = PrState::Merged;
+        prs[9].head.value.created_at = Some(test_time() - TimeDelta::weeks(3));
+        prs[10].head.value.created_at = None;
+        prs[11].head.value.created_at = Some(test_time() - TimeDelta::weeks(2));
+        prs[12].head.value.author = "another-reviewer".into();
+        let snapshot = crate::store::Snapshot {
+            prs: prs
+                .into_iter()
+                .map(|pr| {
+                    let scope = if pr.key.number == 3 {
+                        Scope::Mine
+                    } else {
+                        Scope::Team
+                    };
+                    (scope, pr)
+                })
+                .collect(),
+            ..crate::store::Snapshot::default()
+        };
+        state.load(snapshot, Vec::new());
+        for scope in [Scope::Mine, Scope::Team] {
+            state.data.synced.insert(scope, test_time());
+        }
+        state.ui.active = TABS.iter().position(|tab| tab.id() == "review").unwrap();
+        let frame = frame::frame_model(&mut state);
+        let numbers: Vec<_> = frame
+            .list
+            .rows
+            .iter()
+            .filter_map(|row| {
+                if let RowItem::Pr(pr) = &row.item {
+                    Some(pr.key.number)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(numbers, [1, 12, 13]);
+        assert_eq!(frame.title, "chaoshub · 3 review");
+        for active in 0..TABS.len() {
+            state.ui.active = active;
+            for tab in &mut state.ui.tabs {
+                tab.author = Some("nobody".into());
+                tab.filter = "no match".into();
+                tab.show_hidden = true;
+            }
+            assert_eq!(title(&state), "chaoshub · 3 review");
+        }
+    }
+
+    #[test]
+    fn an_unknown_count_is_not_reported_as_zero() {
+        let mut state = state();
+        state.data.synced.remove(&Scope::Team);
+        assert_eq!(title(&state), "chaoshub · ? review");
+        state.data.session.login = Some("me".into());
+        assert_eq!(title(&state), "chaoshub · ? review · syncing");
+        state.data.synced.insert(Scope::Team, test_time());
+        assert_eq!(title(&state), "chaoshub · 0 review");
+    }
+
+    #[test]
+    fn the_title_includes_one_short_activity() {
+        let mut state = state();
+        state.data.prefetch = Some(PrefetchBatch { done: 1, total: 2 });
+        assert_eq!(title(&state), "chaoshub · 0 review · prefetching");
+        state.data.merge = Some(MergeState::new(
+            testdata::pr_key("chaoshub", 42),
+            test_time(),
+        ));
+        assert_eq!(title(&state), "chaoshub · 0 review · merging #42");
+        let blocked = TermStatus {
+            state: TermState::Blocked {
+                kind: BlockedKind::Question,
+            },
+            msg: Some("A long question that does not belong in the title".into()),
+            progress: Progress::Indeterminate,
+        };
+        assert_eq!(term_title(&state, &blocked), "chaoshub · 0 review · input");
+        let error = TermStatus {
+            state: TermState::Error,
+            msg: Some("A long error that does not belong in the title".into()),
+            progress: Progress::Error,
+        };
+        assert_eq!(term_title(&state, &error), "chaoshub · 0 review · error");
+    }
+
+    #[test]
+    fn a_standalone_pr_title_identifies_the_pr_without_a_list_count() {
+        let mut state = state();
+        let pr = testdata::pr("chaoshub", 7, "A PR title stays in the pane");
+        state.ui.pinned = Some(pr.key.clone());
+        state.data.prs.insert(pr.key.clone(), pr);
+        assert_eq!(title(&state), "chaoshub · chaosteil/chaoshub#7");
+        state.data.synced.clear();
+        state.data.session.login = Some("me".into());
+        assert_eq!(title(&state), "chaoshub · chaosteil/chaoshub#7");
+        state.data.prs.clear();
+        assert_eq!(title(&state), "chaoshub · chaosteil/chaoshub#7 · loading");
     }
 }

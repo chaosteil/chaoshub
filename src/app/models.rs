@@ -14,6 +14,8 @@ pub(crate) struct FrameModel {
     /// The overlay stack, bottom first.
     pub overlays: Vec<OverlayModel>,
     pub term: TermStatus,
+    /// The terminal title, separate from the text drawn in the grid.
+    pub title: String,
     /// The filter line of the active tab, while the user edits it or
     /// while it has text. It takes the last row of the list area.
     pub filter: Option<FilterModel>,
