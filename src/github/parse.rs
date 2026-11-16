@@ -14,7 +14,7 @@ use crate::domain::pr::{
     CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest, ReviewDecision,
 };
 use crate::domain::repo::{RepoSettings, SquashMessageDefault, SquashTitleDefault};
-use crate::domain::stack::{Stack, StackEntry, StackPlace, StackRef};
+use crate::domain::stack::{OpenEntry, Stack, StackEntry, StackPlace, StackRef};
 use crate::github::GithubError;
 
 /// The user, for the `review_requested` rule.
@@ -240,20 +240,32 @@ macro_rules! pr_fields_parser {
             (approvals, changes_requested)
         }
 
-        /// The positions of the merged entries of a stack, position 1
-        /// first. An entry without a pull request is not merged.
-        fn merged_positions(entries: q::PrFieldsStackEntries) -> Result<Vec<u32>, GithubError> {
+        /// The positions of the merged entries of a stack and its open
+        /// entries, position 1 first. An entry without a pull request is
+        /// neither.
+        fn entry_states(
+            entries: q::PrFieldsStackEntries,
+        ) -> Result<(Vec<u32>, Vec<OpenEntry>), GithubError> {
             let mut merged = Vec::new();
+            let mut open = Vec::new();
             for node in entries.nodes.unwrap_or_default().into_iter().flatten() {
-                if node
-                    .pull_request
-                    .is_some_and(|pr| matches!(pr.state, q::PullRequestState::MERGED))
-                {
-                    merged.push(uint(node.position, "stack.entries.position")?);
+                let Some(pr) = node.pull_request else {
+                    continue;
+                };
+                let position = uint(node.position, "stack.entries.position")?;
+                match pr.state {
+                    q::PullRequestState::MERGED => merged.push(position),
+                    q::PullRequestState::OPEN => open.push(OpenEntry {
+                        position,
+                        number: uint(pr.number, "stack.entries.number")?,
+                        node_id: pr.id,
+                    }),
+                    _ => {}
                 }
             }
             merged.sort_unstable();
-            Ok(merged)
+            open.sort_by_key(|entry| entry.position);
+            Ok((merged, open))
         }
 
         /// A pull request from the `PrFields` fragment. Every field group
@@ -294,14 +306,18 @@ macro_rules! pr_fields_parser {
             }
             let (approvals, changes_requested) = review_counts(fields.latest_opinionated_reviews);
             let stack = match (fields.stack, fields.stack_entry) {
-                (Some(stack), Some(entry)) => Some(StackRef {
-                    merged: merged_positions(stack.entries)?,
-                    id: stack.id,
-                    number: uint(stack.number, "stack.number")?,
-                    size: uint(stack.size, "stack.size")?,
-                    position: uint(entry.position, "stackEntry.position")?,
-                    base_ref: stack.base_ref_name,
-                }),
+                (Some(stack), Some(entry)) => {
+                    let (merged, open) = entry_states(stack.entries)?;
+                    Some(StackRef {
+                        merged,
+                        open,
+                        id: stack.id,
+                        number: uint(stack.number, "stack.number")?,
+                        size: uint(stack.size, "stack.size")?,
+                        position: uint(entry.position, "stackEntry.position")?,
+                        base_ref: stack.base_ref_name,
+                    })
+                }
                 _ => None,
             };
             let head = PrHead {
@@ -807,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn the_stack_names_the_merged_positions() {
+    fn the_stack_names_the_merged_positions_and_the_open_entries() {
         let mut json: serde_json::Value = serde_json::from_str(LISTS).unwrap();
         let node = json["data"]["nodes"]
             .as_array_mut()
@@ -816,15 +832,23 @@ mod tests {
             .find(|node| node["number"] == 1586)
             .unwrap();
         node["stack"]["entries"]["nodes"] = serde_json::json!([
-            { "position": 3, "pullRequest": { "state": "OPEN" } },
-            { "position": 2, "pullRequest": { "state": "MERGED" } },
+            { "position": 6, "pullRequest": { "id": "PR_1586", "number": 1586, "state": "OPEN" } },
+            { "position": 3, "pullRequest": { "id": "PR_1583", "number": 1583, "state": "OPEN" } },
+            { "position": 2, "pullRequest": { "id": "PR_1582", "number": 1582, "state": "MERGED" } },
             { "position": 4, "pullRequest": null },
-            { "position": 5, "pullRequest": { "state": "CLOSED" } },
-            { "position": 1, "pullRequest": { "state": "MERGED" } }
+            { "position": 5, "pullRequest": { "id": "PR_1585", "number": 1585, "state": "CLOSED" } },
+            { "position": 1, "pullRequest": { "id": "PR_1581", "number": 1581, "state": "MERGED" } }
         ]);
         let prs = pr_by_ids::prs(fixture(&json.to_string()), &ME, test_time()).unwrap();
         let pr = prs.iter().find(|pr| pr.key.number == 1586).unwrap();
-        assert_eq!(pr.head.value.stack.as_ref().unwrap().merged, [1, 2]);
+        let stack = pr.head.value.stack.as_ref().unwrap();
+        assert_eq!(stack.merged, [1, 2]);
+        let open: Vec<(u32, u64, &str)> = stack
+            .open
+            .iter()
+            .map(|entry| (entry.position, entry.number, entry.node_id.as_str()))
+            .collect();
+        assert_eq!(open, [(3, 1583, "PR_1583"), (6, 1586, "PR_1586")]);
     }
 
     #[test]

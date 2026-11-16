@@ -115,12 +115,12 @@
             "baseRefName": "main",
             "entries": {
               "nodes": [
-                { "position": 1, "pullRequest": { "state": "MERGED" } },
-                { "position": 2, "pullRequest": { "state": "MERGED" } },
-                { "position": 3, "pullRequest": { "state": "MERGED" } },
-                { "position": 4, "pullRequest": { "state": "MERGED" } },
-                { "position": 5, "pullRequest": { "state": "MERGED" } },
-                { "position": 6, "pullRequest": { "state": "MERGED" } }
+                { "position": 1, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1569", "number": 1569, "state": "MERGED" } },
+                { "position": 2, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1570", "number": 1570, "state": "MERGED" } },
+                { "position": 3, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1571", "number": 1571, "state": "MERGED" } },
+                { "position": 4, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1572", "number": 1572, "state": "MERGED" } },
+                { "position": 5, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1573", "number": 1573, "state": "MERGED" } },
+                { "position": 6, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAAA05", "number": 1574, "state": "MERGED" } }
               ]
             }
           },
@@ -251,12 +251,12 @@
             "baseRefName": "main",
             "entries": {
               "nodes": [
-                { "position": 1, "pullRequest": { "state": "MERGED" } },
-                { "position": 2, "pullRequest": { "state": "MERGED" } },
-                { "position": 3, "pullRequest": { "state": "MERGED" } },
-                { "position": 4, "pullRequest": { "state": "MERGED" } },
-                { "position": 5, "pullRequest": { "state": "MERGED" } },
-                { "position": 6, "pullRequest": { "state": "OPEN" } }
+                { "position": 1, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1569", "number": 1569, "state": "MERGED" } },
+                { "position": 2, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1570", "number": 1570, "state": "MERGED" } },
+                { "position": 3, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1571", "number": 1571, "state": "MERGED" } },
+                { "position": 4, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1572", "number": 1572, "state": "MERGED" } },
+                { "position": 5, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAAA04", "number": 1573, "state": "MERGED" } },
+                { "position": 6, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1574", "number": 1574, "state": "OPEN" } }
               ]
             }
           },
@@ -393,12 +393,12 @@
             "baseRefName": "main",
             "entries": {
               "nodes": [
-                { "position": 1, "pullRequest": { "state": "MERGED" } },
-                { "position": 2, "pullRequest": { "state": "MERGED" } },
-                { "position": 3, "pullRequest": { "state": "MERGED" } },
-                { "position": 4, "pullRequest": { "state": "MERGED" } },
-                { "position": 5, "pullRequest": { "state": "OPEN" } },
-                { "position": 6, "pullRequest": { "state": "OPEN" } }
+                { "position": 1, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1569", "number": 1569, "state": "MERGED" } },
+                { "position": 2, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1570", "number": 1570, "state": "MERGED" } },
+                { "position": 3, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1571", "number": 1571, "state": "MERGED" } },
+                { "position": 4, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAAA03", "number": 1572, "state": "MERGED" } },
+                { "position": 5, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1573", "number": 1573, "state": "OPEN" } },
+                { "position": 6, "pullRequest": { "id": "PR_kwDOAAAABc8AAAAAAAA1574", "number": 1574, "state": "OPEN" } }
               ]
             }
           },

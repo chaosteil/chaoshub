@@ -181,6 +181,7 @@ mod tests {
                     position: 1,
                     base_ref: "main".into(),
                     merged: Vec::new(),
+                    open: Vec::new(),
                 }),
                 auto_merge: false,
                 in_merge_queue: false,

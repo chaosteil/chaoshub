@@ -20,6 +20,21 @@ pub(crate) struct StackRef {
     /// example in a cache row of an older version.
     #[serde(default)]
     pub merged: Vec<u32>,
+    /// The open entries, position 1 first, as GitHub gave them with this
+    /// pull request. The sync worker uses them to find an entry with an
+    /// old place in its cache. Empty when not known, for example in a
+    /// cache row of an older version.
+    #[serde(default)]
+    pub open: Vec<OpenEntry>,
+}
+
+/// One open entry of a stack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct OpenEntry {
+    pub position: u32,
+    pub number: u64,
+    /// The GraphQL node id of the pull request.
+    pub node_id: String,
 }
 
 impl StackRef {
@@ -85,6 +100,11 @@ mod tests {
             position: 2,
             base_ref: "main".into(),
             merged: Vec::new(),
+            open: vec![OpenEntry {
+                position: 2,
+                number: 42,
+                node_id: "PR_42".into(),
+            }],
         }
     }
 

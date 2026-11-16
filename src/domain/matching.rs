@@ -194,6 +194,7 @@ pub(crate) mod tests {
                     position,
                     base_ref: "main".into(),
                     merged: Vec::new(),
+                    open: Vec::new(),
                 }),
                 auto_merge: false,
                 in_merge_queue: false,

@@ -733,6 +733,16 @@ starts with a header row, for example `stack #12 -> main · 3 PRs`.
 | `├` | A pull request in the middle of a stack. |
 | `└` | The bottom pull request of a stack. |
 
+GitHub does not change the update time of a pull request when it adds
+the pull request to a stack. Thus chaoshub finds a new stack in one of
+two ways:
+
+- A sync reads a pull request of the stack that changed after GitHub
+  made the stack. Then chaoshub also reads the other open entries of
+  the stack again.
+- The next full sync (`refresh.full_secs`, and at the start) finds the
+  new place in the stack of each pull request.
+
 ### Ready for review
 
 By default, the Review and the Team tab show only the pull requests that

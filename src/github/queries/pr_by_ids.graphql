@@ -87,6 +87,8 @@ fragment PrFields on PullRequest {
       nodes {
         position
         pullRequest {
+          id
+          number
           state
         }
       }

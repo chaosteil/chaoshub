@@ -34,7 +34,11 @@
 //! `observed_at`). GitHub does not change `updatedAt` when it adds a pull
 //! request to a stack. Thus the place in the stack is part of the
 //! version. Phase 2 reads the full fields of the new and the changed pull
-//! requests by node id, at most 10 per request. A full sync also reads again at most 40
+//! requests by node id, at most 10 per request. Then it reads the open
+//! entries of their stacks that the worker knows with another place in
+//! the stack, or with no place. Thus a delta also finds a new stack when
+//! GitHub changed one of its pull requests after it made the stack. A
+//! full sync also reads again at most 40
 //! pull requests whose known version is older than 1 h, oldest first, so
 //! the merge state and old cache rows stay up to date. At its first sync
 //! of a scope, the worker loads the known versions from the cache.
@@ -74,7 +78,7 @@ use crate::config::schema::FiltersConfig;
 use crate::domain::keys::PrKey;
 use crate::domain::pr::{MergeStateStatus, Mergeable, PrState, PullRequest};
 use crate::domain::repo::Repo;
-use crate::domain::stack::StackRef;
+use crate::domain::stack::{StackPlace, StackRef};
 use crate::github::GithubError;
 use crate::github::PrStubPage;
 use crate::github::budget::RateBudget;
@@ -314,6 +318,40 @@ impl ScopeState {
             }
         }
     }
+
+    /// The node ids of the open stack entries of `prs` whose known
+    /// version has another place in the stack, or no place. GitHub does
+    /// not change `updatedAt` when it adds a pull request to a stack, so
+    /// a delta does not find these entries. Only the known pull requests
+    /// of the scope and the ids that are not in `read` take part.
+    fn stack_followups(&self, prs: &[PullRequest], read: &HashSet<String>) -> Vec<String> {
+        let mut ids = Vec::new();
+        for pr in prs {
+            let Some(stack) = &pr.head.value.stack else {
+                continue;
+            };
+            for entry in &stack.open {
+                let key = PrKey {
+                    repo: pr.key.repo.clone(),
+                    number: entry.number,
+                };
+                let Some(version) = self.known.get(&key) else {
+                    continue;
+                };
+                let place = StackPlace {
+                    id: stack.id.clone(),
+                    position: entry.position,
+                };
+                if version.stack.as_ref() != Some(&place)
+                    && !read.contains(&entry.node_id)
+                    && !ids.contains(&entry.node_id)
+                {
+                    ids.push(entry.node_id.clone());
+                }
+            }
+        }
+        ids
+    }
 }
 
 /// The state of the sync worker.
@@ -526,7 +564,9 @@ impl Syncer {
     /// Runs the two phases of the search `query`. Phase 1 reads the stubs,
     /// `page_cap` per page, until no page is left or the stubs reach
     /// `MAX_RESULTS`. After each page, phase 2 reads the new and the
-    /// changed pull requests of the page. In a full sync (`refetch`),
+    /// changed pull requests of the page. After the last page, phase 2
+    /// reads the known open stack entries of these pull requests that
+    /// have an old place in the stack. In a full sync (`refetch`),
     /// phase 2 at the end also reads the unchanged pull requests whose
     /// known version is older than `REFETCH_AFTER`: at most
     /// `REFETCH_PER_SYNC`, oldest first.
@@ -560,6 +600,7 @@ impl Syncer {
         };
         let stale_before = started_at - REFETCH_AFTER;
         let mut stale: Vec<(DateTime<Utc>, String)> = Vec::new();
+        let mut read: HashSet<String> = HashSet::new();
         loop {
             if !self.rate(page.rate.clone()).await {
                 return Ok(None);
@@ -583,6 +624,7 @@ impl Syncer {
             pages
                 .keys
                 .extend(page.stubs.iter().map(|stub| stub.key.clone()));
+            read.extend(changed.iter().cloned());
             match self.fetch(scope, &changed, &me, &mut pages).await {
                 Ok(true) => {}
                 Ok(false) => return Ok(None),
@@ -600,9 +642,17 @@ impl Syncer {
                 Err(err) => return Ok(Some(pages.failed(err))),
             };
         }
+        let followups = self.state(scope).stack_followups(&pages.prs, &read);
+        match self.fetch(scope, &followups, &me, &mut pages).await {
+            Ok(true) => {}
+            Ok(false) => return Ok(None),
+            Err(err) => return Ok(Some(pages.failed(err))),
+        }
+        read.extend(followups);
         stale.sort();
         let stale: Vec<String> = stale
             .into_iter()
+            .filter(|(_, id)| !read.contains(id))
             .take(REFETCH_PER_SYNC)
             .map(|(_, id)| id)
             .collect();
@@ -985,7 +1035,6 @@ mod tests {
     use super::*;
     use crate::bus::{Session, SyncError};
     use crate::domain::keys::RepoKey;
-    use crate::domain::stack::StackPlace;
     use crate::workers::testkit::{self, Harness};
 
     const PAGE1: &str = include_str!("../github/testdata/list_prs_page1.json");
@@ -1530,6 +1579,52 @@ mod tests {
             }),
             "the new version has the place in the stack"
         );
+    }
+
+    #[tokio::test]
+    async fn a_delta_reads_the_other_entries_of_a_new_stack_again() {
+        let server = MockServer::start().await;
+        // The delta finds #4087, which changed after GitHub made the
+        // stack, and #1786, which the worker knows already.
+        serve_stacked(&server, &[4087, 1786]).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let last = "2026-11-16T22:54:00Z".parse::<DateTime<Utc>>().unwrap();
+        ctx.store
+            .put_sync_state(
+                Scope::Mine,
+                repo_set_hash(&["acme/deploy".to_owned()]),
+                crate::store::SyncState {
+                    last_full: Some(last),
+                    last_delta: Some(last),
+                    last_error: None,
+                },
+            )
+            .await
+            .unwrap();
+        let mut syncer = Syncer::new(ctx);
+        // The worker read the stack of seven before GitHub made it, and
+        // the stack of three after GitHub made it.
+        for (number, stack, ..) in STACKED {
+            syncer
+                .mine
+                .known
+                .insert(key(number), stacked_version(number, stack == SMALL_STACK));
+        }
+
+        assert!(syncer.delta(Scope::Mine).await);
+        assert_eq!(
+            sync_pages(&mut harness).await.1,
+            [vec![4087], vec![4082, 4083, 4084, 4085, 4086, 4088]],
+            "the other open entries of the stack of seven follow, position 1 first"
+        );
+        assert_eq!(by_ids(&server).await.len(), 2);
+        for (number, ..) in STACKED {
+            assert_eq!(
+                syncer.mine.known[&key(number)].stack,
+                stacked_version(number, true).stack,
+                "#{number} has its place in the stack"
+            );
+        }
     }
 
     #[tokio::test]

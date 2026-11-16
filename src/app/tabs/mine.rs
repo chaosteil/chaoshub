@@ -398,6 +398,7 @@ mod tests {
             position,
             base_ref: "main".into(),
             merged: Vec::new(),
+            open: Vec::new(),
         });
         pr
     }

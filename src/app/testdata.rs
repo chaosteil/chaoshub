@@ -90,6 +90,7 @@ pub(crate) fn stacked(number: u64, position: u32, title: &str) -> PullRequest {
         position,
         base_ref: "main".into(),
         merged: Vec::new(),
+        open: Vec::new(),
     });
     pr
 }
