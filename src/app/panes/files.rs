@@ -9,7 +9,7 @@
 //! its syntax colors when the result of the worker comes.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::app::models::{Cell, CellStyle, Change, PaneModel, TreeNode};
 use crate::app::panes::{Pane, PaneState};
@@ -36,6 +36,19 @@ pub(crate) struct FilesState {
     /// The files with a job on the highlight worker, by head commit and
     /// path.
     waiting: HashSet<(String, String)>,
+    /// The patch nodes of each open file, by head commit and path. A
+    /// model build after a key press clones them, so it does not parse
+    /// and style a large patch again.
+    patches: Mutex<HashMap<(String, String), PatchNodes>>,
+}
+
+/// The patch nodes of one file at one depth, with or without the syntax
+/// colors.
+#[derive(Debug)]
+struct PatchNodes {
+    depth: u8,
+    colored: bool,
+    nodes: Arc<Vec<TreeNode>>,
 }
 
 /// The syntax tokens of the code lines of one file, `None` for a file
@@ -49,6 +62,33 @@ impl FilesState {
     fn highlight(&self, head: &str, path: &str) -> Option<&[Tokens]> {
         let tokens = self.highlights.get(&(head.to_owned(), path.to_owned()))?;
         tokens.as_deref().map(Vec::as_slice)
+    }
+
+    /// The patch nodes of `file` at `depth` and the head commit `head`,
+    /// from the cache or a new build. The cache keeps only the nodes of
+    /// `head`.
+    fn patch_nodes(&self, head: &str, depth: u8, file: &ChangedFile) -> Arc<Vec<TreeNode>> {
+        let tokens = self.highlight(head, &file.path);
+        let colored = tokens.is_some();
+        let key = (head.to_owned(), file.path.clone());
+        let mut cache = self.patches.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(hit) = cache.get(&key)
+            && hit.depth == depth
+            && hit.colored == colored
+        {
+            return Arc::clone(&hit.nodes);
+        }
+        let nodes = Arc::new(patch(depth, file, tokens));
+        cache.retain(|(h, _), _| h == head);
+        cache.insert(
+            key,
+            PatchNodes {
+                depth,
+                colored,
+                nodes: Arc::clone(&nodes),
+            },
+        );
+        nodes
     }
 
     /// The highlight jobs for the open files of `files` of the pull
@@ -374,9 +414,8 @@ fn emit(
             Some(Toggle::File(file.path.clone())),
         ));
         if open {
-            let tokens = state.highlight(head, &file.path);
-            let nodes = patch(deeper, file, tokens);
-            out.extend(nodes.into_iter().map(|n| (n, None)));
+            let nodes = state.patch_nodes(head, deeper, file);
+            out.extend(nodes.iter().map(|n| (n.clone(), None)));
         }
     }
 }
@@ -845,6 +884,29 @@ mod tests {
                 .all(|c| !matches!(c.style, CellStyle::Code(..))),
             "the tokens of the old head are gone"
         );
+    }
+
+    #[test]
+    fn the_patch_nodes_are_built_once_per_head_and_highlight() {
+        let state = state_with(Some(testdata::files()), None, false);
+        let mut ps = FilesPane.init_state();
+        ps.cursor = 8;
+        model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        let cached = |ps: &PaneState| {
+            let files = ps.ext.downcast_ref::<FilesState>().unwrap();
+            let patches = files.patches.lock().unwrap();
+            let hit = &patches[&("oid7".to_owned(), "src/app/panes/files.rs".to_owned())];
+            (Arc::clone(&hit.nodes), hit.colored)
+        };
+        let (first, colored) = cached(&ps);
+        assert!(!colored);
+        model_and_keys(&state, &mut ps, &[KeyCode::Char('j')]);
+        assert!(Arc::ptr_eq(&first, &cached(&ps).0), "a key reads the cache");
+        assert!(deliver(&state, &mut ps, "src/app/panes/files.rs", "oid7"));
+        model_and_keys(&state, &mut ps, &[]);
+        let (colored_nodes, colored) = cached(&ps);
+        assert!(colored, "the syntax colors build the nodes again");
+        assert!(!Arc::ptr_eq(&first, &colored_nodes));
     }
 
     #[test]
