@@ -128,7 +128,8 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         config.terminal.progress.unwrap_or(detected),
         notify.is_some(),
     )
-    .with_desktop(config.notify.desktop);
+    .with_desktop(config.notify.desktop)
+    .with_title(config.terminal.title.unwrap_or(detected));
     let launcher = launcher(&config, RexLauncher::from_env())?;
     let detail = detail_pane(&DetailArgs {
         mode: config.detail.mode,
@@ -774,12 +775,17 @@ impl EventLoop {
                 self.update(Msg::TransitionsDone);
             }
             self.was_active = active;
-            let status = self.app.frame().term.clone();
+            let frame = self.app.frame();
+            let status = frame.term.clone();
+            let title = frame.title.clone();
             let notice = self.app.notice().cloned();
-            if let Err(err) =
-                self.term
-                    .write(&mut io::stdout(), &status, notice.as_ref(), Instant::now())
-            {
+            if let Err(err) = self.term.write(
+                &mut io::stdout(),
+                &status,
+                &title,
+                notice.as_ref(),
+                Instant::now(),
+            ) {
                 tracing::warn!(%err, "cannot write the terminal status");
             }
 
@@ -1181,8 +1187,8 @@ fn notify_settings(config: &NotifyConfig, detected: bool, pinned: bool) -> Optio
     })
 }
 
-/// Writes the terminal status: OSC 7501 when the state or the message
-/// changed, OSC 9;4 when the progress changed or once per second while a
+/// Writes OSC 2 when the title changes, OSC 7501 when the state or message
+/// changes, and OSC 9;4 when progress changes or once per second while
 /// progress is active. The notice of new pull requests is the OSC 7501
 /// record `NOTICE_ID`: `done` when a new notice comes, `clear` when it
 /// goes. A new notice while one shows sends `clear` and then `done`.
@@ -1191,6 +1197,10 @@ fn notify_settings(config: &NotifyConfig, detected: bool, pinned: bool) -> Optio
 /// as a tab dot.
 #[derive(Debug)]
 struct TermWriter {
+    /// The `[terminal] title` switch.
+    title: bool,
+    /// The last terminal title that was written.
+    last_title: Option<String>,
     /// The `[terminal] program_status` switch.
     program_status: bool,
     /// The `[terminal] progress` switch.
@@ -1211,6 +1221,8 @@ struct TermWriter {
 impl TermWriter {
     fn new(program_status: bool, progress: bool, notify: bool) -> Self {
         Self {
+            title: false,
+            last_title: None,
             program_status,
             progress,
             notify,
@@ -1227,15 +1239,26 @@ impl TermWriter {
         self
     }
 
+    /// Sets whether the terminal title is updated.
+    fn with_title(mut self, enabled: bool) -> Self {
+        self.title = enabled;
+        self
+    }
+
     /// Writes what changed or what is due. Runs on every loop pass.
     fn write(
         &mut self,
         out: &mut impl Write,
         status: &TermStatus,
+        title: &str,
         notice: Option<&Notice>,
         now: Instant,
     ) -> io::Result<()> {
         let mut bytes = Vec::new();
+        if self.title && self.last_title.as_deref() != Some(title) {
+            bytes.extend(osc::title(title));
+            self.last_title = Some(title.to_owned());
+        }
         let seq = notice.map(|notice| notice.seq);
         if self.notify && seq != self.last_notice {
             // A notice that replaces a shown one removes the old record
@@ -1277,10 +1300,11 @@ impl TermWriter {
         out.flush()
     }
 
-    /// Writes `state=clear` and `9;4;0` on quit. `state=clear` without an
-    /// `id` also removes the notice. The next `write` sends the status
-    /// again.
+    /// Clears the title, program status and progress on quit.
+    /// `state=clear` without an `id` also removes the notice. The next
+    /// `write` sends the title and status again.
     fn clear(&mut self, out: &mut impl Write) -> io::Result<()> {
+        self.last_title = None;
         self.last_status = None;
         self.last_progress = None;
         self.last_notice = None;
@@ -1288,8 +1312,8 @@ impl TermWriter {
         flush(out, &bytes)
     }
 
-    /// Clears the status before the terminal is handed to a foreground
-    /// process, for example a review in the same terminal. The notice
+    /// Clears the title and status before a foreground process takes
+    /// the terminal, for example a review in the same terminal. The notice
     /// stays: while it shows, an `idle` root record replaces the status,
     /// because `state=clear` without an `id` also removes the notice.
     /// The next `write` sends the status again.
@@ -1297,9 +1321,13 @@ impl TermWriter {
         if self.last_notice.is_none() {
             return self.clear(out);
         }
+        self.last_title = None;
         self.last_status = None;
         self.last_progress = None;
         let mut bytes = Vec::new();
+        if self.title {
+            bytes.extend(osc::title(""));
+        }
         if self.program_status {
             bytes.extend(osc::program_status(&TermStatus {
                 state: TermState::Idle,
@@ -1315,7 +1343,12 @@ impl TermWriter {
 
     /// The clear sequences of the switches that are on.
     fn clear_sequence(&self) -> Vec<u8> {
-        match (self.program_status || self.notify, self.progress) {
+        let mut bytes = if self.title {
+            osc::title("")
+        } else {
+            Vec::new()
+        };
+        bytes.extend(match (self.program_status || self.notify, self.progress) {
             (true, true) => osc::clear(),
             (true, false) => osc::program_status(&TermStatus {
                 state: TermState::Clear,
@@ -1324,7 +1357,8 @@ impl TermWriter {
             }),
             (false, true) => osc::progress(Progress::Off),
             (false, false) => Vec::new(),
-        }
+        });
+        bytes
     }
 }
 
@@ -1890,7 +1924,9 @@ mod tests {
     /// The bytes of one `write` call.
     fn written(writer: &mut TermWriter, status: &TermStatus, now: Instant) -> Vec<u8> {
         let mut out = Vec::new();
-        writer.write(&mut out, status, None, now).unwrap();
+        writer
+            .write(&mut out, status, "chaoshub", None, now)
+            .unwrap();
         out
     }
 
@@ -2003,7 +2039,7 @@ mod tests {
     fn written_notice(writer: &mut TermWriter, notice: Option<&Notice>) -> Vec<u8> {
         let mut out = Vec::new();
         writer
-            .write(&mut out, &idle(), notice, Instant::now())
+            .write(&mut out, &idle(), "chaoshub", notice, Instant::now())
             .unwrap();
         out
     }
@@ -3519,5 +3555,84 @@ mod tests {
         )
         .unwrap();
         insta::assert_snapshot!(terminal.backend());
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    fn write_title(writer: &mut TermWriter, title: &str, notice: Option<&Notice>) -> Vec<u8> {
+        let mut out = Vec::new();
+        let status = TermStatus {
+            state: TermState::Idle,
+            msg: None,
+            progress: Progress::Off,
+        };
+        writer
+            .write(&mut out, &status, title, notice, Instant::now())
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn the_title_is_written_only_when_it_changes() {
+        let mut writer = TermWriter::new(false, false, false).with_title(true);
+        assert_eq!(
+            write_title(&mut writer, "chaoshub · 3 review", None),
+            "\x1b]2;chaoshub · 3 review\x1b\\".as_bytes()
+        );
+        assert!(write_title(&mut writer, "chaoshub · 3 review", None).is_empty());
+        assert_eq!(
+            write_title(&mut writer, "chaoshub · 2 review", None),
+            "\x1b]2;chaoshub · 2 review\x1b\\".as_bytes()
+        );
+    }
+
+    #[test]
+    fn title_updates_can_be_disabled() {
+        let mut writer = TermWriter::new(false, false, false).with_title(false);
+        assert!(write_title(&mut writer, "chaoshub · 3 review", None).is_empty());
+        let mut out = Vec::new();
+        writer.clear(&mut out).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn quit_and_the_panic_clear_sequence_clear_the_title() {
+        let mut writer = TermWriter::new(false, false, false).with_title(true);
+        assert_eq!(writer.clear_sequence(), b"\x1b]2;\x1b\\");
+        let first = write_title(&mut writer, "chaoshub · 3 review", None);
+        let mut out = Vec::new();
+        writer.clear(&mut out).unwrap();
+        assert_eq!(out, b"\x1b]2;\x1b\\");
+        assert_eq!(write_title(&mut writer, "chaoshub · 3 review", None), first);
+    }
+
+    #[test]
+    fn a_foreground_handover_clears_the_title_and_keeps_the_notice() {
+        for notice in [
+            None,
+            Some(Notice {
+                seq: 1,
+                title: "chaoshub".into(),
+                msg: "New PR".into(),
+            }),
+        ] {
+            let mut writer = TermWriter::new(false, false, true).with_title(true);
+            write_title(&mut writer, "chaoshub · 3 review", notice.as_ref());
+            let mut out = Vec::new();
+            writer.hand_over(&mut out).unwrap();
+            let expected = if notice.is_some() {
+                b"\x1b]2;\x1b\\".as_slice()
+            } else {
+                b"\x1b]2;\x1b\\\x1b]7501;state=clear:app=chaoshub\x1b\\".as_slice()
+            };
+            assert_eq!(out, expected);
+            assert_eq!(
+                write_title(&mut writer, "chaoshub · 3 review", notice.as_ref()),
+                "\x1b]2;chaoshub · 3 review\x1b\\".as_bytes()
+            );
+        }
     }
 }

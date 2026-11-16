@@ -263,6 +263,7 @@ pub(crate) fn frame() -> FrameModel {
             msg: None,
             progress: Progress::Off,
         },
+        title: "chaoshub".to_owned(),
         filter: None,
         hints: None,
         column_headers: false,

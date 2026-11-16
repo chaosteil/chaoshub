@@ -1,6 +1,7 @@
-//! Pure builders for the OSC 7501, OSC 9;4 and OSC 52 byte sequences.
+//! Pure builders for the OSC 2, OSC 7501, OSC 9;4 and OSC 52 byte sequences.
 //! No IO.
 //!
+//! - OSC 2 (terminal title): `ESC ] 2 ; <text> ESC \`.
 //! - OSC 7501 (program status):
 //!   `ESC ] 7501 ; state=<state>[:kind=<kind>]:app=chaoshub[:msg=<base64>] ESC \`.
 //!   A child record also has an `id` and a `title`:
@@ -21,6 +22,12 @@ const APP: &str = "chaoshub";
 const TITLE_MAX: usize = 192;
 /// The maximum length of a decoded `msg`, in bytes.
 const MSG_MAX: usize = 2048;
+
+/// Sets the terminal title. An empty text clears it. Replace control
+/// characters and limit the length, as for a program status title.
+pub(crate) fn title(text: &str) -> Vec<u8> {
+    sequence(&format!("2;{}", field_text(text, TITLE_MAX)))
+}
 
 /// The OSC 7501 sequence for a program status. `msg` is base64 without
 /// line breaks.
@@ -364,5 +371,29 @@ mod tests {
             b"\x1b]52;c;aHR0cHM6Ly9naXRodWIuY29tL2NoYW9zdGVpbC9jaGFvc2h1Yi9wdWxsLzE=\x1b\\"
         );
         assert_eq!(clipboard(""), b"\x1b]52;c;\x1b\\");
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    #[test]
+    fn title_sequences_set_and_clear_the_title() {
+        assert_eq!(title("chaoshub"), b"\x1b]2;chaoshub\x1b\\");
+        assert_eq!(title(""), b"\x1b]2;\x1b\\");
+    }
+
+    #[test]
+    fn terminal_titles_cannot_add_control_sequences() {
+        assert_eq!(
+            title("a\x1b]52;c;bad\x07\nc"),
+            b"\x1b]2;a ]52;c;bad  c\x1b\\"
+        );
+        let long = "ü".repeat(200);
+        assert_eq!(
+            title(&long),
+            format!("\x1b]2;{}\x1b\\", "ü".repeat(96)).into_bytes()
+        );
     }
 }

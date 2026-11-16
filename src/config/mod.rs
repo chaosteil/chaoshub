@@ -260,6 +260,7 @@ mod tests {
         assert!(config.theme.grunge);
         assert!(!config.theme.textures);
         assert_eq!(config.theme.animation_ms, 120);
+        assert_eq!(config.terminal.title, None);
         assert_eq!(config.terminal.program_status, None);
         assert_eq!(config.terminal.progress, Some(true));
         assert_eq!(config.keys.get("merge").map(String::as_str), Some("M"));

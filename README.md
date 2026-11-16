@@ -630,18 +630,37 @@ detail (see "Actions").
 
 ### `[terminal]`
 
-The terminal status sequences (see "Rex, Ghostty and codeview") and the
-mouse (see "Mouse").
+The terminal title, status sequences (see "Rex, Ghostty and codeview")
+and mouse controls (see "Mouse").
 
 | Key | Default | Meaning |
 |---|---|---|
+| `title` | detected | Sets the terminal title with the ready review count and the current activity. |
 | `program_status` | detected | Writes OSC 7501, the program status. |
 | `progress` | detected | Writes OSC 9;4, the progress bar. |
 | `mouse` | `true` | Reads the mouse. `false` leaves the mouse to the terminal, so the terminal selects the text. chaoshub selects text itself (see "Mouse"), so `false` is only necessary to select across panes. |
 
-When `program_status` or `progress` is not set, chaoshub writes the
-sequence only inside Rex (`REX_BLOCK` is set) and Ghostty
+When `title`, `program_status` or `progress` is not set, chaoshub writes
+the sequence only inside Rex (`REX_BLOCK` is set) and Ghostty
 (`TERM_PROGRAM=ghostty`). `true` forces it on, `false` forces it off.
+
+The list title is `chaoshub · 3 review`. The count uses the normal
+Review tab: open PRs that request review from you or your teams, are
+not drafts, have green CI, and pass the age limit. Text and author
+filters and the `t` and `T` switches do not change it. Until the first
+review list sync completes, `? review` shows that the count is not
+known yet.
+
+One short activity can follow the count, such as `syncing`,
+`prefetching`, `merging #42`, `input` or `error`. The status bar shows
+the error details. A standalone PR pane shows its repository and PR
+number instead of a review count.
+
+The title uses OSC 2. It updates only when its text changes. It clears
+when chaoshub exits or hands the terminal to another program, then
+updates again when chaoshub resumes. It does not rename Rex sessions,
+windows or pane labels. Set `title = false` in `[terminal]` to turn
+title updates off.
 
 ### `[notify]`
 

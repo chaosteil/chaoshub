@@ -319,6 +319,8 @@ pub(crate) enum PaletteSetting {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub(crate) struct TerminalConfig {
+    /// OSC 2, the terminal title.
+    pub title: Option<bool>,
     /// OSC 7501, the program status.
     pub program_status: Option<bool>,
     /// OSC 9;4, the progress bar.
@@ -331,6 +333,7 @@ pub(crate) struct TerminalConfig {
 impl Default for TerminalConfig {
     fn default() -> Self {
         Self {
+            title: None,
             program_status: None,
             progress: None,
             mouse: true,
