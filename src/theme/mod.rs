@@ -43,6 +43,16 @@ pub(crate) struct Palette {
     pub orange: Color,
     pub purple: Color,
     pub pink: Color,
+    /// The background of an added line in a diff.
+    pub diff_add_bg: Color,
+    /// The background of a removed line in a diff.
+    pub diff_del_bg: Color,
+    /// The text of a hunk header (`@@ -1,3 +1,4 @@`) in a diff.
+    pub diff_hunk: Color,
+    /// The background of a hunk header in a diff.
+    pub diff_hunk_bg: Color,
+    /// The line numbers in the gutter of a diff.
+    pub diff_gutter: Color,
 }
 
 /// The look of the frames, headers, separators, fills, selections and

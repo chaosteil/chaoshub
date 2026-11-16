@@ -24,6 +24,15 @@ impl Palette {
             orange: Color::Rgb(0xff, 0xa3, 0x59),
             purple: Color::Rgb(0x9d, 0x6a, 0xfb),
             pink: Color::Rgb(0xff, 0x67, 0x8d),
+            // The diff tints are the success, danger and info colors at
+            // 10% over the background, as in the diff colors of the Pierre
+            // theme (`#07c4801a`, `#ff2e3f1a`).
+            diff_add_bg: Color::Rgb(0x0a, 0x1d, 0x16),
+            diff_del_bg: Color::Rgb(0x23, 0x0e, 0x0f),
+            diff_hunk: Color::Rgb(0x7e, 0xa6, 0xc0),
+            diff_hunk_bg: Color::Rgb(0x0a, 0x1d, 0x21),
+            // The line number color of the Pierre theme.
+            diff_gutter: Color::Rgb(0x73, 0x73, 0x73),
         }
     }
 
@@ -45,6 +54,13 @@ impl Palette {
             orange: Color::LightYellow,
             purple: Color::Magenta,
             pink: Color::LightRed,
+            // 16 colors have no subtle tint, so the diff lines keep the
+            // background.
+            diff_add_bg: Color::Black,
+            diff_del_bg: Color::Black,
+            diff_hunk: Color::Cyan,
+            diff_hunk_bg: Color::Black,
+            diff_gutter: Color::DarkGray,
         }
     }
 }
@@ -124,11 +140,60 @@ mod tests {
     }
 
     #[test]
+    fn pierre_diff_lines_keep_contrast() {
+        let p = Palette::pierre();
+        // The text color of each diff line on the tint of its row.
+        let lines = [
+            ("success on diff_add_bg", p.success, p.diff_add_bg),
+            ("fg on diff_add_bg", p.fg, p.diff_add_bg),
+            ("danger on diff_del_bg", p.danger, p.diff_del_bg),
+            ("fg on diff_del_bg", p.fg, p.diff_del_bg),
+            ("diff_hunk on diff_hunk_bg", p.diff_hunk, p.diff_hunk_bg),
+        ];
+        for (name, text, row) in lines {
+            let ratio = contrast(text, row);
+            assert!(ratio >= 4.5, "{name}: {ratio:.2}");
+        }
+        // The line numbers are a dim aid, as in the Pierre theme, so 3:1
+        // is enough for them.
+        for row in [p.bg, p.diff_add_bg, p.diff_del_bg] {
+            let ratio = contrast(p.diff_gutter, row);
+            assert!(ratio >= 3.0, "diff_gutter on {row:?}: {ratio:.2}");
+        }
+    }
+
+    #[test]
+    fn ansi16_diff_lines_keep_the_background() {
+        let p = Palette::ansi16();
+        assert_eq!(p.diff_add_bg, p.bg);
+        assert_eq!(p.diff_del_bg, p.bg);
+        assert_eq!(p.diff_hunk_bg, p.bg);
+    }
+
+    #[test]
     fn ansi16_uses_named_colors_only() {
         let p = Palette::ansi16();
         let all = [
-            p.bg, p.surface, p.fg, p.fg_dim, p.fg_mute, p.primary, p.success, p.danger, p.warn,
-            p.info, p.merge, p.magenta, p.orange, p.purple, p.pink,
+            p.bg,
+            p.surface,
+            p.fg,
+            p.fg_dim,
+            p.fg_mute,
+            p.primary,
+            p.success,
+            p.danger,
+            p.warn,
+            p.info,
+            p.merge,
+            p.magenta,
+            p.orange,
+            p.purple,
+            p.pink,
+            p.diff_add_bg,
+            p.diff_del_bg,
+            p.diff_hunk,
+            p.diff_hunk_bg,
+            p.diff_gutter,
         ];
         assert!(
             all.iter()
