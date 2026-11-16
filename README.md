@@ -949,11 +949,13 @@ background. Each line starts with its line number: the new number for
 an added line and a context line, the old number for a removed line.
 
 The code of each line has the syntax colors of its language. chaoshub
-finds the language from the file name or the extension, with the
-syntaxes that [syntect](https://github.com/trishume/syntect) bundles
-(for example Rust, Go, Python, JavaScript, C, Java, Markdown, YAML and
-shell). TypeScript, TOML, Nix and Dockerfile are not in the set. The
-`+` and the `-` keep the green and the red of the change. The token
+finds the language from the file name or the extension, with
+[syntect](https://github.com/trishume/syntect) and the syntaxes of
+[bat](https://github.com/sharkdp/bat) that
+[two-face](https://codeberg.org/CosmicHarper/two-face) bundles. The set
+has more than 200 languages, for example Rust, Go, Python, TypeScript
+and TSX, JavaScript, TOML, Nix, Dockerfile, YAML, JSON, Markdown and
+shell. The `+` and the `-` keep the green and the red of the change. The token
 colors are the `syntax` keys of the palette, from the `pierre-dark`
 theme:
 

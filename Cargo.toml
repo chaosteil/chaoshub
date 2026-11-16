@@ -57,8 +57,9 @@ rusqlite = { version = "0.41.1", features = ["bundled", "chrono"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 signal-hook = "0.3.18"
-# The pure-Rust regex engine, so the build needs no C library.
-syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
+# The pure-Rust regex engine, so the build needs no C library. The
+# syntaxes come from two-face.
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "regex-fancy"] }
 tachyonfx = "0.25.2"
 textwrap = "0.16.4"
 thiserror = "2.0.21"
@@ -68,6 +69,8 @@ toml = "1.1.8"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = "0.3.23"
+# The syntaxes of bat for syntect, with the pure-Rust regex engine.
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 
 # The dependencies (ratatui, tachyonfx) are optimized in `cargo run`, so
 # the transitions stay fast. The crate itself keeps the dev level.

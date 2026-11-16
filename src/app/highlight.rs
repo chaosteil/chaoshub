@@ -1,6 +1,7 @@
 //! The syntax highlight of the code lines of a diff, with syntect and the
-//! syntaxes that syntect bundles. The result is a role per token, not a
-//! color: the palette of the theme gives the colors (see `ui::style`).
+//! syntaxes of bat that two-face bundles. The result is a role per token,
+//! not a color: the palette of the theme gives the colors (see
+//! `ui::style`).
 
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -38,8 +39,9 @@ pub(crate) enum Side {
 /// each other have different roles.
 pub(crate) type Tokens = Vec<(Syntax, String)>;
 
-/// The syntaxes that syntect bundles, loaded at the first highlight.
-static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+/// The syntaxes of bat that two-face bundles, loaded at the first
+/// highlight.
+static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_newlines);
 
 /// The theme that gives each scope its role. The scopes follow the
 /// `pierre-dark` theme.
@@ -140,15 +142,46 @@ fn roles() -> Theme {
     }
 }
 
+/// File extensions that the syntaxes do not know, each with an extension
+/// of the same language that they know.
+const EXTENSIONS: &[(&str, &str)] = &[
+    // The TypeScript syntax of JSX also reads the JSX tags.
+    ("jsx", "tsx"),
+    ("mjs", "js"),
+    ("cjs", "js"),
+    ("jsonc", "json"),
+    ("json5", "json"),
+];
+
+/// File names that the syntaxes do not know, each with an extension of
+/// their language.
+const NAMES: &[(&str, &str)] = &[("flake.lock", "json"), ("Containerfile", "Dockerfile")];
+
 /// The syntax of a file at `path`, by its file name or its extension.
 /// `None` for a file that no bundled syntax knows.
 fn syntax_for(path: &str) -> Option<&'static SyntaxReference> {
     let name = path.rsplit('/').next().unwrap_or(path);
-    let extension = name.rsplit_once('.').map(|(_, ext)| ext);
     let syntaxes = &*SYNTAXES;
-    let found = syntaxes
-        .find_syntax_by_extension(name)
-        .or_else(|| extension.and_then(|ext| syntaxes.find_syntax_by_extension(ext)))?;
+    let named = NAMES
+        .iter()
+        .find_map(|&(known, ext)| (known == name).then_some(ext));
+    // `Dockerfile.dev` and `Containerfile.prod` are Dockerfiles too.
+    let docker = ["Dockerfile.", "Containerfile."]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        .then_some("Dockerfile");
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase());
+    let alias = extension.as_deref().and_then(|ext| {
+        EXTENSIONS
+            .iter()
+            .find_map(|&(known, other)| (known == ext).then_some(other))
+    });
+    let found = [Some(name), named, docker, extension.as_deref(), alias]
+        .into_iter()
+        .flatten()
+        .find_map(|key| syntaxes.find_syntax_by_extension(key))?;
     (found.name != "Plain Text").then_some(found)
 }
 
@@ -238,6 +271,19 @@ mod tests {
     }
 
     #[test]
+    fn typescript_toml_nix_and_dockerfile_get_roles() {
+        let ts = highlight("web/app.ts", &[(Side::New, "const n: number = 42;")]).unwrap();
+        assert_eq!(role_of(&ts[0], "const"), Syntax::Keyword);
+        assert_eq!(role_of(&ts[0], "42"), Syntax::Number);
+        let toml = highlight("Cargo.toml", &[(Side::New, "name = \"chaoshub\"")]).unwrap();
+        assert_eq!(role_of(&toml[0], "chaoshub"), Syntax::String);
+        let nix = highlight("flake.nix", &[(Side::New, "  x = \"y\"; # note")]).unwrap();
+        assert_eq!(role_of(&nix[0], "note"), Syntax::Comment);
+        let docker = highlight("Dockerfile", &[(Side::New, "FROM rust:1.91")]).unwrap();
+        assert_eq!(role_of(&docker[0], "FROM"), Syntax::Keyword);
+    }
+
+    #[test]
     fn a_removed_line_does_not_change_the_new_side() {
         let lines = [(Side::Old, "/* an open comment"), (Side::New, "let x = 1;")];
         let out = highlight("a.rs", &lines).unwrap();
@@ -250,6 +296,23 @@ mod tests {
         let name = |path| syntax_for(path).map(|s| s.name.as_str());
         assert_eq!(name("src/lib.rs"), Some("Rust"));
         assert_eq!(name("build/Makefile"), Some("Makefile"));
+        assert_eq!(name("web/app.ts"), Some("TypeScript"));
+        assert_eq!(name("web/App.tsx"), Some("TypeScriptReact"));
+        assert_eq!(name("web/App.jsx"), Some("TypeScriptReact"));
+        assert_eq!(name("web/main.mjs"), Some("JavaScript"));
+        assert_eq!(name("Cargo.toml"), Some("TOML"));
+        assert_eq!(name("Cargo.lock"), Some("TOML"));
+        assert_eq!(name("flake.nix"), Some("Nix"));
+        assert_eq!(name("flake.lock"), Some("JSON"));
+        assert_eq!(name("Dockerfile"), Some("Dockerfile"));
+        assert_eq!(name("ci/Dockerfile.dev"), Some("Dockerfile"));
+        assert_eq!(name("Containerfile"), Some("Dockerfile"));
+        assert_eq!(
+            name("src/MAIN.RS"),
+            Some("Rust"),
+            "the extension in any case"
+        );
+        assert_eq!(name("go.mod"), Some("Gomod"));
         assert_eq!(name("notes.txt"), None, "plain text has no colors");
         assert_eq!(name("data.unknown"), None);
         assert_eq!(name("LICENSE"), None);
