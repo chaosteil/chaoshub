@@ -940,6 +940,8 @@ keys of the palette:
 | Hunk header (`@@ -1,3 +1,4 @@`) | `diff_hunk` on `diff_hunk_bg` | `#7ea6c0` on `#0a1d21` | cyan |
 | Added line | `success` on `diff_add_bg` | `#07c480` on `#0a1d16` | green |
 | Removed line | `danger` on `diff_del_bg` | `#ff2e3f` on `#230e0f` | red |
+| Changed word of an added line | its text color on `diff_add_word_bg` | `#093e2b` | on dark gray |
+| Changed word of a removed line | its text color on `diff_del_word_bg` | `#4f1419` | on dark gray |
 | Context line | `fg` | `#fafafa` | white |
 | Line number | `diff_gutter` | `#737373` | dark gray |
 
@@ -947,6 +949,18 @@ The tint of a line goes from its line number to the right edge of the
 pane. The ANSI palette has no light tints, so there the lines keep the
 background. Each line starts with its line number: the new number for
 an added line and a context line, the old number for a removed line.
+
+A run of removed lines that a run of added lines follows directly is
+one change. Its lines pair up by position, as on GitHub: the first
+removed line with the first added line, and so on. In each pair, the
+words that changed get a stronger tint, as in the Pierre diff view.
+The text keeps its color. A word is a run of letters, digits and `_`,
+or one other sign. Two changed words that one char divides show as one
+mark. A pair gets no marks when one of its lines is longer than 1000
+characters, or when less than half of the text of the two lines is
+equal. A change gets no marks when one side has more than three times
+the lines of the other side. On the cursor line, the selection band
+hides the marks.
 
 The code of each line has the syntax colors of its language. chaoshub
 finds the language from the file name or the extension, with
@@ -982,10 +996,11 @@ A background worker gives the syntax colors, so the UI does not wait
 for them. When you open a file, its diff shows at once with the diff
 colors. The syntax colors come when the worker is done, usually after
 some milliseconds. chaoshub keeps the result until the pull request
-gets a new head. A file gets no syntax colors when no bundled syntax
-knows its language, or when its patch is larger than 128 KiB. A line
-that is longer than 1000 characters gets no syntax colors. The diff
-colors stay.
+gets a new head. The worker also finds the changed words. A file gets
+no syntax colors when no bundled syntax knows its language. A file
+gets no syntax colors and no marks of changed words when its patch is
+larger than 128 KiB. A line that is longer than 1000 characters gets
+no syntax colors. The diff colors stay.
 
 #### Codeview comments
 

@@ -126,7 +126,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::domain::diff::Syntax;
+    use crate::domain::diff::{Piece, Syntax};
     use crate::domain::keys::PrKey;
     use crate::workers::testkit;
 
@@ -201,7 +201,14 @@ mod tests {
         assert_eq!((done.key, done.head.as_str()), (key(1), "h1"));
         let lines = done.lines.unwrap();
         assert_eq!(lines.len(), 2, "one entry per code line");
-        assert_eq!(lines[1][0], (Syntax::Keyword, "let".into()));
+        assert_eq!(
+            lines[1][0],
+            Piece {
+                syntax: Some(Syntax::Keyword),
+                changed: false,
+                text: "let".into(),
+            }
+        );
         harness
             .highlight
             .send(HighlightReq::File(job(1, "h1", "notes.unknown")))
@@ -210,7 +217,11 @@ mod tests {
         let Msg::Highlighted(done) = harness.recv().await else {
             panic!("not a highlight");
         };
-        assert_eq!(done.lines, None, "an unknown language has no tokens");
+        let lines = done.lines.unwrap();
+        assert!(
+            lines.iter().flatten().all(|p| p.syntax.is_none()),
+            "an unknown language has no syntax colors, only changed words"
+        );
         drop(harness);
         worker.await.unwrap();
     }

@@ -16,7 +16,7 @@ use crate::app::panes::{Pane, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx, tree_toggled};
 use crate::bus::{Cmd, HighlightJob, HighlightReq, Highlighted, KeyChord, Msg, Size, Target};
-use crate::domain::diff::{LineKind, Tokens, numbered};
+use crate::domain::diff::{LineKind, Piece, Pieces, numbered};
 use crate::domain::files::{ChangedFile, FileStatus, PrFiles};
 use crate::domain::keys::PrKey;
 use crate::domain::pr::PullRequest;
@@ -30,8 +30,8 @@ pub(crate) struct FilesPane;
 pub(crate) struct FilesState {
     pub closed_dirs: HashSet<String>,
     pub open_files: HashSet<String>,
-    /// The syntax tokens that the highlight worker sent, by head commit
-    /// and path.
+    /// The pieces of the code lines that the highlight worker sent, by
+    /// head commit and path.
     highlights: HashMap<(String, String), Highlight>,
     /// The files with a job on the highlight worker, by head commit and
     /// path.
@@ -51,15 +51,14 @@ struct PatchNodes {
     nodes: Arc<Vec<TreeNode>>,
 }
 
-/// The syntax tokens of the code lines of one file, `None` for a file
-/// without syntax colors.
-type Highlight = Option<Arc<Vec<Tokens>>>;
+/// The pieces of the code lines of one file: the token roles and the
+/// changed words. `None` for a file without them.
+type Highlight = Option<Arc<Vec<Pieces>>>;
 
 impl FilesState {
-    /// The syntax tokens of the file at `path` at the head commit `head`.
-    /// `None` until the worker sends them, and for a file without syntax
-    /// colors.
-    fn highlight(&self, head: &str, path: &str) -> Option<&[Tokens]> {
+    /// The pieces of the file at `path` at the head commit `head`. `None`
+    /// until the worker sends them, and for a file without them.
+    fn highlight(&self, head: &str, path: &str) -> Option<&[Pieces]> {
         let tokens = self.highlights.get(&(head.to_owned(), path.to_owned()))?;
         tokens.as_deref().map(Vec::as_slice)
     }
@@ -457,7 +456,7 @@ fn file_node(depth: u8, open: bool, name: &str, file: &ChangedFile) -> TreeNode 
 /// tint. A hunk header is muted on its own tint. With `tokens`, one per
 /// code line, the `+` or `-` keeps the color of the change and the code
 /// gets the syntax colors.
-fn patch(depth: u8, file: &ChangedFile, tokens: Option<&[Tokens]>) -> Vec<TreeNode> {
+fn patch(depth: u8, file: &ChangedFile, pieces: Option<&[Pieces]>) -> Vec<TreeNode> {
     let Some(patch) = &file.patch else {
         return vec![node(
             depth,
@@ -471,7 +470,7 @@ fn patch(depth: u8, file: &ChangedFile, tokens: Option<&[Tokens]>) -> Vec<TreeNo
         .filter_map(|(_, number, _)| *number)
         .max()
         .map_or(1, |max| max.to_string().len());
-    let mut tokens = tokens.map(<[Tokens]>::iter);
+    let mut pieces = pieces.map(<[Pieces]>::iter);
     lines
         .into_iter()
         .map(|(kind, number, text)| {
@@ -493,18 +492,31 @@ fn patch(depth: u8, file: &ChangedFile, tokens: Option<&[Tokens]>) -> Vec<TreeNo
                 LineKind::Context => (CellStyle::Normal, Change::Context),
             };
             let mut cells = vec![cell(gutter, CellStyle::DiffGutter)];
-            match tokens.as_mut().and_then(Iterator::next) {
+            match pieces.as_mut().and_then(Iterator::next) {
                 Some(line) => {
                     cells.push(cell(text.get(..1).unwrap_or_default(), style));
-                    cells.extend(line.iter().map(|(syntax, piece)| {
-                        cell(piece.as_str(), CellStyle::Code(*syntax, change))
-                    }));
+                    cells.extend(
+                        line.iter().map(|piece| {
+                            cell(piece.text.as_str(), piece_style(piece, style, change))
+                        }),
+                    );
                 }
                 None => cells.push(cell(text, style)),
             }
             node(depth, None, cells)
         })
         .collect()
+}
+
+/// The style of a piece of code in a line of `line` style and `change`:
+/// a changed word gets the word tint, a token its syntax color, and a
+/// piece without both the style of its line.
+fn piece_style(piece: &Piece, line: CellStyle, change: Change) -> CellStyle {
+    match (piece.syntax, piece.changed) {
+        (syntax, true) => CellStyle::Word(syntax, change),
+        (Some(syntax), false) => CellStyle::Code(syntax, change),
+        (None, false) => line,
+    }
 }
 
 #[cfg(test)]
@@ -765,8 +777,8 @@ mod tests {
         };
         assert!(has(1, Syntax::Keyword, Change::Context, "fn"));
         assert!(has(1, Syntax::Function, Change::Context, "main"));
-        assert!(has(2, Syntax::String, Change::Removed, "\"old\""));
-        assert!(has(3, Syntax::String, Change::Added, "\"new\""));
+        assert!(has(2, Syntax::String, Change::Removed, "\""));
+        assert!(has(3, Syntax::String, Change::Added, "\""));
         assert_eq!(lines[6].cells.len(), 2, "the note gets no syntax colors");
         assert!(tree_nodes(&model).iter().all(|n| {
             n.cells
@@ -842,6 +854,65 @@ mod tests {
         let styles: Vec<CellStyle> = nodes[2].cells.iter().map(|c| c.style).collect();
         assert_eq!(styles, [CellStyle::DiffGutter, CellStyle::DiffAdd]);
         assert_eq!(nodes[2].cells[1].text, "+fn b");
+    }
+
+    #[test]
+    fn the_changed_words_of_a_file_without_syntax_colors_keep_the_diff_colors() {
+        let file = ChangedFile {
+            path: "notes.unknown".into(),
+            previous_path: None,
+            status: FileStatus::Modified,
+            additions: 1,
+            deletions: 1,
+            patch: Some("@@ -1 +1 @@\n-the old text\n+the new text".into()),
+        };
+        let pieces = crate::highlight::patch(&file.path, file.patch.as_deref().unwrap()).unwrap();
+        let nodes = patch(0, &file, Some(&pieces));
+        let cells = |index: usize| -> Vec<(CellStyle, &str)> {
+            nodes[index].cells[1..]
+                .iter()
+                .map(|c| (c.style, c.text.as_str()))
+                .collect()
+        };
+        assert_eq!(
+            cells(2),
+            [
+                (CellStyle::DiffAdd, "+"),
+                (CellStyle::DiffAdd, "the "),
+                (CellStyle::Word(None, Change::Added), "new"),
+                (CellStyle::DiffAdd, " text"),
+            ]
+        );
+        assert_eq!(cells(1)[2], (CellStyle::Word(None, Change::Removed), "old"));
+    }
+
+    #[test]
+    fn a_pair_of_lines_marks_its_changed_words() {
+        let state = state_with(Some(testdata::files()), None, false);
+        let mut ps = FilesPane.init_state();
+        ps.cursor = 8;
+        model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        assert!(deliver(&state, &mut ps, "src/app/panes/files.rs", "oid7"));
+        let (model, _) = model_and_keys(&state, &mut ps, &[]);
+        let lines = &tree_nodes(&model)[9..16];
+        let words = |index: usize| -> Vec<(CellStyle, &str)> {
+            lines[index]
+                .cells
+                .iter()
+                .filter(|c| matches!(c.style, CellStyle::Word(..)))
+                .map(|c| (c.style, c.text.as_str()))
+                .collect()
+        };
+        // The removed line and the first added line are a pair. Their
+        // changed words keep the string color, on the word tint.
+        let string = Some(Syntax::String);
+        assert_eq!(
+            words(2),
+            [(CellStyle::Word(string, Change::Removed), "old")]
+        );
+        assert_eq!(words(3), [(CellStyle::Word(string, Change::Added), "new")]);
+        assert_eq!(words(4), [], "the second added line has no pair");
+        assert_eq!(words(1), [], "a context line has no pair");
     }
 
     #[test]

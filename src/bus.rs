@@ -20,7 +20,7 @@ use crate::domain::agent::{AgentResults, Record, Tool, ToolKind};
 use crate::domain::check::Check;
 use crate::domain::codeview::Comments;
 use crate::domain::detail::PrDetail;
-use crate::domain::diff::Tokens;
+use crate::domain::diff::Pieces;
 use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::{LocalMatch, LocalState};
@@ -274,10 +274,10 @@ pub(crate) struct Highlighted {
     pub key: PrKey,
     pub head: String,
     pub path: String,
-    /// The tokens of each code line of the patch. `None` for a file
-    /// without syntax colors: an unknown language or a patch over the
-    /// size limit.
-    pub lines: Option<Arc<Vec<Tokens>>>,
+    /// The pieces of each code line of the patch: the token roles and
+    /// the changed words. `None` for a patch over the size limit, and
+    /// for a file of an unknown language without changed words.
+    pub lines: Option<Arc<Vec<Pieces>>>,
 }
 
 /// A command to run in a terminal: in a detached pane or in the

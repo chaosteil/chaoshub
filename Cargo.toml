@@ -57,6 +57,8 @@ rusqlite = { version = "0.41.1", features = ["bundled", "chrono"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 signal-hook = "0.3.18"
+# The word diff of the changed lines in the Files pane.
+similar = { version = "2.7.0", default-features = false }
 # The pure-Rust regex engine, so the build needs no C library. The
 # syntaxes come from two-face.
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "regex-fancy"] }

@@ -169,6 +169,10 @@ pub(crate) enum CellStyle {
     DiffFile,
     /// A code token of a diff line: its role and the change of its line.
     Code(Syntax, Change),
+    /// A changed word of a paired diff line, on the word tint: the role
+    /// of its token (`None` in a file without syntax colors) and the
+    /// change of its line.
+    Word(Option<Syntax>, Change),
 }
 
 /// The change of a diff line.

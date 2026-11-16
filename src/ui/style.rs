@@ -34,6 +34,17 @@ pub(crate) fn cell_style(cell: CellStyle, palette: &Palette) -> Style {
     if let CellStyle::Code(syntax, change) = cell {
         return Style::new().fg(code_fg(syntax, change, palette));
     }
+    if let CellStyle::Word(syntax, change) = cell {
+        // A word keeps the text color of its token, or of its line in a
+        // file without syntax colors.
+        let (fg, bg) = match change {
+            Change::Added => (palette.success, palette.diff_add_word_bg),
+            Change::Removed => (palette.danger, palette.diff_del_word_bg),
+            Change::Context => (palette.fg, palette.bg),
+        };
+        let fg = syntax.map_or(fg, |syntax| code_fg(syntax, change, palette));
+        return Style::new().fg(fg).bg(bg);
+    }
     let fg = match cell {
         CellStyle::Normal | CellStyle::Markdown | CellStyle::Html | CellStyle::DiffFile => {
             palette.fg
@@ -48,9 +59,11 @@ pub(crate) fn cell_style(cell: CellStyle, palette: &Palette) -> Style {
         CellStyle::DiffGutter => palette.diff_gutter,
         // The merge color is too dark for text on the background, so merge
         // text uses the lighter purple.
-        CellStyle::Merge | CellStyle::Badge(_) | CellStyle::MergeBadge(_) | CellStyle::Code(..) => {
-            palette.purple
-        }
+        CellStyle::Merge
+        | CellStyle::Badge(_)
+        | CellStyle::MergeBadge(_)
+        | CellStyle::Code(..)
+        | CellStyle::Word(..) => palette.purple,
     };
     let style = Style::new().fg(fg);
     // Danger and warn carry a state, so they stand out from plain text.
@@ -90,6 +103,19 @@ fn code_fg(syntax: Syntax, change: Change, palette: &Palette) -> Color {
         Syntax::Variable => colors.variable,
         Syntax::Parameter => colors.parameter,
         Syntax::Punctuation => colors.punctuation,
+    }
+}
+
+/// `style` without the word tint: a changed word becomes a plain token,
+/// or for a word without a role, the text of its line. The selection
+/// band of a row wins over the word tints.
+pub(crate) fn unmarked(style: CellStyle) -> CellStyle {
+    match style {
+        CellStyle::Word(Some(syntax), change) => CellStyle::Code(syntax, change),
+        CellStyle::Word(None, Change::Added) => CellStyle::DiffAdd,
+        CellStyle::Word(None, Change::Removed) => CellStyle::DiffDel,
+        CellStyle::Word(None, Change::Context) => CellStyle::Normal,
+        other => other,
     }
 }
 
@@ -183,6 +209,48 @@ mod tests {
             Some(p.syntax.keyword),
             "a context line keeps its syntax colors"
         );
+    }
+
+    #[test]
+    fn a_changed_word_keeps_its_text_color_on_the_word_tint() {
+        let p = Palette::pierre();
+        let word = |syntax, change| cell_style(CellStyle::Word(syntax, change), &p);
+        let added = word(Some(Syntax::String), Change::Added);
+        assert_eq!(
+            (added.fg, added.bg),
+            (Some(p.syntax.string), Some(p.diff_add_word_bg))
+        );
+        let removed = word(None, Change::Removed);
+        assert_eq!(
+            (removed.fg, removed.bg),
+            (Some(p.danger), Some(p.diff_del_word_bg)),
+            "without syntax colors, the word keeps the color of its line"
+        );
+        let ansi = Palette::ansi16();
+        let added = cell_style(CellStyle::Word(Some(Syntax::Keyword), Change::Added), &ansi);
+        assert_eq!(
+            (added.fg, added.bg),
+            (Some(ansi.success), Some(ansi.diff_add_word_bg)),
+            "ANSI: the green of the line on the word tint"
+        );
+    }
+
+    #[test]
+    fn unmarked_drops_the_word_tint() {
+        let keyword = Some(Syntax::Keyword);
+        assert_eq!(
+            unmarked(CellStyle::Word(keyword, Change::Added)),
+            CellStyle::Code(Syntax::Keyword, Change::Added)
+        );
+        assert_eq!(
+            unmarked(CellStyle::Word(None, Change::Removed)),
+            CellStyle::DiffDel
+        );
+        assert_eq!(
+            unmarked(CellStyle::Word(None, Change::Added)),
+            CellStyle::DiffAdd
+        );
+        assert_eq!(unmarked(CellStyle::Dim), CellStyle::Dim);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! The lines of a patch, and the roles of the code tokens in them.
+//! The lines of a patch, and the styles of the code in them.
 
 /// The kind of a patch line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,9 +82,20 @@ pub(crate) enum Syntax {
     Punctuation,
 }
 
-/// The tokens of one code line, each with its role. Two tokens next to
-/// each other have different roles.
-pub(crate) type Tokens = Vec<(Syntax, String)>;
+/// A part of a code line with one style.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Piece {
+    /// The role of the token. `None` in a file without syntax colors.
+    pub syntax: Option<Syntax>,
+    /// True for a changed word of a removed or an added line that has a
+    /// pair (see `highlight::words`).
+    pub changed: bool,
+    pub text: String,
+}
+
+/// The pieces of one code line, in order. Together they hold the whole
+/// code of the line.
+pub(crate) type Pieces = Vec<Piece>;
 
 #[cfg(test)]
 mod tests {

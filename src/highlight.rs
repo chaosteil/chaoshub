@@ -1,11 +1,15 @@
 //! The syntax highlight of the code lines of a diff, with syntect and the
-//! syntaxes of bat that two-face bundles. The result is a role per token,
-//! not a color: the palette of the theme gives the colors (see
-//! `ui::style`).
+//! syntaxes of bat that two-face bundles, and the changed words of the
+//! paired lines (see `words`). The result is a role per token and a mark
+//! per changed word, not a color: the palette of the theme gives the
+//! colors (see `ui::style`).
 //!
 //! The highlight is slow for a large patch, so only the highlight worker
 //! calls it, on a blocking thread (see `workers::highlight`).
 
+mod words;
+
+use std::ops::Range;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
@@ -15,12 +19,17 @@ use syntect::highlighting::{
 };
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
-use crate::domain::diff::{LineKind, Syntax, Tokens, code, numbered};
+use crate::domain::diff::{LineKind, Piece, Pieces, Syntax, code, numbered};
 
-/// A patch with more bytes than this gets no highlight, so one file
-/// cannot keep the worker busy for long. At this limit, a release build
-/// takes at most about 400 ms, for a patch of context lines only.
+/// A patch with more bytes than this gets no syntax colors and no marks
+/// of changed words, so one file cannot keep the worker busy for long.
+/// At this limit, a release build takes at most about 400 ms, for a
+/// patch of context lines only.
 const MAX_BYTES: usize = 128 * 1024;
+
+/// The tokens of one code line, each with its role. Two tokens next to
+/// each other have different roles.
+type Tokens = Vec<(Syntax, String)>;
 
 /// A line longer than this gets no syntax colors and does not go through
 /// the parser. A long line, as in minified code, makes the parser slow.
@@ -28,7 +37,7 @@ const MAX_LINE: usize = 1000;
 
 /// The side of a diff that a code line is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Side {
+enum Side {
     /// A removed line: only in the old file.
     Old,
     /// An added line: only in the new file.
@@ -188,23 +197,92 @@ pub(crate) fn warm() {
     LazyLock::force(&SYNTAXES);
 }
 
-/// The tokens of each code line of `text`, a patch of the file at
+/// The pieces of each code line of `text`, a patch of the file at
 /// `path`: one entry per added, removed and context line, in patch
-/// order. `None` as for `highlight`.
-pub(crate) fn patch(path: &str, text: &str) -> Option<Vec<Tokens>> {
-    let lines: Vec<(Side, &str)> = numbered(text)
+/// order. Each piece has the role of its token and the mark of a changed
+/// word.
+///
+/// `None` for a patch over `MAX_BYTES`, and for a file without syntax
+/// colors and without changed words. Then the diff colors stay.
+pub(crate) fn patch(path: &str, text: &str) -> Option<Vec<Pieces>> {
+    if text.len() > MAX_BYTES {
+        return None;
+    }
+    let kinds: Vec<(LineKind, &str)> = numbered(text)
         .into_iter()
-        .filter_map(|(kind, _, text)| {
+        .map(|(kind, _, line)| (kind, code(line)))
+        .collect();
+    let lines: Vec<(Side, &str)> = kinds
+        .iter()
+        .filter_map(|&(kind, code)| {
             let side = match kind {
                 LineKind::Added => Side::New,
                 LineKind::Removed => Side::Old,
                 LineKind::Context => Side::Both,
                 LineKind::Hunk | LineKind::Note => return None,
             };
-            Some((side, code(text)))
+            Some((side, code))
         })
         .collect();
-    highlight(path, &lines)
+    let tokens = highlight(path, &lines);
+    let marks = words::changed_words(&kinds);
+    if tokens.is_none() && marks.iter().all(Vec::is_empty) {
+        return None;
+    }
+    let out = lines
+        .iter()
+        .zip(&marks)
+        .enumerate()
+        .map(|(index, (&(_, code), marks))| {
+            pieces(code, tokens.as_ref().and_then(|t| t.get(index)), marks)
+        })
+        .collect();
+    Some(out)
+}
+
+/// The pieces of the code line `code`: its `tokens` (one plain piece
+/// without them), cut at the bounds of the changed words `marks`. Two
+/// pieces next to each other have different styles.
+fn pieces(code: &str, tokens: Option<&Tokens>, marks: &[Range<usize>]) -> Pieces {
+    let mut spans: Vec<(Option<Syntax>, Range<usize>)> = Vec::new();
+    if let Some(tokens) = tokens {
+        let mut at = 0;
+        for (role, text) in tokens {
+            spans.push((Some(*role), at..at + text.len()));
+            at += text.len();
+        }
+    }
+    if spans.last().map_or(0, |(_, r)| r.end) != code.len() {
+        // No tokens, or tokens that do not cover the line.
+        spans = vec![(None, 0..code.len())];
+    }
+    let bounds: Vec<usize> = marks.iter().flat_map(|m| [m.start, m.end]).collect();
+    let mut out: Pieces = Vec::new();
+    for (syntax, range) in spans {
+        let mut at = range.start;
+        while at < range.end {
+            let changed = marks.iter().any(|m| m.contains(&at));
+            let end = bounds
+                .iter()
+                .copied()
+                .filter(|&b| b > at)
+                .min()
+                .map_or(range.end, |b| b.min(range.end));
+            let text = code.get(at..end).unwrap_or_default();
+            match out.last_mut() {
+                Some(last) if last.syntax == syntax && last.changed == changed => {
+                    last.text.push_str(text);
+                }
+                _ => out.push(Piece {
+                    syntax,
+                    changed,
+                    text: text.to_owned(),
+                }),
+            }
+            at = end;
+        }
+    }
+    out
 }
 
 /// The tokens of each code line of a diff of the file at `path`. Each
@@ -215,13 +293,8 @@ pub(crate) fn patch(path: &str, text: &str) -> Option<Vec<Tokens>> {
 /// through both, and its tokens come from the new file. A line over
 /// `MAX_LINE` is one `Plain` token.
 ///
-/// `None` for a language without a bundled syntax, a patch over the size
-/// limit, or a parse error.
-pub(crate) fn highlight(path: &str, lines: &[(Side, &str)]) -> Option<Vec<Tokens>> {
-    let bytes: usize = lines.iter().map(|(_, text)| text.len() + 1).sum();
-    if bytes > MAX_BYTES {
-        return None;
-    }
+/// `None` for a language without a bundled syntax, or a parse error.
+fn highlight(path: &str, lines: &[(Side, &str)]) -> Option<Vec<Tokens>> {
     let syntax = syntax_for(path)?;
     let syntaxes = &*SYNTAXES;
     let mut old = HighlightLines::new(syntax, &ROLES);
@@ -262,6 +335,14 @@ pub(crate) fn highlight(path: &str, lines: &[(Side, &str)]) -> Option<Vec<Tokens
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The role and the mark of the first piece with `text` in `pieces`.
+    fn style_of(pieces: &Pieces, text: &str) -> (Option<Syntax>, bool) {
+        pieces
+            .iter()
+            .find_map(|p| p.text.contains(text).then_some((p.syntax, p.changed)))
+            .unwrap_or_else(|| panic!("no {text:?} in {pieces:?}"))
+    }
 
     /// The role of the first token with `text` in `tokens`.
     fn role_of(tokens: &Tokens, text: &str) -> Syntax {
@@ -348,9 +429,13 @@ mod tests {
     #[test]
     fn an_unknown_language_or_a_large_patch_gets_no_highlight() {
         assert_eq!(highlight("a.unknown", &[(Side::New, "x")]), None);
-        let line = "let x = 1;".repeat(50);
-        let many = vec![(Side::New, line.as_str()); MAX_BYTES / line.len() + 1];
-        assert_eq!(highlight("a.rs", &many), None);
+        assert_eq!(
+            patch("a.unknown", "@@ -1 +1,2 @@\n x\n+y"),
+            None,
+            "no syntax colors and no changed words"
+        );
+        let line = "+let x = 1;\n".repeat(MAX_BYTES / 12 + 1);
+        assert_eq!(patch("a.rs", &format!("@@ -1 +1 @@\n{line}")), None);
     }
 
     #[test]
@@ -372,7 +457,72 @@ mod tests {
             "@@ -1,2 +1,2 @@\n fn a() {}\n-let x = 1;\n+let y = 2;\n\\ No newline at end of file";
         let out = super::patch("a.rs", patch).unwrap();
         assert_eq!(out.len(), 3, "no entry for the hunk header and the note");
-        assert_eq!(role_of(&out[0], "fn"), Syntax::Keyword);
-        assert_eq!(role_of(&out[2], "2"), Syntax::Number);
+        assert_eq!(style_of(&out[0], "fn"), (Some(Syntax::Keyword), false));
+        assert_eq!(style_of(&out[1], "let"), (Some(Syntax::Keyword), false));
+        assert_eq!(style_of(&out[1], "x"), (Some(Syntax::Plain), true));
+        assert_eq!(style_of(&out[1], "1"), (Some(Syntax::Number), true));
+        assert_eq!(style_of(&out[2], "2"), (Some(Syntax::Number), true));
+        let text: Vec<String> = out
+            .iter()
+            .map(|pieces| pieces.iter().map(|p| p.text.as_str()).collect())
+            .collect();
+        assert_eq!(
+            text,
+            ["fn a() {}", "let x = 1;", "let y = 2;"],
+            "the pieces keep all the text"
+        );
+    }
+
+    #[test]
+    fn a_file_without_syntax_colors_gets_the_changed_words() {
+        let out = patch("notes.unknown", "@@ -1 +1 @@\n-the old text\n+the new text").unwrap();
+        let styles: Vec<Vec<(Option<Syntax>, bool, &str)>> = out
+            .iter()
+            .map(|pieces| {
+                pieces
+                    .iter()
+                    .map(|p| (p.syntax, p.changed, p.text.as_str()))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            styles,
+            [
+                vec![
+                    (None, false, "the "),
+                    (None, true, "old"),
+                    (None, false, " text")
+                ],
+                vec![
+                    (None, false, "the "),
+                    (None, true, "new"),
+                    (None, false, " text")
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_mark_cuts_a_token_and_tokens_cut_a_mark() {
+        let tokens: Tokens = vec![
+            (Syntax::Keyword, "let".into()),
+            (Syntax::Plain, " ".into()),
+            (Syntax::Variable, "name".into()),
+        ];
+        let out = pieces("let name", Some(&tokens), std::slice::from_ref(&(2..6)));
+        let styles: Vec<(Option<Syntax>, bool, &str)> = out
+            .iter()
+            .map(|p| (p.syntax, p.changed, p.text.as_str()))
+            .collect();
+        assert_eq!(
+            styles,
+            [
+                (Some(Syntax::Keyword), false, "le"),
+                (Some(Syntax::Keyword), true, "t"),
+                (Some(Syntax::Plain), true, " "),
+                (Some(Syntax::Variable), true, "na"),
+                (Some(Syntax::Variable), false, "me"),
+            ]
+        );
     }
 }

@@ -1,6 +1,8 @@
 //! Renders a pane model. Any popup pane produces one, so this renderer
 //! knows no pane by name.
 
+use std::borrow::Cow;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -8,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::app::measure;
-use crate::app::models::{Cell, Column, PaneModel, Row, TreeNode};
+use crate::app::models::{Cell, CellStyle, Column, PaneModel, Row, TreeNode};
 use crate::bus::Hit;
 use crate::theme::{Palette, Theme, punk};
 use crate::ui::hits::HitMap;
@@ -198,6 +200,21 @@ pub(crate) fn render_lines(
         .render(area, buf);
 }
 
+/// The cells of a node: on the selected node without the tints of the
+/// changed words, because the selection band wins over them.
+fn band_cells(cells: &[Cell], selected: bool) -> Cow<'_, [Cell]> {
+    if !selected || !cells.iter().any(|c| matches!(c.style, CellStyle::Word(..))) {
+        return Cow::Borrowed(cells);
+    }
+    cells
+        .iter()
+        .map(|c| Cell {
+            text: c.text.clone(),
+            style: style::unmarked(c.style),
+        })
+        .collect()
+}
+
 /// The nodes of a tree with indent and an expand marker, from the scroll
 /// offset (in rows) down. A node with a markdown body takes one row per
 /// body line, so the first node can start in the middle of its rows. A
@@ -246,7 +263,8 @@ fn render_tree(
         let indent = " ".repeat(measure::TREE_INDENT * usize::from(node.depth));
         let prefix = format!("{indent}{marker}");
         let prefix_width = u16::try_from(measure::node_prefix(node.depth)).unwrap_or(text_width);
-        let lines = expand(&node.cells, text_width.saturating_sub(prefix_width), p);
+        let cells = band_cells(&node.cells, selected);
+        let lines = expand(&cells, text_width.saturating_sub(prefix_width), p);
         // A diff line tints its row from its text to the right end. The
         // selection band wins over the tint.
         let tint = if selected {
@@ -503,6 +521,47 @@ mod tests {
         assert_eq!(buf[(text + 2, 1)].fg, p.success);
         assert_eq!(bg(text + 2, 2), p.bg, "a context line has no tint");
         assert_ne!(bg(text + 2, 3), p.diff_del_bg, "the selection wins");
+    }
+
+    #[test]
+    fn a_changed_word_has_the_word_tint_inside_the_line_tint() {
+        let theme = testdata::pierre();
+        let p = theme.palette;
+        let word = CellStyle::Word(None, crate::app::models::Change::Added);
+        let line = TreeNode {
+            depth: 0,
+            expanded: None,
+            cells: vec![
+                testdata::cell("1 ", CellStyle::DiffGutter),
+                testdata::cell("+", CellStyle::DiffAdd),
+                testdata::cell("a ", CellStyle::DiffAdd),
+                testdata::cell("bc", word),
+                testdata::cell(" d", CellStyle::DiffAdd),
+            ],
+        };
+        let model = PaneModel::Tree {
+            nodes: vec![line.clone(), line],
+        };
+        let area = Rect::new(0, 0, 30, 2);
+        let mut buf = Buffer::empty(area);
+        render(&model, 1, 0, area, &mut buf, &theme, &mut HitMap::default());
+        // The text after the prefix: `1 +a bc d`.
+        let text = list::columns_x(area) + u16::try_from(measure::node_prefix(0)).unwrap();
+        let bg = |x: u16, y: u16| buf[(x, y)].bg;
+        assert_eq!(bg(text + 3, 0), p.diff_add_bg, "an unchanged word");
+        assert_eq!(bg(text + 5, 0), p.diff_add_word_bg, "the changed word");
+        assert_eq!(bg(text + 6, 0), p.diff_add_word_bg);
+        assert_eq!(buf[(text + 5, 0)].fg, p.success, "the text keeps its color");
+        assert_eq!(
+            bg(text + 7, 0),
+            p.diff_add_bg,
+            "the tint goes on after the word"
+        );
+        assert_ne!(
+            bg(text + 5, 1),
+            p.diff_add_word_bg,
+            "the selection band wins over the word tint"
+        );
     }
 
     #[test]
