@@ -216,15 +216,21 @@ fn render_tree(
     buf.set_style(area, Style::new().bg(p.bg).fg(p.fg));
     let selection = theme.selected_row();
     let text_width = measure::tree_text_width(area.width, selection.shift);
-    let total: usize = nodes
+    let rows: Vec<usize> = nodes
         .iter()
         .map(|node| measure::node_rows(node, text_width))
-        .sum();
+        .collect();
+    let total: usize = rows.iter().sum();
     let mut skip = scroll.min(total.saturating_sub(usize::from(area.height)));
     let mut y = area.y;
-    for (index, node) in nodes.iter().enumerate() {
+    for ((index, node), &node_rows) in nodes.iter().enumerate().zip(&rows) {
         if y >= area.bottom() {
             break;
+        }
+        // A node above the view needs no lines, only its row count.
+        if skip >= node_rows {
+            skip -= node_rows;
+            continue;
         }
         let selected = index == cursor;
         let base = if selected {
@@ -249,10 +255,6 @@ fn render_tree(
             style::row_bg(&node.cells, p)
         };
         let text_base = tint.map_or(base, |bg| base.bg(bg));
-        if skip >= lines.len() {
-            skip -= lines.len();
-            continue;
-        }
         let top = y;
         for (row, line) in lines
             .into_iter()
