@@ -31,24 +31,45 @@ pub(crate) fn cell_style(cell: CellStyle, palette: &Palette) -> Style {
             .add_modifier(Modifier::BOLD);
     }
     let fg = match cell {
-        CellStyle::Normal | CellStyle::Markdown | CellStyle::Html => palette.fg,
+        CellStyle::Normal | CellStyle::Markdown | CellStyle::Html | CellStyle::DiffFile => {
+            palette.fg
+        }
         CellStyle::Dim => palette.fg_mute,
         CellStyle::Primary => palette.primary,
-        CellStyle::Success => palette.success,
-        CellStyle::Danger => palette.danger,
+        CellStyle::Success | CellStyle::DiffAdd => palette.success,
+        CellStyle::Danger | CellStyle::DiffDel => palette.danger,
         CellStyle::Warn => palette.warn,
         CellStyle::Info => palette.info,
+        CellStyle::DiffHunk => palette.diff_hunk,
+        CellStyle::DiffGutter => palette.diff_gutter,
         // The merge color is too dark for text on the background, so merge
         // text uses the lighter purple.
         CellStyle::Merge | CellStyle::Badge(_) | CellStyle::MergeBadge(_) => palette.purple,
     };
     let style = Style::new().fg(fg);
     // Danger and warn carry a state, so they stand out from plain text.
-    if matches!(cell, CellStyle::Danger | CellStyle::Warn) {
+    // The name of an open file is a header, so it is bold too. A removed
+    // diff line is not a state, so it stays regular.
+    if matches!(
+        cell,
+        CellStyle::Danger | CellStyle::Warn | CellStyle::DiffFile
+    ) {
         style.add_modifier(Modifier::BOLD)
     } else {
         style
     }
+}
+
+/// The background of a whole row of `cells`: the tint of the first diff
+/// cell, or `None` for a row that keeps the background of the pane.
+pub(crate) fn row_bg(cells: &[Cell], palette: &Palette) -> Option<Color> {
+    cells.iter().find_map(|c| match c.style {
+        CellStyle::DiffAdd => Some(palette.diff_add_bg),
+        CellStyle::DiffDel => Some(palette.diff_del_bg),
+        CellStyle::DiffHunk => Some(palette.diff_hunk_bg),
+        CellStyle::DiffFile => Some(palette.surface),
+        _ => None,
+    })
 }
 
 /// The color at `mix` between `from` (0) and `to` (255), mixed in RGB.
@@ -92,6 +113,45 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::BOLD)
         );
+    }
+
+    #[test]
+    fn diff_cells_map_to_the_diff_colors() {
+        let p = Palette::pierre();
+        let fg = |style| cell_style(style, &p).fg;
+        assert_eq!(fg(CellStyle::DiffAdd), Some(p.success));
+        assert_eq!(fg(CellStyle::DiffDel), Some(p.danger));
+        assert_eq!(fg(CellStyle::DiffHunk), Some(p.diff_hunk));
+        assert_eq!(fg(CellStyle::DiffGutter), Some(p.diff_gutter));
+        assert_eq!(fg(CellStyle::DiffFile), Some(p.fg));
+        let del = cell_style(CellStyle::DiffDel, &p);
+        assert!(!del.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(del.bg, None, "the row gives the tint");
+    }
+
+    #[test]
+    fn the_first_diff_cell_gives_the_row_tint() {
+        let p = Palette::pierre();
+        let cell = |style| Cell {
+            text: String::new(),
+            style,
+        };
+        let bg = |styles: &[CellStyle]| {
+            let cells: Vec<Cell> = styles.iter().map(|&s| cell(s)).collect();
+            row_bg(&cells, &p)
+        };
+        assert_eq!(
+            bg(&[CellStyle::DiffGutter, CellStyle::DiffAdd]),
+            Some(p.diff_add_bg)
+        );
+        assert_eq!(bg(&[CellStyle::DiffDel]), Some(p.diff_del_bg));
+        assert_eq!(bg(&[CellStyle::DiffHunk]), Some(p.diff_hunk_bg));
+        assert_eq!(
+            bg(&[CellStyle::DiffFile, CellStyle::Success]),
+            Some(p.surface)
+        );
+        assert_eq!(bg(&[CellStyle::Normal, CellStyle::Success]), None);
+        assert_eq!(bg(&[]), None);
     }
 
     #[test]

@@ -241,6 +241,14 @@ fn render_tree(
         let prefix = format!("{indent}{marker}");
         let prefix_width = u16::try_from(measure::node_prefix(node.depth)).unwrap_or(text_width);
         let lines = expand(&node.cells, text_width.saturating_sub(prefix_width), p);
+        // A diff line tints its row from its text to the right end. The
+        // selection band wins over the tint.
+        let tint = if selected {
+            None
+        } else {
+            style::row_bg(&node.cells, p)
+        };
+        let text_base = tint.map_or(base, |bg| base.bg(bg));
         if skip >= lines.len() {
             skip -= lines.len();
             continue;
@@ -270,10 +278,15 @@ fn render_tree(
             let over = |style: Style| fg.map_or(style, |fg| style.fg(fg));
             let mut spans = vec![Span::styled(lead, over(base.fg(p.fg_mute)))];
             spans.extend(line.spans.into_iter().map(|s| {
-                let style = over(base.patch(s.style));
+                let style = over(text_base.patch(s.style));
                 s.style(style)
             }));
             let rect = Rect::new(list::columns_x(area), y, text_width, 1);
+            if let Some(bg) = tint {
+                let x = rect.x.saturating_add(prefix_width).min(rect.right());
+                let band = Rect::new(x, y, rect.right() - x, 1);
+                buf.set_style(band, Style::new().bg(bg));
+            }
             Line::from(spans).render(rect, buf);
             if selected {
                 // The band jumps out: its text moves into the free cells.
@@ -454,6 +467,40 @@ mod tests {
                 "width {width} without wrap"
             );
         }
+    }
+
+    #[test]
+    fn a_diff_line_tints_its_row_from_its_text() {
+        let theme = testdata::pierre();
+        let p = theme.palette;
+        let node = |cells: Vec<Cell>| TreeNode {
+            depth: 1,
+            expanded: None,
+            cells,
+        };
+        let gutter = |n: &str| testdata::cell(n, CellStyle::DiffGutter);
+        let model = PaneModel::Tree {
+            nodes: vec![
+                node(vec![testdata::cell("@@ -1,2 +1,2 @@", CellStyle::DiffHunk)]),
+                node(vec![gutter("1 "), testdata::cell("+a", CellStyle::DiffAdd)]),
+                node(vec![gutter("2 "), testdata::cell(" b", CellStyle::Normal)]),
+                node(vec![gutter("2 "), testdata::cell("-c", CellStyle::DiffDel)]),
+            ],
+        };
+        let area = Rect::new(0, 0, 30, 4);
+        let mut buf = Buffer::empty(area);
+        render(&model, 3, 0, area, &mut buf, &theme, &mut HitMap::default());
+        let text = list::columns_x(area) + u16::try_from(measure::node_prefix(1)).unwrap();
+        let bg = |x: u16, y: u16| buf[(x, y)].bg;
+        assert_eq!(bg(text, 0), p.diff_hunk_bg, "the hunk header");
+        assert_eq!(bg(text, 1), p.diff_add_bg, "the gutter of an added line");
+        assert_eq!(bg(text + 2, 1), p.diff_add_bg, "the text of an added line");
+        assert_eq!(bg(29, 1), p.diff_add_bg, "the tint goes to the right end");
+        assert_eq!(bg(text - 1, 1), p.bg, "the indent keeps the background");
+        assert_eq!(buf[(text, 1)].fg, p.diff_gutter);
+        assert_eq!(buf[(text + 2, 1)].fg, p.success);
+        assert_eq!(bg(text + 2, 2), p.bg, "a context line has no tint");
+        assert_ne!(bg(text + 2, 3), p.diff_del_bg, "the selection wins");
     }
 
     #[test]

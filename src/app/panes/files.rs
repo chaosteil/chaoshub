@@ -260,10 +260,16 @@ fn emit(
     }
 }
 
-/// `name +N −M`, with a tag for a status other than `Modified`.
+/// `name +N −M`, with a tag for a status other than `Modified`. An open
+/// file is the header of its diff, on the surface band.
 fn file_node(depth: u8, open: bool, name: &str, file: &ChangedFile) -> TreeNode {
+    let name_style = if open {
+        CellStyle::DiffFile
+    } else {
+        CellStyle::Normal
+    };
     let mut cells = vec![
-        cell(name, CellStyle::Normal),
+        cell(name, name_style),
         cell(format!(" +{}", file.additions), CellStyle::Success),
         cell(format!(" −{}", file.deletions), CellStyle::Danger),
     ];
@@ -285,7 +291,65 @@ fn file_node(depth: u8, open: bool, name: &str, file: &ChangedFile) -> TreeNode 
     node(depth, Some(open), cells)
 }
 
+/// The kind of a patch line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Hunk,
+    Added,
+    Removed,
+    Context,
+    /// `\ No newline at end of file`.
+    Note,
+}
+
+/// The kind of each line of `patch` and its line number: the new number
+/// for an added or a context line, the old number for a removed line,
+/// and `None` for a hunk header or a note.
+fn numbered(patch: &str) -> Vec<(Kind, Option<u32>, &str)> {
+    let (mut old, mut new) = (0_u32, 0_u32);
+    patch
+        .lines()
+        .map(|text| {
+            let (kind, number) = if text.starts_with("@@") {
+                if let Some((o, n)) = hunk_starts(text) {
+                    (old, new) = (o, n);
+                }
+                (Kind::Hunk, None)
+            } else if text.starts_with('+') {
+                new = new.saturating_add(1);
+                (Kind::Added, Some(new - 1))
+            } else if text.starts_with('-') {
+                old = old.saturating_add(1);
+                (Kind::Removed, Some(old - 1))
+            } else if text.starts_with('\\') {
+                (Kind::Note, None)
+            } else {
+                old = old.saturating_add(1);
+                new = new.saturating_add(1);
+                (Kind::Context, Some(new - 1))
+            };
+            (kind, number, text)
+        })
+        .collect()
+}
+
+/// The first old and new line numbers of a hunk header, as in
+/// `@@ -12,5 +14,7 @@ fn main`.
+fn hunk_starts(header: &str) -> Option<(u32, u32)> {
+    let mut parts = header.split_whitespace().skip(1);
+    let start = |part: Option<&str>, sign: char| -> Option<u32> {
+        let range = part?.strip_prefix(sign)?;
+        range.split(',').next()?.parse().ok()
+    };
+    let old = start(parts.next(), '-')?;
+    let new = start(parts.next(), '+')?;
+    Some((old, new))
+}
+
 /// One leaf per patch line of `file` at `depth`, or one `no diff` leaf.
+/// Each line but a hunk header starts with its line number in a dim
+/// gutter. An added line is green and a removed line red, each on its
+/// tint. A hunk header is muted on its own tint.
 fn patch(depth: u8, file: &ChangedFile) -> Vec<TreeNode> {
     let Some(patch) = &file.patch else {
         return vec![node(
@@ -294,21 +358,31 @@ fn patch(depth: u8, file: &ChangedFile) -> Vec<TreeNode> {
             vec![cell("no diff: binary or too large", CellStyle::Dim)],
         )];
     };
-    patch
-        .lines()
-        .map(|text| {
-            let style = if text.starts_with("@@") {
-                CellStyle::Info
-            } else if text.starts_with('+') {
-                CellStyle::Success
-            } else if text.starts_with('-') {
-                CellStyle::Danger
-            } else if text.starts_with('\\') {
-                CellStyle::Dim
-            } else {
-                CellStyle::Normal
+    let lines = numbered(patch);
+    let width = lines
+        .iter()
+        .filter_map(|(_, number, _)| *number)
+        .max()
+        .map_or(1, |max| max.to_string().len());
+    lines
+        .into_iter()
+        .map(|(kind, number, text)| {
+            let gutter = match number {
+                Some(n) => format!("{n:>width$} "),
+                None => " ".repeat(width + 1),
             };
-            node(depth, None, vec![cell(text, style)])
+            let style = match kind {
+                Kind::Hunk => return node(depth, None, vec![cell(text, CellStyle::DiffHunk)]),
+                Kind::Added => CellStyle::DiffAdd,
+                Kind::Removed => CellStyle::DiffDel,
+                Kind::Context => CellStyle::Normal,
+                Kind::Note => CellStyle::Dim,
+            };
+            node(
+                depth,
+                None,
+                vec![cell(gutter, CellStyle::DiffGutter), cell(text, style)],
+            )
         })
         .collect()
 }
@@ -474,28 +548,35 @@ mod tests {
             [
                 "      ▾ files.rs +2 −1",
                 "        @@ -1,3 +1,4 @@",
-                "         fn main() {",
-                "        -    println!(\"old\");",
-                "        +    println!(\"new\");",
-                "        +    println!(\"more\");",
-                "         }",
-                "        \\ No newline at end of file",
-            ]
+                "        1  fn main() {",
+                "        2 -    println!(\"old\");",
+                "        2 +    println!(\"new\");",
+                "        3 +    println!(\"more\");",
+                "        4  }",
+                "          \\ No newline at end of file",
+            ],
+            "a removed line has its old number, the others their new number"
         );
-        let styles: Vec<CellStyle> = tree_nodes(&model)[9..16]
+        assert_eq!(
+            tree_nodes(&model)[8].cells[0].style,
+            CellStyle::DiffFile,
+            "the open file is the header of its diff"
+        );
+        let styles: Vec<Vec<CellStyle>> = tree_nodes(&model)[9..16]
             .iter()
-            .map(|n| n.cells[0].style)
+            .map(|n| n.cells.iter().map(|c| c.style).collect())
             .collect();
+        let gutter = CellStyle::DiffGutter;
         assert_eq!(
             styles,
             [
-                CellStyle::Info,
-                CellStyle::Normal,
-                CellStyle::Danger,
-                CellStyle::Success,
-                CellStyle::Success,
-                CellStyle::Normal,
-                CellStyle::Dim,
+                vec![CellStyle::DiffHunk],
+                vec![gutter, CellStyle::Normal],
+                vec![gutter, CellStyle::DiffDel],
+                vec![gutter, CellStyle::DiffAdd],
+                vec![gutter, CellStyle::DiffAdd],
+                vec![gutter, CellStyle::Normal],
+                vec![gutter, CellStyle::Dim],
             ]
         );
         assert!(tree_nodes(&model).iter().all(|n| {
@@ -532,6 +613,45 @@ mod tests {
         ps.cursor = 0;
         let (_, handled) = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
         assert_eq!(handled, None, "Enter on the summary does nothing");
+    }
+
+    #[test]
+    fn the_gutter_counts_from_each_hunk_header() {
+        let text = "@@ -8,2 +9,3 @@ fn main\n a\n-b\n+c\n+d\n@@ -98 +100,2 @@\n e\n+f";
+        let numbers: Vec<(Kind, Option<u32>)> =
+            numbered(text).into_iter().map(|(k, n, _)| (k, n)).collect();
+        assert_eq!(
+            numbers,
+            [
+                (Kind::Hunk, None),
+                (Kind::Context, Some(9)),
+                (Kind::Removed, Some(9)),
+                (Kind::Added, Some(10)),
+                (Kind::Added, Some(11)),
+                (Kind::Hunk, None),
+                (Kind::Context, Some(100)),
+                (Kind::Added, Some(101)),
+            ]
+        );
+        assert_eq!(hunk_starts("@@ -98 +100,2 @@"), Some((98, 100)));
+        assert_eq!(hunk_starts("@@ broken @@"), None);
+        let file = ChangedFile {
+            path: "a.rs".into(),
+            previous_path: None,
+            status: FileStatus::Modified,
+            additions: 3,
+            deletions: 1,
+            patch: Some(text.into()),
+        };
+        let gutters: Vec<String> = patch(0, &file)
+            .iter()
+            .map(|n| n.cells[0].text.clone())
+            .collect();
+        assert_eq!(
+            gutters[..3],
+            ["@@ -8,2 +9,3 @@ fn main", "  9 ", "  9 "],
+            "the widest number sets the gutter width"
+        );
     }
 
     #[test]

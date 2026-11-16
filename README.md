@@ -884,7 +884,7 @@ selects the next pane:
 | `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the head has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments · space r to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order. |
-| `4` | Files | The changed files as a tree, with the diff of each file inline. |
+| `4` | Files | The changed files as a tree, with the diff of each file inline. See "Diff colors" below. |
 | `5` | Stack | The entries of the stack. Only for a stacked pull request. For a pull request without a stack, the tab shows dim, and `5`, `tab` and a click do not select it. The cursor starts on the pull request of the detail. Enter opens the detail of the entry under the cursor on top, and `esc` goes back. `o` opens the page of that entry. |
 | `6` | Agent | The pr-agent results: one section per tool. Only for a repo with a `path`. For a repo without a `path`, the tab shows dim, and `6`, `tab` and a click do not select it. |
 
@@ -917,6 +917,26 @@ popup, and `space` then `R` starts the pr-agent review. The menu of the
 Agent pane does not show the `agent` action, because the pane shows
 already. To bind a direct key for an action in the detail, see
 "Actions".
+
+#### Diff colors
+
+The Files pane shows the diff of an open file in the style of the
+diff view of Pierre ([diffs.com](https://diffs.com)). The colors are
+keys of the palette:
+
+| Part | Color | Pierre | ANSI 16 |
+|---|---|---|---|
+| Open file name | `fg`, bold, on `surface` | `#fafafa` on `#171717` | white, bold |
+| Hunk header (`@@ -1,3 +1,4 @@`) | `diff_hunk` on `diff_hunk_bg` | `#7ea6c0` on `#0a1d21` | cyan |
+| Added line | `success` on `diff_add_bg` | `#07c480` on `#0a1d16` | green |
+| Removed line | `danger` on `diff_del_bg` | `#ff2e3f` on `#230e0f` | red |
+| Context line | `fg` | `#fafafa` | white |
+| Line number | `diff_gutter` | `#737373` | dark gray |
+
+The tint of a line goes from its line number to the right edge of the
+pane. The ANSI palette has no light tints, so there the lines keep the
+background. Each line starts with its line number: the new number for
+an added line and a context line, the old number for a removed line.
 
 #### Codeview comments
 

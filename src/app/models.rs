@@ -154,6 +154,18 @@ pub(crate) enum CellStyle {
     /// a mix of the success color and the purple. The mix is 0 for the
     /// success color and 255 for the purple.
     MergeBadge(u8),
+    /// An added line of a diff. Its row gets the add tint.
+    DiffAdd,
+    /// A removed line of a diff. Its row gets the remove tint.
+    DiffDel,
+    /// A hunk header of a diff (`@@ -1,3 +1,4 @@`). Its row gets the
+    /// hunk tint.
+    DiffHunk,
+    /// The line number of a diff line.
+    DiffGutter,
+    /// The name of an open file above its diff. Its row gets the surface
+    /// band.
+    DiffFile,
 }
 
 /// The color of a badge.
