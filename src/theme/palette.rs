@@ -29,6 +29,11 @@ impl Palette {
             // theme (`#07c4801a`, `#ff2e3f1a`).
             diff_add_bg: Color::Rgb(0x0a, 0x1d, 0x16),
             diff_del_bg: Color::Rgb(0x23, 0x0e, 0x0f),
+            // A changed word has the success or the danger color at 20%
+            // over the tint of its line, as the dark emphasis of the
+            // Pierre diff view (`--diffs-bg-addition-emphasis`).
+            diff_add_word_bg: Color::Rgb(0x09, 0x3e, 0x2b),
+            diff_del_word_bg: Color::Rgb(0x4f, 0x14, 0x19),
             diff_hunk: Color::Rgb(0x7e, 0xa6, 0xc0),
             diff_hunk_bg: Color::Rgb(0x0a, 0x1d, 0x21),
             // The line number color of the Pierre theme.
@@ -73,6 +78,11 @@ impl Palette {
             // background.
             diff_add_bg: Color::Black,
             diff_del_bg: Color::Black,
+            // A changed word is the only part of a changed line with a
+            // background. The green or the red text of its line stays
+            // readable on dark gray.
+            diff_add_word_bg: Color::DarkGray,
+            diff_del_word_bg: Color::DarkGray,
             diff_hunk: Color::Cyan,
             diff_hunk_bg: Color::Black,
             diff_gutter: Color::DarkGray,
@@ -183,6 +193,22 @@ mod tests {
             let ratio = contrast(text, row);
             assert!(ratio >= 4.5, "{name}: {ratio:.2}");
         }
+        // The text of a changed word on the word tint. The danger color
+        // is the text only in a file without syntax colors, and only on
+        // some words, so 3:1 is enough for it.
+        for (name, text, word) in [
+            ("fg on diff_add_word_bg", p.fg, p.diff_add_word_bg),
+            ("fg on diff_del_word_bg", p.fg, p.diff_del_word_bg),
+            ("success on diff_add_word_bg", p.success, p.diff_add_word_bg),
+        ] {
+            let ratio = contrast(text, word);
+            assert!(ratio >= 4.5, "{name}: {ratio:.2}");
+        }
+        let ratio = contrast(p.danger, p.diff_del_word_bg);
+        assert!(ratio >= 3.0, "danger on diff_del_word_bg: {ratio:.2}");
+        // The word tint stands out from the tint of its line.
+        assert!(luminance(p.diff_add_word_bg) > luminance(p.diff_add_bg));
+        assert!(luminance(p.diff_del_word_bg) > luminance(p.diff_del_bg));
         // The line numbers are a dim aid, as in the Pierre theme, so 3:1
         // is enough for them.
         for row in [p.bg, p.diff_add_bg, p.diff_del_bg] {
@@ -197,6 +223,8 @@ mod tests {
         assert_eq!(p.diff_add_bg, p.bg);
         assert_eq!(p.diff_del_bg, p.bg);
         assert_eq!(p.diff_hunk_bg, p.bg);
+        assert_ne!(p.diff_add_word_bg, p.bg, "a changed word stands out");
+        assert_ne!(p.diff_del_word_bg, p.bg, "a changed word stands out");
     }
 
     #[test]
@@ -220,6 +248,8 @@ mod tests {
             p.pink,
             p.diff_add_bg,
             p.diff_del_bg,
+            p.diff_add_word_bg,
+            p.diff_del_word_bg,
             p.diff_hunk,
             p.diff_hunk_bg,
             p.diff_gutter,

@@ -47,6 +47,10 @@ pub(crate) struct Palette {
     pub diff_add_bg: Color,
     /// The background of a removed line in a diff.
     pub diff_del_bg: Color,
+    /// The background of a changed word in an added line of a diff.
+    pub diff_add_word_bg: Color,
+    /// The background of a changed word in a removed line of a diff.
+    pub diff_del_word_bg: Color,
     /// The text of a hunk header (`@@ -1,3 +1,4 @@`) in a diff.
     pub diff_hunk: Color,
     /// The background of a hunk header in a diff.
