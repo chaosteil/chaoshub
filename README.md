@@ -348,6 +348,12 @@ The poll intervals, in seconds.
 
 When the GitHub rate budget runs low, the sync intervals double.
 
+The detail pane (`chaoshub pr`) refreshes its pull request every
+`mine_secs`. GitHub computes the merge state of a pull request on
+request, for example after its base changes. When a refresh gives an
+unknown merge state, the detail pane refreshes again after 3 s, at most
+10 times in a row. The `refresh` key starts this count again.
+
 ### `[prefetch]`
 
 | Key | Default | Meaning |

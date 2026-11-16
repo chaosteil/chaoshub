@@ -14,7 +14,11 @@
 //! serves the refresh and load requests, and every `refresh.mine_secs` it
 //! refreshes the selected pull request, or loads the pinned one when it is
 //! not loaded yet. It writes no pull request rows, because the list
-//! process owns the rows of the cache.
+//! process owns the rows of the cache. GitHub computes the merge state
+//! of a pull request on request, for example after the base changes.
+//! When a refresh or a load gives an open pull request with an unknown
+//! merge state, the next tick comes after 3 s, at most 10 times in a
+//! row. A refresh or a load on request starts the count again.
 //!
 //! A full sync searches the open pull requests of the repo set. A delta
 //! searches all states, updated since `last_delta` minus 2 min, so merges
@@ -65,7 +69,7 @@ use tokio::time::Instant;
 use crate::bus::{Msg, PrRef, RateInfo, Scope, SyncError, SyncReq};
 use crate::config::schema::FiltersConfig;
 use crate::domain::keys::PrKey;
-use crate::domain::pr::{PrState, PullRequest};
+use crate::domain::pr::{MergeStateStatus, Mergeable, PrState, PullRequest};
 use crate::domain::repo::Repo;
 use crate::github::GithubError;
 use crate::github::PrStubPage;
@@ -109,6 +113,13 @@ const REFETCH_PER_SYNC: usize = 40;
 /// The overlap of a delta with the previous one, because the search index
 /// lags.
 const DELTA_OVERLAP: TimeDelta = TimeDelta::minutes(2);
+
+/// The time to the next tick of the pinned mode after a refresh with an
+/// unknown merge state.
+const UNKNOWN_RETRY: Duration = Duration::from_secs(3);
+
+/// The most ticks after `UNKNOWN_RETRY` in a row.
+const UNKNOWN_RETRIES: u32 = 10;
 
 /// Waits for the login, then serves the schedule and the requests until
 /// `app` is gone.
@@ -191,7 +202,9 @@ async fn run(ctx: WorkerCtx) {
 /// The loop of the pinned mode: the requests, and one tick every
 /// `mine_secs`. The tick refreshes the selected pull request of the
 /// interest, or loads the pinned pull request `key` while no pull request
-/// is selected. It returns when `app` is gone.
+/// is selected. After a refresh with an unknown merge state, the next
+/// tick comes sooner (see `Syncer::unknown_retry`). It returns when `app`
+/// is gone.
 async fn run_pinned(
     mut syncer: Syncer,
     requests: &mut tokio::sync::mpsc::Receiver<SyncReq>,
@@ -199,6 +212,7 @@ async fn run_pinned(
     mine_secs: u64,
 ) {
     let mut next = Instant::now() + syncer.interval(mine_secs);
+    let mut retries = 0;
     loop {
         let mut due = next;
         if let Some(paused) = syncer.paused_until {
@@ -211,12 +225,21 @@ async fn run_pinned(
                         tracing::debug!(?scope, "full sync ignored in the pinned mode");
                         true
                     }
-                    Some(SyncReq::Refresh(refs)) => syncer.refresh(&refs).await,
-                    Some(SyncReq::Load(key)) => syncer.load(&key).await,
+                    Some(SyncReq::Refresh(refs)) => {
+                        retries = 0;
+                        syncer.refresh(&refs).await
+                    }
+                    Some(SyncReq::Load(key)) => {
+                        retries = 0;
+                        syncer.load(&key).await
+                    }
                     None => false,
                 };
                 if !alive {
                     return;
+                }
+                if let Some(retry) = syncer.unknown_retry(&mut retries) {
+                    next = retry;
                 }
             }
             () = tokio::time::sleep_until(due) => {
@@ -228,10 +251,20 @@ async fn run_pinned(
                 if !alive {
                     return;
                 }
-                next = Instant::now() + syncer.interval(mine_secs);
+                next = syncer
+                    .unknown_retry(&mut retries)
+                    .unwrap_or_else(|| Instant::now() + syncer.interval(mine_secs));
             }
         }
     }
+}
+
+/// True when `pr` is open and GitHub did not compute its merge state
+/// yet.
+fn unknown_merge_state(pr: &PullRequest) -> bool {
+    let head = &pr.head.value;
+    head.state == PrState::Open
+        && (head.mergeable == Mergeable::Unknown || head.merge_state == MergeStateStatus::Unknown)
 }
 
 /// What the worker remembers of one scope.
@@ -286,6 +319,9 @@ struct Syncer {
     budget: RateBudget,
     /// The end of a rate limit. No timed sync runs before it.
     paused_until: Option<Instant>,
+    /// True when the last refresh or load gave an open pull request with
+    /// a merge state that GitHub did not compute yet.
+    unknown: bool,
 }
 
 impl Syncer {
@@ -296,7 +332,25 @@ impl Syncer {
             team: ScopeState::default(),
             budget: RateBudget::default(),
             paused_until: None,
+            unknown: false,
         }
+    }
+
+    /// The time of the next tick of the pinned mode after a refresh or a
+    /// load. GitHub computes the merge state on request. Thus, when the
+    /// refresh gave an unknown merge state, the next tick comes after
+    /// `UNKNOWN_RETRY`, at most `UNKNOWN_RETRIES` times in a row. `None`
+    /// for the usual interval. A known merge state sets `retries` to 0.
+    fn unknown_retry(&mut self, retries: &mut u32) -> Option<Instant> {
+        if !std::mem::take(&mut self.unknown) {
+            *retries = 0;
+            return None;
+        }
+        if *retries >= UNKNOWN_RETRIES {
+            return None;
+        }
+        *retries += 1;
+        Some(Instant::now() + UNKNOWN_RETRY)
     }
 
     /// The interval for a base of `secs` seconds, doubled while the rate
@@ -711,9 +765,11 @@ impl Syncer {
     }
 
     /// Notes the refreshed pull requests `prs` in the scope of their
-    /// author, sends one `PrRefreshed` per pull request, and caches them in
-    /// the `Lists` mode. False when `app` is gone.
+    /// author and notes an unknown merge state, sends one `PrRefreshed`
+    /// per pull request, and caches them in the `Lists` mode. False when
+    /// `app` is gone.
     async fn refreshed(&mut self, login: &str, prs: Vec<PullRequest>) -> bool {
+        self.unknown = prs.iter().any(unknown_merge_state);
         let (mine, team): (Vec<PullRequest>, Vec<PullRequest>) = prs
             .into_iter()
             .partition(|pr| pr.head.value.author == login);
@@ -1817,6 +1873,52 @@ mod tests {
                     .to_owned()
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn an_unknown_merge_state_brings_the_next_pinned_tick_sooner() {
+        let server = MockServer::start().await;
+        let mut body: Value = serde_json::from_str(BY_NUMBER).unwrap();
+        let pr = &mut body["data"]["repository"]["pullRequest"];
+        pr["mergeable"] = json!("UNKNOWN");
+        pr["mergeStateStatus"] = json!("UNKNOWN");
+        serve_by_number(&server, &body.to_string()).await;
+        let (ctx, _harness) = logged_in(&server);
+        let mut syncer = Syncer::new(ctx);
+        let mut retries = 0;
+
+        let before = Instant::now();
+        assert!(syncer.load(&key(1550)).await);
+        let retry = syncer.unknown_retry(&mut retries).unwrap();
+        assert!(retry >= before + UNKNOWN_RETRY, "{retry:?}");
+        assert!(retry <= Instant::now() + UNKNOWN_RETRY, "{retry:?}");
+        assert_eq!(retries, 1);
+        for _ in 1..UNKNOWN_RETRIES {
+            syncer.unknown = true;
+            assert!(syncer.unknown_retry(&mut retries).is_some());
+        }
+        syncer.unknown = true;
+        assert_eq!(
+            syncer.unknown_retry(&mut retries),
+            None,
+            "at most {UNKNOWN_RETRIES} in a row"
+        );
+        assert_eq!(retries, UNKNOWN_RETRIES);
+        assert_eq!(syncer.unknown_retry(&mut retries), None);
+        assert_eq!(retries, 0, "a known merge state starts the count again");
+    }
+
+    #[tokio::test]
+    async fn a_known_merge_state_keeps_the_usual_pinned_tick() {
+        let server = MockServer::start().await;
+        serve_by_number(&server, BY_NUMBER).await;
+        let (ctx, _harness) = logged_in(&server);
+        let mut syncer = Syncer::new(ctx);
+        let mut retries = 3;
+
+        assert!(syncer.load(&key(1550)).await);
+        assert_eq!(syncer.unknown_retry(&mut retries), None);
+        assert_eq!(retries, 0);
     }
 
     #[tokio::test]
