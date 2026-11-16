@@ -10,6 +10,7 @@
 )]
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -19,6 +20,7 @@ use crate::domain::agent::{AgentResults, Record, Tool, ToolKind};
 use crate::domain::check::Check;
 use crate::domain::codeview::Comments;
 use crate::domain::detail::PrDetail;
+use crate::domain::diff::Tokens;
 use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::{LocalMatch, LocalState};
@@ -243,6 +245,39 @@ pub(crate) enum DetailReq {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum JjReq {
     Scan(RepoKey),
+}
+
+/// A request to the highlight worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HighlightReq {
+    /// Highlights the patch of one file.
+    File(HighlightJob),
+    /// Drops the waiting job of the file at `path` of the pull request
+    /// `key`, for example after the user closed the file. A job that
+    /// runs already ends normally.
+    Cancel { key: PrKey, path: String },
+}
+
+/// The highlight of the patch of one file, at one head commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HighlightJob {
+    pub key: PrKey,
+    /// The head commit that the files were read at.
+    pub head: String,
+    pub path: String,
+    pub patch: String,
+}
+
+/// The result of a `HighlightJob`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Highlighted {
+    pub key: PrKey,
+    pub head: String,
+    pub path: String,
+    /// The tokens of each code line of the patch. `None` for a file
+    /// without syntax colors: an unknown language or a patch over the
+    /// size limit.
+    pub lines: Option<Arc<Vec<Tokens>>>,
 }
 
 /// A command to run in a terminal: in a detached pane or in the
@@ -565,6 +600,8 @@ pub(crate) enum Msg {
         repo: RepoKey,
         state: Observed<LocalState>,
     },
+    /// The highlight worker finished the job of one file.
+    Highlighted(Highlighted),
     PrefetchDone(PrKey, Result<(), String>),
     /// The progress of a prefetch batch: `done` of `total` pull requests.
     /// `done == total` ends the batch.
@@ -631,6 +668,8 @@ pub(crate) enum Cmd {
     /// Reads the conversation of each pull request from GitHub again.
     ReloadDetail(Vec<PrRef>),
     ScanJj(RepoKey),
+    /// Starts or drops a highlight job on the highlight worker.
+    Highlight(HighlightReq),
     RunAction {
         id: &'static str,
         selection: Box<Selection>,

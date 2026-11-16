@@ -39,8 +39,8 @@ use crate::app::exec::{ActionEnv, AgentEnv, Runtime, Senders};
 use crate::app::keymap::Keymap;
 use crate::app::{App, DetailPane, Notice, NotifySettings, SPINNER_FRAME};
 use crate::bus::{
-    Cmd, DetailReq, Hit, Interest, JjReq, LaunchRequest, MouseKind, Msg, Progress, Scope, Session,
-    Size, SyncReq, TargetKey, TermState, TermStatus,
+    Cmd, DetailReq, HighlightReq, Hit, Interest, JjReq, LaunchRequest, MouseKind, Msg, Progress,
+    Scope, Session, Size, SyncReq, TargetKey, TermState, TermStatus,
 };
 use crate::cli::{CacheAction, Cli, Command};
 use crate::config::schema::{DetailMode, NotifyConfig, parse_repo_name};
@@ -315,6 +315,7 @@ fn worker_ctx(
         sync_rx: Arc::new(tokio::sync::Mutex::new(channels.sync)),
         detail_rx: Arc::new(tokio::sync::Mutex::new(channels.detail)),
         jj_rx: Arc::new(tokio::sync::Mutex::new(channels.jj)),
+        highlight_rx: Arc::new(tokio::sync::Mutex::new(channels.highlight)),
         locks,
         mode,
     }
@@ -351,8 +352,8 @@ fn action_env(
     }
 }
 
-/// The capacity of the request channels of the sync, the detail and the
-/// jj worker.
+/// The capacity of the request channels of the sync, the detail, the jj
+/// and the highlight worker.
 const REQUEST_CAPACITY: usize = 32;
 
 /// The receiving ends of the channels from the runtime to the workers.
@@ -362,22 +363,26 @@ struct WorkerChannels {
     sync: mpsc::Receiver<SyncReq>,
     detail: mpsc::Receiver<DetailReq>,
     jj: mpsc::Receiver<JjReq>,
+    highlight: mpsc::Receiver<HighlightReq>,
 }
 
 /// The channels from the runtime to the workers: the interest and the
-/// session watches, and the sync, detail and jj request channels.
+/// session watches, and the sync, detail, jj and highlight request
+/// channels.
 fn channels(store: StoreHandle, interest: Interest, session: Session) -> (Senders, WorkerChannels) {
     let (interest_tx, interest_rx) = watch::channel(interest);
     let (session_tx, session_rx) = watch::channel(session);
     let (sync_tx, sync_rx) = mpsc::channel(REQUEST_CAPACITY);
     let (detail_tx, detail_rx) = mpsc::channel(REQUEST_CAPACITY);
     let (jj_tx, jj_rx) = mpsc::channel(REQUEST_CAPACITY);
+    let (highlight_tx, highlight_rx) = mpsc::channel(REQUEST_CAPACITY);
     let senders = Senders {
         interest: interest_tx,
         session: session_tx,
         sync: sync_tx,
         detail: detail_tx,
         jj: jj_tx,
+        highlight: highlight_tx,
         store,
     };
     let channels = WorkerChannels {
@@ -386,6 +391,7 @@ fn channels(store: StoreHandle, interest: Interest, session: Session) -> (Sender
         sync: sync_rx,
         detail: detail_rx,
         jj: jj_rx,
+        highlight: highlight_rx,
     };
     (senders, channels)
 }

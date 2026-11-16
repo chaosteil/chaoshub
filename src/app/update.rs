@@ -163,11 +163,18 @@ pub(crate) fn update_full(
             if result.is_ok() {
                 back_online(state);
             }
-            if files_loaded(state, key, result) {
-                after_change(state, tabs)
+            if files_loaded(state, key.clone(), result) {
+                let mut cmds = pane_jobs(state, panes, &key);
+                cmds.extend(after_change(state, tabs));
+                cmds
             } else {
                 Vec::new()
             }
+        }
+        Msg::Highlighted(done) => {
+            let key = done.key.clone();
+            pane_receive(state, panes, &key, &Msg::Highlighted(done));
+            Vec::new()
         }
         Msg::SyncFailed { source, scope, err } => sync_failed(state, source, scope, &err),
         Msg::WorkerDied { name, restart_in } => worker_died(state, name, restart_in),
@@ -2361,6 +2368,61 @@ fn detail_loading(state: &mut AppState, key: PrKey) -> Vec<Cmd> {
     Vec::new()
 }
 
+/// Calls `f` with each pane that applies to `key` in each popup on
+/// `key`, with its key context and its state.
+fn each_pane(
+    state: &mut AppState,
+    panes: &[Box<dyn Pane>],
+    key: &PrKey,
+    mut f: impl FnMut(&dyn Pane, &KeyCx<'_>, &mut PaneState),
+) {
+    let areas = frame::areas(state);
+    let Some(target) = pr_target(&state.data, key) else {
+        return;
+    };
+    let cx = KeyCx {
+        data: &state.data,
+        target: Some(&target),
+        areas: &areas,
+        keys: &keymap::DEFAULT,
+    };
+    for overlay in &mut state.ui.overlays {
+        let OverlayState::Popup(popup) = &mut overlay.state else {
+            continue;
+        };
+        if popup.key != *key {
+            continue;
+        }
+        for (pane, ps) in panes.iter().zip(popup.panes.iter_mut()) {
+            if pane.applies(&target) {
+                f(pane.as_ref(), &cx, ps);
+            }
+        }
+    }
+}
+
+/// The background jobs of the panes of the popups on `key` after new
+/// data of `key`.
+fn pane_jobs(state: &mut AppState, panes: &[Box<dyn Pane>], key: &PrKey) -> Vec<Cmd> {
+    let mut cmds = Vec::new();
+    each_pane(state, panes, key, |pane, cx, ps| {
+        cmds.extend(pane.jobs(cx, ps));
+    });
+    cmds
+}
+
+/// Gives the result of a background job to the panes of the popups on
+/// `key`. The frame is built again when a pane took it.
+fn pane_receive(state: &mut AppState, panes: &[Box<dyn Pane>], key: &PrKey, msg: &Msg) {
+    let mut changed = false;
+    each_pane(state, panes, key, |pane, cx, ps| {
+        changed |= pane.receive(msg, cx, ps);
+    });
+    if changed {
+        state.bump();
+    }
+}
+
 /// The detail worker started to read the changed files of `key`. It runs
 /// until `FilesLoaded`.
 fn files_loading(state: &mut AppState, key: PrKey) -> Vec<Cmd> {
@@ -3230,7 +3292,7 @@ mod tests {
     use crate::app::state::Overlay;
     use crate::app::tabs::fake::FakeTab;
     use crate::app::testdata;
-    use crate::bus::{Interest, RateInfo, Session};
+    use crate::bus::{HighlightReq, Interest, RateInfo, Session};
     use crate::domain::test_time;
 
     const SIZE: Size = Size {
@@ -5062,6 +5124,63 @@ mod tests {
         assert_eq!(run(&mut state, &tabs, loaded(Ok(older))), vec![]);
         assert_eq!(state.data.files.get(&key), Some(&at_secs(10)));
         assert_eq!(state.generation, generation);
+    }
+
+    #[test]
+    fn the_files_pane_gets_its_highlight_jobs_and_their_results() {
+        let (tabs, mut state) = setup(None);
+        let pr = testdata::pr("chaoshub", 7, "Seven");
+        let key = pr.key.clone();
+        state.data.prs.insert(key.clone(), pr);
+        let target = pr_target(&state.data, &key).unwrap();
+        open_popup(&mut state, &PANES, &target, Some("files"));
+        let files = |head: &str, secs| {
+            let mut files = testdata::files();
+            files.head_oid = head.into();
+            Observed {
+                value: files,
+                observed_at: at(secs),
+            }
+        };
+        let is_job = |cmd: &Cmd, head: &str| matches!(cmd, Cmd::Highlight(HighlightReq::File(job)) if job.head == head);
+        let cmds = run(
+            &mut state,
+            &tabs,
+            Msg::FilesLoaded(key.clone(), Ok(files("oid7", 1))),
+        );
+        assert!(!cmds.iter().any(|c| is_job(c, "oid7")), "no open file");
+        let Some(Overlay {
+            state: OverlayState::Popup(popup),
+            ..
+        }) = state.ui.overlays.last_mut()
+        else {
+            panic!("no popup");
+        };
+        popup.panes[popup.active].cursor = 8;
+        let cmds = run(&mut state, &tabs, press(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(cmds.iter().any(|c| is_job(c, "oid7")), "{cmds:?}");
+        let cmds = run(
+            &mut state,
+            &tabs,
+            Msg::FilesLoaded(key.clone(), Ok(files("oid8", 2))),
+        );
+        assert!(
+            cmds.iter().any(|c| is_job(c, "oid8")),
+            "a new head asks again: {cmds:?}"
+        );
+        let done = |head: &str| {
+            Msg::Highlighted(crate::bus::Highlighted {
+                key: key.clone(),
+                head: head.into(),
+                path: "src/app/panes/files.rs".into(),
+                lines: None,
+            })
+        };
+        let generation = state.generation;
+        assert_eq!(run(&mut state, &tabs, done("oid7")), vec![]);
+        assert_eq!(state.generation, generation, "the old head is dropped");
+        run(&mut state, &tabs, done("oid8"));
+        assert_eq!(state.generation, generation + 1, "the frame shows it");
     }
 
     #[test]

@@ -18,7 +18,7 @@ use std::sync::LazyLock;
 
 use crate::app::models::PaneModel;
 use crate::app::tabs::{Handled, KeyCx};
-use crate::bus::{KeyChord, Size, Target};
+use crate::bus::{Cmd, KeyChord, Msg, Size, Target};
 
 /// The state of one pane, made by `Pane::init_state`.
 #[derive(Debug)]
@@ -82,6 +82,18 @@ pub(crate) trait Pane: Send + Sync {
     /// `None` when the pane has no such action. The default has none.
     fn run_action(&self, _key: KeyChord, _cx: &KeyCx<'_>, _ps: &mut PaneState) -> Option<Handled> {
         None
+    }
+    /// The background jobs that the pane needs after new data of its
+    /// target, for example after a load of the changed files. The
+    /// default has none.
+    fn jobs(&self, _cx: &KeyCx<'_>, _ps: &mut PaneState) -> Vec<Cmd> {
+        Vec::new()
+    }
+    /// Takes the result of a background job of the pane, for example
+    /// `Msg::Highlighted`. True when the state changed. The default
+    /// takes nothing.
+    fn receive(&self, _msg: &Msg, _cx: &KeyCx<'_>, _ps: &mut PaneState) -> bool {
+        false
     }
 }
 

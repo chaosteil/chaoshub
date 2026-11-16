@@ -3,19 +3,23 @@
 //! opens and closes a directory or a file; an open file shows its patch
 //! under it, with the syntax colors of its language. `o` opens the files
 //! page of the pull request.
+//!
+//! The highlight worker gives the syntax colors (see
+//! `workers::highlight`). An open file shows its diff colors at once, and
+//! its syntax colors when the result of the worker comes.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::app::models::{Cell, CellStyle, Change, PaneModel, TreeNode};
 use crate::app::panes::{Pane, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx, tree_toggled};
-use crate::bus::{Cmd, KeyChord, Size, Target};
-use crate::domain::diff::{LineKind, Tokens, code, numbered};
+use crate::bus::{Cmd, HighlightJob, HighlightReq, Highlighted, KeyChord, Msg, Size, Target};
+use crate::domain::diff::{LineKind, Tokens, numbered};
 use crate::domain::files::{ChangedFile, FileStatus, PrFiles};
+use crate::domain::keys::PrKey;
 use crate::domain::pr::PullRequest;
-use crate::highlight::{self, Side};
 
 /// The files pane.
 pub(crate) struct FilesPane;
@@ -26,44 +30,88 @@ pub(crate) struct FilesPane;
 pub(crate) struct FilesState {
     pub closed_dirs: HashSet<String>,
     pub open_files: HashSet<String>,
-    /// The syntax tokens of each file that the pane showed open, by head
-    /// commit and path. The pane highlights a file when it first shows
-    /// the file, not on each draw. `None` for a file without a highlight.
-    highlights: Mutex<HashMap<(String, String), Highlight>>,
+    /// The syntax tokens that the highlight worker sent, by head commit
+    /// and path.
+    highlights: HashMap<(String, String), Highlight>,
+    /// The files with a job on the highlight worker, by head commit and
+    /// path.
+    waiting: HashSet<(String, String)>,
 }
 
 /// The syntax tokens of the code lines of one file, `None` for a file
-/// without a highlight.
+/// without syntax colors.
 type Highlight = Option<Arc<Vec<Tokens>>>;
 
 impl FilesState {
-    /// The syntax tokens of the code lines of `file` at the head commit
-    /// `head`, from the cache or a new highlight. A new head drops the
-    /// tokens of the old head.
-    fn highlights(&self, head: &str, file: &ChangedFile) -> Highlight {
-        let patch = file.patch.as_deref()?;
-        let key = (head.to_owned(), file.path.clone());
-        if let Some(hit) = self.highlights.lock().ok()?.get(&key) {
-            return hit.clone();
-        }
-        let lines: Vec<(Side, &str)> = numbered(patch)
-            .into_iter()
-            .filter_map(|(kind, _, text)| {
-                let side = match kind {
-                    LineKind::Added => Side::New,
-                    LineKind::Removed => Side::Old,
-                    LineKind::Context => Side::Both,
-                    LineKind::Hunk | LineKind::Note => return None,
-                };
-                Some((side, code(text)))
-            })
-            .collect();
-        let tokens = highlight::highlight(&file.path, &lines).map(Arc::new);
-        let mut cache = self.highlights.lock().ok()?;
-        cache.retain(|(h, _), _| h == head);
-        cache.insert(key, tokens.clone());
-        tokens
+    /// The syntax tokens of the file at `path` at the head commit `head`.
+    /// `None` until the worker sends them, and for a file without syntax
+    /// colors.
+    fn highlight(&self, head: &str, path: &str) -> Option<&[Tokens]> {
+        let tokens = self.highlights.get(&(head.to_owned(), path.to_owned()))?;
+        tokens.as_deref().map(Vec::as_slice)
     }
+
+    /// The highlight jobs for the open files of `files` of the pull
+    /// request `key` that have no tokens and no job yet. The tokens and
+    /// the jobs of the other heads go away.
+    fn jobs(&mut self, key: &PrKey, files: &PrFiles) -> Vec<Cmd> {
+        let head = &files.head_oid;
+        self.highlights.retain(|(h, _), _| h == head);
+        self.waiting.retain(|(h, _)| h == head);
+        files
+            .files
+            .iter()
+            .filter(|file| self.open_files.contains(&file.path))
+            .filter_map(|file| {
+                let patch = file.patch.as_ref()?;
+                let id = (head.clone(), file.path.clone());
+                if self.highlights.contains_key(&id) || !self.waiting.insert(id) {
+                    return None;
+                }
+                Some(Cmd::Highlight(HighlightReq::File(HighlightJob {
+                    key: key.clone(),
+                    head: head.clone(),
+                    path: file.path.clone(),
+                    patch: patch.clone(),
+                })))
+            })
+            .collect()
+    }
+
+    /// The cancel of the waiting highlight job of the file at `path`,
+    /// after the user closed the file.
+    fn cancel(&mut self, cx: &KeyCx<'_>, path: String) -> Option<Cmd> {
+        let (key, files) = target_files(cx)?;
+        let id = (files.head_oid.clone(), path);
+        self.waiting.remove(&id).then(|| {
+            Cmd::Highlight(HighlightReq::Cancel {
+                key: key.clone(),
+                path: id.1,
+            })
+        })
+    }
+
+    /// Keeps the result of a highlight job when it is for `head`, the
+    /// head of the files now. True when it kept the result.
+    fn highlighted(&mut self, done: &Highlighted, head: &str) -> bool {
+        let id = (done.head.clone(), done.path.clone());
+        self.waiting.remove(&id);
+        if done.head != head {
+            tracing::debug!(path = done.path, "a highlight for an old head, dropped");
+            return false;
+        }
+        self.highlights.insert(id, done.lines.clone());
+        true
+    }
+}
+
+/// The pull request and the changed files of the target of `cx`.
+fn target_files<'a>(cx: &KeyCx<'a>) -> Option<(&'a PrKey, &'a PrFiles)> {
+    let Some(Target::Pr { pr, .. }) = cx.target else {
+        return None;
+    };
+    let files = cx.data.files.get(&pr.key)?;
+    Some((&pr.key, &files.value))
 }
 
 impl Pane for FilesPane {
@@ -118,6 +166,7 @@ impl Pane for FilesPane {
             (nodes.into_iter().nth(ps.cursor)?.1?, before)
         };
         let state = ps.ext.downcast_mut::<FilesState>()?;
+        let mut cmds = Vec::new();
         match toggle {
             Toggle::Dir(path) => {
                 if !state.closed_dirs.remove(&path) {
@@ -125,13 +174,39 @@ impl Pane for FilesPane {
                 }
             }
             Toggle::File(path) => {
-                if !state.open_files.remove(&path) {
+                if state.open_files.remove(&path) {
+                    cmds.extend(state.cancel(cx, path));
+                } else {
                     state.open_files.insert(path);
+                    if let Some((key, files)) = target_files(cx) {
+                        cmds.extend(state.jobs(key, files));
+                    }
                 }
             }
         }
         let after = nodes(cx, state).len();
-        Some(tree_toggled(ps.cursor, before, after))
+        let mut handled = tree_toggled(ps.cursor, before, after);
+        handled.cmds = cmds;
+        Some(handled)
+    }
+
+    fn jobs(&self, cx: &KeyCx<'_>, ps: &mut PaneState) -> Vec<Cmd> {
+        let Some(state) = ps.ext.downcast_mut::<FilesState>() else {
+            return Vec::new();
+        };
+        target_files(cx).map_or_else(Vec::new, |(key, files)| state.jobs(key, files))
+    }
+
+    fn receive(&self, msg: &Msg, cx: &KeyCx<'_>, ps: &mut PaneState) -> bool {
+        let Msg::Highlighted(done) = msg else {
+            return false;
+        };
+        let (Some(state), Some((key, files))) =
+            (ps.ext.downcast_mut::<FilesState>(), target_files(cx))
+        else {
+            return false;
+        };
+        *key == done.key && state.highlighted(done, &files.head_oid)
     }
 }
 
@@ -299,8 +374,8 @@ fn emit(
             Some(Toggle::File(file.path.clone())),
         ));
         if open {
-            let tokens = state.highlights(head, file);
-            let nodes = patch(deeper, file, tokens.as_deref().map(Vec::as_slice));
+            let tokens = state.highlight(head, &file.path);
+            let nodes = patch(deeper, file, tokens);
             out.extend(nodes.into_iter().map(|n| (n, None)));
         }
     }
@@ -489,6 +564,48 @@ mod tests {
         (model, handled)
     }
 
+    /// The highlight job of the file at `path` of the test files at the
+    /// head `head`.
+    fn job(path: &str, head: &str) -> Cmd {
+        let file = testdata::files()
+            .files
+            .into_iter()
+            .find(|f| f.path == path)
+            .unwrap();
+        Cmd::Highlight(HighlightReq::File(HighlightJob {
+            key: testdata::pr_key("chaoshub", 7),
+            head: head.into(),
+            path: path.into(),
+            patch: file.patch.unwrap(),
+        }))
+    }
+
+    /// Gives the pane the result of the highlight worker for the file at
+    /// `path`, read at the head `head`. True when the pane took it.
+    fn deliver(state: &AppState, ps: &mut PaneState, path: &str, head: &str) -> bool {
+        let file = testdata::files()
+            .files
+            .into_iter()
+            .find(|f| f.path == path)
+            .unwrap();
+        let done = Highlighted {
+            key: testdata::pr_key("chaoshub", 7),
+            head: head.into(),
+            path: path.into(),
+            lines: crate::highlight::patch(path, file.patch.as_deref().unwrap()).map(Arc::new),
+        };
+        let key = testdata::pr_key("chaoshub", 7);
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &Keymap::default(),
+        };
+        FilesPane.receive(&Msg::Highlighted(done), &cx, ps)
+    }
+
     #[test]
     fn the_tree_shows_nested_directories_with_counts() {
         let state = state_with(Some(testdata::files()), None, false);
@@ -588,6 +705,19 @@ mod tests {
             ],
             "the gutter, then the +, - or space in the color of the change"
         );
+        assert!(
+            lines.iter().all(|n| n.cells.len() <= 2),
+            "no syntax colors before the worker sends them"
+        );
+        let file = &testdata::files().files[2];
+        assert_eq!(
+            handled.cmds,
+            [job(&file.path, "oid7")],
+            "the open file goes to the highlight worker"
+        );
+        assert!(deliver(&state, &mut ps, &file.path, "oid7"));
+        let (model, _) = model_and_keys(&state, &mut ps, &[]);
+        let lines = &tree_nodes(&model)[9..16];
         // The code after the sign has the syntax colors of Rust.
         let has = |index: usize, syntax, change, text: &str| {
             lines[index].cells[2..]
@@ -606,7 +736,9 @@ mod tests {
         }));
         assert!(tree_nodes(&model)[9..16].iter().all(|n| n.depth == 4));
         let (model, handled) = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
-        assert_eq!(handled.unwrap().events, [], "a collapse is instant");
+        let handled = handled.unwrap();
+        assert_eq!(handled.events, [], "a collapse is instant");
+        assert_eq!(handled.cmds, [], "no job waits for the file");
         assert_eq!(outline(&model)[8], "      ▸ files.rs +2 −1");
         assert_eq!(
             outline(&model)[9],
@@ -667,8 +799,6 @@ mod tests {
             deletions: 0,
             patch: Some("@@ -1 +1,2 @@\n fn a\n+fn b".into()),
         };
-        let state = FilesState::default();
-        assert_eq!(state.highlights("oid", &file), None);
         let nodes = patch(0, &file, None);
         let styles: Vec<CellStyle> = nodes[2].cells.iter().map(|c| c.style).collect();
         assert_eq!(styles, [CellStyle::DiffGutter, CellStyle::DiffAdd]);
@@ -676,26 +806,66 @@ mod tests {
     }
 
     #[test]
-    fn the_highlight_of_a_file_stays_until_a_new_head() {
-        let mut file = testdata::files()
-            .files
-            .into_iter()
-            .find(|f| f.path == "src/app/panes/files.rs")
-            .unwrap();
-        let state = FilesState::default();
-        let first = state.highlights("oid1", &file).unwrap();
-        file.patch = Some("@@ -1 +1 @@\n-let a = 1;\n+let b = 2;".into());
-        let cached = state.highlights("oid1", &file).unwrap();
+    fn a_result_for_an_old_head_is_dropped() {
+        let mut state = state_with(Some(testdata::files()), None, false);
+        let mut ps = FilesPane.init_state();
+        ps.cursor = 8;
+        model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        let path = "src/app/panes/files.rs";
+        assert!(!deliver(&state, &mut ps, path, "an old head"));
+        let (model, _) = model_and_keys(&state, &mut ps, &[]);
         assert!(
-            Arc::ptr_eq(&first, &cached),
-            "the same head reads the cache"
+            tree_nodes(&model)[9..16].iter().all(|n| n.cells.len() <= 2),
+            "no syntax colors from the old head"
         );
-        let fresh = state.highlights("oid2", &file).unwrap();
-        assert_eq!(fresh.len(), 2, "a new head highlights the new patch");
+        assert!(deliver(&state, &mut ps, path, "oid7"));
+        // A load at a new head drops the tokens and asks for new ones.
+        let key = testdata::pr_key("chaoshub", 7);
+        let mut files = testdata::files();
+        files.head_oid = "oid8".into();
+        state
+            .data
+            .files
+            .insert(key.clone(), testdata::observed(files));
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &Keymap::default(),
+        };
+        assert_eq!(FilesPane.jobs(&cx, &mut ps), [job(path, "oid8")]);
+        assert_eq!(FilesPane.jobs(&cx, &mut ps), [], "one job per file");
+        let model = FilesPane.model(&cx, &ps, state.data.size);
+        assert!(
+            tree_nodes(&model)
+                .iter()
+                .flat_map(|n| &n.cells)
+                .all(|c| !matches!(c.style, CellStyle::Code(..))),
+            "the tokens of the old head are gone"
+        );
+    }
+
+    #[test]
+    fn closing_a_file_cancels_its_waiting_job() {
+        let state = state_with(Some(testdata::files()), None, false);
+        let mut ps = FilesPane.init_state();
+        ps.cursor = 8;
+        model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        let (_, handled) = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
         assert_eq!(
-            state.highlights.lock().unwrap().len(),
-            1,
-            "the old head is gone"
+            handled.unwrap().cmds,
+            [Cmd::Highlight(HighlightReq::Cancel {
+                key: testdata::pr_key("chaoshub", 7),
+                path: "src/app/panes/files.rs".into(),
+            })]
+        );
+        let (_, handled) = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        assert_eq!(
+            handled.unwrap().cmds,
+            [job("src/app/panes/files.rs", "oid7")],
+            "an open again asks again"
         );
     }
 

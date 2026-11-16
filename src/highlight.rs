@@ -2,6 +2,9 @@
 //! syntaxes of bat that two-face bundles. The result is a role per token,
 //! not a color: the palette of the theme gives the colors (see
 //! `ui::style`).
+//!
+//! The highlight is slow for a large patch, so only the highlight worker
+//! calls it, on a blocking thread (see `workers::highlight`).
 
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -12,16 +15,15 @@ use syntect::highlighting::{
 };
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
-use crate::domain::diff::{Syntax, Tokens};
+use crate::domain::diff::{LineKind, Syntax, Tokens, code, numbered};
 
-/// A patch with more bytes than this gets no highlight, so the first
-/// draw of a large file stays fast. The highlight runs on the UI thread
-/// when a file opens. At this limit, a release build takes at most about
-/// 120 ms.
-const MAX_BYTES: usize = 32 * 1024;
+/// A patch with more bytes than this gets no highlight, so one file
+/// cannot keep the worker busy for long. At this limit, a release build
+/// takes at most about 400 ms, for a patch of context lines only.
+const MAX_BYTES: usize = 128 * 1024;
 
-/// A patch with a line longer than this gets no highlight. A long line,
-/// as in minified code, makes the parser slow.
+/// A line longer than this gets no syntax colors and does not go through
+/// the parser. A long line, as in minified code, makes the parser slow.
 const MAX_LINE: usize = 1000;
 
 /// The side of a diff that a code line is on.
@@ -181,18 +183,43 @@ fn syntax_for(path: &str) -> Option<&'static SyntaxReference> {
     (found.name != "Plain Text").then_some(found)
 }
 
+/// Loads the syntax set, so the first highlight does not wait for it.
+pub(crate) fn warm() {
+    LazyLock::force(&SYNTAXES);
+}
+
+/// The tokens of each code line of `text`, a patch of the file at
+/// `path`: one entry per added, removed and context line, in patch
+/// order. `None` as for `highlight`.
+pub(crate) fn patch(path: &str, text: &str) -> Option<Vec<Tokens>> {
+    let lines: Vec<(Side, &str)> = numbered(text)
+        .into_iter()
+        .filter_map(|(kind, _, text)| {
+            let side = match kind {
+                LineKind::Added => Side::New,
+                LineKind::Removed => Side::Old,
+                LineKind::Context => Side::Both,
+                LineKind::Hunk | LineKind::Note => return None,
+            };
+            Some((side, code(text)))
+        })
+        .collect();
+    highlight(path, &lines)
+}
+
 /// The tokens of each code line of a diff of the file at `path`. Each
 /// line is its side and its text without the `+`, `-` or space prefix.
 ///
 /// The old and the new file each get their own parser, so a removed
 /// line does not change the parse of an added line. A context line goes
-/// through both, and its tokens come from the new file.
+/// through both, and its tokens come from the new file. A line over
+/// `MAX_LINE` is one `Plain` token.
 ///
 /// `None` for a language without a bundled syntax, a patch over the size
-/// limits, or a parse error.
+/// limit, or a parse error.
 pub(crate) fn highlight(path: &str, lines: &[(Side, &str)]) -> Option<Vec<Tokens>> {
     let bytes: usize = lines.iter().map(|(_, text)| text.len() + 1).sum();
-    if bytes > MAX_BYTES || lines.iter().any(|(_, text)| text.len() > MAX_LINE) {
+    if bytes > MAX_BYTES {
         return None;
     }
     let syntax = syntax_for(path)?;
@@ -201,6 +228,10 @@ pub(crate) fn highlight(path: &str, lines: &[(Side, &str)]) -> Option<Vec<Tokens
     let mut new = HighlightLines::new(syntax, &ROLES);
     let mut out = Vec::with_capacity(lines.len());
     for &(side, text) in lines {
+        if text.len() > MAX_LINE {
+            out.push(vec![(Syntax::Plain, text.to_owned())]);
+            continue;
+        }
         let line = format!("{text}\n");
         if side == Side::Both {
             old.highlight_line(&line, syntaxes).ok()?;
@@ -317,10 +348,31 @@ mod tests {
     #[test]
     fn an_unknown_language_or_a_large_patch_gets_no_highlight() {
         assert_eq!(highlight("a.unknown", &[(Side::New, "x")]), None);
-        let long = "x".repeat(MAX_LINE + 1);
-        assert_eq!(highlight("a.rs", &[(Side::New, long.as_str())]), None);
         let line = "let x = 1;".repeat(50);
         let many = vec![(Side::New, line.as_str()); MAX_BYTES / line.len() + 1];
         assert_eq!(highlight("a.rs", &many), None);
+    }
+
+    #[test]
+    fn a_long_line_is_plain_and_the_next_lines_keep_their_roles() {
+        let long = format!("let s = \"{}", "x".repeat(MAX_LINE));
+        let lines = [(Side::New, long.as_str()), (Side::New, "let n = 1;")];
+        let out = highlight("a.rs", &lines).unwrap();
+        assert_eq!(out[0], [(Syntax::Plain, long.clone())]);
+        assert_eq!(
+            role_of(&out[1], "let"),
+            Syntax::Keyword,
+            "the open string of the long line does not reach the parser"
+        );
+    }
+
+    #[test]
+    fn a_patch_gives_one_entry_per_code_line() {
+        let patch =
+            "@@ -1,2 +1,2 @@\n fn a() {}\n-let x = 1;\n+let y = 2;\n\\ No newline at end of file";
+        let out = super::patch("a.rs", patch).unwrap();
+        assert_eq!(out.len(), 3, "no entry for the hunk header and the note");
+        assert_eq!(role_of(&out[0], "fn"), Syntax::Keyword);
+        assert_eq!(role_of(&out[2], "2"), Syntax::Number);
     }
 }

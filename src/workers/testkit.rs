@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use tokio::sync::{Mutex, mpsc, watch};
 
-use crate::bus::{DetailReq, Interest, JjReq, Msg, PrRef, Session, SyncReq};
+use crate::bus::{DetailReq, HighlightReq, Interest, JjReq, Msg, PrRef, Session, SyncReq};
 use crate::config::Config;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::github::{GithubClient, TokenSource};
@@ -27,6 +27,7 @@ pub(crate) struct Harness {
     pub sync: mpsc::Sender<SyncReq>,
     pub detail: mpsc::Sender<DetailReq>,
     pub jj: mpsc::Sender<JjReq>,
+    pub highlight: mpsc::Sender<HighlightReq>,
 }
 
 impl Harness {
@@ -66,6 +67,7 @@ pub(crate) fn ctx_with(base_url: &str, config: Config, store: StoreHandle) -> (W
     let (sync_tx, sync_rx) = mpsc::channel(16);
     let (detail_tx, detail_rx) = mpsc::channel(16);
     let (jj_tx, jj_rx) = mpsc::channel(16);
+    let (highlight_tx, highlight_rx) = mpsc::channel(16);
     let ctx = WorkerCtx {
         client: Arc::new(client),
         store,
@@ -76,6 +78,7 @@ pub(crate) fn ctx_with(base_url: &str, config: Config, store: StoreHandle) -> (W
         sync_rx: Arc::new(Mutex::new(sync_rx)),
         detail_rx: Arc::new(Mutex::new(detail_rx)),
         jj_rx: Arc::new(Mutex::new(jj_rx)),
+        highlight_rx: Arc::new(Mutex::new(highlight_rx)),
         locks: RepoLocks::default(),
         mode: WorkerMode::Lists,
     };
@@ -86,6 +89,7 @@ pub(crate) fn ctx_with(base_url: &str, config: Config, store: StoreHandle) -> (W
         sync: sync_tx,
         detail: detail_tx,
         jj: jj_tx,
+        highlight: highlight_tx,
     };
     (ctx, harness)
 }

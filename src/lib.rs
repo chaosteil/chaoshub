@@ -11,7 +11,7 @@
 //! agent: reads domain, bus, github and config; read by actions, app and run.
 //! codeview: reads domain and config; read by actions, app (exec) and run.
 //! osc: reads bus only; read by run and clipboard.   clipboard: read by app (exec).
-//! markup: reads no module; read by app and ui.   highlight: reads domain; read by app and workers.
+//! markup: reads no module; read by app and ui.   highlight: reads domain; read by workers and the tests of app.
 //! ```
 #![forbid(unsafe_code)]
 

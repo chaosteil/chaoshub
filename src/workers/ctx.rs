@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use tokio::sync::{Mutex, mpsc, watch};
 
-use crate::bus::{DetailReq, Interest, JjReq, Msg, Session, SyncReq};
+use crate::bus::{DetailReq, HighlightReq, Interest, JjReq, Msg, Session, SyncReq};
 use crate::config::Config;
 use crate::domain::keys::PrKey;
 use crate::github::GithubClient;
@@ -39,6 +39,8 @@ pub(crate) struct WorkerCtx {
     pub detail_rx: Arc<Mutex<mpsc::Receiver<DetailReq>>>,
     /// Requests to the jj worker.
     pub jj_rx: Arc<Mutex<mpsc::Receiver<JjReq>>>,
+    /// Requests to the highlight worker.
+    pub highlight_rx: Arc<Mutex<mpsc::Receiver<HighlightReq>>>,
     pub locks: RepoLocks,
     /// The lists, or one pinned pull request.
     pub mode: WorkerMode,

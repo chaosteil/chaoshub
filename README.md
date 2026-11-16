@@ -978,11 +978,14 @@ On the ANSI palette, an added or a removed line has no tint. Thus its
 code keeps the green or the red of the change, and only the context
 lines get the syntax colors.
 
-A file gets no syntax colors when no bundled syntax knows its
-language, when its patch is larger than 32 KiB, or when one of its
-lines is longer than 1000 characters. Its diff colors stay. chaoshub
-highlights a file when you open it, and keeps the result until the
-pull request gets a new head.
+A background worker gives the syntax colors, so the UI does not wait
+for them. When you open a file, its diff shows at once with the diff
+colors. The syntax colors come when the worker is done, usually after
+some milliseconds. chaoshub keeps the result until the pull request
+gets a new head. A file gets no syntax colors when no bundled syntax
+knows its language, or when its patch is larger than 128 KiB. A line
+that is longer than 1000 characters gets no syntax colors. The diff
+colors stay.
 
 #### Codeview comments
 

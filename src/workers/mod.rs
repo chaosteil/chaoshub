@@ -4,6 +4,7 @@
 mod ci;
 pub(crate) mod ctx;
 mod detail;
+mod highlight;
 mod jj;
 mod prefetch;
 mod startup;
@@ -30,6 +31,7 @@ const WORKERS: &[Worker] = &[
     jj::WORKER,
     detail::WORKER,
     prefetch::WORKER,
+    highlight::WORKER,
 ];
 
 /// Spawns every worker into one `JoinSet`, each one inside its own
