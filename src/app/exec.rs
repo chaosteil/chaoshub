@@ -1068,6 +1068,9 @@ mod tests {
         let mut f = pane_fixture(&tokio, &launcher);
         f.runtime.exec(run_terminal(1));
         assert_eq!(f.msgs.blocking_recv(), Some(started(1)));
+        // The pane task can start its wait after the `started` message.
+        // Thus wait for it, so the focus comes after the wait.
+        eventually(|| launcher.calls().contains(&"wait block:pane-1".to_owned()));
         f.runtime.exec(Cmd::FocusPane {
             id: "review",
             key: pr_key(1),
@@ -1083,6 +1086,11 @@ mod tests {
             id: "review",
             key: pr_key(1),
         });
+        // The task ends just after it sends `PaneEnded`. Thus wait for it.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while f.runtime.running() > 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert_eq!(f.runtime.running(), 0);
     }
 
