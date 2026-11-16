@@ -22,6 +22,27 @@ pub(crate) struct StackRef {
     pub merged: Vec<u32>,
 }
 
+impl StackRef {
+    /// The place of the pull request in the stack.
+    pub(crate) fn place(&self) -> StackPlace {
+        StackPlace {
+            id: self.id.clone(),
+            position: self.position,
+        }
+    }
+}
+
+/// The place of a pull request in a stack: the stack id and the
+/// position. A search result gives it, so the sync worker can find a
+/// pull request that joined or left a stack. GitHub does not change
+/// `updatedAt` when it adds a pull request to a stack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StackPlace {
+    /// The GraphQL node id of the stack.
+    pub id: String,
+    pub position: u32,
+}
+
 /// A stack with its loaded entries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Stack {

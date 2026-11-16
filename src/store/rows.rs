@@ -12,6 +12,7 @@ use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::repo::RepoSettings;
+use crate::domain::stack::StackRef;
 use crate::store::error::StoreError;
 use crate::store::{PrVersion, Snapshot, SyncState};
 
@@ -215,6 +216,7 @@ pub(crate) fn pr_versions(
                 pr.key,
                 PrVersion {
                     updated_at: pr.head.value.updated_at,
+                    stack: pr.head.value.stack.as_ref().map(StackRef::place),
                     head_oid: pr.head.value.head_oid,
                     observed_at: pr.head.observed_at,
                 },

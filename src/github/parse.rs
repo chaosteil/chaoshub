@@ -14,7 +14,7 @@ use crate::domain::pr::{
     CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest, ReviewDecision,
 };
 use crate::domain::repo::{RepoSettings, SquashMessageDefault, SquashTitleDefault};
-use crate::domain::stack::{Stack, StackEntry, StackRef};
+use crate::domain::stack::{Stack, StackEntry, StackPlace, StackRef};
 use crate::github::GithubError;
 
 /// The user, for the `review_requested` rule.
@@ -63,6 +63,8 @@ pub(crate) struct PrStub {
     pub state: PrState,
     pub updated_at: DateTime<Utc>,
     pub head_oid: String,
+    /// The place in a stack. `None` when the pull request is in no stack.
+    pub stack: Option<StackPlace>,
 }
 
 /// Converts a GraphQL `Int` to an unsigned domain number.
@@ -380,7 +382,7 @@ macro_rules! pr_fields_parser {
 
 /// Conversions for the `ListPrs` query.
 pub(crate) mod list_prs {
-    use super::{GithubError, PrKey, PrState, PrStub, repo_key, uint};
+    use super::{GithubError, PrKey, PrState, PrStub, StackPlace, repo_key, uint};
     use crate::github::queries::list_prs as q;
 
     /// The stubs of one search page, and the cursor of the next page when
@@ -417,6 +419,13 @@ pub(crate) mod list_prs {
                     },
                     updated_at: pr.updated_at,
                     head_oid: pr.head_ref_oid,
+                    stack: match (pr.stack, pr.stack_entry) {
+                        (Some(stack), Some(entry)) => Some(StackPlace {
+                            id: stack.id,
+                            position: uint(entry.position, "stackEntry.position")?,
+                        }),
+                        _ => None,
+                    },
                 })
             })
             .collect::<Result<_, GithubError>>()?;
@@ -725,7 +734,16 @@ mod tests {
                 state: PrState::Merged,
                 updated_at: "2026-10-31T02:20:36Z".parse().unwrap(),
                 head_oid: "00000000000000000000000000000000c0de0006".into(),
+                stack: None,
             }
+        );
+        assert_eq!(
+            stubs[2].stack,
+            Some(StackPlace {
+                id: "PRS_kwDOAAAABc4AAA02".into(),
+                position: 6,
+            }),
+            "a stacked stub gives its place"
         );
         let data = fixture(include_str!("testdata/list_prs_team.json"));
         let (stubs, next) = list_prs::page(data).unwrap();

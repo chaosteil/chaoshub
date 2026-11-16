@@ -23,6 +23,7 @@ use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
 use crate::domain::pr::PullRequest;
 use crate::domain::repo::RepoSettings;
+use crate::domain::stack::StackPlace;
 use crate::store::error::StoreError;
 use crate::store::handle::{CHANNEL_CAPACITY, StoreHandle};
 
@@ -71,11 +72,15 @@ pub(crate) struct SyncState {
 }
 
 /// The version of a pull request that the sync worker knows. A search
-/// result with another `updated_at` or `head_oid` is a change.
+/// result with another `updated_at`, `head_oid` or `stack` is a change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PrVersion {
     pub updated_at: DateTime<Utc>,
     pub head_oid: String,
+    /// The place in a stack. GitHub does not change `updatedAt` when it
+    /// adds a pull request to a stack, so this field is part of the
+    /// version.
+    pub stack: Option<StackPlace>,
     /// The time when the head was observed.
     pub observed_at: DateTime<Utc>,
 }
@@ -499,6 +504,7 @@ mod tests {
                 PrVersion {
                     updated_at: t,
                     head_oid: "oid1".into(),
+                    stack: None,
                     observed_at: t,
                 }
             )]

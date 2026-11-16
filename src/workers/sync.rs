@@ -27,11 +27,14 @@
 //!
 //! A sync has two phases. Phase 1 reads the stubs of the search: the
 //! light data of each pull request (`id`, `number`, repo, `state`,
-//! `updatedAt`, `headRefOid`), at most 100 per page, until no page is
-//! left or the stubs reach 500. The worker compares each stub with the
-//! version that it knows of the pull request (`updated_at`, `head_oid`,
-//! `observed_at`). Phase 2 reads the full fields of the new and the
-//! changed pull requests by node id, at most 10 per request. A full sync also reads again at most 40
+//! `updatedAt`, `headRefOid`, the stack id and the stack position), at
+//! most 100 per page, until no page is left or the stubs reach 500. The
+//! worker compares each stub with the version that it knows of the pull
+//! request (`updated_at`, `head_oid`, the place in the stack,
+//! `observed_at`). GitHub does not change `updatedAt` when it adds a pull
+//! request to a stack. Thus the place in the stack is part of the
+//! version. Phase 2 reads the full fields of the new and the changed pull
+//! requests by node id, at most 10 per request. A full sync also reads again at most 40
 //! pull requests whose known version is older than 1 h, oldest first, so
 //! the merge state and old cache rows stay up to date. At its first sync
 //! of a scope, the worker loads the known versions from the cache.
@@ -71,6 +74,7 @@ use crate::config::schema::FiltersConfig;
 use crate::domain::keys::PrKey;
 use crate::domain::pr::{MergeStateStatus, Mergeable, PrState, PullRequest};
 use crate::domain::repo::Repo;
+use crate::domain::stack::StackRef;
 use crate::github::GithubError;
 use crate::github::PrStubPage;
 use crate::github::budget::RateBudget;
@@ -301,6 +305,7 @@ impl ScopeState {
                 let version = PrVersion {
                     updated_at: pr.head.value.updated_at,
                     head_oid: pr.head.value.head_oid.clone(),
+                    stack: pr.head.value.stack.as_ref().map(StackRef::place),
                     observed_at: pr.head.observed_at,
                 };
                 self.known.insert(pr.key.clone(), version);
@@ -565,7 +570,8 @@ impl Syncer {
                 match known.get(&stub.key) {
                     Some(version)
                         if version.updated_at == stub.updated_at
-                            && version.head_oid == stub.head_oid =>
+                            && version.head_oid == stub.head_oid
+                            && version.stack == stub.stack =>
                     {
                         if refetch && version.observed_at < stale_before {
                             stale.push((version.observed_at, stub.node_id.clone()));
@@ -979,6 +985,7 @@ mod tests {
     use super::*;
     use crate::bus::{Session, SyncError};
     use crate::domain::keys::RepoKey;
+    use crate::domain::stack::StackPlace;
     use crate::workers::testkit::{self, Harness};
 
     const PAGE1: &str = include_str!("../github/testdata/list_prs_page1.json");
@@ -1226,8 +1233,119 @@ mod tests {
         PrVersion {
             updated_at: updated_at.parse().unwrap(),
             head_oid: head_oid.to_owned(),
+            stack: None,
             observed_at,
         }
+    }
+
+    /// The stack of seven open pull requests, #4082 to #4088, and the
+    /// stack of eight entries with #1780 to #1784 merged and #1785 to
+    /// #1787 open. The numbers, the positions, the sizes and the
+    /// `updatedAt` values are the real ones of a user report. GitHub added
+    /// the seven pull requests to their stack at 22:54:57, after the
+    /// `updatedAt` of six of them.
+    const BIG_STACK: &str = "PRS_big";
+    const SMALL_STACK: &str = "PRS_small";
+    const STACKED: [(u64, &str, u32, &str); 10] = [
+        (4082, BIG_STACK, 1, "2026-11-16T22:53:28Z"),
+        (4083, BIG_STACK, 2, "2026-11-16T22:53:37Z"),
+        (4084, BIG_STACK, 3, "2026-11-16T22:53:22Z"),
+        (4085, BIG_STACK, 4, "2026-11-16T22:53:36Z"),
+        (4086, BIG_STACK, 5, "2026-11-16T22:54:39Z"),
+        (4087, BIG_STACK, 6, "2026-11-16T22:55:07Z"),
+        (4088, BIG_STACK, 7, "2026-11-16T22:54:54Z"),
+        (1785, SMALL_STACK, 6, "2026-11-16T20:57:15Z"),
+        (1786, SMALL_STACK, 7, "2026-11-16T20:57:43Z"),
+        (1787, SMALL_STACK, 8, "2026-11-16T20:55:53Z"),
+    ];
+
+    /// The entries of a stack of `STACKED`: the position, the number and
+    /// the state.
+    fn stack_entries(stack: &str) -> Vec<(u32, u64, &'static str)> {
+        if stack == BIG_STACK {
+            (1..=7)
+                .map(|position| (position, 4081 + u64::from(position), "OPEN"))
+                .collect()
+        } else {
+            (1..=8)
+                .map(|position| {
+                    let state = if position <= 5 { "MERGED" } else { "OPEN" };
+                    (position, 1779 + u64::from(position), state)
+                })
+                .collect()
+        }
+    }
+
+    /// The node of a pull request of `STACKED`, for a search page and for
+    /// `PrByIds`.
+    fn stacked_node(number: u64) -> Value {
+        let (_, stack, position, updated_at) = STACKED
+            .iter()
+            .find(|(n, ..)| *n == number)
+            .copied()
+            .unwrap();
+        let entries: Vec<Value> = stack_entries(stack)
+            .into_iter()
+            .map(|(position, number, state)| {
+                json!({
+                    "position": position,
+                    "pullRequest": { "id": format!("PR_{number}"), "number": number, "state": state },
+                })
+            })
+            .collect();
+        let mut node = page_nodes().remove(0);
+        node["id"] = json!(format!("PR_{number}"));
+        node["number"] = json!(number);
+        node["state"] = json!("OPEN");
+        node["updatedAt"] = json!(updated_at);
+        node["headRefOid"] = json!(format!("oid{number}"));
+        node["stack"] = json!({
+            "id": stack,
+            "number": if stack == BIG_STACK { 4089 } else { 1788 },
+            "size": entries.len(),
+            "baseRefName": "main",
+            "entries": { "nodes": entries },
+        });
+        node["stackEntry"] = json!({ "position": position });
+        node
+    }
+
+    /// The version of a pull request of `STACKED`, observed now. With
+    /// `in_stack`, the version has its place in the stack. Without it,
+    /// the version is from before GitHub added the pull request to the
+    /// stack.
+    fn stacked_version(number: u64, in_stack: bool) -> PrVersion {
+        let (_, stack, position, updated_at) = STACKED
+            .iter()
+            .find(|(n, ..)| *n == number)
+            .copied()
+            .unwrap();
+        let mut version = version(updated_at, &format!("oid{number}"), Utc::now());
+        version.stack = in_stack.then(|| StackPlace {
+            id: stack.into(),
+            position,
+        });
+        version
+    }
+
+    /// Serves one search page with the `numbers` of `STACKED`, and every
+    /// node of `STACKED` to `PrByIds`.
+    async fn serve_stacked(server: &MockServer, numbers: &[u64]) {
+        let page = json!({
+            "data": {
+                "search": {
+                    "pageInfo": { "hasNextPage": false, "endCursor": null },
+                    "nodes": numbers.iter().map(|n| stacked_node(*n)).collect::<Vec<_>>(),
+                },
+                "rateLimit": rate_json(),
+            }
+        });
+        serve_searches(server, page.clone(), page).await;
+        serve_by_ids(
+            server,
+            STACKED.iter().map(|(n, ..)| stacked_node(*n)).collect(),
+        )
+        .await;
     }
 
     /// The sync state of `scope` for the repo `acme/deploy`.
@@ -1383,6 +1501,35 @@ mod tests {
         );
         assert_eq!(by_ids(&server).await, [[ID_1587, ID_1586]]);
         assert_eq!(syncer.mine.known.get(&key(1589)), Some(&unchanged));
+    }
+
+    #[tokio::test]
+    async fn a_full_sync_reads_a_pull_request_again_when_its_stack_changes() {
+        let server = MockServer::start().await;
+        let numbers: Vec<u64> = STACKED.iter().map(|(n, ..)| *n).collect();
+        serve_stacked(&server, &numbers).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let mut syncer = Syncer::new(ctx);
+        // The worker read #4082 to #4085 before GitHub added them to the
+        // stack, and #4086 to #4088 after it.
+        for number in &numbers {
+            let in_stack = !(4082..=4085).contains(number);
+            syncer
+                .mine
+                .known
+                .insert(key(*number), stacked_version(*number, in_stack));
+        }
+
+        assert!(syncer.full(Scope::Mine).await);
+        assert_eq!(synced(&mut harness).await.1, [4082, 4083, 4084, 4085]);
+        assert_eq!(
+            syncer.mine.known.get(&key(4082)),
+            Some(&PrVersion {
+                observed_at: syncer.mine.known[&key(4082)].observed_at,
+                ..stacked_version(4082, true)
+            }),
+            "the new version has the place in the stack"
+        );
     }
 
     #[tokio::test]

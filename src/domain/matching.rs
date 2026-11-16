@@ -397,7 +397,7 @@ pub(crate) mod tests {
 
     #[test]
     fn group_stacks_cases() {
-        let cases: [(&str, Vec<PullRequest>, Groups); 4] = [
+        let cases: [(&str, Vec<PullRequest>, Groups); 5] = [
             ("empty", vec![], vec![]),
             (
                 "single pull requests keep their order",
@@ -423,6 +423,25 @@ pub(crate) mod tests {
                     (Some("T"), vec![22, 21]),
                     (Some("S"), vec![11]),
                     (None, vec![6]),
+                ],
+            ),
+            (
+                "a stack of seven and a stack of three stay apart",
+                vec![
+                    pr(4087, "BIG", 6),
+                    pr(4083, "BIG", 2),
+                    pr(4085, "BIG", 4),
+                    pr(4082, "BIG", 1),
+                    pr(4084, "BIG", 3),
+                    pr(1786, "SMALL", 7),
+                    pr(4088, "BIG", 7),
+                    pr(1785, "SMALL", 6),
+                    pr(4086, "BIG", 5),
+                    pr(1787, "SMALL", 8),
+                ],
+                vec![
+                    (Some("BIG"), vec![4088, 4087, 4086, 4085, 4084, 4083, 4082]),
+                    (Some("SMALL"), vec![1787, 1786, 1785]),
                 ],
             ),
         ];
