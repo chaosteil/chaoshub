@@ -1027,8 +1027,8 @@ the selected row or of the detail. These bindings have no default.
 | `agent` | `p` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
 | `codeview_send` | `r` | Opens the Review popup. There you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). |
 
-A merge of a stacked pull request includes every entry up to it. To
-merge every entry, use `merge_stack` (`s`) from any entry. The
+A merge of a stacked pull request includes every entry up to it. A
+merged entry needs no merge, so the merge skips it. To merge every entry, use `merge_stack` (`s`) from any entry. The
 `[merge] stack` key sets how chaoshub sends the merge. In `auto` mode,
 chaoshub reads the squash defaults of the repo. When they are the PR
 title and the PR body, or when the method is `merge` or `rebase`,
