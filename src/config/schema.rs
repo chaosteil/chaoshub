@@ -357,6 +357,9 @@ pub(crate) struct NotifyConfig {
     /// wait again, up to 5 times this value. Zero announces at once.
     #[serde(deserialize_with = "debounce")]
     pub debounce: TimeDelta,
+    /// True when the notice also goes out as a desktop notification
+    /// (OSC 777), with the text of the notice.
+    pub desktop: bool,
 }
 
 impl Default for NotifyConfig {
@@ -365,6 +368,7 @@ impl Default for NotifyConfig {
             enabled: None,
             tabs: vec!["team".to_owned(), "review".to_owned()],
             debounce: TimeDelta::seconds(15),
+            desktop: true,
         }
     }
 }

@@ -6,6 +6,7 @@
 //!   A child record also has an `id` and a `title`:
 //!   `ESC ] 7501 ; state=done:id=<id>:app=chaoshub:title=<base64>:msg=<base64> ESC \`.
 //! - OSC 9;4 (progress bar): `ESC ] 9 ; 4 ; <s>[;<v>] ESC \`.
+//! - OSC 777 (desktop notification): `ESC ] 777 ; notify ; <title> ; <body> ESC \`.
 //! - OSC 52 (clipboard): `ESC ] 52 ; c ; <base64> ESC \`.
 
 use crate::bus::{BlockedKind, Progress, TermState, TermStatus};
@@ -79,6 +80,19 @@ fn field_text(text: &str, max: usize) -> String {
         out.push(c);
     }
     out
+}
+
+/// The OSC 777 sequence of a desktop notification with `title` and
+/// `body`, as plain text. A control character becomes a space, and a
+/// text that is too long is cut at a character boundary, the same as in
+/// `record_done`. A `;` in `title` becomes a space too, because the
+/// first `;` after the title starts the body.
+pub(crate) fn desktop_notification(title: &str, body: &str) -> Vec<u8> {
+    sequence(&format!(
+        "777;notify;{};{}",
+        field_text(title, TITLE_MAX).replace(';', " "),
+        field_text(body, MSG_MAX),
+    ))
 }
 
 /// The OSC 9;4 sequence for a progress state. A percent above 100 counts
@@ -289,6 +303,33 @@ mod tests {
         assert_eq!(field("title="), base64("ü".repeat(96).as_bytes()));
         assert_eq!(field("msg="), base64("€".repeat(682).as_bytes()));
         assert!(out.len() <= 4096);
+    }
+
+    #[test]
+    fn desktop_notification_has_a_title_and_a_body() {
+        assert_eq!(
+            desktop_notification("chaoshub", "#12 fix: a; b (alice)"),
+            "\x1b]777;notify;chaoshub;#12 fix: a; b (alice)\x1b\\".as_bytes()
+        );
+    }
+
+    #[test]
+    fn desktop_notification_cannot_end_the_sequence_early() {
+        assert_eq!(
+            desktop_notification("a;b\x1b", "x\x1b\\y\u{9c}z\n\u{7}"),
+            "\x1b]777;notify;a b ;x \\y z  \x1b\\".as_bytes()
+        );
+    }
+
+    #[test]
+    fn desktop_notification_respects_the_length_limits() {
+        let out = desktop_notification(&"ü".repeat(200), &"€".repeat(1000));
+        let expected = format!(
+            "\x1b]777;notify;{};{}\x1b\\",
+            "ü".repeat(96),
+            "€".repeat(682)
+        );
+        assert_eq!(out, expected.as_bytes());
     }
 
     #[test]

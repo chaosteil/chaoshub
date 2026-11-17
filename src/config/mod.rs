@@ -213,6 +213,7 @@ mod tests {
         assert_eq!(config.notify.enabled, None);
         assert_eq!(config.notify.tabs, ["team", "review"]);
         assert_eq!(config.notify.debounce, chrono::TimeDelta::seconds(15));
+        assert!(config.notify.desktop);
         assert!(config.keys.is_empty());
         assert!(config.actions.is_empty());
         assert_eq!(
@@ -464,7 +465,8 @@ mod tests {
 
     #[test]
     fn notify_section_parses() {
-        let text = "[notify]\nenabled = true\ntabs = [\"mine\"]\ndebounce = \"2m\"\n";
+        let text =
+            "[notify]\nenabled = true\ntabs = [\"mine\"]\ndebounce = \"2m\"\ndesktop = false\n";
         let config = Config::parse(text, None).unwrap();
         assert_eq!(
             config.notify,
@@ -472,6 +474,7 @@ mod tests {
                 enabled: Some(true),
                 tabs: vec!["mine".to_owned()],
                 debounce: chrono::TimeDelta::minutes(2),
+                desktop: false,
             }
         );
     }

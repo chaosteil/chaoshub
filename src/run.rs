@@ -127,7 +127,8 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         config.terminal.program_status.unwrap_or(detected),
         config.terminal.progress.unwrap_or(detected),
         notify.is_some(),
-    );
+    )
+    .with_desktop(config.notify.desktop);
     let launcher = launcher(&config, RexLauncher::from_env())?;
     let detail = detail_pane(&DetailArgs {
         mode: config.detail.mode,
@@ -1185,6 +1186,9 @@ fn notify_settings(config: &NotifyConfig, detected: bool, pinned: bool) -> Optio
 /// progress is active. The notice of new pull requests is the OSC 7501
 /// record `NOTICE_ID`: `done` when a new notice comes, `clear` when it
 /// goes. A new notice while one shows sends `clear` and then `done`.
+/// With `[notify] desktop`, each new notice also goes out as an OSC 777
+/// desktop notification, because the terminal can show a record only
+/// as a tab dot.
 #[derive(Debug)]
 struct TermWriter {
     /// The `[terminal] program_status` switch.
@@ -1193,6 +1197,9 @@ struct TermWriter {
     progress: bool,
     /// True when the notification of new pull requests is on.
     notify: bool,
+    /// The `[notify] desktop` switch: each new notice is also an OSC 777
+    /// desktop notification. Only while `notify` is on.
+    desktop: bool,
     /// The state and the message of the last OSC 7501 write.
     last_status: Option<(TermState, Option<String>)>,
     /// The progress and the time of the last OSC 9;4 write.
@@ -1207,10 +1214,17 @@ impl TermWriter {
             program_status,
             progress,
             notify,
+            desktop: false,
             last_status: None,
             last_progress: None,
             last_notice: None,
         }
+    }
+
+    /// Sets the `[notify] desktop` switch.
+    fn with_desktop(mut self, on: bool) -> Self {
+        self.desktop = on;
+        self
     }
 
     /// Writes what changed or what is due. Runs on every loop pass.
@@ -1231,6 +1245,9 @@ impl TermWriter {
             }
             if let Some(notice) = notice {
                 bytes.extend(osc::record_done(NOTICE_ID, &notice.title, &notice.msg));
+                if self.desktop {
+                    bytes.extend(osc::desktop_notification(&notice.title, &notice.msg));
+                }
             }
             self.last_notice = seq;
         }
@@ -2054,6 +2071,45 @@ mod tests {
             osc::record_done("new-prs", "chaoshub", "#3 Next (carol)"),
             "after a clear, no second clear"
         );
+    }
+
+    #[test]
+    fn term_writer_sends_a_desktop_notification_with_each_new_notice() {
+        let mut writer = TermWriter::new(false, false, true).with_desktop(true);
+        let mut expected = osc::record_done("new-prs", "chaoshub", "#1 Old (alice)");
+        expected.extend(osc::desktop_notification("chaoshub", "#1 Old (alice)"));
+        assert_eq!(
+            written_notice(&mut writer, Some(&notice(1, "#1 Old (alice)"))),
+            expected
+        );
+        assert_eq!(
+            written_notice(&mut writer, Some(&notice(1, "#1 Old (alice)"))),
+            b"",
+            "one desktop notification for each notice"
+        );
+        let mut expected = osc::record_clear("new-prs");
+        expected.extend(osc::record_done("new-prs", "chaoshub", "#2 New (bob)"));
+        expected.extend(osc::desktop_notification("chaoshub", "#2 New (bob)"));
+        assert_eq!(
+            written_notice(&mut writer, Some(&notice(2, "#2 New (bob)"))),
+            expected
+        );
+        assert_eq!(
+            written_notice(&mut writer, None),
+            osc::record_clear("new-prs"),
+            "a clear sends no desktop notification"
+        );
+    }
+
+    #[test]
+    fn term_writer_sends_no_desktop_notification_without_the_switches() {
+        let mut off = TermWriter::new(false, false, true).with_desktop(false);
+        assert_eq!(
+            written_notice(&mut off, Some(&notice(1, "x"))),
+            osc::record_done("new-prs", "chaoshub", "x")
+        );
+        let mut no_notify = TermWriter::new(false, false, false).with_desktop(true);
+        assert_eq!(written_notice(&mut no_notify, Some(&notice(1, "x"))), b"");
     }
 
     #[test]

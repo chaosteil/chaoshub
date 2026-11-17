@@ -653,6 +653,7 @@ The terminal notice of new pull requests that are ready for review (see
 | `enabled` | detected | Sends the notice. When it is not set, chaoshub sends the notice only inside Rex and Ghostty, the same as `[terminal] program_status`. |
 | `tabs` | `["team", "review"]` | The tabs to watch: `"mine"`, `"review"` or `"team"`. Another value stops chaoshub with an error. |
 | `debounce` | `"15s"` | The wait before the notice, for example `"15s"` or `"2m"`. `"0s"` sends the notice at once. |
+| `desktop` | `true` | Also sends each notice as a desktop notification with its text (OSC 777). `false` keeps only the program status record, so Rex shows only the tab dot. |
 
 ```toml
 [notify]
@@ -1452,8 +1453,8 @@ successful sync.
 
 chaoshub tells you when new pull requests are ready for review. The
 terminal shows a notice, for example `3 new PRs in team`. Rex shows the
-notice as a tab message, a Dock badge and a sound. When Rex is in the
-background, Rex also shows a macOS notification.
+notice as a dot and a message on the tab, and as a desktop notification
+with the text.
 
 A pull request is new when it becomes ready in a watched tab (`[notify]
 tabs`) for the first time. Ready means open, not a draft, CI green, and
@@ -1493,11 +1494,27 @@ title `chaoshub` and the text as `msg`. When a new notice comes while
 the last one shows, chaoshub first removes the old record
 (`state=clear`, `id=new-prs`), so the terminal sees a new record.
 Ghostty shows OSC 7501 too.
-chaoshub does not send OSC 9, OSC 777 or OSC 99.
+
+With `[notify] desktop` (on by default), chaoshub also sends each new
+notice as an OSC 777 desktop notification:
+`ESC ] 777 ; notify ; chaoshub ; <text> ESC \`. A program status record
+gives only a tab dot in Rex, and a text notification only while Rex is
+in the background. OSC 777 gives the text also while Rex is in front.
+In Rex, the setting "Terminal notifications" (Settings > Notifications
+> System Notifications) must be on. Ghostty shows OSC 777 too. chaoshub
+does not send OSC 9, because OSC 9 has the same number as the OSC 9;4
+progress bar. chaoshub does not send OSC 99.
+
+While Rex is in the background, Rex can also send a macOS notification
+for the program status record, so you can get two notifications for one
+notice. To get only the one from OSC 777, turn off the system
+notifications of the Done state in Rex (Settings > Notifications >
+Program Activity > Done). The tab dot stays. To get only the tab dot,
+set `desktop = false`.
 
 chaoshub does not support tmux for the notice yet. tmux does not pass
-OSC 7501 to the terminal, and chaoshub does not wrap the sequence for
-tmux. Inside tmux, the notice does not show.
+OSC 7501 and OSC 777 to the terminal, and chaoshub does not wrap the
+sequences for tmux. Inside tmux, the notice does not show.
 
 ### Status bar
 
