@@ -1,0 +1,8 @@
+mutation AddReaction($id: ID!, $content: ReactionContent!) {
+  addReaction(input: { subjectId: $id, content: $content }) {
+    subject {
+      __typename
+      id
+    }
+  }
+}

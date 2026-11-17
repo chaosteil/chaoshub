@@ -9,6 +9,7 @@ use graphql_client::GraphQLQuery;
 
 use crate::bus::RateInfo;
 use crate::domain;
+use crate::domain::detail::ReactionKind;
 use crate::domain::keys::PrKey;
 use crate::domain::observed::Observed;
 use crate::domain::pr::PullRequest;
@@ -123,6 +124,24 @@ pub(crate) struct AddThreadReply;
     response_derives = "Debug"
 )]
 pub(crate) struct AddComment;
+
+/// `addReaction`: a reaction of the viewer on a comment or a review.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/add_reaction.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct AddReaction;
+
+/// `removeReaction`: removes a reaction of the viewer.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/remove_reaction.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct RemoveReaction;
 
 /// `markPullRequestReadyForReview`.
 #[derive(GraphQLQuery)]
@@ -336,6 +355,62 @@ impl GithubClient {
             .and_then(|payload| payload.comment_edge)
             .and_then(|edge| edge.node)
             .ok_or_else(|| no_payload("addComment"))?;
+        Ok(rate)
+    }
+
+    /// Adds the reaction `kind` of the viewer to the comment or the
+    /// review with the node id `id`.
+    pub(crate) async fn add_reaction(
+        &self,
+        id: &str,
+        kind: ReactionKind,
+    ) -> Result<RateInfo, GithubError> {
+        use add_reaction::ReactionContent as C;
+        let vars = add_reaction::Variables {
+            id: id.to_owned(),
+            content: match kind {
+                ReactionKind::ThumbsUp => C::THUMBS_UP,
+                ReactionKind::ThumbsDown => C::THUMBS_DOWN,
+                ReactionKind::Laugh => C::LAUGH,
+                ReactionKind::Hooray => C::HOORAY,
+                ReactionKind::Confused => C::CONFUSED,
+                ReactionKind::Heart => C::HEART,
+                ReactionKind::Rocket => C::ROCKET,
+                ReactionKind::Eyes => C::EYES,
+            },
+        };
+        let (data, rate) = self.run::<AddReaction>(vars).await?;
+        data.add_reaction
+            .and_then(|payload| payload.subject)
+            .ok_or_else(|| no_payload("addReaction"))?;
+        Ok(rate)
+    }
+
+    /// Removes the reaction `kind` of the viewer from the comment or the
+    /// review with the node id `id`.
+    pub(crate) async fn remove_reaction(
+        &self,
+        id: &str,
+        kind: ReactionKind,
+    ) -> Result<RateInfo, GithubError> {
+        use remove_reaction::ReactionContent as C;
+        let vars = remove_reaction::Variables {
+            id: id.to_owned(),
+            content: match kind {
+                ReactionKind::ThumbsUp => C::THUMBS_UP,
+                ReactionKind::ThumbsDown => C::THUMBS_DOWN,
+                ReactionKind::Laugh => C::LAUGH,
+                ReactionKind::Hooray => C::HOORAY,
+                ReactionKind::Confused => C::CONFUSED,
+                ReactionKind::Heart => C::HEART,
+                ReactionKind::Rocket => C::ROCKET,
+                ReactionKind::Eyes => C::EYES,
+            },
+        };
+        let (data, rate) = self.run::<RemoveReaction>(vars).await?;
+        data.remove_reaction
+            .and_then(|payload| payload.subject)
+            .ok_or_else(|| no_payload("removeReaction"))?;
         Ok(rate)
     }
 
@@ -685,6 +760,103 @@ mod tests {
         let err = client.add_comment("PR_1", "Hi").await.unwrap_err();
         assert!(
             matches!(&err, GithubError::Graphql(m) if m == &["addComment returned no result"]),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_and_remove_reaction_send_the_id_and_the_content() {
+        let server = mutation_server(json!({
+            "addReaction": { "subject": { "__typename": "IssueComment", "id": "IC_1" } },
+            "removeReaction": { "subject": { "__typename": "PullRequestReviewComment", "id": "PRRC_2" } }
+        }))
+        .await;
+        let client = client(&server);
+        let rate = client
+            .add_reaction("IC_1", ReactionKind::ThumbsUp)
+            .await
+            .unwrap();
+        assert_eq!(rate.remaining, 4990);
+        client
+            .remove_reaction("PRRC_2", ReactionKind::Heart)
+            .await
+            .unwrap();
+        client
+            .add_reaction("PRR_3", ReactionKind::Eyes)
+            .await
+            .unwrap();
+        assert_eq!(
+            sent(&server).await,
+            [
+                (
+                    json!("AddReaction"),
+                    json!({ "id": "IC_1", "content": "THUMBS_UP" })
+                ),
+                (
+                    json!("RemoveReaction"),
+                    json!({ "id": "PRRC_2", "content": "HEART" })
+                ),
+                (
+                    json!("AddReaction"),
+                    json!({ "id": "PRR_3", "content": "EYES" })
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn every_reaction_has_its_content_name() {
+        let server = mutation_server(json!({
+            "addReaction": { "subject": { "__typename": "IssueComment", "id": "IC_1" } }
+        }))
+        .await;
+        let client = client(&server);
+        for kind in ReactionKind::ALL {
+            client.add_reaction("IC_1", kind).await.unwrap();
+        }
+        let names: Vec<Value> = sent(&server)
+            .await
+            .into_iter()
+            .map(|(_, vars)| vars["content"].clone())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "THUMBS_UP",
+                "THUMBS_DOWN",
+                "LAUGH",
+                "HOORAY",
+                "CONFUSED",
+                "HEART",
+                "ROCKET",
+                "EYES"
+            ]
+            .map(|name| json!(name))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_null_reaction_payload_is_an_error() {
+        let server = mutation_server(json!({
+            "addReaction": null,
+            "removeReaction": { "subject": null }
+        }))
+        .await;
+        let client = client(&server);
+        let err = client
+            .add_reaction("IC_1", ReactionKind::Laugh)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GithubError::Graphql(m) if m == &["addReaction returned no result"]),
+            "{err:?}"
+        );
+        let err = client
+            .remove_reaction("IC_1", ReactionKind::Laugh)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GithubError::Graphql(m) if m == &["removeReaction returned no result"]),
             "{err:?}"
         );
     }

@@ -16,6 +16,7 @@ mod codeview_send;
 mod copy;
 mod draft;
 mod merge;
+mod react;
 mod reply;
 mod rerun_checks;
 mod review;
@@ -130,6 +131,7 @@ pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(|| {
         Box::new(review::Review),
         Box::new(codeview_send::CodeviewSend),
         Box::new(reply::Reply),
+        Box::new(react::React),
         Box::new(browser::Browser),
         Box::new(copy::CopyUrl),
         Box::new(copy::CopyChangeId),

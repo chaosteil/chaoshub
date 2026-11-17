@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::agent::{AgentResults, Record, Tool, ToolKind};
 use crate::domain::check::Check;
 use crate::domain::codeview::Comments;
-use crate::domain::detail::PrDetail;
+use crate::domain::detail::{PrDetail, ReactionKind};
 use crate::domain::diff::Pieces;
 use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
@@ -360,6 +360,19 @@ pub(crate) enum ActionInput {
         to: ReplyTo,
         body: String,
     },
+    /// A reaction of the viewer to add or to remove.
+    React(ReactSpec),
+}
+
+/// A reaction of the viewer on a comment or a review: add it, or remove
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReactSpec {
+    /// The GraphQL node id of the comment or the review.
+    pub subject: String,
+    pub kind: ReactionKind,
+    /// True to add the reaction, false to remove it.
+    pub add: bool,
 }
 
 /// The place of a reply in the conversation of a pull request.
