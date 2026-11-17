@@ -3582,7 +3582,7 @@ mod title_tests {
             write_title(&mut writer, "chaoshub · 3 review", None),
             "\x1b]2;chaoshub · 3 review\x1b\\".as_bytes()
         );
-        assert!(write_title(&mut writer, "chaoshub · 3 review", None).is_empty());
+        assert_eq!(write_title(&mut writer, "chaoshub · 3 review", None), b"");
         assert_eq!(
             write_title(&mut writer, "chaoshub · 2 review", None),
             "\x1b]2;chaoshub · 2 review\x1b\\".as_bytes()
@@ -3592,10 +3592,10 @@ mod title_tests {
     #[test]
     fn title_updates_can_be_disabled() {
         let mut writer = TermWriter::new(false, false, false).with_title(false);
-        assert!(write_title(&mut writer, "chaoshub · 3 review", None).is_empty());
+        assert_eq!(write_title(&mut writer, "chaoshub · 3 review", None), b"");
         let mut out = Vec::new();
         writer.clear(&mut out).unwrap();
-        assert!(out.is_empty());
+        assert_eq!(out, b"");
     }
 
     #[test]
