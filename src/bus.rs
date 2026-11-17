@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 pub(crate) use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use serde::{Deserialize, Serialize};
 
 use crate::domain::agent::{AgentResults, Record, Tool, ToolKind};
 use crate::domain::check::Check;
@@ -296,6 +297,21 @@ pub(crate) struct LaunchRequest {
     /// The percent of the split that the new pane gets. `None` uses the
     /// default of the launcher.
     pub ratio: Option<u8>,
+}
+
+/// One event from a PR view (`chaoshub pr`) to the list process that
+/// started it. The list socket carries it (see `ipc`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub(crate) enum PrViewEvent {
+    /// The PR view sent an approval of `pr`. The request runs.
+    ApprovalStarted { pr: PrKey },
+    /// The approval of `pr` ended. `ok` is false when it failed or was
+    /// cancelled.
+    ApprovalDone { pr: PrKey, ok: bool },
+    /// An action of the PR view changed `pr` on GitHub, for example a
+    /// merge, a close, a draft change, a reply or a review.
+    PrChanged { pr: PrKey },
 }
 
 /// A run of pr-agent: one tool on one pull request.

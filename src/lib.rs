@@ -11,6 +11,7 @@
 //! agent: reads domain, bus, github and config; read by actions, app and run.
 //! codeview: reads domain and config; read by actions, app (exec) and run.
 //! osc: reads bus only; read by run and clipboard.   clipboard: read by app (exec).
+//! ipc: reads domain and bus; read by run.
 //! markup: reads no module; read by app and ui.   highlight: reads domain; read by workers and the tests of app.
 //! ```
 #![forbid(unsafe_code)]
@@ -26,6 +27,7 @@ mod config;
 mod domain;
 mod github;
 mod highlight;
+mod ipc;
 mod launch;
 mod markup;
 mod osc;
@@ -208,6 +210,7 @@ mod tests {
         ("vcs", &["domain", "bus"]),
         ("store", &["domain", "bus"]),
         ("launch", &["domain", "bus"]),
+        ("ipc", &["domain", "bus"]),
         ("agent", &["domain", "bus", "github", "config"]),
         ("codeview", &["domain", "config"]),
         ("highlight", &["domain"]),
@@ -270,6 +273,7 @@ mod tests {
                 "osc",
                 "clipboard",
                 "cli",
+                "ipc",
             ],
         ),
         ("markup", &[]),
