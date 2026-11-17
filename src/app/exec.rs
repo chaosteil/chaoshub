@@ -855,6 +855,24 @@ mod tests {
             .unwrap()
     }
 
+    /// Waits until `runtime` has `count` running tasks, for at most two
+    /// seconds. A task ends just after its last message, so a test that
+    /// read the last message can still count the task.
+    fn settle(runtime: &mut Runtime, count: usize) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let running = runtime.running();
+            if running == count {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{running} tasks run after 2 s, not {count}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     #[test]
     fn a_run_action_sends_its_events_and_done() {
         let tokio = tokio();
@@ -871,6 +889,7 @@ mod tests {
             f.msgs.blocking_recv(),
             Some(done("talks", 1, Ok("talks done")))
         );
+        settle(&mut f.runtime, 0);
         f.runtime.exec(run_action("missing", 1, ActionInput::None));
         assert_eq!(f.runtime.running(), 0);
         assert!(f.runtime.tokens.is_empty(), "the finished task left");
@@ -895,11 +914,7 @@ mod tests {
             key: pr_key(2),
         });
         assert!(f.msgs.try_recv().is_err(), "another id is another task");
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while f.runtime.running() != 1 && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert_eq!(f.runtime.running(), 1);
+        settle(&mut f.runtime, 1);
         assert_eq!(f.runtime.tokens.len(), 1);
     }
 
@@ -1087,11 +1102,7 @@ mod tests {
             key: pr_key(1),
         });
         // The task ends just after it sends `PaneEnded`. Thus wait for it.
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while f.runtime.running() > 0 && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert_eq!(f.runtime.running(), 0);
+        settle(&mut f.runtime, 0);
     }
 
     #[test]
@@ -1187,11 +1198,7 @@ mod tests {
                 ),
             })
         );
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while f.runtime.running() > 0 {
-            assert!(std::time::Instant::now() < deadline, "timed out");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        settle(&mut f.runtime, 0);
         assert!(
             f.msgs.try_recv().is_err(),
             "no PaneEnded after a failed launch"
