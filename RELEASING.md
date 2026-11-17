@@ -79,7 +79,7 @@ The steps use jj. The git commands are below the list.
 
 3. Set `version = "X.Y.Z"` in `Cargo.toml`.
 4. Run `cargo build`. Cargo writes the new version to `Cargo.lock`.
-5. Run the four checks of [AGENTS.md](AGENTS.md).
+5. Run `scripts/check.sh`, the required checks of [AGENTS.md](AGENTS.md).
 6. Merge the change to main, with a pull request or a push.
 7. Make sure that `main` points to the release commit:
 

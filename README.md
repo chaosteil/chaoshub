@@ -212,8 +212,9 @@ cargo build --release
 The binary is `target/release/chaoshub`. To install it in
 `~/.cargo/bin`, run `cargo install --locked --path .`.
 
-The repo pins the Rust toolchain in `rust-toolchain.toml`. rustup
-installs this toolchain when you build in the repo. The minimum Rust
+The repo pins the exact Rust version in `rust-toolchain.toml`. rustup
+installs this toolchain when you build in the repo. The devShell of
+`flake.nix` (`nix develop`) gives the same version. The minimum Rust
 version is 1.91 (`rust-version` in `Cargo.toml`).
 
 ## Start
@@ -1716,14 +1717,17 @@ The sidebar shows the panes whose `applies` is true, in the order of
 jj is recommended, never required: every feature must work in a git-only
 repo (see [AGENTS.md](AGENTS.md)).
 
-Every change must pass these checks:
+Every change must pass the required checks of CI. Before each push, run
+them with one command:
 
 ```sh
-cargo build
-cargo nextest run
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
+scripts/check.sh
 ```
+
+The script runs `cargo build`, `cargo nextest run`, `cargo clippy` and
+`cargo fmt --check` with the same flags and in the same order as CI.
+First, it makes sure that rustc has the version of `rust-toolchain.toml`.
+[AGENTS.md](AGENTS.md) gives the details.
 
 ### Benchmark of the review open
 

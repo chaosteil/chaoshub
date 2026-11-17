@@ -19,11 +19,31 @@ repo.
 
 ## Required checks
 
-Every change must pass these four checks:
+Every change must pass the required checks. CI runs them on Linux and
+on macOS. Before each push, run the checks with this command:
 
 ```sh
-cargo build
-cargo nextest run
-cargo clippy --all-targets -- -D warnings
+scripts/check.sh
+```
+
+The script runs these four checks, in the order of CI:
+
+```sh
+cargo build --locked
+cargo nextest run --locked
+cargo clippy --locked --all-targets -- -D warnings
 cargo fmt --check
 ```
+
+- Run the script, not the four commands one by one. CI runs the same
+  script (see `.github/workflows/ci.yml`). Other flags can pass locally
+  and fail in CI.
+- Before the first check, the script makes sure that rustc and clippy
+  have the exact version of `rust-toolchain.toml`. If the script stops
+  with a version error, use rustup, or run the script in `nix develop`.
+- To run one check, give its step: `scripts/check.sh clippy`. The steps
+  are `build`, `test`, `clippy` and `fmt`.
+- The Linux job of CI runs the tests without jj on the `PATH`, and the
+  macOS job runs them with jj. A local run uses the jj of your `PATH`.
+- If a nixpkgs update gives a new Rust version, `nix develop` stops.
+  Then set the same version in `rust-toolchain.toml`.
