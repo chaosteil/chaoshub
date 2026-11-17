@@ -22,8 +22,8 @@ use crate::app::panes::agent::head;
 use crate::app::panes::{PaneAction, PaneState};
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{
-    ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReviewButton, ReviewKind, ReviewRow,
-    ReviewSpec, Scope, Selection, Session, Size, SyncError, Target, TargetKey, UiEvent,
+    ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReplyTo, ReviewButton, ReviewKind,
+    ReviewRow, ReviewSpec, Scope, Selection, Session, Size, SyncError, Target, TargetKey, UiEvent,
 };
 use crate::bus::{MergeProgress, MergeStep};
 use crate::config::schema::FiltersConfig;
@@ -469,11 +469,14 @@ pub(crate) enum OverlayState {
     Review(ReviewPopup),
     /// The text box of the message of a review, on top of the Review
     /// popup. `esc` and `ctrl-s` go back to the popup with the text.
+    /// With a `reply`, the box is the text box of a reply on top of the
+    /// pull request popup: `ctrl-s` sends the reply, and `esc` drops it.
     ReviewText {
         title: String,
         text: String,
         /// The error that the popup shows, for example a failed editor.
         error: Option<String>,
+        reply: Option<ReplyDialog>,
     },
     /// The help overlay: the key bindings that it shows, and the index
     /// of its first visible line.
@@ -499,6 +502,15 @@ pub(crate) const OUTPUT_LINES: usize = 2000;
 pub(crate) struct ActionDialog {
     pub id: &'static str,
     pub selection: Box<Selection>,
+}
+
+/// The reply of a reply text box: the reply action and its selection,
+/// the place of the reply, and the start text.
+#[derive(Debug)]
+pub(crate) struct ReplyDialog {
+    pub action: ActionDialog,
+    pub to: ReplyTo,
+    pub start: String,
 }
 
 /// The Review popup of a pull request: the list of its codeview comments

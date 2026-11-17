@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 
-use crate::actions::{Action, Applicability, Prepare, REGISTRY};
+use crate::actions::{Action, Applicability, Prepare, REGISTRY, REPLY_ID};
 use crate::app::frame;
 use crate::app::help::help_model;
 use crate::app::keymap::{self, Keymap};
@@ -23,7 +23,7 @@ use crate::app::state::PrefetchBatch;
 use crate::app::state::{
     AUTHOR_KEY, ActionDialog, ActionMenu, AppData, AppState, AuthorPicker, COLUMN_HEADERS_KEY,
     Condition, FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaneHandleState,
-    PopupState, ReviewPopup, error_text, ui_key,
+    PopupState, ReplyDialog, ReviewPopup, error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, cells, pr_ref};
 use crate::app::target::{pr_target, row_target};
@@ -33,7 +33,7 @@ use crate::bus::{
     KeyModifiers, LaunchRequest, MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection,
     Size, SyncError, Target, TargetKey, UiEvent,
 };
-use crate::bus::{ConfirmSpec, PromptSpec, ReviewKind};
+use crate::bus::{ConfirmSpec, PromptSpec, ReplySpec, ReviewKind};
 use crate::bus::{MergeProgress, MergeStep};
 use crate::domain::agent::{AgentResults, Record, Tool, ToolKind, short_tokens};
 use crate::domain::check::Check;
@@ -553,7 +553,8 @@ fn run_pane_action(
 }
 
 /// Applies what a pane of the popup of `key` handled: the generation,
-/// the UI events, a confirm popup, the commands and a popup on top.
+/// the UI events, a confirm popup, a reply text box, the commands and a
+/// popup on top.
 fn popup_handled(
     state: &mut AppState,
     panes: &[Box<dyn Pane>],
@@ -566,6 +567,9 @@ fn popup_handled(
     state.ui.ui_events.extend(handled.events);
     if let Some((id, spec)) = handled.confirm {
         open_confirm(state, key, id, spec);
+    }
+    if let Some(spec) = handled.reply {
+        open_reply(state, key, spec);
     }
     let mut cmds = pane_cmds(state, handled.cmds);
     cmds.extend(open_pr(state, panes, handled.open_pr.as_ref()));
@@ -942,6 +946,33 @@ fn open_confirm(state: &mut AppState, key: &PrKey, id: &'static str, spec: Confi
     );
 }
 
+/// Opens the text box of a reply on the pull request `key`. The reply
+/// action sends the text.
+fn open_reply(state: &mut AppState, key: &PrKey, spec: ReplySpec) {
+    let Some(target) = pr_target(&state.data, key) else {
+        return;
+    };
+    let reply = ReplyDialog {
+        action: ActionDialog {
+            id: REPLY_ID,
+            selection: Box::new(Selection {
+                target,
+                me: state.data.session.login.clone().unwrap_or_default(),
+                action_config: state.data.action_config.get(REPLY_ID).cloned(),
+            }),
+        },
+        to: spec.to,
+        start: spec.text.clone(),
+    };
+    let overlay = OverlayState::ReviewText {
+        title: spec.title,
+        text: spec.text,
+        error: None,
+        reply: Some(reply),
+    };
+    open_overlay(state, OverlayKind::Prompt, overlay);
+}
+
 /// The action id of the agent action. Its prompt asks pr-agent.
 const AGENT_ID: &str = crate::agent::ID;
 
@@ -1000,6 +1031,7 @@ fn review_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) -> Vec<Cmd
                 title: format!("message of the review to #{}", review.pr().key.number),
                 text: review.message(&state.data).to_owned(),
                 error: None,
+                reply: None,
             };
             open_overlay(state, OverlayKind::Prompt, overlay);
             return Vec::new();
@@ -1084,15 +1116,29 @@ fn review_kind(key: char) -> Option<ReviewKind> {
 /// A key for the text box of the message on top of the overlay stack:
 /// characters and backspace edit the text, `enter` adds a line,
 /// `ctrl-e` opens the text in the editor, and `esc` or `ctrl-s` go back
-/// to the Review popup with the text. `None` when the top overlay is not
-/// the text box.
+/// to the Review popup with the text. In the text box of a reply,
+/// `ctrl-s` sends the reply and `esc` drops it. `None` when the top
+/// overlay is not the text box.
 fn review_text_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
     let overlay = state.ui.overlays.iter_mut().rev().find(|o| !o.closing)?;
-    let OverlayState::ReviewText { text, error, .. } = &mut overlay.state else {
+    let OverlayState::ReviewText {
+        text, error, reply, ..
+    } = &mut overlay.state
+    else {
         return None;
     };
     let control = chord.mods.contains(KeyModifiers::CONTROL);
     match chord.code {
+        KeyCode::Esc if reply.is_some() => {
+            close_overlay(state);
+            return Some(Vec::new());
+        }
+        KeyCode::Char('s') if control && reply.is_some() => {
+            let text = std::mem::take(text);
+            let reply = reply.take()?;
+            close_overlay(state);
+            return Some(send_reply(state, reply, &text));
+        }
         KeyCode::Esc => {}
         KeyCode::Char('s') if control => {}
         KeyCode::Char('e') if control => return Some(vec![Cmd::EditText(text.clone())]),
@@ -1124,6 +1170,23 @@ fn review_text_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
     close_overlay(state);
     message_back(state, text);
     Some(Vec::new())
+}
+
+/// Runs the reply action with `text`. A text without a word, or with
+/// only the start text, sends nothing, and the status line says so.
+fn send_reply(state: &mut AppState, reply: ReplyDialog, text: &str) -> Vec<Cmd> {
+    if text.trim().is_empty() || text.trim() == reply.start.trim() {
+        state.message("the reply is empty: nothing sent", CellStyle::Dim, INFO_TTL);
+        return Vec::new();
+    }
+    vec![Cmd::RunAction {
+        id: reply.action.id,
+        selection: reply.action.selection,
+        input: ActionInput::Reply {
+            to: reply.to,
+            body: text.trim_end().to_owned(),
+        },
+    }]
 }
 
 /// The text box of the message closed with `text`: the review draft of
@@ -3292,7 +3355,7 @@ mod tests {
     use crate::app::state::Overlay;
     use crate::app::tabs::fake::FakeTab;
     use crate::app::testdata;
-    use crate::bus::{HighlightReq, Interest, RateInfo, Session};
+    use crate::bus::{HighlightReq, Interest, RateInfo, ReplyTo, Session};
     use crate::domain::test_time;
 
     const SIZE: Size = Size {
@@ -3395,6 +3458,7 @@ mod tests {
             changed: true,
             confirm: None,
             open_pr: None,
+            reply: None,
         };
         let (tabs, mut state) = setup(Some(handled));
         let j = press(KeyCode::Char('z'), KeyModifiers::NONE);
@@ -8891,5 +8955,199 @@ mod tests {
         assert_eq!(watched, [84], "the failing one of the Team tab");
         let off = team_state();
         assert_eq!(off.ui.interest.as_ref().unwrap().ci_watch, []);
+    }
+
+    /// The mine state with the popup of #99 open on the conversation
+    /// pane, and the conversation of `testdata::detail` at the head of
+    /// #99. The nodes: the comment of alice and its body, the thread on
+    /// `src/ui/list.rs:42`, the thread on `src/ui/pane.rs:7`, the review
+    /// of bob and its body.
+    fn reply_state() -> (AppState, PrKey) {
+        let mut state = mine_state(20);
+        let pr = testdata::pr_key("chaoshub", 99);
+        let mut detail = testdata::detail();
+        detail
+            .head_oid
+            .clone_from(&state.data.prs[&pr].head.value.head_oid);
+        state
+            .data
+            .details
+            .insert(pr.clone(), testdata::observed(detail));
+        enter(&mut state);
+        key(&mut state, '3');
+        assert_eq!(
+            sidebar(&state).map(|p| PANES[p.active].id()),
+            Some("conversation")
+        );
+        (state, pr)
+    }
+
+    /// The title, the text and the reply of the reply text box on top.
+    fn reply_box(state: &AppState) -> (&str, &str, &ReplyDialog) {
+        match top(state) {
+            OverlayState::ReviewText {
+                title,
+                text,
+                reply: Some(reply),
+                ..
+            } => (title, text, reply),
+            other => panic!("not a reply text box: {other:?}"),
+        }
+    }
+
+    fn type_text(state: &mut AppState, text: &str) {
+        for c in text.chars() {
+            let cmds = if c == '\n' {
+                enter(state)
+            } else {
+                key(state, c)
+            };
+            assert_eq!(cmds, vec![], "{c:?} is text");
+        }
+    }
+
+    #[test]
+    fn r_on_a_comment_quotes_it_and_ctrl_s_sends_a_comment() {
+        let (mut state, pr) = reply_state();
+        assert_eq!(key(&mut state, 'R'), vec![]);
+        let (title, text, reply) = reply_box(&state);
+        assert_eq!(title, "comment on #99");
+        assert_eq!(
+            text,
+            "> @alice: Looks good, one question about `layout`.\n\n"
+        );
+        assert_eq!(reply.to, ReplyTo::Pr);
+        assert_eq!(reply.action.id, "reply");
+        type_text(&mut state, "It keeps the gutter.\n");
+        let cmds = ctrl(&mut state, 's');
+        let [
+            Cmd::RunAction {
+                id,
+                selection,
+                input,
+            },
+        ] = cmds.as_slice()
+        else {
+            panic!("no send: {cmds:?}");
+        };
+        assert_eq!(*id, "reply");
+        assert_eq!(selection.target.key(), TargetKey::Pr(pr));
+        assert_eq!(
+            input,
+            &ActionInput::Reply {
+                to: ReplyTo::Pr,
+                body: "> @alice: Looks good, one question about `layout`.\n\nIt keeps the gutter."
+                    .into(),
+            }
+        );
+        assert!(
+            sidebar(&state).is_some(),
+            "the text box closes, the popup stays"
+        );
+    }
+
+    #[test]
+    fn r_on_a_thread_replies_in_the_thread() {
+        let (mut state, _) = reply_state();
+        key(&mut state, 'j');
+        key(&mut state, 'j');
+        key(&mut state, 'R');
+        let (title, text, reply) = reply_box(&state);
+        assert_eq!((title, text), ("reply on src/ui/list.rs:42", ""));
+        let to = ReplyTo::Thread {
+            id: "PRRT_42".into(),
+            place: "src/ui/list.rs:42".into(),
+        };
+        assert_eq!(reply.to, to);
+        type_text(&mut state, "Fixed in the next push.");
+        let cmds = ctrl(&mut state, 's');
+        let [Cmd::RunAction { input, .. }] = cmds.as_slice() else {
+            panic!("no send: {cmds:?}");
+        };
+        assert_eq!(
+            input,
+            &ActionInput::Reply {
+                to,
+                body: "Fixed in the next push.".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn an_empty_or_unchanged_reply_sends_nothing_and_esc_drops_it() {
+        let (mut state, _) = reply_state();
+        key(&mut state, 'R');
+        assert_eq!(ctrl(&mut state, 's'), vec![], "only the quote");
+        assert_eq!(
+            status_text(&state),
+            Some("the reply is empty: nothing sent")
+        );
+        assert!(sidebar(&state).is_some());
+        key(&mut state, 'j');
+        key(&mut state, 'j');
+        key(&mut state, 'R');
+        type_text(&mut state, " \n ");
+        assert_eq!(ctrl(&mut state, 's'), vec![], "only white space");
+        key(&mut state, 'R');
+        type_text(&mut state, "never sent");
+        assert_eq!(esc(&mut state), vec![]);
+        assert!(sidebar(&state).is_some(), "esc closes only the text box");
+        key(&mut state, 'R');
+        assert_eq!(reply_box(&state).1, "", "the dropped text is gone");
+    }
+
+    #[test]
+    fn the_editor_fills_the_reply() {
+        let (mut state, _) = reply_state();
+        key(&mut state, 'R');
+        let quote = "> @alice: Looks good, one question about `layout`.\n\n";
+        assert_eq!(ctrl(&mut state, 'e'), vec![Cmd::EditText(quote.into())]);
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::TextEdited(Ok(format!("{quote}Line one\nline two\n"))),
+        );
+        assert_eq!(reply_box(&state).1, format!("{quote}Line one\nline two"));
+        let cmds = ctrl(&mut state, 's');
+        assert!(
+            matches!(&cmds[..], [Cmd::RunAction { input: ActionInput::Reply { body, .. }, .. }] if body.ends_with("line two")),
+            "{cmds:?}"
+        );
+    }
+
+    #[test]
+    fn the_reply_is_in_the_actions_menu_of_the_conversation_pane() {
+        let (mut state, _) = reply_state();
+        key(&mut state, ' ');
+        let OverlayState::Actions(menu) = top(&state) else {
+            panic!("no actions menu");
+        };
+        assert!(!menu.ids.contains(&"reply"), "the action is hidden");
+        assert_eq!(
+            menu.pane,
+            [PaneAction::char('R', "reply to the comment")],
+            "the pane has the reply"
+        );
+        assert_eq!(key(&mut state, 'R'), vec![]);
+        assert_eq!(reply_box(&state).0, "comment on #99");
+    }
+
+    #[test]
+    fn a_sent_reply_reloads_the_conversation_and_a_failure_shows() {
+        let (mut state, pr) = reply_state();
+        let done = |result: Result<&str, &str>| Msg::ActionEvent {
+            id: "reply",
+            key: TargetKey::Pr(pr.clone()),
+            event: ActionEvent::Done(result.map(str::to_owned).map_err(str::to_owned)),
+        };
+        let cmds = update(&mut state, &Keymap::default(), done(Ok("commented on #99")));
+        let reload = Cmd::ReloadDetail(vec![pr_ref(&state.data.prs[&pr])]);
+        assert!(cmds.contains(&reload), "{cmds:?}");
+        assert_eq!(status_text(&state), Some("commented on #99"));
+        update(&mut state, &Keymap::default(), done(Err("offline")));
+        assert_eq!(
+            status_text(&state),
+            Some("reply to a comment failed: offline")
+        );
     }
 }

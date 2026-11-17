@@ -339,6 +339,32 @@ pub(crate) enum ActionInput {
         event: ReviewKind,
         body: String,
     },
+    /// The text of a reply in the conversation, and its place.
+    Reply {
+        to: ReplyTo,
+        body: String,
+    },
+}
+
+/// The place of a reply in the conversation of a pull request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReplyTo {
+    /// A review thread: its GraphQL node id, and its place in the form
+    /// `path:line`.
+    Thread { id: String, place: String },
+    /// A new comment on the pull request.
+    Pr,
+}
+
+/// The text box of a reply that a pane opens: the place of the reply,
+/// the title of the box and the start text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReplySpec {
+    pub to: ReplyTo,
+    pub title: String,
+    /// The start text, for example a quote of the comment. A text that
+    /// is still the start text sends nothing.
+    pub text: String,
 }
 
 /// The event of a review of codeview comments.

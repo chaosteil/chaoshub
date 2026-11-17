@@ -2,17 +2,25 @@
 //! reviews and review threads in time order. A thread header shows
 //! `path:line · 3 comments · resolved`; Enter expands and collapses it.
 //! Comment bodies are markdown cells, which `ui` renders and wraps.
+//!
+//! The reply key (`R`) opens a text box for the comment of the cursor.
+//! On a thread or a comment in a thread, the reply goes into the thread.
+//! On an issue comment or a review, the reply is a new comment on the
+//! pull request that starts with a quote of the author and the first
+//! line. On a line without a comment, the reply is a new comment without
+//! a quote.
 
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 
+use crate::actions::REPLY_ID;
 use crate::app::age::age;
 use crate::app::models::{Cell, CellStyle, PaneModel, TreeNode};
-use crate::app::panes::{Pane, PaneState};
+use crate::app::panes::{Pane, PaneAction, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx, tree_toggled};
-use crate::bus::{KeyChord, Size, Target};
+use crate::bus::{KeyChord, ReplySpec, ReplyTo, Size, Target};
 use crate::domain::detail::{Comment, PrDetail, Review, ReviewState, Thread};
 use crate::domain::pr::PullRequest;
 
@@ -65,13 +73,19 @@ impl Pane for Conversation {
     }
 
     fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
+        if cx.keys.matches(REPLY_ID, key) {
+            return reply(cx, ps);
+        }
         if !cx.keys.matches("open", key) {
             return None;
         }
         let (thread, before) = {
             let expanded = expanded(ps);
             let nodes = nodes(cx, &expanded);
-            (nodes.get(ps.cursor)?.1?, nodes.len())
+            let Some(Item::Thread(thread)) = nodes.get(ps.cursor)?.1 else {
+                return None;
+            };
+            (thread, nodes.len())
         };
         let state = ps.ext.downcast_mut::<ConversationState>()?;
         if !state.expanded.remove(&thread) {
@@ -79,6 +93,94 @@ impl Pane for Conversation {
         }
         let after = nodes(cx, &expanded(ps)).len();
         Some(tree_toggled(ps.cursor, before, after))
+    }
+
+    fn hints(&self) -> &'static [(&'static str, &'static str)] {
+        &[(REPLY_ID, "reply")]
+    }
+
+    /// The reply, on the first chord of the reply key.
+    fn actions(&self, cx: &KeyCx<'_>, _ps: &PaneState) -> Vec<PaneAction> {
+        cx.keys
+            .chords(REPLY_ID)
+            .first()
+            .map(|&key| PaneAction {
+                key,
+                label: "reply to the comment",
+            })
+            .into_iter()
+            .collect()
+    }
+
+    fn run_action(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
+        cx.keys
+            .matches(REPLY_ID, key)
+            .then(|| reply(cx, ps))
+            .flatten()
+    }
+}
+
+/// The text box of a reply to the item of the cursor.
+fn reply(cx: &KeyCx<'_>, ps: &PaneState) -> Option<Handled> {
+    let Some(Target::Pr { pr, .. }) = cx.target else {
+        return None;
+    };
+    let item = nodes(cx, &expanded(ps)).get(ps.cursor).and_then(|n| n.1);
+    let detail = cx.data.details.get(&pr.key).map(|d| &d.value);
+    let spec = reply_spec(detail, item, pr.key.number);
+    Some(Handled {
+        reply: Some(spec),
+        ..Handled::default()
+    })
+}
+
+/// The reply to `item` of `detail`, on the pull request `number`. A
+/// thread, or a comment in a thread, gets a reply in the thread. An
+/// issue comment or a review gets a new comment on the pull request,
+/// with a quote. No item gets a new comment without a quote.
+fn reply_spec(detail: Option<&PrDetail>, item: Option<Item>, number: u64) -> ReplySpec {
+    let new_comment = |text: String| ReplySpec {
+        to: ReplyTo::Pr,
+        title: format!("comment on #{number}"),
+        text,
+    };
+    let Some(detail) = detail else {
+        return new_comment(String::new());
+    };
+    match item {
+        Some(Item::Thread(index)) => match detail.threads.get(index) {
+            Some(thread) => {
+                let place = place(thread);
+                ReplySpec {
+                    title: format!("reply on {place}"),
+                    to: ReplyTo::Thread {
+                        id: thread.id.clone(),
+                        place,
+                    },
+                    text: String::new(),
+                }
+            }
+            None => new_comment(String::new()),
+        },
+        Some(Item::Comment(index)) => detail.comments.get(index).map_or_else(
+            || new_comment(String::new()),
+            |comment| new_comment(quote(&comment.author, &comment.body)),
+        ),
+        Some(Item::Review(index)) => detail.reviews.get(index).map_or_else(
+            || new_comment(String::new()),
+            |review| new_comment(quote(&review.author, &review.body)),
+        ),
+        None => new_comment(String::new()),
+    }
+}
+
+/// The start text of a reply to a comment of `author` with `body`: a
+/// markdown quote of the author and the first line with text, then an
+/// empty line. A body without text gives a mention of the author.
+fn quote(author: &str, body: &str) -> String {
+    match body.lines().map(str::trim).find(|line| !line.is_empty()) {
+        Some(line) => format!("> @{author}: {line}\n\n"),
+        None => format!("@{author} "),
     }
 }
 
@@ -90,12 +192,21 @@ fn expanded(ps: &PaneState) -> HashSet<usize> {
         .unwrap_or_default()
 }
 
-/// One entry of the conversation.
+/// One entry of the conversation, with its index in `PrDetail`.
 enum Entry<'a> {
-    Comment(&'a Comment),
-    Review(&'a Review),
-    /// A thread and its index in `PrDetail.threads`.
+    Comment(usize, &'a Comment),
+    Review(usize, &'a Review),
     Thread(usize, &'a Thread),
+}
+
+/// The entry of a node: the index of an issue comment, a review or a
+/// thread in `PrDetail`. The nodes of a thread are the header and the
+/// comments of the thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Item {
+    Comment(usize),
+    Review(usize),
+    Thread(usize),
 }
 
 impl Entry<'_> {
@@ -103,8 +214,8 @@ impl Entry<'_> {
     /// without comments sort first.
     fn time(&self) -> Option<DateTime<Utc>> {
         match self {
-            Entry::Comment(comment) => Some(comment.created_at),
-            Entry::Review(review) => review.submitted_at,
+            Entry::Comment(_, comment) => Some(comment.created_at),
+            Entry::Review(_, review) => review.submitted_at,
             Entry::Thread(_, thread) => thread.comments.first().map(|c| c.created_at),
         }
     }
@@ -114,14 +225,20 @@ impl Entry<'_> {
 /// comment-only reviews without a body are left out: their comments
 /// show in the threads.
 fn entries(detail: &PrDetail) -> Vec<Entry<'_>> {
-    let mut entries: Vec<Entry<'_>> = detail.comments.iter().map(Entry::Comment).collect();
+    let mut entries: Vec<Entry<'_>> = detail
+        .comments
+        .iter()
+        .enumerate()
+        .map(|(i, c)| Entry::Comment(i, c))
+        .collect();
     entries.extend(
         detail
             .reviews
             .iter()
-            .filter(|r| r.state != ReviewState::Pending)
-            .filter(|r| r.state != ReviewState::Commented || !r.body.trim().is_empty())
-            .map(Entry::Review),
+            .enumerate()
+            .filter(|(_, r)| r.state != ReviewState::Pending)
+            .filter(|(_, r)| r.state != ReviewState::Commented || !r.body.trim().is_empty())
+            .map(|(i, r)| Entry::Review(i, r)),
     );
     entries.extend(
         detail
@@ -154,14 +271,15 @@ fn body(depth: u8, text: &str, html: &str) -> Option<TreeNode> {
     (!text.is_empty()).then(|| node(depth, None, vec![cell(text, CellStyle::Markdown)]))
 }
 
-/// The nodes of the pane, each with the index of the thread whose header
-/// it is.
-fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<usize>)> {
+/// The nodes of the pane, each with its entry. A status line has none.
+/// A node of a thread has the item of the thread, but only the header
+/// expands and collapses it.
+fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<Item>)> {
     let Some(Target::Pr { pr, .. }) = cx.target else {
         return Vec::new();
     };
     let now = cx.data.now;
-    let mut out: Vec<(TreeNode, Option<usize>)> = Vec::new();
+    let mut out: Vec<(TreeNode, Option<Item>)> = Vec::new();
     let mut push = |node: TreeNode| out.push((node, None));
     let error = cx.data.detail_errors.get(&pr.key);
     if let Some(reason) = error {
@@ -201,21 +319,24 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<usi
     }
     for entry in entries {
         match entry {
-            Entry::Comment(comment) => {
-                out.push((comment_header(0, comment, "commented", now), None));
-                out.extend(body(1, &comment.body, &comment.body_html).map(|n| (n, None)));
+            Entry::Comment(index, comment) => {
+                let item = Some(Item::Comment(index));
+                out.push((comment_header(0, comment, "commented", now), item));
+                out.extend(body(1, &comment.body, &comment.body_html).map(|n| (n, item)));
             }
-            Entry::Review(review) => {
-                out.push((review_header(review, now), None));
-                out.extend(body(1, &review.body, &review.body_html).map(|n| (n, None)));
+            Entry::Review(index, review) => {
+                let item = Some(Item::Review(index));
+                out.push((review_header(review, now), item));
+                out.extend(body(1, &review.body, &review.body_html).map(|n| (n, item)));
             }
             Entry::Thread(index, thread) => {
                 let open = expanded.contains(&index);
-                out.push((thread_header(thread, open), Some(index)));
+                let item = Some(Item::Thread(index));
+                out.push((thread_header(thread, open), item));
                 if open {
                     for comment in &thread.comments {
-                        out.push((comment_header(1, comment, "", now), None));
-                        out.extend(body(2, &comment.body, &comment.body_html).map(|n| (n, None)));
+                        out.push((comment_header(1, comment, "", now), item));
+                        out.extend(body(2, &comment.body, &comment.body_html).map(|n| (n, item)));
                     }
                 }
             }
@@ -271,12 +392,18 @@ fn review_header(review: &Review, now: DateTime<Utc>) -> TreeNode {
     )
 }
 
-/// `path:line · 3 comments · resolved`. A resolved thread is grey.
-fn thread_header(thread: &Thread, open: bool) -> TreeNode {
-    let place = match thread.line {
+/// The place of a thread: `path:line`, or the path alone for a thread
+/// without a line.
+fn place(thread: &Thread) -> String {
+    match thread.line {
         Some(line) => format!("{}:{line}", thread.path),
         None => thread.path.clone(),
-    };
+    }
+}
+
+/// `path:line · 3 comments · resolved`. A resolved thread is grey.
+fn thread_header(thread: &Thread, open: bool) -> TreeNode {
+    let place = place(thread);
     let count = thread.comments.len();
     let noun = if count == 1 { "comment" } else { "comments" };
     let (resolved, style) = if thread.is_resolved {
@@ -504,5 +631,164 @@ mod tests {
             outline(&model_and_keys(&empty, &mut ps, &[])),
             ["cannot load the conversation: offline", "no comments yet"]
         );
+    }
+
+    /// The reply of the `R` key with the cursor on the node `cursor`,
+    /// after the keys `keys`.
+    fn reply_at(state: &AppState, keys: &[KeyCode], cursor: usize) -> ReplySpec {
+        let mut ps = Conversation.init_state();
+        model_and_keys(state, &mut ps, keys);
+        ps.cursor = cursor;
+        let key = testdata::pr_key("chaoshub", 7);
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let r = KeyChord {
+            code: KeyCode::Char('R'),
+            mods: KeyModifiers::NONE,
+        };
+        let handled = Conversation.handle_key(r, &cx, &mut ps).unwrap();
+        assert!(!handled.changed && handled.cmds.is_empty());
+        handled.reply.unwrap()
+    }
+
+    fn thread(id: &str, place: &str) -> ReplyTo {
+        ReplyTo::Thread {
+            id: id.into(),
+            place: place.into(),
+        }
+    }
+
+    #[test]
+    fn each_node_of_a_comment_a_review_or_a_thread_has_its_reply() {
+        let state = state_with(Some(testdata::detail()), None);
+        let alice = "> @alice: Looks good, one question about `layout`.\n\n";
+        let bob = "> @bob: Please split the **transition** module.\n\n";
+        // The nodes: alice, her body, two threads, bob, his body.
+        for (cursor, to, title, text) in [
+            (0, ReplyTo::Pr, "comment on #7", alice),
+            (1, ReplyTo::Pr, "comment on #7", alice),
+            (
+                2,
+                thread("PRRT_42", "src/ui/list.rs:42"),
+                "reply on src/ui/list.rs:42",
+                "",
+            ),
+            (
+                3,
+                thread("PRRT_7", "src/ui/pane.rs:7"),
+                "reply on src/ui/pane.rs:7",
+                "",
+            ),
+            (4, ReplyTo::Pr, "comment on #7", bob),
+            (5, ReplyTo::Pr, "comment on #7", bob),
+        ] {
+            let spec = reply_at(&state, &[], cursor);
+            assert_eq!(
+                spec,
+                ReplySpec {
+                    to,
+                    title: title.into(),
+                    text: text.into(),
+                },
+                "node {cursor}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_comment_in_an_expanded_thread_replies_in_the_thread() {
+        let state = state_with(Some(testdata::detail()), None);
+        let mut ps = Conversation.init_state();
+        ps.cursor = 2;
+        model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        let expanded = ps.ext.downcast_ref::<ConversationState>().unwrap();
+        assert!(expanded.expanded.contains(&0));
+        // The nodes 3 to 6: the two comments of the thread and their
+        // bodies.
+        let key = testdata::pr_key("chaoshub", 7);
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let r = KeyChord {
+            code: KeyCode::Char('R'),
+            mods: KeyModifiers::NONE,
+        };
+        for cursor in 3..=6 {
+            ps.cursor = cursor;
+            let spec = Conversation.handle_key(r, &cx, &mut ps).unwrap().reply;
+            assert_eq!(
+                spec.map(|s| s.to),
+                Some(thread("PRRT_42", "src/ui/list.rs:42")),
+                "node {cursor}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_line_without_a_comment_starts_a_new_comment() {
+        let new = ReplySpec {
+            to: ReplyTo::Pr,
+            title: "comment on #7".into(),
+            text: String::new(),
+        };
+        let loading = state_with(None, None);
+        assert_eq!(reply_at(&loading, &[], 0), new, "no detail yet");
+        let empty = PrDetail {
+            comments: Vec::new(),
+            reviews: Vec::new(),
+            threads: Vec::new(),
+            head_oid: "oid7".into(),
+        };
+        let empty = state_with(Some(empty), None);
+        assert_eq!(reply_at(&empty, &[], 0), new, "no comments yet");
+        let mut stale = testdata::detail();
+        stale.head_oid = "an older head".into();
+        let stale = state_with(Some(stale), None);
+        assert_eq!(reply_at(&stale, &[], 0), new, "the stale line");
+    }
+
+    #[test]
+    fn a_quote_has_the_author_and_the_first_line_with_text() {
+        assert_eq!(
+            quote("bob", "\r\n  First.  \r\nSecond."),
+            "> @bob: First.\n\n"
+        );
+        assert_eq!(quote("bob", " \n "), "@bob ");
+    }
+
+    #[test]
+    fn the_pane_shows_and_runs_the_reply_key() {
+        assert_eq!(Conversation.hints(), [("reply", "reply")]);
+        let state = state_with(Some(testdata::detail()), None);
+        let key = testdata::pr_key("chaoshub", 7);
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let mut ps = Conversation.init_state();
+        let actions = Conversation.actions(&cx, &ps);
+        assert_eq!(actions, [PaneAction::char('R', "reply to the comment")]);
+        let handled = Conversation.run_action(actions[0].key, &cx, &mut ps);
+        assert_eq!(
+            handled.and_then(|h| h.reply).map(|s| s.to),
+            Some(ReplyTo::Pr)
+        );
+        let other = PaneAction::char('x', "").key;
+        assert_eq!(Conversation.run_action(other, &cx, &mut ps), None);
     }
 }

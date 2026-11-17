@@ -16,6 +16,7 @@ mod codeview_send;
 mod copy;
 mod draft;
 mod merge;
+mod reply;
 mod rerun_checks;
 mod review;
 
@@ -32,6 +33,7 @@ use crate::github::GithubClient;
 use crate::vcs::lock::RepoLocks;
 
 pub(crate) use merge::STACK_NOT_LOADED;
+pub(crate) use reply::ID as REPLY_ID;
 
 /// What a running action can use. There is no launcher: panes come only
 /// from `Prepare::Terminal`.
@@ -126,6 +128,7 @@ pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(|| {
     vec![
         Box::new(review::Review),
         Box::new(codeview_send::CodeviewSend),
+        Box::new(reply::Reply),
         Box::new(browser::Browser),
         Box::new(copy::CopyUrl),
         Box::new(copy::CopyChangeId),

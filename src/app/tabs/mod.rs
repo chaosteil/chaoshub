@@ -19,7 +19,9 @@ use crate::app::keymap::Keymap;
 use crate::app::layout::Areas;
 use crate::app::models::{ListModel, RowItem};
 use crate::app::state::AppData;
-use crate::bus::{Cmd, ConfirmSpec, Interest, KeyChord, PrRef, Scope, Size, Target, UiEvent};
+use crate::bus::{
+    Cmd, ConfirmSpec, Interest, KeyChord, PrRef, ReplySpec, Scope, Size, Target, UiEvent,
+};
 use crate::domain::keys::PrKey;
 use crate::domain::pr::PullRequest;
 
@@ -106,6 +108,9 @@ pub(crate) struct Handled {
     /// A pull request to open in a new popup on top of the overlays. Only
     /// a pane sets it.
     pub open_pr: Option<PrKey>,
+    /// The text box of a reply to open. The reply action sends the text
+    /// on the pull request of the popup. Only a pane sets it.
+    pub reply: Option<ReplySpec>,
 }
 
 /// One tab of the main screen.

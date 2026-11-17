@@ -937,7 +937,7 @@ selects the next pane:
 |---|---|---|
 | `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the head has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments · space r to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
 | `2` | Checks | One row per check, with its state and its duration. |
-| `3` | Conversation | The comments, the reviews and the review threads, in time order. |
+| `3` | Conversation | The comments, the reviews and the review threads, in time order. `R` replies to the comment of the cursor (see "Replies" below). |
 | `4` | Files | The changed files as a tree, with the diff of each file inline. See "Diff colors" below. |
 | `5` | Stack | The entries of the stack. Only for a stacked pull request. For a pull request without a stack, the tab shows dim, and `5`, `tab` and a click do not select it. The cursor starts on the pull request of the detail. Enter opens the detail of the entry under the cursor on top, and `esc` goes back. `o` opens the page of that entry. |
 | `6` | Agent | The pr-agent results: one section per tool. Only for a repo with a `path`. For a repo without a `path`, the tab shows dim, and `6`, `tab` and a click do not select it. |
@@ -954,7 +954,9 @@ mouse does not use the scrollbar.
 
 In the detail, only the keys that change nothing on GitHub work
 directly: the navigation keys, `r` (refresh), `v` (codeview), `o`
-(browser), `y` and `i` (copy). The other actions are in the actions
+(browser), `y` and `i` (copy). In the conversation pane, `R` opens the
+text box of a reply. Only `ctrl-s` in the text box sends the reply to
+GitHub. The other actions are in the actions
 menu. Press `space` to open it on top of the detail, then the key of
 the action. For example, `space` then `r` opens the Review popup,
 and `space` then `m` opens the merge confirm popup. `esc` closes the
@@ -964,13 +966,41 @@ the selected check, not the pull request. The key hint bar shows
 `Space actions`.
 
 The actions menu also lists the own actions of the active pane, after
-the actions of the pull request: the pr-agent tools of the Agent pane.
+the actions of the pull request: the pr-agent tools of the Agent pane,
+and the reply of the conversation pane.
 In the menu, an action key wins over
 a pane key. Thus in the Agent pane, `space` then `r` opens the Review
 popup, and `space` then `R` starts the pr-agent review. The menu of the
 Agent pane does not show the `agent` action, because the pane shows
 already. To bind a direct key for an action in the detail, see
 "Actions".
+
+#### Replies
+
+In the conversation pane, `R` opens a text box for a reply to the
+comment of the cursor. The key hint bar shows `R reply`. `space` then
+`R` does the same. The place of the reply depends on the line of the
+cursor:
+
+| Cursor on | The reply |
+|---|---|
+| A review thread, or a comment in an expanded thread | Goes into the thread. The text box starts empty. |
+| An issue comment or a review | Is a new comment on the pull request. The text box starts with a quote of the author and the first line, for example `> @alice: Looks good.`, then an empty line. A comment without text gives `@alice` instead. |
+| Another line, for example `no comments yet` | Is a new comment on the pull request. The text box starts empty. |
+
+The text box has the keys of the text box of the review message:
+
+| Key | What it does |
+|---|---|
+| `enter` | Adds a new line. |
+| `ctrl-e` | Opens the text in `$VISUAL`, else `$EDITOR`, else `nvim`. When the editor quits, its text comes back into the text box. |
+| `ctrl-s` | Sends the reply. A text that is empty, or that is still the start text, sends nothing. The status line then says `the reply is empty: nothing sent`. |
+| `esc` | Closes the text box. The text is lost. |
+
+When the reply went out, the status line says so, for example
+`commented on #7` or `replied on src/lib.rs:12`, and chaoshub reads the
+conversation again. Then the reply shows in the pane. When GitHub
+refuses the reply, the status line shows the error.
 
 #### Diff colors
 
@@ -1160,6 +1190,7 @@ the selected row or of the detail. These bindings have no default.
 | `copy_change_id` | `i` | Copies the jj change id of the local change that matches the pull request. In a git repo, it copies the local branch name, and the actions menu shows "copy the branch name". Hidden when no local change matches. |
 | `agent` | `p` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
 | `codeview_send` | `r` | Opens the Review popup. There you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). |
+| `reply` | `R` | Only in the conversation pane of the pull request detail: replies to the comment of the cursor (see "Replies"). The actions menu shows it only as an action of the conversation pane. |
 
 A merge of a stacked pull request includes every entry up to it. A
 merged entry needs no merge, so the merge skips it. GitHub tells

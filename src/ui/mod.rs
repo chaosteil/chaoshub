@@ -208,8 +208,24 @@ pub(crate) fn render_overlay(
         }
         OverlayContent::Confirm(spec) => confirm::render(spec, area, buf, theme, hits),
         OverlayContent::Review(spec) => review_popup::render(spec, area, buf, theme, hits),
-        OverlayContent::ReviewText { title, text, error } => {
-            review::render(title, text, error.as_deref(), area, buf, theme, hits);
+        OverlayContent::ReviewText {
+            title,
+            text,
+            error,
+            reply,
+        } => {
+            let words = if *reply {
+                review::REPLY
+            } else {
+                review::MESSAGE
+            };
+            let text = review::TextBox {
+                title,
+                text,
+                error: error.as_deref(),
+                words,
+            };
+            review::render(&text, area, buf, theme, hits);
         }
         OverlayContent::Picker {
             title,

@@ -72,6 +72,12 @@ pub(crate) trait Pane: Send + Sync {
     fn model(&self, cx: &KeyCx<'_>, ps: &PaneState, size: Size) -> PaneModel;
     /// `None` when the pane does not handle the key.
     fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled>;
+    /// The bindings of the own keys of the pane and their labels. The
+    /// key hints of the popup show them while the pane is active. The
+    /// default has none.
+    fn hints(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
     /// The own actions of the pane, in display order. The actions menu
     /// of the popup shows them after the actions of the pull request.
     /// The default has none.
@@ -232,6 +238,7 @@ pub(crate) mod fake {
                 changed: false,
                 confirm: None,
                 open_pr: None,
+                reply: None,
             })
         }
     }

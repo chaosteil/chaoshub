@@ -3050,6 +3050,26 @@ mod tests {
         insta::assert_snapshot!(screen(&mut conversation_app(160, 40)));
     }
 
+    /// The conversation popup with the text box of a reply to the
+    /// comment of alice open, with a line of text after the quote.
+    fn reply_text_app(width: u16, height: u16) -> App {
+        let mut app = conversation_app(width, height);
+        press(&mut app, 'g');
+        press(&mut app, 'R');
+        type_keys(&mut app, "It keeps the gutter.");
+        app
+    }
+
+    #[test]
+    fn reply_text_100() {
+        insta::assert_snapshot!(screen(&mut reply_text_app(100, 30)));
+    }
+
+    #[test]
+    fn reply_text_160() {
+        insta::assert_snapshot!(screen(&mut reply_text_app(160, 40)));
+    }
+
     /// The popup on #101 on the conversation pane, with eight comments
     /// of five paragraphs, scrolled down once with `D`.
     fn long_conversation_app(width: u16, height: u16) -> App {

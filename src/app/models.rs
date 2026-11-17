@@ -276,11 +276,13 @@ pub(crate) enum OverlayContent {
     },
     /// The Review popup of a pull request.
     Review(ReviewSpec),
-    /// The multi-line text popup of the message of a review.
+    /// The multi-line text popup of the message of a review, or of a
+    /// reply when `reply` is true.
     ReviewText {
         title: String,
         text: String,
         error: Option<String>,
+        reply: bool,
     },
     Output {
         title: String,

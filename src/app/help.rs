@@ -323,4 +323,20 @@ mod tests {
             Some(ACTIONS_TITLE)
         );
     }
+
+    #[test]
+    fn the_reply_key_is_in_the_actions_section() {
+        let actions = &crate::actions::REGISTRY;
+        let model = help_model(&Keymap::default(), &TABS, actions);
+        let section = model
+            .sections
+            .iter()
+            .find(|s| s.title == ACTIONS_TITLE)
+            .unwrap();
+        assert!(
+            section.entries.contains(&entry("R", "reply to a comment")),
+            "{:?}",
+            section.entries
+        );
+    }
 }

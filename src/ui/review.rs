@@ -1,6 +1,7 @@
-//! The text popup of the message of a review, built on ratatui-textarea.
-//! `app` keeps the text; the popup draws it with the cursor at the end, an
-//! error line when the editor failed, and the keys on the last row.
+//! The text popup of the message of a review or of a reply, built on
+//! ratatui-textarea. `app` keeps the text; the popup draws it with the
+//! cursor at the end, an error line when the editor failed, and the keys
+//! on the last row.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -13,23 +14,51 @@ use crate::theme::Theme;
 use crate::theme::ThemeBlock;
 use crate::ui::hits::HitMap;
 
-/// The key hint on the last row.
-const HINT: &str = "ctrl-s done · ctrl-e editor · esc back";
+/// The fixed words of a text popup: the key hint on the last row and
+/// the placeholder of an empty text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Words {
+    pub hint: &'static str,
+    pub placeholder: &'static str,
+}
 
-/// The placeholder of an empty text.
-const PLACEHOLDER: &str = "the message of the review";
+/// The words of the text popup of the message of a review.
+pub(crate) const MESSAGE: Words = Words {
+    hint: "ctrl-s done · ctrl-e editor · esc back",
+    placeholder: "the message of the review",
+};
+
+/// The words of the text popup of a reply.
+pub(crate) const REPLY: Words = Words {
+    hint: "ctrl-s send · ctrl-e editor · esc cancel",
+    placeholder: "the text of the reply",
+};
+
+/// The content of a text popup.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TextBox<'a> {
+    pub title: &'a str,
+    pub text: &'a str,
+    /// The error line, for example of a failed editor.
+    pub error: Option<&'a str>,
+    pub words: Words,
+}
 
 /// Draws the text popup into its area. The whole area is a
 /// `Hit::Inside`.
 pub(crate) fn render(
-    title: &str,
-    text: &str,
-    error: Option<&str>,
+    content: &TextBox<'_>,
     area: Rect,
     buf: &mut Buffer,
     theme: &Theme,
     hits: &mut HitMap,
 ) {
+    let TextBox {
+        title,
+        text,
+        error,
+        words,
+    } = *content;
     let p = &theme.palette;
     let area = area.intersection(buf.area);
     hits.push(area, Hit::Inside);
@@ -47,7 +76,7 @@ pub(crate) fn render(
     textarea.set_style(Style::new().bg(p.bg).fg(p.fg));
     textarea.set_cursor_line_style(Style::new());
     textarea.set_cursor_style(Style::new().bg(p.fg).fg(p.bg));
-    textarea.set_placeholder_text(PLACEHOLDER);
+    textarea.set_placeholder_text(words.placeholder);
     textarea.set_placeholder_style(Style::new().fg(p.fg_mute).add_modifier(Modifier::ITALIC));
     textarea.move_cursor(CursorMove::Bottom);
     textarea.move_cursor(CursorMove::End);
@@ -64,7 +93,7 @@ pub(crate) fn render(
     buf.set_stringn(
         input.x,
         inner.bottom() - 1,
-        HINT,
+        words.hint,
         usize::from(width),
         Style::new().fg(p.fg_mute),
     );

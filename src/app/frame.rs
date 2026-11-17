@@ -175,11 +175,15 @@ fn overlay_models(
                 },
                 OverlayState::Review(review) => OverlayContent::Review(review.spec(&state.data)),
                 OverlayState::ReviewText {
-                    title, text, error, ..
+                    title,
+                    text,
+                    error,
+                    reply,
                 } => OverlayContent::ReviewText {
                     title: title.clone(),
                     text: text.clone(),
                     error: error.clone(),
+                    reply: reply.is_some(),
                 },
                 OverlayState::Help { help, scroll } => OverlayContent::Help {
                     help: help.clone(),
@@ -496,12 +500,23 @@ fn overlay_hints(
                 })
                 .unwrap_or_default();
             keys.extend(first_chords(keymap, &["next_tab"]));
-            vec![
+            let own = panes
+                .get(popup.active)
+                .map(|pane| pane.hints())
+                .unwrap_or_default()
+                .iter()
+                .filter(|_| target.is_some())
+                .map(|&(name, label)| app_hint(keymap, &[name], label, true));
+            let mut hints = vec![
                 hint(&keys, "pane tabs"),
                 app_hint(keymap, &["open"], "expand", true),
+            ];
+            hints.extend(own);
+            hints.extend([
                 app_hint(keymap, &["close_overlay"], "close", true),
                 target.and_then(|_| app_hint(keymap, &["actions"], "actions", true)),
-            ]
+            ]);
+            hints
         }
         OverlayState::Confirm { .. } => vec![
             app_hint(keymap, &["confirm"], "confirm", true),
@@ -524,10 +539,15 @@ fn overlay_hints(
                 app_hint(keymap, &["close_overlay"], "cancel", true),
             ]
         }
-        OverlayState::ReviewText { .. } => vec![
+        OverlayState::ReviewText { reply: None, .. } => vec![
             hint(&[ctrl_key('s')], "done"),
             hint(&[ctrl_key('e')], "editor"),
             hint(&[plain_key(KeyCode::Esc)], "back"),
+        ],
+        OverlayState::ReviewText { reply: Some(_), .. } => vec![
+            hint(&[ctrl_key('s')], "send"),
+            hint(&[ctrl_key('e')], "editor"),
+            hint(&[plain_key(KeyCode::Esc)], "cancel"),
         ],
         OverlayState::Authors(_) => vec![
             app_hint(keymap, &["open"], "select", true),
