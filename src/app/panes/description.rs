@@ -14,10 +14,13 @@
 //! list. The threads and the activity come from the conversation detail,
 //! which loads in the background. The pane does not start a load.
 //!
-//! When the head has codeview comments that went to GitHub not yet, one
-//! dim line between the block and the body counts them, for example
-//! `3 unsent codeview comments · space r to review`. The Review popup
-//! lists and sends them. Without such comments, the pane shows no line.
+//! When the pull request has codeview comments that went to GitHub not
+//! yet, one dim line between the block and the body counts them, for
+//! example `3 unsent codeview comments (1 on an older push) · space r to
+//! review`. The Review popup lists and sends them. Without such comments,
+//! the pane shows no line.
+
+use std::fmt::Write as _;
 
 use chrono::{DateTime, TimeDelta, Utc};
 
@@ -100,22 +103,28 @@ impl Pane for DescriptionPane {
     }
 }
 
-/// The dim line that counts the unsent codeview comments of the head of
-/// `pr`, with the keys of the Review popup. `None` without such comments,
-/// before the load and after a failed load.
+/// The dim line that counts the unsent codeview comments of `pr`, with
+/// the count of the comments on an older push and the keys of the Review
+/// popup. `None` without such comments, before the load and after a
+/// failed load.
 fn codeview_line(cx: &KeyCx<'_>, pr: &PullRequest) -> Option<Vec<Cell>> {
     let Some(Ok(comments)) = cx.data.codeview.get(&pr.key) else {
         return None;
     };
-    let count = comments.current(&head(cx.data, pr)).len();
+    let head = head(cx.data, pr);
+    let older = comments.older(&head);
+    let count = comments.current(&head).len() + older;
     if count == 0 {
         return None;
     }
     let noun = plural::noun(count, "comment", "comments");
-    let text = match review_keys(cx.keys) {
-        Some(keys) => format!("{count} unsent codeview {noun} · {keys} to review"),
-        None => format!("{count} unsent codeview {noun}"),
-    };
+    let mut text = format!("{count} unsent codeview {noun}");
+    if older > 0 {
+        let _ = write!(text, " ({older} on an older push)");
+    }
+    if let Some(keys) = review_keys(cx.keys) {
+        let _ = write!(text, " · {keys} to review");
+    }
     Some(vec![cell(text, CellStyle::Dim)])
 }
 
@@ -1192,14 +1201,14 @@ mod tests {
     }
 
     #[test]
-    fn one_dim_line_counts_the_unsent_comments_of_the_head() {
+    fn one_dim_line_counts_the_unsent_comments_of_every_push() {
         let state = codeview_state(Some(Ok(codeview_comments())));
         let (lines, enter, actions) = codeview_pane(&state, &crate::app::keymap::DEFAULT);
         assert_eq!(
             codeview_texts(&state, &crate::app::keymap::DEFAULT)[3..],
             [
                 "",
-                "3 unsent codeview comments · space r to review",
+                "4 unsent codeview comments (1 on an older push) · space r to review",
                 "",
                 "(no description)",
             ]
@@ -1213,6 +1222,7 @@ mod tests {
     fn the_line_follows_the_keys_and_the_count() {
         let mut comments = codeview_comments();
         comments.pushes[0].comments.truncate(1);
+        comments.pushes.truncate(1);
         let state = codeview_state(Some(Ok(comments)));
         let overrides =
             std::collections::BTreeMap::from([("codeview_send".to_owned(), "ctrl-r".to_owned())]);
@@ -1230,20 +1240,28 @@ mod tests {
     }
 
     #[test]
-    fn without_unsent_comments_on_the_head_the_pane_shows_no_line() {
+    fn without_unsent_comments_the_pane_shows_no_line() {
         let empty = crate::domain::codeview::Comments::default();
-        let mut older = codeview_comments();
-        older.pushes.remove(0);
         for comments in [
             None,
             Some(Ok(empty)),
-            Some(Ok(older)),
             Some(Err("version 2 is not 1".into())),
         ] {
             let state = codeview_state(comments);
             let lines = codeview_texts(&state, &crate::app::keymap::DEFAULT);
             assert_eq!(lines.len(), 5, "{lines:?}");
         }
+    }
+
+    #[test]
+    fn the_line_counts_the_comments_of_an_older_push_alone() {
+        let mut older = codeview_comments();
+        older.pushes.remove(0);
+        let state = codeview_state(Some(Ok(older)));
+        assert_eq!(
+            codeview_texts(&state, &crate::app::keymap::DEFAULT)[4],
+            "1 unsent codeview comment (1 on an older push) · space r to review"
+        );
     }
 
     /// The state of #7 with the merge run `merge` of #7, `elapsed` after

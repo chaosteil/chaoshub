@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 
-use crate::actions::{Action, Applicability, Group, Prepare, REGISTRY, REPLY_ID};
+use crate::actions::{Action, Applicability, Group, Prepare, REGISTRY, REPLY_ID, STAYS_LOCAL};
 use crate::app::frame;
 use crate::app::help::help_model;
 use crate::app::keymap::{self, Keymap};
@@ -3125,6 +3125,10 @@ fn action_event(
             }
             match result {
                 Ok(text) if text.is_empty() => {}
+                // A review that went out without some of its comments.
+                Ok(text) if id == CODEVIEW_SEND_ID && text.contains(STAYS_LOCAL) => {
+                    state.message(text, CellStyle::Warn, ERROR_TTL);
+                }
                 Ok(text) => state.message(text, CellStyle::Success, INFO_TTL),
                 Err(err) => {
                     state.message(
@@ -8464,15 +8468,18 @@ mod tests {
             [
                 crate::bus::ReviewRow::Comment {
                     marked: true,
+                    older: false,
                     place: "src/a.rs:L3 (new)".into(),
                     summary: "First note".into(),
                 },
                 crate::bus::ReviewRow::Comment {
                     marked: true,
+                    older: false,
                     place: "src/b.rs:L3 (new)".into(),
                     summary: "Second note".into(),
                 },
                 crate::bus::ReviewRow::Fixed {
+                    older: false,
                     place: "commit message".into(),
                     summary: "Message note".into(),
                 },
@@ -8485,6 +8492,70 @@ mod tests {
         update(&mut state, &Keymap::default(), msg);
         assert_eq!(marks(&state), "x-", "the load updates the open popup");
         assert_eq!(review_spec(&state).cursor, Some(0));
+    }
+
+    #[test]
+    fn the_comments_of_an_older_push_are_rows_that_go_out() {
+        use crate::domain::codeview::{Comment, CommentKind, Push};
+        let (mut state, pr) = codeview_state();
+        let Ok(comments) = state.data.codeview.get_mut(&pr).unwrap() else {
+            panic!("no comments");
+        };
+        comments.pushes.push(Push {
+            head: "old1".into(),
+            comments: vec![Comment {
+                id: "c0".into(),
+                file: "src/a.rs".into(),
+                start_line: 1,
+                end_line: 1,
+                side: "new".into(),
+                body: "Old note".into(),
+                kind: CommentKind::Line,
+            }],
+        });
+        open_dialog(&mut state, &pr);
+        let rows = review_spec(&state).rows;
+        assert_eq!(rows.len(), 4, "{rows:?}");
+        assert_eq!(
+            rows[3],
+            crate::bus::ReviewRow::Comment {
+                marked: true,
+                older: true,
+                place: "src/a.rs:L1 (new)".into(),
+                summary: "Old note".into(),
+            },
+            "after the comments of the head, marked"
+        );
+        assert_eq!(dialog(&state).ids(&state.data), ["c1", "c2", "c0"]);
+        key(&mut state, 'G');
+        assert_eq!(review_spec(&state).cursor, Some(3));
+        enter(&mut state);
+        assert_eq!(marks(&state), "xx- ");
+        assert_eq!(dialog(&state).ids(&state.data), ["c1", "c2"]);
+        let cmds = key(&mut state, 'c');
+        let [Cmd::RunAction { input, .. }] = cmds.as_slice() else {
+            panic!("no send: {cmds:?}");
+        };
+        assert!(
+            matches!(input, ActionInput::Review { ids, .. } if ids == &["c1", "c2"]),
+            "{input:?}"
+        );
+    }
+
+    #[test]
+    fn a_review_without_some_comments_shows_a_warning() {
+        let (mut state, pr) = codeview_state();
+        let text =
+            format!("posted 1 comment as an approve review{STAYS_LOCAL}src/a.rs:L3 (new): no line");
+        let done = Msg::ActionEvent {
+            id: CODEVIEW_SEND_ID,
+            key: TargetKey::Pr(pr.clone()),
+            event: ActionEvent::Done(Ok(text.clone())),
+        };
+        update(&mut state, &Keymap::default(), done);
+        let status = state.ui.status.as_ref().unwrap();
+        assert_eq!(status.text, text);
+        assert_eq!(status.style, CellStyle::Warn);
     }
 
     #[test]

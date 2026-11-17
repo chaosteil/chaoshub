@@ -34,7 +34,6 @@ use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
-use crate::domain::plural;
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::repo::Repo;
 use crate::store::Snapshot;
@@ -595,22 +594,27 @@ impl ReviewPopup {
         format!("review #{}", self.pr().key.number)
     }
 
-    /// The unsent codeview comments of the head of the pull request, or
-    /// the error of the load. Empty before a load.
-    fn comments<'a>(&self, data: &'a AppData) -> Result<&'a [Comment], &'a str> {
+    /// The unsent codeview comments of the pull request, or the error of
+    /// the load: the comments of the head first, then the comments of the
+    /// older pushes. The flag is true for a comment of an older push.
+    /// Empty before a load.
+    fn comments<'a>(&self, data: &'a AppData) -> Result<Vec<(&'a Comment, bool)>, &'a str> {
         let pr = self.pr();
         match data.codeview.get(&pr.key) {
-            Some(Ok(comments)) => Ok(comments.current(&head(data, pr))),
+            Some(Ok(comments)) => Ok(comments.all(&head(data, pr))),
             Some(Err(err)) => Err(err),
-            None => Ok(&[]),
+            None => Ok(Vec::new()),
         }
     }
 
-    /// The comments that can go to GitHub, each with its row index.
+    /// The comments that can go to GitHub, each with its row index. A
+    /// comment of an older push can go too: codeview posts it on the head
+    /// commit of its push.
     pub(crate) fn sendable<'a>(&self, data: &'a AppData) -> Vec<(usize, &'a Comment)> {
         self.comments(data)
             .unwrap_or_default()
-            .iter()
+            .into_iter()
+            .map(|(comment, _)| comment)
             .enumerate()
             .filter(|(_, comment)| comment.sendable())
             .collect()
@@ -674,10 +678,11 @@ impl ReviewPopup {
         }
     }
 
-    /// The rows of the comment list: one row per unsent comment of the
-    /// head, then the count of the comments on older pushes. A failed
-    /// load has one row with the error. Without comments, one row says
-    /// that the review has only the message.
+    /// The rows of the comment list: one row per unsent comment, first
+    /// the comments of the head, then the comments of the older pushes.
+    /// A row of an older push has the `older` flag. A failed load has one
+    /// row with the error. Without comments, one row says that the review
+    /// has only the message.
     pub(crate) fn rows(&self, data: &AppData) -> Vec<ReviewRow> {
         let comments = match self.comments(data) {
             Ok(comments) => comments,
@@ -689,31 +694,27 @@ impl ReviewPopup {
         };
         let draft = self.draft(data);
         let mut rows: Vec<ReviewRow> = comments
-            .iter()
-            .map(|comment| {
+            .into_iter()
+            .map(|(comment, older)| {
                 let place = comment.place();
                 let summary = comment.summary().to_owned();
                 if comment.sendable() {
                     let marked = draft.is_none_or(|draft| !draft.deselected.contains(&comment.id));
                     ReviewRow::Comment {
                         marked,
+                        older,
                         place,
                         summary,
                     }
                 } else {
-                    ReviewRow::Fixed { place, summary }
+                    ReviewRow::Fixed {
+                        older,
+                        place,
+                        summary,
+                    }
                 }
             })
             .collect();
-        let pr = self.pr();
-        let older = match data.codeview.get(&pr.key) {
-            Some(Ok(all)) => all.older(&head(data, pr)),
-            _ => 0,
-        };
-        if older > 0 {
-            let older = plural::count(older, "comment", "comments");
-            rows.push(ReviewRow::Note(format!("{older} on an older push")));
-        }
         if rows.is_empty() {
             rows.push(ReviewRow::Note(
                 "no codeview comments: the review has only the message".to_owned(),

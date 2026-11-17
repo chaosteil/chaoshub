@@ -101,6 +101,10 @@ pub(crate) fn render(
     }
 }
 
+/// The tag of a comment of an older push, between the place and the
+/// summary.
+const OLDER: &str = "older push  ";
+
 /// Draws the visible rows of the comment list into `area`.
 fn render_list(spec: &ReviewSpec, area: Rect, buf: &mut Buffer, theme: &Theme, hits: &mut HitMap) {
     let p = &theme.palette;
@@ -127,14 +131,17 @@ fn render_list(spec: &ReviewSpec, area: Rect, buf: &mut Buffer, theme: &Theme, h
         let line = match row {
             ReviewRow::Comment {
                 marked,
+                older,
                 place,
                 summary,
             } => {
                 let mark = if *marked { "[x] " } else { "[ ] " };
                 let lead = format!("{pointer}{mark}");
                 let place = format!("{place}  ");
+                let tag = if *older { OLDER } else { "" };
                 let room = width.saturating_sub(text::width(&lead));
-                let rest = room.saturating_sub(text::width(&place));
+                let after_place = room.saturating_sub(text::width(&place));
+                let rest = after_place.saturating_sub(text::width(tag));
                 let style = if cursor {
                     normal.add_modifier(Modifier::BOLD)
                 } else {
@@ -143,13 +150,21 @@ fn render_list(spec: &ReviewSpec, area: Rect, buf: &mut Buffer, theme: &Theme, h
                 Line::from(vec![
                     Span::styled(lead, key),
                     Span::styled(text::truncate(&place, room), Style::new().fg(p.info)),
+                    Span::styled(text::truncate(tag, after_place), Style::new().fg(p.warn)),
                     Span::styled(text::truncate(summary, rest), style),
                 ])
             }
-            ReviewRow::Fixed { place, summary } => Line::styled(
-                text::truncate(&format!("  [-] {place}  {summary}"), width),
-                mute,
-            ),
+            ReviewRow::Fixed {
+                older,
+                place,
+                summary,
+            } => {
+                let tag = if *older { OLDER } else { "" };
+                Line::styled(
+                    text::truncate(&format!("  [-] {place}  {tag}{summary}"), width),
+                    mute,
+                )
+            }
             ReviewRow::Note(note) => Line::styled(text::truncate(note, width), mute),
             ReviewRow::Error(err) => {
                 Line::styled(text::truncate(err, width), Style::new().fg(p.danger))

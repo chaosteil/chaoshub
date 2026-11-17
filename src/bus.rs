@@ -456,17 +456,22 @@ pub(crate) struct ReviewSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ReviewRow {
     /// A comment that can go to GitHub. A marked comment goes into the
-    /// review.
+    /// review. `older` is true for a comment of an older push of the
+    /// head. It shows the tag `older push`.
     Comment {
         marked: bool,
+        older: bool,
         place: String,
         summary: String,
     },
     /// A comment that cannot go to GitHub, for example a comment on a
     /// commit message. It shows dim as `[-]`.
-    Fixed { place: String, summary: String },
-    /// A dim note, for example the count of the comments on an older
-    /// push.
+    Fixed {
+        older: bool,
+        place: String,
+        summary: String,
+    },
+    /// A dim note, for example that the review has only the message.
     Note(String),
     /// The error of a failed load of the comment files.
     Error(String),

@@ -32,6 +32,7 @@ use crate::bus::{
 use crate::github::GithubClient;
 use crate::vcs::lock::RepoLocks;
 
+pub(crate) use codeview_send::STAYS_LOCAL;
 pub(crate) use merge::STACK_NOT_LOADED;
 pub(crate) use reply::ID as REPLY_ID;
 

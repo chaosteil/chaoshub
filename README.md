@@ -947,7 +947,7 @@ selects the next pane:
 
 | Key | Pane | What it shows |
 |---|---|---|
-| `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the head has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments · space r to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
+| `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the pull request has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments (1 on an older push) · space r to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order. `R` replies to the comment of the cursor (see "Replies" below). |
 | `4` | Files | The changed files as a tree, with the diff of each file inline. See "Diff colors" below. |
@@ -1110,8 +1110,15 @@ The comment list is on top. Each row shows the cursor (`>`), the mark
 the comment. A `PR` comment goes into the text of the review, after
 your message. Every comment starts marked, also a new comment. GitHub
 takes no comment on a commit message, so such a row shows dim with
-`[-]`, and the cursor skips it. A dim line counts the comments of an
-older push of the head: open codeview (`v`) to see them.
+`[-]`, and the cursor skips it.
+
+A comment that you wrote before the last push of the head is on an
+older push. Its row comes after the comments of the head, with the tag
+`older push`. It starts marked too, and goes out with the review.
+codeview posts the comments of each older push first, in a comment
+review of their own on the head commit of that push. So each comment
+stays on the lines that you wrote it for. GitHub shows it as outdated
+when a later push changed these lines.
 
 Below the list, the keys are on the left, and the message is on the
 right. The message wraps in its column. The popup shows up to 4 rows
@@ -1170,7 +1177,12 @@ When a marked comment went out from codeview in the meantime, the send
 leaves it out. When codeview can post none of the marked comments, for
 example because no comment maps to the diff, it sends no review. The
 status line then says `the review did not go out`, and names the
-comments that stay local.
+comments that stay local. When the review went out, but some marked
+comments stay local, the status line shows a warning that names them
+with the reason. When GitHub refuses the review of an older push, for
+example after a force push, the review does not go out, and the status
+line shows the error. Unmark the comments of that push to send the
+review.
 
 ### Actions
 
@@ -1487,21 +1499,29 @@ out from codeview already.
 `<request>` is a JSON file in `<state dir>/codeview/`:
 
 ```json
-{ "version": 1, "repo": "owner/name", "number": 14, "head": "<sha>",
-  "ids": ["..."], "event": "comment", "body": "...", "out": "<result>" }
+{ "version": 2, "repo": "owner/name", "number": 14,
+  "pushes": [{ "head": "<sha>", "ids": ["..."] }],
+  "event": "comment", "body": "...", "out": "<result>" }
 ```
 
-`event` is `comment`, `approve` or `request-changes`. codeview opens the
-pull request, maps the comments to the lines of the diff, posts one
-review, marks the comments as sent in its comment file, and writes the
-result to `<result>`. nvim gets `CHAOSHUB_AGENT_ROOT=<state dir>/agent`,
+`pushes` holds the marked comments per push of the head. `event` is
+`comment`, `approve` or `request-changes`. codeview opens the pull
+request, maps the comments to the lines of the diff of their push,
+posts one comment review for each older push and then the review with
+the event, marks the comments as sent in its comment file, and writes
+the result to `<result>`. A codeview that knows only version 1 refuses
+the request. chaoshub then sends the comments of one push again with
+version 1 (`"head"` and `"ids"` in place of `"pushes"`). For comments
+of more than one push, the send then fails, and the status line asks
+you to update codeview. nvim gets `CHAOSHUB_AGENT_ROOT=<state dir>/agent`,
 like the review of `v`. chaoshub stops nvim after 120 seconds.
 
 chaoshub never posts these comments to GitHub itself. Only codeview
 posts, so its lock file and its sent marks stop a second send of the
 same comment, also from an open codeview. The status line then says
-`posted N comments as a <event> review`, and names the comments that
-stay local and the comments that went out already. After the send,
+`posted N comments as a <event> review`, with the count of the comments
+on an older push, and names the comments that stay local and the
+comments that went out already. After the send,
 chaoshub reads the comment files again. See `:help codeview-bridge` in
 nvim for the request and the result.
 

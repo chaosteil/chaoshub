@@ -19,6 +19,16 @@
 //! no comment, it sends no review, and the action fails with
 //! "the review did not go out".
 //!
+//! The request names the chosen comments per push of the head (version
+//! 2). codeview posts the comments of an older push first, in a review of
+//! their own on the head commit of that push. So each comment stays on
+//! the lines that it was written for. A codeview that knows only version
+//! 1 gets the comments of one push again with version 1. For comments of
+//! more than one push, the action then fails and asks for a new codeview.
+//!
+//! The text of the result names each chosen comment that stays local,
+//! with the reason. The status then shows the text as a warning.
+//!
 //! Without comments, codeview has nothing to post. Then the action posts
 //! a review with only the message, with `addPullRequestReview`.
 
@@ -41,9 +51,6 @@ use crate::github::ReviewEvent;
 
 /// The longest run of the headless nvim.
 const TIMEOUT: Duration = Duration::from_secs(120);
-
-/// The version of the request and the result of `codeview.bridge`.
-const VERSION: u32 = 1;
 
 /// The action that sends codeview comments through a headless codeview.
 pub(crate) struct CodeviewSend;
@@ -152,17 +159,38 @@ struct Job {
     timeout: Duration,
 }
 
-/// The request of `codeview.bridge`.
+/// The newest version of the request and the result of
+/// `codeview.bridge`. Version 2 names the chosen comments per push.
+const VERSION: u32 = 2;
+
+/// The version of the request of a codeview without version 2. It takes
+/// the comments of one push.
+const VERSION_ONE: u32 = 1;
+
+/// The request of `codeview.bridge`. Version 2 has `pushes`. Version 1
+/// has `head` and `ids` of one push.
 #[derive(Debug, Serialize)]
 struct Request<'a> {
     version: u32,
     repo: String,
     number: u64,
-    head: &'a str,
-    ids: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    head: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ids: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pushes: Option<&'a [PushIds<'a>]>,
     event: &'a str,
     body: &'a str,
     out: &'a Path,
+}
+
+/// The chosen comments of one push in a request of version 2.
+#[derive(Debug, Serialize)]
+struct PushIds<'a> {
+    /// The head commit of the push.
+    head: &'a str,
+    ids: Vec<String>,
 }
 
 /// The result of `codeview.bridge`.
@@ -171,6 +199,8 @@ struct Request<'a> {
 struct Outcome {
     ok: bool,
     posted: u64,
+    /// The part of `posted` that went out on older pushes. Version 2 only.
+    older: u64,
     skipped: Vec<Skipped>,
     already_sent: Vec<String>,
     error: String,
@@ -190,6 +220,18 @@ const SENT_ALREADY: &str = "the review did not go out: the comments went out fro
 /// The error of a send that posted no comment: codeview then sends no
 /// review.
 const NOT_OUT: &str = "the review did not go out";
+
+/// The text before the comments that stay local, in the result of a
+/// send. The status shows such a result as a warning.
+pub(crate) const STAYS_LOCAL: &str = " · stays local: ";
+
+/// The start of the error of a codeview that does not know the version of
+/// the request.
+const UNKNOWN_VERSION: &str = "the request has version";
+
+/// The error of a codeview without version 2, for comments of more than
+/// one push.
+const OLD_CODEVIEW: &str = "the review did not go out: this codeview cannot send the comments of an older push. Update codeview";
 
 /// Posts a review of `pr` with only the message `body`, with
 /// `addPullRequestReview`. A comment review and a change request need a
@@ -219,54 +261,55 @@ async fn message_review(
 /// Reads the comment files again, runs the headless codeview on the
 /// comments that are still unsent, and returns the text of the result.
 /// A send that posted no comment is an error: no review went out.
+///
+/// The request names the chosen comments per push, so codeview posts the
+/// comments of an older push on the head commit of that push. A codeview
+/// that knows only version 1 gets the comments of one push again with
+/// version 1.
 async fn send(job: Job) -> Result<String, String> {
     let (dir, repo, number) = (job.comments_dir.clone(), job.repo.clone(), job.key.number);
     let comments = tokio::task::spawn_blocking(move || store::load(&dir, &repo, number))
         .await
         .map_err(|err| err.to_string())??;
-    let Some(push) = job.ids.iter().find_map(|id| comments.push_of(id)) else {
+    let mut places: BTreeMap<&str, String> = BTreeMap::new();
+    let mut pushes: Vec<PushIds<'_>> = Vec::new();
+    for id in &job.ids {
+        let Some(push) = comments.push_of(id) else {
+            continue;
+        };
+        let Some(comment) = push
+            .comments
+            .iter()
+            .find(|comment| &comment.id == id && comment.sendable())
+        else {
+            continue;
+        };
+        places.insert(id, comment.place());
+        match pushes.iter_mut().find(|chosen| chosen.head == push.head) {
+            Some(chosen) => chosen.ids.push(id.clone()),
+            None => pushes.push(PushIds {
+                head: &push.head,
+                ids: vec![id.clone()],
+            }),
+        }
+    }
+    if pushes.is_empty() {
         return Err(SENT_ALREADY.to_owned());
-    };
-    let places: BTreeMap<&str, String> = push
-        .comments
-        .iter()
-        .map(|comment| (comment.id.as_str(), comment.place()))
-        .collect();
-    let ids: Vec<String> = job
+    }
+    let gone: Vec<&String> = job
         .ids
         .iter()
-        .filter(|id| {
-            push.comments
-                .iter()
-                .any(|comment| &comment.id == *id && comment.sendable())
-        })
-        .cloned()
+        .filter(|id| !places.contains_key(id.as_str()))
         .collect();
-    let gone = job.ids.len() - ids.len();
     let place = |id: &str| places.get(id).cloned().unwrap_or_else(|| id.to_owned());
 
-    std::fs::create_dir_all(&job.work_dir)
-        .map_err(|err| format!("cannot make {}: {err}", job.work_dir.display()))?;
-    let stem = format!("{}-{:08x}", std::process::id(), rand::random::<u32>());
-    let request_path = job.work_dir.join(format!("send-{stem}.json"));
-    let result_path = job.work_dir.join(format!("result-{stem}.json"));
-    let request = Request {
-        version: VERSION,
-        repo: format!("{}/{}", job.key.repo.owner, job.key.repo.name),
-        number: job.key.number,
-        head: &push.head,
-        ids: &ids,
-        event: job.event.name(),
-        body: &job.body,
-        out: &result_path,
-    };
-    let text = serde_json::to_string(&request).map_err(|err| err.to_string())?;
-    std::fs::write(&request_path, text)
-        .map_err(|err| format!("cannot write {}: {err}", request_path.display()))?;
-    let outcome = run(&job, &request_path, &result_path).await;
-    let _ = std::fs::remove_file(&request_path);
-    let _ = std::fs::remove_file(&result_path);
-    let outcome = outcome?;
+    let mut outcome = request(&job, VERSION, &pushes).await?;
+    if !outcome.ok && outcome.error.starts_with(UNKNOWN_VERSION) {
+        if pushes.len() > 1 {
+            return Err(OLD_CODEVIEW.to_owned());
+        }
+        outcome = request(&job, VERSION_ONE, &pushes).await?;
+    }
     if !outcome.ok {
         return Err(outcome.error);
     }
@@ -277,17 +320,11 @@ async fn send(job: Job) -> Result<String, String> {
             .iter()
             .map(|skipped| format!("{}: {}", place(&skipped.id), skipped.reason))
             .collect();
-        let _ = write!(text, " · stays local: {}", names.join(", "));
+        let _ = write!(text, "{STAYS_LOCAL}{}", names.join(", "));
     }
-    let sent = outcome.already_sent.len() + gone;
-    if sent > 0 {
+    if !outcome.already_sent.is_empty() || !gone.is_empty() {
         let mut names: Vec<String> = outcome.already_sent.iter().map(|id| place(id)).collect();
-        names.extend(
-            job.ids
-                .iter()
-                .filter(|id| !ids.contains(id))
-                .map(|id| place(id)),
-        );
+        names.extend(gone.iter().map(|id| place(id)));
         let _ = write!(
             text,
             " · went out from codeview already: {}",
@@ -297,11 +334,48 @@ async fn send(job: Job) -> Result<String, String> {
     if outcome.posted == 0 {
         return Err(format!("{NOT_OUT}{text}"));
     }
+    let older = if outcome.older > 0 {
+        format!(" ({} on an older push)", outcome.older)
+    } else {
+        String::new()
+    };
+    let name = job.event.name();
+    let article = if name.starts_with('a') { "an" } else { "a" };
     Ok(format!(
-        "posted {} as a {} review{text}",
-        noun(outcome.posted),
-        job.event.name()
+        "posted {} as {article} {name} review{older}{text}",
+        noun(outcome.posted)
     ))
+}
+
+/// Writes the request of `version` for `pushes` to a temporary file in
+/// the work directory, runs the headless codeview on it, and reads the
+/// result. Version 1 takes the first push only. The request and the
+/// result files go away at the end.
+async fn request(job: &Job, version: u32, pushes: &[PushIds<'_>]) -> Result<Outcome, String> {
+    std::fs::create_dir_all(&job.work_dir)
+        .map_err(|err| format!("cannot make {}: {err}", job.work_dir.display()))?;
+    let stem = format!("{}-{:08x}", std::process::id(), rand::random::<u32>());
+    let request_path = job.work_dir.join(format!("send-{stem}.json"));
+    let result_path = job.work_dir.join(format!("result-{stem}.json"));
+    let one = (version == VERSION_ONE).then(|| &pushes[0]);
+    let request = Request {
+        version,
+        repo: format!("{}/{}", job.key.repo.owner, job.key.repo.name),
+        number: job.key.number,
+        head: one.map(|push| push.head),
+        ids: one.map(|push| push.ids.as_slice()),
+        pushes: (version != VERSION_ONE).then_some(pushes),
+        event: job.event.name(),
+        body: &job.body,
+        out: &result_path,
+    };
+    let text = serde_json::to_string(&request).map_err(|err| err.to_string())?;
+    std::fs::write(&request_path, text)
+        .map_err(|err| format!("cannot write {}: {err}", request_path.display()))?;
+    let outcome = run(job, &request_path, &result_path).await;
+    let _ = std::fs::remove_file(&request_path);
+    let _ = std::fs::remove_file(&result_path);
+    outcome
 }
 
 /// `1 comment` or `N comments`.
@@ -369,6 +443,17 @@ mod tests {
         )
     }
 
+    /// A comment file of #14 at the older head `h0` for the repo at
+    /// `repo`: `c3` is unsent.
+    fn older_file(repo: &Path) -> String {
+        format!(
+            "---\nversion: 1\nrepo: {}\nrange: pr-14-h0\n---\n\n\
+             ## codeview-comment c3\n\n- file: src/c.rs\n- start_line: 7\n- end_line: 8\n\
+             - side: old\n- synced_at:\n\nOld note\n",
+            repo.display()
+        )
+    }
+
     /// A temporary setup: a repo, a comment directory, a work directory
     /// and a fake nvim that runs `body` after it copies the request to
     /// `request.json`. `$out` is the result path of the request.
@@ -396,6 +481,14 @@ mod tests {
             std::fs::write(&nvim, script).unwrap();
             std::fs::set_permissions(&nvim, std::fs::Permissions::from_mode(0o755)).unwrap();
             Self { root }
+        }
+
+        /// Adds the comment file of the older push `h0`.
+        fn with_older(self) -> Self {
+            let dir = self.root.path();
+            let file = dir.join("comments").join("repo-1a2b3c4d").join("old.md");
+            std::fs::write(file, older_file(&dir.join("repo"))).unwrap();
+            self
         }
 
         fn job(&self, ids: &[&str], timeout: Duration) -> Job {
@@ -443,17 +536,81 @@ mod tests {
             "posted 1 comment as a comment review · went out from codeview already: c2"
         );
         let request = setup.request();
-        assert_eq!(request["version"], 1);
+        assert_eq!(request["version"], 2);
         assert_eq!(request["repo"], "chaosteil/chaoshub-test");
         assert_eq!(request["number"], 14);
-        assert_eq!(request["head"], "h1");
-        assert_eq!(request["ids"], serde_json::json!(["c1"]));
+        assert_eq!(
+            request["pushes"],
+            serde_json::json!([{ "head": "h1", "ids": ["c1"] }])
+        );
+        assert_eq!(request.get("head"), None, "version 1 fields");
+        assert_eq!(request.get("ids"), None);
         assert_eq!(request["event"], "comment");
         assert_eq!(
             request["body"], "line one\nline two",
             "the line breaks stay"
         );
         assert_eq!(setup.leftovers(), 0, "the request and the result go away");
+    }
+
+    #[tokio::test]
+    async fn the_request_names_the_comments_of_each_push() {
+        let body = r#"printf '%s' '{"version":2,"ok":true,"posted":2,"older":1,"skipped":[],"already_sent":[],"url":"u","error":""}' > "$out""#;
+        let setup = Setup::new(body).with_older();
+        let mut job = setup.job(&["c3", "c1", "c2"], TIMEOUT);
+        job.event = ReviewKind::Approve;
+        let text = send(job).await.unwrap();
+        assert_eq!(
+            text,
+            "posted 2 comments as an approve review (1 on an older push) · went out from codeview already: c2"
+        );
+        assert_eq!(
+            setup.request()["pushes"],
+            serde_json::json!([
+                { "head": "h0", "ids": ["c3"] },
+                { "head": "h1", "ids": ["c1"] },
+            ]),
+            "one entry per push, in the order of the ids"
+        );
+        assert_eq!(setup.leftovers(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_comment_of_an_older_push_that_stays_local_is_in_the_text() {
+        let body = r#"printf '%s' '{"version":2,"ok":true,"posted":1,"older":0,"skipped":[{"id":"c3","reason":"cannot read the diff of the older push h0"}],"already_sent":[],"url":"u","error":""}' > "$out""#;
+        let setup = Setup::new(body).with_older();
+        let text = send(setup.job(&["c1", "c3"], TIMEOUT)).await.unwrap();
+        assert_eq!(
+            text,
+            format!(
+                "posted 1 comment as a comment review{STAYS_LOCAL}src/c.rs:L7-8 (old): cannot read the diff of the older push h0"
+            )
+        );
+    }
+
+    /// The body of a fake nvim of a codeview that knows only version 1.
+    const OLD_CODEVIEW_BODY: &str = r#"if grep -q '"version":2' "$req"; then printf '%s' '{"version":1,"ok":false,"posted":0,"skipped":[],"already_sent":[],"url":"","error":"the request has version 2, not 1"}' > "$out"; exit 1; fi
+printf '%s' '{"version":1,"ok":true,"posted":1,"skipped":[],"already_sent":[],"url":"u","error":""}' > "$out""#;
+
+    #[tokio::test]
+    async fn an_older_codeview_gets_the_comments_of_one_push_with_version_1() {
+        let setup = Setup::new(OLD_CODEVIEW_BODY);
+        let text = send(setup.job(&["c1"], TIMEOUT)).await.unwrap();
+        assert_eq!(text, "posted 1 comment as a comment review");
+        let request = setup.request();
+        assert_eq!(request["version"], 1, "the second request");
+        assert_eq!(request["head"], "h1");
+        assert_eq!(request["ids"], serde_json::json!(["c1"]));
+        assert_eq!(request.get("pushes"), None);
+        assert_eq!(setup.leftovers(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_older_codeview_cannot_send_the_comments_of_two_pushes() {
+        let setup = Setup::new(OLD_CODEVIEW_BODY).with_older();
+        let err = send(setup.job(&["c1", "c3"], TIMEOUT)).await.unwrap_err();
+        assert_eq!(err, OLD_CODEVIEW);
+        assert_eq!(setup.request()["version"], 2, "no second request");
     }
 
     #[tokio::test]

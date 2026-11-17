@@ -104,6 +104,19 @@ impl Comments {
             .map_or(&[], |push| push.comments.as_slice())
     }
 
+    /// The unsent comments of every push: the comments of the push of
+    /// `head` first, then the comments of the other pushes, in the order
+    /// of the files. The flag is true for a comment of another push.
+    pub(crate) fn all(&self, head: &str) -> Vec<(&Comment, bool)> {
+        let current = self.current(head).iter().map(|comment| (comment, false));
+        let older = self
+            .pushes
+            .iter()
+            .filter(|push| push.head != head)
+            .flat_map(|push| push.comments.iter().map(|comment| (comment, true)));
+        current.chain(older).collect()
+    }
+
     /// The number of unsent comments of the other pushes.
     pub(crate) fn older(&self, head: &str) -> usize {
         self.pushes
