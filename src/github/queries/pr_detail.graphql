@@ -28,6 +28,7 @@ query PrDetail($owner: String!, $name: String!, $number: Int!) {
       }
       reviewThreads(first: 100) {
         nodes {
+          id
           isResolved
           path
           line

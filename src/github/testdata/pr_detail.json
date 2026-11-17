@@ -64,6 +64,7 @@
         "reviewThreads": {
           "nodes": [
             {
+              "id": "PRRT_kwDOAAAAAAAAAAA1",
               "isResolved": true,
               "path": "src/file-1.rs",
               "line": null,
@@ -93,6 +94,7 @@
               }
             },
             {
+              "id": "PRRT_kwDOAAAAAAAAAAA2",
               "isResolved": false,
               "path": "src/file-1.rs",
               "line": 550,

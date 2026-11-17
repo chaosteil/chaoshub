@@ -674,6 +674,7 @@ mod tests {
     /// A thread on `path` with `comments`.
     fn thread(path: &str, is_resolved: bool, comments: Vec<Comment>) -> Thread {
         Thread {
+            id: format!("PRRT_{path}"),
             path: path.into(),
             line: Some(1),
             is_resolved,

@@ -669,6 +669,7 @@ pub(crate) mod pr_detail {
             .flatten()
         {
             threads.push(Thread {
+                id: node.id,
                 path: node.path,
                 line: node.line.map(|line| uint(line, "line")).transpose()?,
                 is_resolved: node.is_resolved,
@@ -1121,6 +1122,7 @@ mod tests {
             .collect();
         assert_eq!(lines, [(true, None, 2), (false, Some(550), 2)]);
         assert_eq!(detail.threads[0].path, "src/file-1.rs");
+        assert_eq!(detail.threads[0].id, "PRRT_kwDOAAAAAAAAAAA1");
     }
 
     #[test]

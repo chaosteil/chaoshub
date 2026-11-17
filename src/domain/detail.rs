@@ -49,6 +49,10 @@ pub(crate) enum ReviewState {
 /// A review thread on a line of a file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Thread {
+    /// The GraphQL node id of the thread. A reply goes to this id. A
+    /// cached detail without the id does not parse, so the detail worker
+    /// reads it from GitHub again.
+    pub id: String,
     pub path: String,
     pub line: Option<u32>,
     pub is_resolved: bool,
@@ -82,6 +86,7 @@ mod tests {
                 submitted_at: Some(test_time()),
             }],
             threads: vec![Thread {
+                id: "PRRT_1".into(),
                 path: "src/lib.rs".into(),
                 line: Some(10),
                 is_resolved: false,
@@ -89,5 +94,11 @@ mod tests {
             }],
             head_oid: "abc123".into(),
         });
+    }
+
+    #[test]
+    fn a_thread_without_an_id_does_not_parse() {
+        let old = r#"{"path":"src/lib.rs","line":10,"is_resolved":false,"comments":[]}"#;
+        assert!(serde_json::from_str::<Thread>(old).is_err());
     }
 }

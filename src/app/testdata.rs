@@ -329,6 +329,7 @@ pub(crate) fn detail() -> crate::domain::detail::PrDetail {
         ],
         threads: vec![
             Thread {
+                id: "PRRT_42".into(),
                 path: "src/ui/list.rs".into(),
                 line: Some(42),
                 is_resolved: true,
@@ -338,6 +339,7 @@ pub(crate) fn detail() -> crate::domain::detail::PrDetail {
                 ],
             },
             Thread {
+                id: "PRRT_7".into(),
                 path: "src/ui/pane.rs".into(),
                 line: Some(7),
                 is_resolved: false,
