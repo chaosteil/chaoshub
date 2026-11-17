@@ -1045,12 +1045,14 @@ expand/react`.
 
 A reaction that you already have shows a `✓` in the menu. Its key
 removes your reaction again, as on GitHub. Else the key adds your
-reaction. The pane shows the change at once. When the reaction went
-out, the status line says so, for example `reacted 🎉 on #7` or
-`removed 👍 on #7`, and chaoshub reads the conversation again. When
-GitHub refuses the reaction, the pane shows the old reactions again,
-and the status line shows the error, for example `react to a comment
-failed: offline`.
+reaction. The pane shows the change at once, and the reaction pulses
+until GitHub shows it (see "Changes on their way to GitHub"). A removed
+reaction with no count left shows as `👍 0` while it pulses. When the
+reaction went out, the status line says so, for example `reacted 🎉 on
+#7` or `removed 👍 on #7`, and chaoshub reads the conversation again.
+When GitHub refuses the reaction, the pane shows the old reactions
+again, and the status line shows the error, for example `react to a
+comment failed: offline`.
 
 #### Diff colors
 
@@ -1196,11 +1198,15 @@ moves to the Team tab, and chaoshub shows it there at once too. The
 title count of the Review tab goes down at once. The notification does
 not announce the pull request in the Team tab. If the approval fails,
 the pull request comes back, and the status bar shows the error. The
-change is local only: when GitHub data from after the approval comes,
-GitHub decides. If GitHub still requests your review, the pull request
-comes back to the Review tab. An approval in the detail pane
-(`chaoshub pr`) hides the pull request in the list at once too (see
-"How the PR view talks to the list").
+change is local only. It ends when GitHub data shows your approval
+and no review request of you. A read that comes before GitHub has the
+approval does not end it. If GitHub still requests your review 60 s
+after the approval, the pull request comes back to the Review tab:
+GitHub decides. An approval in the detail pane (`chaoshub pr`) hides
+the pull request in the list at once too (see "How the PR view talks
+to the list"). The Description pane of the PR view shows your review
+at once after the `REVIEWS` label, for example `✓ you`, until GitHub
+shows it.
 
 The text box of the message can have more than one line, and its line
 breaks go to GitHub:
@@ -1284,6 +1290,47 @@ chaoshub sends one atomic request. Else chaoshub merges each entry
 itself, bottom first, each with its own title and body. Thus every
 squash commit carries its PR body. The confirm popup says which way
 chaoshub merges.
+
+### Changes on their way to GitHub
+
+An action that changes GitHub, for example an approval, a merge or a
+reaction, waits for GitHub twice: for the result of the request, and
+for GitHub data that shows the change. In this time, chaoshub pulses
+the item that changes, in the colors of the merge badge: green to purple
+and back. The pulse uses the tick of the status bar spinner and moves
+only while an item pulses.
+
+| Action | What pulses |
+|---|---|
+| Approve, request changes, comment review (`r`) | The title of the row in the list, and `REVIEWS` with your review (`✓ you`, `✗ you`, `you commented`) in the Description pane. |
+| Review in codeview (`v`) | When the pane ends: the row and `REVIEWS`, until GitHub shows a change of your review or of the review request. |
+| Merge (`m`), stack merge (`s`) | The row of each entry that the merge merges, in the list and in the Stack pane, and the badge of the Description pane. |
+| Close (`c`), draft (`d`) | The row and the badge of the Description pane. |
+| Rerun the checks (`x`) | The row, `CHECKS` in the Description pane, and each failed check in the Checks pane. |
+| Reply (`R`) | The row, and the thread header in the Conversation pane, or a `sending your comment…` line at the end. |
+| Reaction | The row, and the reaction in the Conversation pane. |
+
+The header of the pull request popup is plain text. It cannot pulse,
+so it shows the spinner before the state instead, for example
+`⠋ draft`, during a merge, a close or a draft change.
+
+The item stops when the GitHub data shows the change: for an approval,
+your latest review is an approval and GitHub requests no review of you;
+for a merge, the pull request is merged, closed or in the merge queue;
+for a reaction, you have it or not. Data that does not show the change
+yet keeps the pulse. After the result, chaoshub reads the pull request
+again after 2 s, 7 s, 22 s, 37 s and 52 s, until the change shows and
+GitHub knows the merge state. If the change does not show 60 s after
+the result, the pulse stops, and the GitHub data decides. If no result
+comes in 30 min, the pulse stops too.
+
+When the action fails, the pulse stops at once, the item shows the
+GitHub data again, and the status line shows the error.
+
+GitHub computes the merge state again after many changes. While it does,
+the badge in the Description pane keeps the last known state, pulses
+for up to 60 s and says `computing the merge state`. The badge shows
+CHECKING only when no state is known.
 
 ### Mouse
 
@@ -1598,7 +1645,8 @@ the list does not wait for the next sync.
 - The list gives the path to each PR view that it starts, in the env
   `CHAOSHUB_LIST_SOCKET`.
 - For each event, the PR view sends one small JSON message, for
-  example `{"v":1,"event":"pr_changed","pr":{...}}`.
+  example `{"v":2,"event":"pr_changed","pr":{...}}`. A message of
+  another version is dropped.
 - The list deletes its socket when it quits. At start, it also deletes
   the sockets of list processes that do not run now.
 
@@ -1606,14 +1654,13 @@ The PR view sends these events:
 
 | Event | When | What the list does |
 |---|---|---|
-| `approval_started` | The PR view sends an approval. | The pull request leaves the Review tab at once, as after an approval in the list. |
-| `approval_done` | The approval ends. `ok` is false when it failed or was cancelled. | A failure brings the pull request back. Then the list reads the pull request from GitHub again. |
-| `pr_changed` | A review that is not an approval, a reply, a merge, a close, a draft change or a rerun of the checks succeeds, or a codeview review pane ends. | The list reads the pull request from GitHub again. |
+| `pending_started` | The PR view starts an action that changes GitHub, for example an approval, a merge or a reaction. The message holds the action id and its parts (see "Changes on their way to GitHub"). | The list keeps the parts with the same rules as its own: the rows pulse, and an approval hides the pull request from the Review tab at once. |
+| `pending_done` | That action ends. `ok` is false when it failed or was cancelled. | A failure ends the parts at once, so an approved pull request comes back. A success keeps the parts until GitHub shows the change. |
+| `pr_changed` | A review, a reply, a merge, a close, a draft change or a rerun of the checks succeeds, or a codeview review pane ends. | The list reads the pull request from GitHub again. |
 
-Only an approval hides a pull request. A change request sends
-`pr_changed` only. If the pane of the PR view ends before the end of
-the approval comes, the approval ends at that time, and the next GitHub
-data decides.
+If the pane of the PR view ends before the end of an action comes, the
+action ends as a success at that time, and the GitHub data or the time
+limit decides.
 
 The channel is for the local user only:
 
@@ -1799,6 +1846,13 @@ unique; a test in each registry checks this.
 The action reads its configuration from `Selection.action_config`, the
 `[actions.<id>]` table. After the action is done, chaoshub syncs the pull
 request again and scans the repo again, for every action.
+
+An action that changes GitHub also implements `pending`. It returns the
+parts of the pull requests that it changes (`bus::PendingPart`) and the
+change that GitHub must show for each part (`bus::Expect`). chaoshub then
+pulses the parts and ends them by the same rules for every action (see
+"Changes on their way to GitHub"). An action without `pending` changes
+nothing on GitHub.
 
 ### Add a tab
 
