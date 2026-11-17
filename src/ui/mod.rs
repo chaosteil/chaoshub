@@ -167,6 +167,7 @@ pub(crate) fn render_overlay(
     hits: &mut HitMap,
 ) {
     let area = overlay_area(overlay, areas);
+    cut_wide(buf, area);
     match &overlay.content {
         OverlayContent::Popup {
             title,
@@ -235,10 +236,41 @@ pub(crate) fn render_overlay(
     }
 }
 
+/// Blanks each wide symbol, for example an emoji, that starts in the
+/// column left of `area` and ends in `area`. Else the diff of ratatui
+/// skips the first cell of `area` on that row, and the terminal draws
+/// the symbol over the edge of the overlay.
+fn cut_wide(buf: &mut ratatui::buffer::Buffer, area: Rect) {
+    let area = area.intersection(buf.area);
+    let Some(x) = area.x.checked_sub(1) else {
+        return;
+    };
+    for y in area.top()..area.bottom() {
+        if let Some(cell) = buf.cell_mut((x, y))
+            && text::width(cell.symbol()) > 1
+        {
+            cell.set_symbol(" ");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ui::testdata;
+
+    #[test]
+    fn a_wide_symbol_at_the_left_edge_of_an_overlay_is_cut() {
+        let mut buf = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 10, 3));
+        let style = ratatui::style::Style::new();
+        buf.set_string(3, 0, "👀", style);
+        buf.set_string(2, 1, "👀", style);
+        buf.set_string(4, 2, "❤️", style);
+        cut_wide(&mut buf, Rect::new(4, 0, 4, 2));
+        assert_eq!(buf[(3, 0)].symbol(), " ", "the emoji ends in the area");
+        assert_eq!(buf[(2, 1)].symbol(), "👀", "the emoji ends left of it");
+        assert_eq!(buf[(4, 2)].symbol(), "❤️", "below the area");
+    }
 
     /// Draws a frame model at a size with a theme.
     pub(crate) fn draw(model: &FrameModel, width: u16, height: u16, theme: &Theme) -> String {
