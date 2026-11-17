@@ -20,9 +20,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::app::state::AppData;
-use crate::app::tabs::pr_ref;
+use crate::app::tabs::{TABS, pr_ref};
 use crate::bus::{Cmd, Persist, PrRef, Scope};
-use crate::config::schema::NOTIFY_TABS;
 use crate::domain::keys::PrKey;
 use crate::domain::pr::{CiState, PrState, PullRequest};
 use crate::domain::team::is_ready;
@@ -185,35 +184,44 @@ pub(crate) fn announce(data: &mut AppData, now: DateTime<Utc>) -> Option<(String
     Some((msg, persist_announced(data)))
 }
 
-/// The text of a notice. One pull request: `#123 <title> (<author>)`.
-/// More: the count of each tab in tab bar order, for example `3 new PRs
-/// in team` or `2 new PRs in review, 1 in team`.
+/// The text of a notice. The text starts with the title of the tab, as
+/// the tab bar shows it, because a desktop notification can cut the end
+/// of a long text. One pull request: `Review: #123 <title> (<author>)`.
+/// More: the count of each tab in tab bar order, for example
+/// `Team: 3 new PRs` or `Review: 2 new PRs · Team: 1 new PR`.
 fn notice_text(data: &AppData, pending: &[(String, PrKey)]) -> String {
-    if let [(_, key)] = pending
+    if let [(tab, key)] = pending
         && let Some(pr) = data.prs.get(key)
     {
         let head = &pr.head.value;
-        return format!("#{} {} ({})", key.number, head.title, head.author);
+        return format!(
+            "{}: #{} {} ({})",
+            tab_title(tab),
+            key.number,
+            head.title,
+            head.author
+        );
     }
-    let counts: Vec<(&str, usize)> = NOTIFY_TABS
-        .iter()
-        .map(|&tab| (tab, pending.iter().filter(|(t, _)| t == tab).count()))
+    TABS.iter()
+        .map(|tab| {
+            let count = pending.iter().filter(|(t, _)| t == tab.id()).count();
+            (tab.title(), count)
+        })
         .filter(|(_, count)| *count > 0)
-        .collect();
-    counts
-        .iter()
-        .enumerate()
-        .map(|(i, (tab, count))| {
-            if i > 0 {
-                format!("{count} in {tab}")
-            } else if *count == 1 {
-                format!("1 new PR in {tab}")
-            } else {
-                format!("{count} new PRs in {tab}")
-            }
+        .map(|(title, count)| {
+            let prs = if count == 1 { "PR" } else { "PRs" };
+            format!("{title}: {count} new {prs}")
         })
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(" · ")
+}
+
+/// The title of the tab with the id `id` in the tab bar. The id itself
+/// when no tab has this id.
+fn tab_title(id: &str) -> &str {
+    TABS.iter()
+        .find(|tab| tab.id() == id)
+        .map_or(id, |tab| tab.title())
 }
 
 /// Drops the announced pull requests that are closed, gone or past the
@@ -358,14 +366,14 @@ mod tests {
         detect_at(&mut state, 0);
         assert_eq!(
             announce_at(&mut state, 0).as_deref(),
-            Some("#2 Add the thing (alice)")
+            Some("Team: #2 Add the thing (alice)")
         );
         assert_eq!(
             state.data.notify.notice,
             Some(Notice {
                 seq: 1,
                 title: "chaoshub".into(),
-                msg: "#2 Add the thing (alice)".into(),
+                msg: "Team: #2 Add the thing (alice)".into(),
             })
         );
         assert_eq!(announce_at(&mut state, 60), None, "one notice only");
@@ -384,7 +392,7 @@ mod tests {
         detect_at(&mut state, 10);
         assert_eq!(
             announce_at(&mut state, 10).as_deref(),
-            Some("#2 Draft (alice)")
+            Some("Team: #2 Draft (alice)")
         );
     }
 
@@ -401,7 +409,7 @@ mod tests {
         detect_at(&mut state, 10);
         assert_eq!(
             announce_at(&mut state, 10).as_deref(),
-            Some("#2 Pending (alice)")
+            Some("Team: #2 Pending (alice)")
         );
     }
 
@@ -496,7 +504,7 @@ mod tests {
         detect_at(&mut state, 0);
         assert_eq!(
             announce_at(&mut state, 0).as_deref(),
-            Some("#2 Hidden in the list (alice)")
+            Some("Team: #2 Hidden in the list (alice)")
         );
     }
 
@@ -512,7 +520,7 @@ mod tests {
         assert_eq!(announce_at(&mut state, 24), None);
         assert_eq!(
             announce_at(&mut state, 25).as_deref(),
-            Some("2 new PRs in team")
+            Some("Team: 2 new PRs")
         );
     }
 
@@ -531,7 +539,7 @@ mod tests {
         // last one came at 70 s.
         assert_eq!(
             announce_at(&mut state, 75).as_deref(),
-            Some("8 new PRs in team")
+            Some("Team: 8 new PRs")
         );
     }
 
@@ -552,16 +560,41 @@ mod tests {
         detect_at(&mut state, 0);
         assert_eq!(
             announce_at(&mut state, 0).as_deref(),
-            Some("2 new PRs in review, 1 in team")
+            Some("Review: 2 new PRs · Team: 1 new PR")
         );
         put(&mut state, Scope::Team, review_pr(5, "D"));
         put(&mut state, Scope::Team, team_pr(6, "E"));
         detect_at(&mut state, 10);
         assert_eq!(
             announce_at(&mut state, 10).as_deref(),
-            Some("1 new PR in review, 1 in team")
+            Some("Review: 1 new PR · Team: 1 new PR")
         );
         assert_eq!(state.data.notify.notice.as_ref().map(|n| n.seq), Some(2));
+    }
+
+    #[test]
+    fn the_notice_names_the_tab_of_one_pull_request() {
+        let mut state = synced(&["team", "review"], 0);
+        put(&mut state, Scope::Team, review_pr(2, "Review me"));
+        detect_at(&mut state, 0);
+        assert_eq!(
+            announce_at(&mut state, 0).as_deref(),
+            Some("Review: #2 Review me (bob)")
+        );
+    }
+
+    #[test]
+    fn the_notice_counts_the_tabs_in_tab_bar_order() {
+        let mut state = synced(&["team", "review", "mine"], 0);
+        put(&mut state, Scope::Team, team_pr(2, "A"));
+        put(&mut state, Scope::Team, review_pr(3, "B"));
+        put(&mut state, Scope::Mine, team_pr(4, "C"));
+        put(&mut state, Scope::Mine, team_pr(5, "D"));
+        detect_at(&mut state, 0);
+        assert_eq!(
+            announce_at(&mut state, 0).as_deref(),
+            Some("Mine: 2 new PRs · Review: 1 new PR · Team: 1 new PR")
+        );
     }
 
     #[test]
