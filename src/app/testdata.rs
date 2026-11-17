@@ -54,6 +54,7 @@ pub(crate) fn pr(repo: &str, number: u64, title: &str) -> PullRequest {
             changed_files: 3,
             review_decision: None,
             review_requested: false,
+            viewer_review: None,
             reviewers: Vec::new(),
             approvals: 0,
             changes_requested: 0,

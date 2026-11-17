@@ -8,6 +8,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::domain::check::{Check, CheckConclusion, CheckKind, CheckStatus};
+use crate::domain::detail::ReviewState;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::observed::Observed;
 use crate::domain::pr::{
@@ -240,6 +241,19 @@ macro_rules! pr_fields_parser {
             (approvals, changes_requested)
         }
 
+        /// The state of the latest review of the viewer. `None` without a
+        /// review, or for a state that this version does not know.
+        fn viewer_review(review: Option<q::PrFieldsViewerLatestReview>) -> Option<ReviewState> {
+            match review?.state {
+                q::PullRequestReviewState::APPROVED => Some(ReviewState::Approved),
+                q::PullRequestReviewState::CHANGES_REQUESTED => Some(ReviewState::ChangesRequested),
+                q::PullRequestReviewState::COMMENTED => Some(ReviewState::Commented),
+                q::PullRequestReviewState::DISMISSED => Some(ReviewState::Dismissed),
+                q::PullRequestReviewState::PENDING => Some(ReviewState::Pending),
+                q::PullRequestReviewState::Other(_) => None,
+            }
+        }
+
         /// The positions of the merged entries of a stack and its open
         /// entries, position 1 first. An entry without a pull request is
         /// neither.
@@ -356,6 +370,7 @@ macro_rules! pr_fields_parser {
                     q::PullRequestReviewDecision::Other(_) => None,
                 }),
                 review_requested: requested_me || fields.viewer_latest_review_request.is_some(),
+                viewer_review: viewer_review(fields.viewer_latest_review),
                 reviewers,
                 approvals,
                 changes_requested,
@@ -1001,6 +1016,11 @@ mod tests {
         );
         assert_eq!(prs[0].head.value.head_repo, "acme/deploy");
         assert!(!prs[0].head.value.cross_repo);
+        assert_eq!(prs[0].head.value.viewer_review, Some(ReviewState::Approved));
+        assert_eq!(
+            prs[1].head.value.viewer_review, None,
+            "no review of the viewer"
+        );
     }
 
     #[test]
@@ -1144,8 +1164,6 @@ mod tests {
 
     #[test]
     fn pr_detail_maps_comments_reviews_and_threads() {
-        use crate::domain::detail::ReviewState;
-
         let data = fixture(include_str!("testdata/pr_detail.json"));
         let detail = pr_detail::detail(data, test_time()).unwrap().unwrap();
         assert_eq!(detail.observed_at, test_time());

@@ -49,6 +49,9 @@ fragment PrFields on PullRequest {
   viewerLatestReviewRequest {
     id
   }
+  viewerLatestReview {
+    state
+  }
   reviewRequests(first: 10) {
     nodes {
       requestedReviewer {

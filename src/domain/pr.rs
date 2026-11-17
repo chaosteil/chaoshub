@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::check::Check;
+use crate::domain::detail::ReviewState;
 use crate::domain::keys::PrKey;
 use crate::domain::observed::Observed;
 use crate::domain::repo::RepoSettings;
@@ -53,6 +54,10 @@ pub(crate) struct PrHead {
     /// True when the review of the user or of one of the user's teams is
     /// requested.
     pub review_requested: bool,
+    /// The state of the latest review of the user. `None` without a
+    /// review, and in a cache from before the field.
+    #[serde(default)]
+    pub viewer_review: Option<ReviewState>,
     /// The logins of the requested reviewers.
     pub reviewers: Vec<String>,
     /// The latest opinionated reviews that approve.
@@ -171,6 +176,7 @@ mod tests {
                 changed_files: 3,
                 review_decision: Some(ReviewDecision::ReviewRequired),
                 review_requested: true,
+                viewer_review: None,
                 reviewers: vec!["colleague".into()],
                 approvals: 1,
                 changes_requested: 2,

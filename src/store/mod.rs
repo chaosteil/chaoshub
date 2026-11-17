@@ -206,6 +206,7 @@ mod tests {
                     changed_files: 1,
                     review_decision: None,
                     review_requested: false,
+                    viewer_review: None,
                     reviewers: Vec::new(),
                     approvals: 0,
                     changes_requested: 0,
