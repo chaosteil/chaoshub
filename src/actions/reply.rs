@@ -9,8 +9,11 @@
 
 use futures::future::BoxFuture;
 
-use crate::actions::{Action, Applicability, Group, Prepare, Services};
-use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, ReplyTo, Selection, Target};
+use crate::actions::{Action, Applicability, Group, Prepare, Services, own_part};
+use crate::bus::{
+    ActionInput, Expect, KeyChord, KeyCode, KeyModifiers, Pending, PendingPart, ReplyTo, Selection,
+    Target,
+};
 
 /// The id of the reply action. It is also the binding name of the reply
 /// key in the conversation pane.
@@ -52,6 +55,21 @@ impl Action for Reply {
     /// the action is hidden.
     fn prepare(&self, _sel: &Selection) -> Prepare {
         Prepare::OpenPopup(PANE)
+    }
+
+    /// The thread of the reply, or a new comment on the pull request.
+    fn pending(&self, sel: &Selection, input: &ActionInput) -> Vec<Pending> {
+        let part = match input {
+            ActionInput::Reply {
+                to: ReplyTo::Thread { id, .. },
+                ..
+            } => PendingPart::Thread(id.clone()),
+            ActionInput::Reply {
+                to: ReplyTo::Pr, ..
+            } => PendingPart::Comment,
+            _ => return Vec::new(),
+        };
+        own_part(sel, part, Expect::NewComment)
     }
 
     /// `addPullRequestReviewThreadReply` for a thread, else `addComment`

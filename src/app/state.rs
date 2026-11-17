@@ -8,7 +8,7 @@
     reason = "update, the tabs and the panes read the fields in later phases"
 )]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -20,9 +20,10 @@ use crate::app::models::{CellStyle, HelpModel};
 use crate::app::notify::{ANNOUNCED_KEY, NotifyState};
 use crate::app::panes::agent::head;
 use crate::app::panes::{PaneAction, PaneState};
+use crate::app::pending::PendingMap;
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{
-    ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReactSpec, ReplyTo, ReviewButton,
+    ConfirmSpec, Interest, OverlayKind, PendingPart, PromptSpec, RateInfo, ReplyTo, ReviewButton,
     ReviewKind, ReviewRow, ReviewSpec, Scope, Selection, Session, Size, SyncError, Target,
     TargetKey, UiEvent,
 };
@@ -64,10 +65,6 @@ pub(crate) struct AppData {
     /// The jj scan of each repo.
     pub local: BTreeMap<RepoKey, Observed<LocalState>>,
     pub details: BTreeMap<PrKey, Observed<PrDetail>>,
-    /// The reactions of the viewer that the react action sends now, for
-    /// each pull request, oldest first. The conversation shows them
-    /// before GitHub has them, also after a new load of the detail.
-    pub reacting: BTreeMap<PrKey, VecDeque<ReactSpec>>,
     /// The pull requests whose conversation the detail worker reads from
     /// GitHub now.
     pub details_loading: BTreeSet<PrKey>,
@@ -134,42 +131,11 @@ pub(crate) struct AppData {
     pub title_spinner: bool,
     /// The notification of new pull requests.
     pub notify: NotifyState,
-    /// The approvals that you sent from chaoshub, by pull request. Each
-    /// one hides its pull request from the Review tab at once, until
-    /// GitHub data from after the approval arrives (see
-    /// `AppData::review_requested`).
-    pub approvals: BTreeMap<PrKey, Approval>,
-    /// The approvals of the pinned mode that went to the list process as
-    /// `PrViewEvent::ApprovalStarted`. The end of each one goes to the
-    /// list too.
-    pub told_approvals: BTreeSet<PrKey>,
-}
-
-/// An approval that chaoshub sent. While it covers its pull request, the
-/// tabs and the notification act as if GitHub requests no review of you,
-/// as GitHub does after an approval. The entry is local only: the cache
-/// does not get it, and GitHub data from after the approval replaces it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct Approval {
-    /// The end of the request. `None` while the request runs.
-    pub done_at: Option<DateTime<Utc>>,
-    /// True when the approval added the pull request to the announced
-    /// pull requests of the notification. A failed approval removes it
-    /// again.
-    pub announced: bool,
-    /// True when a PR view (`chaoshub pr`) sent the approval and told the
-    /// list by the list socket. When the pane of the PR view ends before
-    /// the end of the request comes, the approval ends at that time.
-    pub from_pane: bool,
-}
-
-impl Approval {
-    /// True while the approval covers `pr`: the request runs, or the
-    /// head of `pr` is from before the end of the request.
-    pub(crate) fn covers(&self, pr: &PullRequest) -> bool {
-        self.done_at
-            .is_none_or(|done_at| pr.head.observed_at < done_at)
-    }
+    /// The parts of pull requests that actions change on GitHub now. Each
+    /// part pulses until GitHub shows the change (see `app::pending`). A
+    /// pending approval hides its pull request from the Review tab, and a
+    /// pending reaction shows in the conversation.
+    pub pending: PendingMap,
 }
 
 /// The review draft of a pull request. It stays when the popups close.
@@ -298,27 +264,41 @@ pub(crate) struct PrefetchBatch {
 
 impl AppData {
     /// True when GitHub requests the review of you on `pr`, and no
-    /// approval of chaoshub covers `pr`. The Review tab, the Team tab and
-    /// the notification read this rule, not the field.
+    /// pending approval of chaoshub hides `pr`. GitHub requests no review
+    /// of you after an approval. The Review tab, the Team tab and the
+    /// notification read this rule, not the field.
     pub(crate) fn review_requested(&self, pr: &PullRequest) -> bool {
-        pr.head.value.review_requested
-            && !self
-                .approvals
-                .get(&pr.key)
-                .is_some_and(|approval| approval.covers(pr))
+        pr.head.value.review_requested && self.pending.review(&pr.key) != Some(ReviewKind::Approve)
     }
 
     /// True while a sync, a prefetch batch, a conversation load, a files
     /// load, a pr-agent run or a merge runs. The status bar then shows a
-    /// spinner.
+    /// spinner. The pending parts of actions also need the spinner tick.
     pub(crate) fn busy(&self) -> bool {
         self.merging().is_some()
+            || self.pending.busy()
             || !self.sync.pending.is_empty()
             || !self.sync.running.is_empty()
             || self.prefetch.is_some()
             || !self.details_loading.is_empty()
             || !self.files_loading.is_empty()
             || !self.agent_jobs.is_empty()
+    }
+
+    /// The spinner frame for `part` of `pr` while an action changes it on
+    /// GitHub, else `None`.
+    pub(crate) fn pending_spinner(&self, pr: &PrKey, part: &PendingPart) -> Option<&'static str> {
+        self.pending
+            .started(pr, part)
+            .map(|_| frame::spinner(self.now))
+    }
+
+    /// The spinner frame while an action changes any part of `pr` on
+    /// GitHub, else `None`.
+    pub(crate) fn pending_any(&self, pr: &PrKey) -> Option<&'static str> {
+        self.pending
+            .any_started(pr)
+            .map(|_| frame::spinner(self.now))
     }
 
     /// The merge run that goes on now (`MergeState::running`).
@@ -906,7 +886,6 @@ impl AppState {
                 scopes: BTreeMap::new(),
                 local: BTreeMap::new(),
                 details: BTreeMap::new(),
-                reacting: BTreeMap::new(),
                 details_loading: BTreeSet::new(),
                 detail_errors: BTreeMap::new(),
                 files: BTreeMap::new(),
@@ -931,8 +910,7 @@ impl AppState {
                 animations: true,
                 title_spinner: true,
                 notify: NotifyState::default(),
-                approvals: BTreeMap::new(),
-                told_approvals: BTreeSet::new(),
+                pending: PendingMap::default(),
             },
             ui: UiState {
                 active: 0,

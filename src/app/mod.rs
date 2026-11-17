@@ -14,6 +14,7 @@ pub(crate) mod models;
 pub(crate) mod nav;
 mod notify;
 mod panes;
+mod pending;
 mod state;
 mod tabs;
 mod target;

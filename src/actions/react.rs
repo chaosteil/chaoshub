@@ -8,8 +8,10 @@
 
 use futures::future::BoxFuture;
 
-use crate::actions::{Action, Applicability, Group, Prepare, Services};
-use crate::bus::{ActionInput, KeyChord, ReactSpec, Selection, Target};
+use crate::actions::{Action, Applicability, Group, Prepare, Services, own_part};
+use crate::bus::{
+    ActionInput, Expect, KeyChord, Pending, PendingPart, ReactSpec, Selection, Target,
+};
 
 /// The id of the react action.
 pub(crate) const ID: &str = "react";
@@ -52,6 +54,16 @@ impl Action for React {
     /// the action is hidden.
     fn prepare(&self, _sel: &Selection) -> Prepare {
         Prepare::OpenPopup(PANE)
+    }
+
+    /// The reaction on its comment or review, which the viewer then has
+    /// or does not have.
+    fn pending(&self, sel: &Selection, input: &ActionInput) -> Vec<Pending> {
+        let ActionInput::React(spec) = input else {
+            return Vec::new();
+        };
+        let part = PendingPart::Reaction(spec.subject.clone(), spec.kind);
+        own_part(sel, part, Expect::Reaction(spec.add))
     }
 
     /// `addReaction` to add the reaction, else `removeReaction`.

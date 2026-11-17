@@ -8,8 +8,10 @@
 
 use futures::future::BoxFuture;
 
-use crate::actions::{Action, Applicability, Group, Prepare, Services};
-use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, Selection, Target};
+use crate::actions::{Action, Applicability, Group, Prepare, Services, own_part};
+use crate::bus::{
+    ActionInput, Expect, KeyChord, KeyCode, KeyModifiers, Pending, PendingPart, Selection, Target,
+};
 use crate::domain::check::{Check, CheckConclusion};
 
 /// The action that re-runs the failed checks of a pull request.
@@ -24,7 +26,7 @@ pub(crate) struct Rerun {
 }
 
 impl Rerun {
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.runs.is_empty() && self.suites.is_empty()
     }
 }
@@ -99,6 +101,11 @@ impl Action for RerunChecks {
 
     fn prepare(&self, _sel: &Selection) -> Prepare {
         Prepare::Run
+    }
+
+    /// The checks of the pull request.
+    fn pending(&self, sel: &Selection, _input: &ActionInput) -> Vec<Pending> {
+        own_part(sel, PendingPart::Checks, Expect::Rerun)
     }
 
     /// `rerun-failed-jobs` for each workflow run, then `rerequest` for

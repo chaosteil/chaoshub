@@ -2,8 +2,11 @@
 
 use futures::future::BoxFuture;
 
-use crate::actions::{Action, Applicability, Group, Prepare, Services};
-use crate::bus::{ActionInput, ConfirmSpec, KeyChord, KeyCode, KeyModifiers, Selection, Target};
+use crate::actions::{Action, Applicability, Group, Prepare, Services, own_part};
+use crate::bus::{
+    ActionInput, ConfirmSpec, Expect, KeyChord, KeyCode, KeyModifiers, Pending, PendingPart,
+    Selection, Target,
+};
 use crate::domain::pr::PrState;
 
 /// The action that closes a pull request without a merge, after a
@@ -50,6 +53,11 @@ impl Action for Close {
             ],
             danger: true,
         })
+    }
+
+    /// The state of the pull request.
+    fn pending(&self, sel: &Selection, _input: &ActionInput) -> Vec<Pending> {
+        own_part(sel, PendingPart::State, Expect::Closed)
     }
 
     /// `closePullRequest`.

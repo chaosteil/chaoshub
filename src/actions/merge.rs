@@ -26,8 +26,8 @@ use futures::future::BoxFuture;
 use tokio::time::Instant;
 
 use crate::bus::{
-    ActionEvent, ActionInput, ConfirmSpec, KeyChord, KeyCode, KeyModifiers, MergeProgress,
-    MergeStep, Msg, Selection, Target, TargetKey,
+    ActionEvent, ActionInput, ConfirmSpec, Expect, KeyChord, KeyCode, KeyModifiers, MergeProgress,
+    MergeStep, Msg, Pending, PendingPart, Selection, Target, TargetKey,
 };
 use crate::config::schema::{MergeConfig, RepoMerge, parse_repo_name};
 use crate::domain::merge::{
@@ -116,6 +116,10 @@ impl Action for MergeAction {
 
     fn prepare(&self, sel: &Selection) -> Prepare {
         Self::prepare(sel)
+    }
+
+    fn pending(&self, sel: &Selection, _input: &ActionInput) -> Vec<Pending> {
+        merge_parts(sel)
     }
 
     fn execute(
@@ -208,6 +212,14 @@ impl Action for MergeStackAction {
         }
     }
 
+    /// The merge of each entry of the stack that the run merges.
+    fn pending(&self, sel: &Selection, _input: &ActionInput) -> Vec<Pending> {
+        match top_selection(sel) {
+            Top::Loaded(top) => merge_parts(&top),
+            Top::NoStack | Top::NotLoaded => Vec::new(),
+        }
+    }
+
     fn execute(
         &self,
         sel: Selection,
@@ -220,6 +232,22 @@ impl Action for MergeStackAction {
         };
         Box::pin(merge(*top, key, STACK_ID, svc, SCHEDULE, RETARGET))
     }
+}
+
+/// The merge of each pull request that a merge of `sel` merges: the
+/// open entries of the stack up to the pull request, or the pull request
+/// alone.
+fn merge_parts(sel: &Selection) -> Vec<Pending> {
+    let Target::Pr { pr, stack, .. } = &sel.target;
+    merged_entries(pr, stack)
+        .unwrap_or_else(|| vec![pr.clone()])
+        .into_iter()
+        .map(|entry| Pending {
+            pr: entry.key,
+            part: PendingPart::Merge,
+            expect: Expect::Merged,
+        })
+        .collect()
 }
 
 /// When the action polls the state of an async merge.
@@ -1069,6 +1097,32 @@ mod tests {
                     "method: squash",
                 ],
             )
+        );
+    }
+
+    #[test]
+    fn a_merge_is_pending_on_each_entry_that_it_merges() {
+        let numbers = |parts: Vec<Pending>| -> Vec<u64> {
+            assert!(parts.iter().all(|p| p.part == PendingPart::Merge));
+            parts.into_iter().map(|p| p.pr.number).collect()
+        };
+        let sel = select(entry(2, 2), stack3(), None);
+        assert_eq!(
+            numbers(MergeAction.pending(&sel, &ActionInput::Confirmed)),
+            [1, 2]
+        );
+        assert_eq!(
+            numbers(MergeStackAction.pending(&sel, &ActionInput::Confirmed)),
+            [1, 2, 3]
+        );
+        let single = select(entry(9, 0), Vec::new(), None);
+        assert_eq!(
+            numbers(MergeAction.pending(&single, &ActionInput::Confirmed)),
+            [9]
+        );
+        assert_eq!(
+            MergeStackAction.pending(&single, &ActionInput::Confirmed),
+            []
         );
     }
 

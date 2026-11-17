@@ -22,12 +22,13 @@ use crate::app::notify;
 use crate::app::panes::{
     PANES, Pane, PaneAction, PaneMenu, PaneState, applicable, init_states, items,
 };
+use crate::app::pending::{RunEnd, View};
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
-    AUTHOR_KEY, ActionDialog, ActionMenu, AppData, AppState, Approval, AuthorPicker,
-    COLUMN_HEADERS_KEY, Condition, FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState,
-    PaneHandleState, PopupState, ReplyDialog, ReviewPopup, error_text, ui_key,
+    AUTHOR_KEY, ActionDialog, ActionMenu, AppData, AppState, AuthorPicker, COLUMN_HEADERS_KEY,
+    Condition, FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaneHandleState,
+    PopupState, ReplyDialog, ReviewPopup, error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, cells, pr_ref};
 use crate::app::target::{pr_target, row_target};
@@ -37,11 +38,13 @@ use crate::bus::{
     KeyModifiers, LaunchRequest, MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection,
     Size, SyncError, Target, TargetKey, UiEvent,
 };
-use crate::bus::{ConfirmSpec, PromptSpec, ReactSpec, ReplySpec, ReviewKind};
+use crate::bus::{
+    ConfirmSpec, Expect, Pending, PendingPart, PromptSpec, ReactSpec, ReplySpec, ReviewKind,
+};
 use crate::bus::{MergeProgress, MergeStep, PrViewEvent};
 use crate::domain::agent::{AgentResults, Record, Tool, ToolKind, short_tokens};
 use crate::domain::check::Check;
-use crate::domain::detail::{self, PrDetail};
+use crate::domain::detail::PrDetail;
 use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
@@ -67,12 +70,58 @@ pub(crate) fn update_with(
 }
 
 /// Applies one message to the state, with the tabs of `tabs`, the panes
-/// of `panes` and the actions of `actions`.
+/// of `panes` and the actions of `actions`. Each `Cmd::RunAction` of the
+/// result adds the parts of its action to the pending map, and the parts
+/// that new data or a time limit ended go (see `app::pending`).
+pub(crate) fn update_full(
+    state: &mut AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    actions: &[Box<dyn Action>],
+    msg: Msg,
+) -> Vec<Cmd> {
+    let hidden = hidden_reviews(&state.data);
+    let mut cmds = dispatch(state, keymap, tabs, panes, actions, msg);
+    let now = Utc::now();
+    let tell = pending_started(state, actions, &cmds, now);
+    cmds.extend(tell);
+    let data = &mut state.data;
+    let view = View {
+        prs: &data.prs,
+        details: &data.details,
+    };
+    if data.pending.sweep(view, now) {
+        state.bump();
+    }
+    // A pending approval hides its pull request from the Review tab, so
+    // a new or an ended one changes the rows.
+    if hidden_reviews(&state.data) != hidden {
+        state.data.revision += 1;
+        state.bump();
+        cmds.extend(after_change(state, tabs));
+    }
+    cmds
+}
+
+/// The pull requests that GitHub requests your review of and that a
+/// pending approval hides from the Review tab.
+fn hidden_reviews(data: &AppData) -> BTreeSet<PrKey> {
+    let mut hidden = data.pending.approvals();
+    hidden.retain(|pr| {
+        data.prs
+            .get(pr)
+            .is_some_and(|pr| pr.head.value.review_requested)
+    });
+    hidden
+}
+
+/// Applies one message to the state: one function per message family.
 #[allow(
     clippy::too_many_lines,
     reason = "the dispatch has one arm per message"
 )]
-pub(crate) fn update_full(
+fn dispatch(
     state: &mut AppState,
     keymap: &Keymap,
     tabs: &[Box<dyn Tab>],
@@ -197,15 +246,21 @@ pub(crate) fn update_full(
             event: ActionEvent::MergeStep(step),
             ..
         } => merge_step(state, key, step),
+        Msg::ActionEvent {
+            id,
+            key: TargetKey::Pr(key),
+            event: ActionEvent::Parts(parts),
+        } => {
+            state.data.pending.result_parts(id, key, parts);
+            Vec::new()
+        }
         Msg::ActionEvent { id, key, event } => {
-            let back = approval_event(&mut state.data, id, &key, &event, Utc::now());
-            let tell = tell_list_done(state, actions, id, &key, &event);
+            let mut tell: Vec<Cmd> = pending_done(state, id, &key, &event, Utc::now())
+                .into_iter()
+                .collect();
+            tell.extend(tell_list_done(state, actions, id, &key, &event));
             let mut cmds = action_event(state, actions, id, key, event);
             cmds.extend(tell);
-            if back {
-                state.bump();
-                cmds.extend(after_change(state, tabs));
-            }
             cmds
         }
         msg @ (Msg::AgentStarted { .. } | Msg::AgentFinished { .. } | Msg::AgentLoaded { .. }) => {
@@ -228,13 +283,17 @@ pub(crate) fn update_full(
             }
             if id == DETAIL_ID {
                 let TargetKey::Pr(pr) = &key;
-                approval_pane_ended(&mut state.data, pr, Utc::now());
+                if state.data.pending.pane_ended(pr, Utc::now()) {
+                    state.bump();
+                }
             }
             let mut cmds = follow_up(&state.data, &key);
-            // A review in codeview can add comments or send them.
+            // A review in codeview can add comments or send them, and it
+            // can send a review that chaoshub does not see.
             if id == REVIEW_ID {
                 let TargetKey::Pr(pr) = &key;
                 cmds.push(Cmd::LoadCodeview(pr.clone()));
+                cmds.extend(codeview_review_ended(state, pr, Utc::now()));
                 if state.ui.pinned.is_some() {
                     cmds.push(Cmd::TellList(PrViewEvent::PrChanged { pr: pr.clone() }));
                 }
@@ -249,7 +308,7 @@ pub(crate) fn update_full(
             prefetch_batch(state, done, total);
             Vec::new()
         }
-        Msg::PrView(event) => pr_view_event(state, tabs, event, Utc::now()),
+        Msg::PrView(event) => pr_view_event(state, actions, event, Utc::now()),
     }
 }
 
@@ -998,23 +1057,12 @@ fn open_pane_menu(state: &mut AppState, key: &PrKey, menu: PaneMenu) {
 }
 
 /// Runs the react action with `spec` on the pull request `key`. The
-/// conversation shows the reaction at once (an optimistic update), and
-/// `reacting` keeps it until the action is done. A failed action rolls
-/// it back.
+/// pending map keeps the reaction until GitHub shows it, and the
+/// conversation shows it at once. A failed action rolls it back.
 fn send_reaction(state: &mut AppState, key: &PrKey, spec: ReactSpec) -> Vec<Cmd> {
     let Some(target) = pr_target(&state.data, key) else {
         return Vec::new();
     };
-    if let Some(detail) = state.data.details.get_mut(key) {
-        set_reaction(&mut detail.value, &spec, spec.add);
-    }
-    state
-        .data
-        .reacting
-        .entry(key.clone())
-        .or_default()
-        .push_back(spec.clone());
-    state.bump();
     vec![Cmd::RunAction {
         id: REACT_ID,
         selection: Box::new(Selection {
@@ -1024,56 +1072,6 @@ fn send_reaction(state: &mut AppState, key: &PrKey, spec: ReactSpec) -> Vec<Cmd>
         }),
         input: ActionInput::React(spec),
     }]
-}
-
-/// Sets the reaction of the viewer of `spec` on its comment or review in
-/// `detail`: `add` adds it, else it goes away. A detail without the
-/// comment or the review does not change.
-fn set_reaction(detail: &mut PrDetail, spec: &ReactSpec, add: bool) {
-    let reactions = detail
-        .comments
-        .iter_mut()
-        .chain(
-            detail
-                .threads
-                .iter_mut()
-                .flat_map(|t| t.comments.iter_mut()),
-        )
-        .find(|comment| comment.id == spec.subject)
-        .map(|comment| &mut comment.reactions)
-        .or_else(|| {
-            detail
-                .reviews
-                .iter_mut()
-                .find(|review| review.id == spec.subject)
-                .map(|review| &mut review.reactions)
-        });
-    if let Some(reactions) = reactions {
-        detail::set_mine(reactions, spec.kind, add);
-    }
-}
-
-/// The end of a react action on `key`: the oldest reaction of
-/// `reacting` for `key` leaves. On a failure, the conversation rolls it
-/// back. The actions on one pull request can end in another order than
-/// they started. Then a rollback can hit the wrong reaction, but the
-/// reload of the follow-up rule gives the state of GitHub soon after.
-fn reaction_done(state: &mut AppState, key: &TargetKey, ok: bool) {
-    let TargetKey::Pr(pr) = key;
-    let Some(queue) = state.data.reacting.get_mut(pr) else {
-        return;
-    };
-    let spec = queue.pop_front();
-    if queue.is_empty() {
-        state.data.reacting.remove(pr);
-    }
-    let Some(spec) = spec else {
-        return;
-    };
-    if !ok && let Some(detail) = state.data.details.get_mut(pr) {
-        set_reaction(&mut detail.value, &spec, !spec.add);
-        state.bump();
-    }
 }
 
 /// Opens the text box of a reply on the pull request `key`. The reply
@@ -1147,12 +1145,7 @@ fn open_review(state: &mut AppState, id: &'static str, selection: Selection) -> 
 /// text box of the message, and the key of an event sends the review
 /// with the event and the marked comments. A blocked key sends nothing,
 /// and the status line says why. `esc` closes the popup before this.
-fn review_key(
-    state: &mut AppState,
-    keymap: &Keymap,
-    tabs: &[Box<dyn Tab>],
-    chord: KeyChord,
-) -> Vec<Cmd> {
+fn review_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) -> Vec<Cmd> {
     let height = frame::areas(state).list.height;
     let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
         return Vec::new();
@@ -1197,35 +1190,187 @@ fn review_key(
             body: review.message(&state.data).to_owned(),
         },
     };
-    let approval = (event == ReviewKind::Approve).then(|| review.pr().key.clone());
     close_overlay(state);
-    let mut cmds = vec![cmd];
-    // The pinned mode tells the list about the approval, so the list
-    // hides the pull request too.
-    if let Some(key) = &approval
-        && state.ui.pinned.is_some()
-    {
-        state.data.told_approvals.insert(key.clone());
-        cmds.push(Cmd::TellList(PrViewEvent::ApprovalStarted {
-            pr: key.clone(),
-        }));
+    vec![cmd]
+}
+
+/// The parts of the actions of the `Cmd::RunAction` commands of `cmds`
+/// go into the pending map at `now`. They pulse from the next frame. The
+/// pinned mode tells the list about each run with parts, so the list
+/// shows the parts too.
+fn pending_started(
+    state: &mut AppState,
+    actions: &[Box<dyn Action>],
+    cmds: &[Cmd],
+    now: DateTime<Utc>,
+) -> Vec<Cmd> {
+    let mut tell = Vec::new();
+    for cmd in cmds {
+        let Cmd::RunAction {
+            id,
+            selection,
+            input,
+        } = cmd
+        else {
+            continue;
+        };
+        let Some(action) = actions.iter().find(|action| action.id() == *id) else {
+            continue;
+        };
+        let TargetKey::Pr(target) = selection.target.key();
+        let parts = action.pending(selection, input);
+        if state.ui.pinned.is_some() && !parts.is_empty() {
+            tell.push(Cmd::TellList(PrViewEvent::PendingStarted {
+                pr: target.clone(),
+                id: (*id).to_owned(),
+                parts: parts.clone(),
+            }));
+        }
+        start_parts(state, id, target, parts, false, now);
     }
-    // An approval hides its pull request from the Review tab.
-    if let Some(key) = approval
-        && approval_sent(&mut state.data, key)
-    {
-        cmds.extend(after_change(state, tabs));
+    tell
+}
+
+/// Starts a run of the action `id` on `target` with `parts` in the
+/// pending map at `now`. `from_pane` is true for a run of a PR view. A
+/// pending approval adds its pull request to the announced pull requests
+/// of the notification, so its move to the Team tab is no news.
+fn start_parts(
+    state: &mut AppState,
+    id: &'static str,
+    target: PrKey,
+    parts: Vec<Pending>,
+    from_pane: bool,
+    now: DateTime<Utc>,
+) {
+    let approvals: Vec<PrKey> = parts
+        .iter()
+        .filter(|part| part.expect == Expect::Review(ReviewKind::Approve))
+        .map(|part| part.pr.clone())
+        .collect();
+    let data = &mut state.data;
+    let view = View {
+        prs: &data.prs,
+        details: &data.details,
+    };
+    if !data.pending.start(id, target, parts, from_pane, now, view) {
+        return;
+    }
+    for pr in approvals {
+        let requested = data
+            .prs
+            .get(&pr)
+            .is_some_and(|pr| pr.head.value.review_requested);
+        if requested && data.notify.announced.insert(pr.clone()) {
+            data.pending.set_announced(&pr);
+        }
+    }
+    state.bump();
+}
+
+/// The result of the action `id` on `key` ends its run in the pending
+/// map at `now`. A failure removes its parts at once, and with them the
+/// announcement of a failed approval. The parts of a success wait until
+/// GitHub shows the change. In the pinned mode, the end goes to the list
+/// too.
+fn pending_done(
+    state: &mut AppState,
+    id: &'static str,
+    key: &TargetKey,
+    event: &ActionEvent,
+    now: DateTime<Utc>,
+) -> Option<Cmd> {
+    let ActionEvent::Done(result) = event else {
+        return None;
+    };
+    let TargetKey::Pr(pr) = key;
+    let ok = result.is_ok();
+    let end = end_run(state, id, pr, ok, now)?;
+    state.ui.pinned.as_ref()?;
+    Some(Cmd::TellList(PrViewEvent::PendingDone {
+        pr: pr.clone(),
+        id: id.to_owned(),
+        parts: end.parts,
+        ok,
+    }))
+}
+
+/// Ends a run of the action `id` on `pr` in the pending map at `now`.
+fn end_run(
+    state: &mut AppState,
+    id: &'static str,
+    pr: &PrKey,
+    ok: bool,
+    now: DateTime<Utc>,
+) -> Option<RunEnd> {
+    let end = state.data.pending.done(id, pr, ok, now)?;
+    for pr in &end.unannounce {
+        state.data.notify.announced.remove(pr);
+    }
+    state.bump();
+    Some(end)
+}
+
+/// The end of a review in codeview on `pr` at `now`. codeview can send a
+/// review, and chaoshub does not see its event. So the reviews of `pr`
+/// pend until GitHub shows a change of your review or of the review
+/// request, or until the time limit. In the pinned mode, the list gets
+/// the part too.
+fn codeview_review_ended(state: &mut AppState, pr: &PrKey, now: DateTime<Utc>) -> Vec<Cmd> {
+    let parts = vec![Pending {
+        pr: pr.clone(),
+        part: PendingPart::Review,
+        expect: Expect::ReviewChanged,
+    }];
+    start_parts(state, REVIEW_ID, pr.clone(), parts.clone(), false, now);
+    end_run(state, REVIEW_ID, pr, true, now);
+    if state.ui.pinned.is_none() {
+        return Vec::new();
+    }
+    let id = REVIEW_ID.to_owned();
+    vec![
+        Cmd::TellList(PrViewEvent::PendingStarted {
+            pr: pr.clone(),
+            id: id.clone(),
+            parts: parts.clone(),
+        }),
+        Cmd::TellList(PrViewEvent::PendingDone {
+            pr: pr.clone(),
+            id,
+            parts,
+            ok: true,
+        }),
+    ]
+}
+
+/// The new reads of the pending map that are due at `now`: a refresh of
+/// the pull request, and a new load of its conversation for a part that
+/// the conversation shows.
+fn pending_rereads(state: &mut AppState, now: DateTime<Utc>) -> Vec<Cmd> {
+    let data = &mut state.data;
+    let view = View {
+        prs: &data.prs,
+        details: &data.details,
+    };
+    let mut cmds = Vec::new();
+    for read in data.pending.due_rereads(view, now) {
+        let Some(pr) = data.prs.get(&read.pr) else {
+            continue;
+        };
+        cmds.push(Cmd::RefreshPr(vec![pr_ref(pr)]));
+        if read.detail {
+            cmds.push(Cmd::ReloadDetail(vec![pr_ref(pr)]));
+        }
     }
     cmds
 }
 
 /// The event for the list process at the end of the action `id` on
-/// `key` in the pinned mode. The end of an approval that the list knows
-/// about is `ApprovalDone`. A success of an action that changes the pull
-/// request on GitHub (the groups `Review` and `Change`) is `PrChanged`.
-/// Other ends tell the list nothing.
+/// `key` in the pinned mode: `PrChanged` for a success of an action that
+/// changes the pull request on GitHub (the groups `Review` and
+/// `Change`). Other ends tell the list nothing.
 fn tell_list_done(
-    state: &mut AppState,
+    state: &AppState,
     actions: &[Box<dyn Action>],
     id: &'static str,
     key: &TargetKey,
@@ -1236,12 +1381,6 @@ fn tell_list_done(
     };
     state.ui.pinned.as_ref()?;
     let TargetKey::Pr(pr) = key;
-    if id == CODEVIEW_SEND_ID && state.data.told_approvals.remove(pr) {
-        return Some(Cmd::TellList(PrViewEvent::ApprovalDone {
-            pr: pr.clone(),
-            ok: result.is_ok(),
-        }));
-    }
     let changes = actions
         .iter()
         .find(|action| action.id() == id)
@@ -1249,123 +1388,40 @@ fn tell_list_done(
     (result.is_ok() && changes).then(|| Cmd::TellList(PrViewEvent::PrChanged { pr: pr.clone() }))
 }
 
-/// Starts the approval of `key`: the pull request leaves the Review tab
-/// at once, before GitHub answers. The approval also adds the pull
-/// request to the announced pull requests, so the notification does not
-/// announce it when it moves to the Team tab. A pull request that does
-/// not request your review gets no approval, because it is not in the
-/// Review tab. True when the approval started.
-fn approval_sent(data: &mut AppData, key: PrKey) -> bool {
-    if !data
-        .prs
-        .get(&key)
-        .is_some_and(|pr| pr.head.value.review_requested)
-    {
-        return false;
-    }
-    let added = data.notify.announced.insert(key.clone());
-    let before = data.approvals.get(&key).copied().unwrap_or_default();
-    let approval = Approval {
-        done_at: None,
-        announced: before.announced || added,
-        from_pane: before.from_pane,
-    };
-    data.approvals.insert(key, approval);
-    data.revision += 1;
-    true
-}
-
-/// The end of a review send on `key` that started an approval. A sent
-/// approval covers the pull request until GitHub data from after `now`
-/// arrives. A failed approval ends: the pull request comes back to the
-/// Review tab. True when the pull request came back.
-///
-/// `now` is the clock, not `AppData::now`: `AppData::now` moves only on
-/// a tick, and data that a sync read before the end of the request must
-/// not end the approval.
-fn approval_event(
-    data: &mut AppData,
-    id: &'static str,
-    key: &TargetKey,
-    event: &ActionEvent,
-    now: DateTime<Utc>,
-) -> bool {
-    let ActionEvent::Done(result) = event else {
-        return false;
-    };
-    let TargetKey::Pr(key) = key;
-    id == CODEVIEW_SEND_ID && approval_end(data, key, result.is_ok(), now)
-}
-
-/// The end of the approval request of `key`, sent from the list or from
-/// a PR view. A sent approval (`ok`) covers the pull request until
-/// GitHub data from after `now` arrives. A failed approval ends at once.
-/// True when the pull request came back.
-fn approval_end(data: &mut AppData, key: &PrKey, ok: bool, now: DateTime<Utc>) -> bool {
-    if !data.approvals.contains_key(key) {
-        return false;
-    }
-    if ok {
-        if let Some(approval) = data.approvals.get_mut(key) {
-            approval.done_at = Some(now);
-        }
-        return false;
-    }
-    if data
-        .approvals
-        .remove(key)
-        .is_some_and(|approval| approval.announced)
-    {
-        data.notify.announced.remove(key);
-    }
-    data.revision += 1;
-    true
-}
-
-/// An event of a PR view (`chaoshub pr`) that the list started. The
-/// list applies an approval of the PR view with the same rules as its
-/// own approval. Each end of an approval and each `PrChanged` refresh
-/// the pull request, as the end of an action in the list does.
+/// An event of a PR view (`chaoshub pr`) that the list started. The list
+/// keeps the parts of a run of the PR view in its own pending map, with
+/// the same rules as its own runs: a pending approval hides the pull
+/// request, and the end of the PR view ends its runs. Each `PrChanged`
+/// refreshes the pull request, as the end of an action in the list does.
+/// The list knows the action ids of its registry only.
 fn pr_view_event(
     state: &mut AppState,
-    tabs: &[Box<dyn Tab>],
+    actions: &[Box<dyn Action>],
     event: PrViewEvent,
     now: DateTime<Utc>,
 ) -> Vec<Cmd> {
+    let known = |id: &str| {
+        actions
+            .iter()
+            .map(|action| action.id())
+            .chain([REVIEW_ID])
+            .find(|known| *known == id)
+    };
     match event {
-        PrViewEvent::ApprovalStarted { pr } => {
-            if !approval_sent(&mut state.data, pr.clone()) {
-                return Vec::new();
+        PrViewEvent::PendingStarted { pr, id, parts } => {
+            if let Some(id) = known(&id) {
+                start_parts(state, id, pr, parts, true, now);
             }
-            if let Some(approval) = state.data.approvals.get_mut(&pr) {
-                approval.from_pane = true;
-            }
-            state.bump();
-            after_change(state, tabs)
+            Vec::new()
         }
-        PrViewEvent::ApprovalDone { pr, ok } => {
-            let back = approval_end(&mut state.data, &pr, ok, now);
-            let mut cmds = follow_up(&state.data, &TargetKey::Pr(pr));
-            if back {
-                state.bump();
-                cmds.extend(after_change(state, tabs));
+        PrViewEvent::PendingDone { pr, id, parts, ok } => {
+            if let Some(id) = known(&id) {
+                state.data.pending.result_parts(id, pr.clone(), parts);
+                end_run(state, id, &pr, ok, now);
             }
-            cmds
+            Vec::new()
         }
         PrViewEvent::PrChanged { pr } => follow_up(&state.data, &TargetKey::Pr(pr)),
-    }
-}
-
-/// The end of the detail pane of `key`. An approval of the PR view whose
-/// end never came ends now, because the PR view cannot send it any
-/// more. Then GitHub data from after `now` decides, as after a sent
-/// approval.
-fn approval_pane_ended(data: &mut AppData, key: &PrKey, now: DateTime<Utc>) {
-    if let Some(approval) = data.approvals.get_mut(key)
-        && approval.from_pane
-        && approval.done_at.is_none()
-    {
-        approval.done_at = Some(now);
     }
 }
 
@@ -1996,7 +2052,7 @@ fn overlay_key(
             }
             Vec::new()
         }
-        OverlayState::Review(_) => review_key(state, keymap, tabs, chord),
+        OverlayState::Review(_) => review_key(state, keymap, chord),
         OverlayState::Prompt { .. } | OverlayState::ReviewText { .. } => Vec::new(),
     }
 }
@@ -3016,15 +3072,6 @@ fn detail_loaded(
                 }
                 Some(current) => apply(current, detail, &key, "detail"),
             };
-            // A reaction that is still on its way stays in a new load.
-            if applied
-                && let (Some(queue), Some(current)) =
-                    (data.reacting.get(&key), data.details.get_mut(&key))
-            {
-                for spec in queue {
-                    set_reaction(&mut current.value, spec, spec.add);
-                }
-            }
             cleared || applied
         }
         Err(err) => {
@@ -3119,17 +3166,6 @@ fn merge_pr(data: &mut AppData, incoming: PullRequest) -> bool {
     let mut changed = apply(&mut current.head, head, &key, "head");
     changed |= apply(&mut current.ci_state, ci_state, &key, "ci state");
     changed |= apply(&mut current.checks, checks, &key, "checks");
-    // GitHub data from after an approval replaces the approval. The
-    // pull request comes back to the Review tab when GitHub still
-    // requests your review.
-    if data
-        .approvals
-        .get(&key)
-        .is_some_and(|approval| !approval.covers(current))
-    {
-        data.approvals.remove(&key);
-        changed |= current.head.value.review_requested;
-    }
     changed
 }
 
@@ -3199,7 +3235,6 @@ fn drop_gone(data: &mut AppData, key: &PrKey, started_at: DateTime<Utc>) -> bool
     data.prs.remove(key);
     data.scopes.remove(key);
     data.details.remove(key);
-    data.approvals.remove(key);
     true
 }
 
@@ -3227,9 +3262,6 @@ fn action_event(
             Vec::new()
         }
         ActionEvent::Done(result) => {
-            if id == REACT_ID {
-                reaction_done(state, &key, result.is_ok());
-            }
             if result.is_ok() {
                 let TargetKey::Pr(pr) = &key;
                 state.ui.ui_events.push(UiEvent::RowFlash(pr.clone()));
@@ -3272,7 +3304,10 @@ fn action_event(
             }
             cmds
         }
-        ActionEvent::Popup(_) | ActionEvent::MergeStatus(_) | ActionEvent::MergeStep(_) => {
+        ActionEvent::Popup(_)
+        | ActionEvent::MergeStatus(_)
+        | ActionEvent::MergeStep(_)
+        | ActionEvent::Parts(_) => {
             tracing::trace!(id, "action event not handled yet");
             Vec::new()
         }
@@ -3478,6 +3513,7 @@ fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<
         Vec::new()
     };
     cmds.extend(announce(state, now));
+    cmds.extend(pending_rereads(state, now));
     let sync = &mut state.data.sync;
     if sync.condition.as_ref().is_some_and(|c| !c.holds(now)) {
         sync.condition = None;
@@ -3498,6 +3534,7 @@ fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<
     };
     if new_minute
         || state.data.merging().is_some()
+        || state.data.pending.has_parts()
         || *status != frame::status_model(state, tabs)
         || *term != term_status(state)
     {
@@ -9618,10 +9655,15 @@ mod tests {
     }
 
     /// The pull request `pr` as GitHub returns it `secs` seconds from the
-    /// clock, with `requested` as the review request of the user.
+    /// clock, with `requested` as the review request of the user. Without
+    /// a request, the data has the approval of the user, as GitHub has
+    /// after an approval.
     fn github_pr(state: &AppState, pr: &PrKey, secs: i64, requested: bool) -> Msg {
         let mut pr = state.data.prs[pr].clone();
         pr.head.value.review_requested = requested;
+        if !requested {
+            pr.head.value.viewer_review = Some(crate::domain::detail::ReviewState::Approved);
+        }
         pr.head.value.updated_at += TimeDelta::minutes(1);
         let at = Utc::now() + TimeDelta::seconds(secs);
         pr.head.observed_at = at;
@@ -9691,13 +9733,85 @@ mod tests {
         let old = github_pr(&state, &pr, -60, true);
         update(&mut state, &Keymap::default(), old);
         assert_eq!(tab_numbers(&mut state), [90, 88], "a late page of a sync");
-        assert!(state.data.approvals.contains_key(&pr));
+        let early = github_pr(&state, &pr, 60, true);
+        update(&mut state, &Keymap::default(), early);
+        assert_eq!(
+            tab_numbers(&mut state),
+            [90, 88],
+            "a read before GitHub shows the approval does not end it"
+        );
+        assert_eq!(state.data.pending.review(&pr), Some(ReviewKind::Approve));
 
-        let fresh = github_pr(&state, &pr, 60, false);
+        let fresh = github_pr(&state, &pr, 61, false);
         update(&mut state, &Keymap::default(), fresh);
-        assert!(state.data.approvals.is_empty(), "GitHub data replaces it");
+        assert_eq!(state.data.pending.review(&pr), None, "GitHub shows it");
         assert_eq!(tab_numbers(&mut state), [90, 88], "GitHub agrees");
         assert_eq!(notify::ready_count(&state.data, "review"), 2);
+    }
+
+    #[test]
+    fn a_review_pulses_until_github_shows_it() {
+        let (mut state, pr) = approval_state();
+        let review = PendingPart::Review;
+        approve(&mut state, &pr);
+        assert!(state.data.pending.started(&pr, &review).is_some());
+        assert!(state.data.busy(), "the pulse ticks");
+        update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Ok("approved #89")),
+        );
+        assert!(state.data.pending.started(&pr, &review).is_some());
+        let generation = state.generation;
+        let fresh = github_pr(&state, &pr, 60, false);
+        update(&mut state, &Keymap::default(), fresh);
+        assert!(state.data.pending.started(&pr, &review).is_none());
+        assert!(state.generation > generation, "the pulse ends");
+    }
+
+    #[test]
+    fn a_pending_review_reads_github_again_with_a_backoff() {
+        let (mut state, pr) = approval_state();
+        approve(&mut state, &pr);
+        update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Ok("approved #89")),
+        );
+        let refresh = Cmd::RefreshPr(vec![pr_ref(&state.data.prs[&pr])]);
+        let cmds = update(&mut state, &Keymap::default(), Msg::Tick);
+        assert!(!cmds.contains(&refresh), "not at once: {cmds:?}");
+        state.data.pending.age(TimeDelta::seconds(2));
+        let cmds = update(&mut state, &Keymap::default(), Msg::Tick);
+        assert!(cmds.contains(&refresh), "after 2 s: {cmds:?}");
+        let cmds = update(&mut state, &Keymap::default(), Msg::Tick);
+        assert!(!cmds.contains(&refresh), "then a longer wait: {cmds:?}");
+        let fresh = github_pr(&state, &pr, 60, false);
+        update(&mut state, &Keymap::default(), fresh);
+        state.data.pending.age(TimeDelta::seconds(60));
+        let known = state.data.prs[&pr].head.value.mergeable
+            != crate::domain::pr::Mergeable::Unknown
+            && state.data.prs[&pr].head.value.merge_state
+                != crate::domain::pr::MergeStateStatus::Unknown;
+        let cmds = update(&mut state, &Keymap::default(), Msg::Tick);
+        assert_eq!(
+            cmds.contains(&refresh),
+            !known,
+            "settled: more reads only for an unknown merge state"
+        );
+    }
+
+    #[test]
+    fn a_failed_review_is_no_longer_pending() {
+        let (mut state, pr) = approval_state();
+        approve(&mut state, &pr);
+        update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Err("HTTP 422")),
+        );
+        assert!(state.data.pending.is_empty());
+        assert_eq!(status_text(&state), Some("review failed: HTTP 422"));
     }
 
     #[test]
@@ -9711,7 +9825,10 @@ mod tests {
         );
         let fresh = github_pr(&state, &pr, 60, true);
         update(&mut state, &Keymap::default(), fresh);
-        assert!(state.data.approvals.is_empty());
+        assert_eq!(tab_numbers(&mut state), [90, 88], "GitHub can be late");
+        state.data.pending.age(crate::app::pending::SETTLE_LIMIT);
+        update(&mut state, &Keymap::default(), Msg::Tick);
+        assert_eq!(state.data.pending.review(&pr), None);
         assert_eq!(tab_numbers(&mut state), [90, 89, 88], "GitHub wins");
         assert_eq!(notify::ready_count(&state.data, "review"), 3);
     }
@@ -9727,7 +9844,7 @@ mod tests {
             send_done(&pr, Err("HTTP 422")),
         );
         assert_eq!(status_text(&state), Some("review failed: HTTP 422"));
-        assert!(state.data.approvals.is_empty());
+        assert_eq!(state.data.pending.review(&pr), None);
         assert_eq!(tab_numbers(&mut state), [90, 89, 88]);
         assert_eq!(
             selected_number(&mut state),
@@ -9757,7 +9874,7 @@ mod tests {
             matches!(cmds.first(), Some(Cmd::RunAction { .. })),
             "{cmds:?}"
         );
-        assert!(state.data.approvals.is_empty());
+        assert_eq!(state.data.pending.review(&pr), Some(ReviewKind::Comment));
         assert_eq!(tab_numbers(&mut state), [90, 89, 88]);
         update(
             &mut state,
@@ -9817,11 +9934,42 @@ mod tests {
         head && detail
     }
 
+    /// The start of an approval of `pr` in the PR view, for the list.
+    fn view_approval(pr: &PrKey) -> PrViewEvent {
+        PrViewEvent::PendingStarted {
+            pr: pr.clone(),
+            id: "codeview_send".into(),
+            parts: approval_parts(pr),
+        }
+    }
+
+    /// The end of an approval of `pr` in the PR view, for the list.
+    fn view_approval_done(pr: &PrKey, ok: bool) -> PrViewEvent {
+        PrViewEvent::PendingDone {
+            pr: pr.clone(),
+            id: "codeview_send".into(),
+            parts: approval_parts(pr),
+            ok,
+        }
+    }
+
+    /// The pending parts of an approval of `pr`.
+    fn approval_parts(pr: &PrKey) -> Vec<Pending> {
+        vec![Pending {
+            pr: pr.clone(),
+            part: PendingPart::Review,
+            expect: Expect::Review(ReviewKind::Approve),
+        }]
+    }
+
     #[test]
     fn an_approval_of_the_pr_view_hides_the_pr_in_the_list() {
         let (mut state, pr) = approval_state();
-        let started = PrViewEvent::ApprovalStarted { pr: pr.clone() };
-        let cmds = update(&mut state, &Keymap::default(), from_pane(started));
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            from_pane(view_approval(&pr)),
+        );
         assert_eq!(tab_numbers(&mut state), [90, 88], "before GitHub answers");
         assert_eq!(selected_number(&mut state), Some(88));
         assert!(
@@ -9830,14 +9978,9 @@ mod tests {
         );
         assert_eq!(notify::ready_count(&state.data, "review"), 2);
         assert!(state.data.notify.announced.contains(&pr));
-        assert!(state.data.approvals[&pr].from_pane);
 
-        let done = PrViewEvent::ApprovalDone {
-            pr: pr.clone(),
-            ok: true,
-        };
-        let cmds = update(&mut state, &Keymap::default(), from_pane(done));
-        assert!(refreshes(&cmds, &pr), "the list reads GitHub: {cmds:?}");
+        let done = view_approval_done(&pr, true);
+        update(&mut state, &Keymap::default(), from_pane(done));
         assert_eq!(tab_numbers(&mut state), [90, 88]);
         let old = github_pr(&state, &pr, -60, true);
         update(&mut state, &Keymap::default(), old);
@@ -9845,29 +9988,28 @@ mod tests {
 
         let fresh = github_pr(&state, &pr, 60, false);
         update(&mut state, &Keymap::default(), fresh);
-        assert!(state.data.approvals.is_empty(), "GitHub data replaces it");
+        assert_eq!(state.data.pending.review(&pr), None, "GitHub shows it");
         assert_eq!(tab_numbers(&mut state), [90, 88]);
     }
 
     #[test]
     fn a_failed_approval_of_the_pr_view_brings_the_pr_back() {
         let (mut state, pr) = approval_state();
-        let started = PrViewEvent::ApprovalStarted { pr: pr.clone() };
-        update(&mut state, &Keymap::default(), from_pane(started));
+        update(
+            &mut state,
+            &Keymap::default(),
+            from_pane(view_approval(&pr)),
+        );
         assert_eq!(tab_numbers(&mut state), [90, 88]);
-        let failed = PrViewEvent::ApprovalDone {
-            pr: pr.clone(),
-            ok: false,
-        };
+        let failed = view_approval_done(&pr, false);
         let cmds = update(&mut state, &Keymap::default(), from_pane(failed));
-        assert!(state.data.approvals.is_empty());
+        assert_eq!(state.data.pending.review(&pr), None);
         assert_eq!(tab_numbers(&mut state), [90, 89, 88]);
         assert_eq!(selected_number(&mut state), Some(89));
         assert!(
             cmds.iter().any(|cmd| matches!(cmd, Cmd::SetInterest(_))),
             "{cmds:?}"
         );
-        assert!(refreshes(&cmds, &pr), "{cmds:?}");
         assert_eq!(notify::ready_count(&state.data, "review"), 3);
         assert!(!state.data.notify.announced.contains(&pr));
     }
@@ -9875,18 +10017,23 @@ mod tests {
     #[test]
     fn an_approval_of_the_pr_view_ends_when_its_pane_ends() {
         let (mut state, pr) = approval_state();
-        let started = PrViewEvent::ApprovalStarted { pr: pr.clone() };
-        update(&mut state, &Keymap::default(), from_pane(started));
+        update(
+            &mut state,
+            &Keymap::default(),
+            from_pane(view_approval(&pr)),
+        );
         let ended = Msg::PaneEnded {
             id: DETAIL_ID,
             key: TargetKey::Pr(pr.clone()),
         };
         let cmds = update(&mut state, &Keymap::default(), ended);
         assert!(refreshes(&cmds, &pr), "{cmds:?}");
-        assert!(state.data.approvals[&pr].done_at.is_some());
         assert_eq!(tab_numbers(&mut state), [90, 88], "until GitHub answers");
         let fresh = github_pr(&state, &pr, 60, true);
         update(&mut state, &Keymap::default(), fresh);
+        assert_eq!(tab_numbers(&mut state), [90, 88], "GitHub can be late");
+        state.data.pending.age(crate::app::pending::SETTLE_LIMIT);
+        update(&mut state, &Keymap::default(), Msg::Tick);
         assert_eq!(tab_numbers(&mut state), [90, 89, 88], "GitHub wins");
     }
 
@@ -9899,22 +10046,28 @@ mod tests {
             key: TargetKey::Pr(pr.clone()),
         };
         update(&mut state, &Keymap::default(), ended);
-        assert_eq!(state.data.approvals[&pr].done_at, None);
+        let fresh = github_pr(&state, &pr, 60, false);
+        update(&mut state, &Keymap::default(), fresh);
+        assert_eq!(
+            state.data.pending.review(&pr),
+            Some(ReviewKind::Approve),
+            "the request of the list still runs"
+        );
     }
 
     #[test]
     fn a_pr_view_approval_of_a_pr_without_a_review_request_hides_nothing() {
         let (mut state, pr) = approval_state();
         let other = testdata::pr_key("chaoshub", 4242);
-        let started = PrViewEvent::ApprovalStarted { pr: other.clone() };
-        let cmds = update(&mut state, &Keymap::default(), from_pane(started));
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            from_pane(view_approval(&other)),
+        );
         assert!(cmds.is_empty(), "{cmds:?}");
-        assert!(state.data.approvals.is_empty());
-        let done = PrViewEvent::ApprovalDone {
-            pr: other,
-            ok: false,
-        };
+        let done = view_approval_done(&other, false);
         update(&mut state, &Keymap::default(), from_pane(done));
+        assert_eq!(state.data.pending.review(&other), None);
         assert_eq!(tab_numbers(&mut state), [90, 89, 88]);
         assert!(!state.data.notify.announced.contains(&pr));
     }
@@ -9925,7 +10078,7 @@ mod tests {
         let changed = PrViewEvent::PrChanged { pr: pr.clone() };
         let cmds = update(&mut state, &Keymap::default(), from_pane(changed));
         assert!(refreshes(&cmds, &pr), "{cmds:?}");
-        assert!(state.data.approvals.is_empty(), "no overlay");
+        assert_eq!(state.data.pending.review(&pr), None, "no overlay");
         assert_eq!(tab_numbers(&mut state), [90, 89, 88]);
     }
 
@@ -9959,10 +10112,7 @@ mod tests {
     fn the_pr_view_tells_the_list_about_an_approval_and_its_end() {
         let (mut state, pr) = pr_view_state();
         let cmds = approve(&mut state, &pr);
-        assert_eq!(
-            told(&cmds),
-            [PrViewEvent::ApprovalStarted { pr: pr.clone() }]
-        );
+        assert_eq!(told(&cmds), [view_approval(&pr)]);
         let cmds = update(
             &mut state,
             &Keymap::default(),
@@ -9970,13 +10120,11 @@ mod tests {
         );
         assert_eq!(
             told(&cmds),
-            [PrViewEvent::ApprovalDone {
-                pr: pr.clone(),
-                ok: true
-            }],
-            "one event, not also a PrChanged"
+            [
+                view_approval_done(&pr, true),
+                PrViewEvent::PrChanged { pr: pr.clone() }
+            ],
         );
-        assert!(state.data.told_approvals.is_empty());
     }
 
     #[test]
@@ -9988,13 +10136,7 @@ mod tests {
             &Keymap::default(),
             send_done(&pr, Err("cancelled")),
         );
-        assert_eq!(
-            told(&cmds),
-            [PrViewEvent::ApprovalDone {
-                pr: pr.clone(),
-                ok: false
-            }]
-        );
+        assert_eq!(told(&cmds), [view_approval_done(&pr, false)]);
     }
 
     #[test]
@@ -10018,13 +10160,36 @@ mod tests {
             ),
             "{cmds:?}"
         );
-        assert_eq!(told(&cmds), [], "no overlay in the list");
+        let parts = vec![Pending {
+            pr: pr.clone(),
+            part: PendingPart::Review,
+            expect: Expect::Review(ReviewKind::RequestChanges),
+        }];
+        assert_eq!(
+            told(&cmds),
+            [PrViewEvent::PendingStarted {
+                pr: pr.clone(),
+                id: "codeview_send".into(),
+                parts: parts.clone(),
+            }]
+        );
         let cmds = update(
             &mut state,
             &Keymap::default(),
             send_done(&pr, Ok("changes requested")),
         );
-        assert_eq!(told(&cmds), [PrViewEvent::PrChanged { pr: pr.clone() }]);
+        assert_eq!(
+            told(&cmds),
+            [
+                PrViewEvent::PendingDone {
+                    pr: pr.clone(),
+                    id: "codeview_send".into(),
+                    parts,
+                    ok: true,
+                },
+                PrViewEvent::PrChanged { pr: pr.clone() }
+            ]
+        );
         let cmds = update(
             &mut state,
             &Keymap::default(),
@@ -10066,10 +10231,28 @@ mod tests {
             key: TargetKey::Pr(pr.clone()),
         };
         let cmds = update(&mut state, &Keymap::default(), ended);
+        let parts = vec![Pending {
+            pr: pr.clone(),
+            part: PendingPart::Review,
+            expect: Expect::ReviewChanged,
+        }];
         assert_eq!(
             told(&cmds),
-            [PrViewEvent::PrChanged { pr: pr.clone() }],
-            "codeview can send comments"
+            [
+                PrViewEvent::PendingStarted {
+                    pr: pr.clone(),
+                    id: "review".into(),
+                    parts: parts.clone(),
+                },
+                PrViewEvent::PendingDone {
+                    pr: pr.clone(),
+                    id: "review".into(),
+                    parts,
+                    ok: true,
+                },
+                PrViewEvent::PrChanged { pr: pr.clone() }
+            ],
+            "codeview can send comments and a review"
         );
     }
 
@@ -10090,7 +10273,6 @@ mod tests {
             action_done("merge", &pr, Ok("")),
         );
         assert_eq!(told(&cmds), []);
-        assert!(state.data.told_approvals.is_empty());
     }
 
     /// Sends the events of `cmds` of the PR view to the list socket at
@@ -10141,7 +10323,7 @@ mod tests {
         assert_eq!(tab_numbers(&mut list), [90, 88]);
         let fresh = github_pr(&list, &pr, 60, false);
         update(&mut list, &Keymap::default(), fresh);
-        assert!(list.data.approvals.is_empty(), "GitHub decides");
+        assert_eq!(list.data.pending.review(&pr), None, "GitHub decides");
         assert_eq!(tab_numbers(&mut list), [90, 88]);
     }
 
@@ -10165,9 +10347,17 @@ mod tests {
         (state, pr)
     }
 
-    /// The reactions of the comment of alice in the detail of `pr`.
+    /// The reactions of the comment of alice in the detail of `pr`, as
+    /// the conversation shows them: with the pending reactions.
     fn alice_reactions(state: &AppState, pr: &PrKey) -> Vec<crate::domain::detail::Reaction> {
-        state.data.details[pr].value.comments[0].reactions.clone()
+        let comment = &state.data.details[pr].value.comments[0];
+        let mut shown = comment.reactions.clone();
+        for (subject, kind, add) in state.data.pending.reactions(pr) {
+            if subject == comment.id {
+                crate::domain::detail::set_mine(&mut shown, kind, add);
+            }
+        }
+        shown
     }
 
     fn reaction(
@@ -10250,7 +10440,7 @@ mod tests {
             [reaction(ThumbsUp, 3, true), reaction(Hooray, 2, true)],
             "the optimistic update"
         );
-        assert_eq!(state.data.reacting[&pr].len(), 1);
+        assert_eq!(state.data.pending.reactions(&pr).len(), 1);
         let cmds = update(
             &mut state,
             &Keymap::default(),
@@ -10259,8 +10449,11 @@ mod tests {
         let reload = Cmd::ReloadDetail(vec![pr_ref(&state.data.prs[&pr])]);
         assert!(cmds.contains(&reload), "{cmds:?}");
         assert_eq!(status_text(&state), Some("reacted 🎉 on #99"));
-        assert!(state.data.reacting.is_empty());
-        assert_eq!(alice_reactions(&state, &pr)[1], reaction(Hooray, 2, true));
+        assert_eq!(
+            alice_reactions(&state, &pr)[1],
+            reaction(Hooray, 2, true),
+            "until GitHub shows it"
+        );
     }
 
     #[test]
@@ -10360,6 +10553,101 @@ mod tests {
             react_done(&pr, Err("offline")),
         );
         assert_eq!(alice_reactions(&state, &pr).len(), 2, "the rollback");
+    }
+
+    #[test]
+    fn a_reaction_stays_until_a_load_shows_it() {
+        use crate::domain::detail::ReactionKind::Rocket;
+        let (mut state, pr) = react_state();
+        enter(&mut state);
+        key(&mut state, '7');
+        update(
+            &mut state,
+            &Keymap::default(),
+            react_done(&pr, Ok("reacted")),
+        );
+        let load = |state: &AppState, rocket: bool, secs: i64| {
+            let mut fresh = testdata::detail_with_reactions();
+            fresh
+                .head_oid
+                .clone_from(&state.data.prs[&pr].head.value.head_oid);
+            if rocket {
+                crate::domain::detail::set_mine(&mut fresh.comments[0].reactions, Rocket, true);
+            }
+            let observed_at = state.data.details[&pr].observed_at + TimeDelta::seconds(secs);
+            Msg::DetailLoaded(
+                pr.clone(),
+                Ok(Observed {
+                    value: fresh,
+                    observed_at,
+                }),
+            )
+        };
+        let early = load(&state, false, 1);
+        update(&mut state, &Keymap::default(), early);
+        assert_eq!(
+            alice_reactions(&state, &pr)[2],
+            reaction(Rocket, 1, true),
+            "an early load without the reaction"
+        );
+        let fresh = load(&state, true, 2);
+        update(&mut state, &Keymap::default(), fresh);
+        assert!(
+            state.data.pending.reactions(&pr).is_empty(),
+            "GitHub has it"
+        );
+        assert_eq!(alice_reactions(&state, &pr)[2], reaction(Rocket, 1, true));
+    }
+
+    #[test]
+    fn two_reactions_that_end_in_another_order_roll_back_the_right_one() {
+        use crate::domain::detail::ReactionKind::{Hooray, Rocket};
+        let (mut state, pr) = react_state();
+        enter(&mut state);
+        let first = key(&mut state, '4');
+        enter(&mut state);
+        let second = key(&mut state, '7');
+        let parts = |cmds: &[Cmd]| -> Vec<Pending> {
+            let [
+                Cmd::RunAction {
+                    selection, input, ..
+                },
+            ] = cmds
+            else {
+                panic!("no action: {cmds:?}");
+            };
+            let react = REGISTRY.iter().find(|a| a.id() == "react").unwrap();
+            react.pending(selection, input)
+        };
+        let rocket = Msg::ActionEvent {
+            id: "react",
+            key: TargetKey::Pr(pr.clone()),
+            event: ActionEvent::Parts(parts(&second)),
+        };
+        update(&mut state, &Keymap::default(), rocket);
+        update(
+            &mut state,
+            &Keymap::default(),
+            react_done(&pr, Err("offline")),
+        );
+        let shown = alice_reactions(&state, &pr);
+        assert!(shown.contains(&reaction(Hooray, 2, true)), "{shown:?}");
+        assert!(
+            !shown.iter().any(|r| r.kind == Rocket),
+            "the failed rocket rolls back: {shown:?}"
+        );
+        let hooray = Msg::ActionEvent {
+            id: "react",
+            key: TargetKey::Pr(pr.clone()),
+            event: ActionEvent::Parts(parts(&first)),
+        };
+        update(&mut state, &Keymap::default(), hooray);
+        update(
+            &mut state,
+            &Keymap::default(),
+            react_done(&pr, Err("offline")),
+        );
+        assert_eq!(state.data.pending.reactions(&pr), []);
     }
 
     #[test]

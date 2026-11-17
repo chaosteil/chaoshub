@@ -41,8 +41,11 @@ use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 use crate::actions::review::{NVIM, agent_env};
-use crate::actions::{Action, Applicability, Group, Prepare, Services};
-use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, ReviewKind, Selection, Target};
+use crate::actions::{Action, Applicability, Group, Prepare, Services, own_part};
+use crate::bus::{
+    ActionInput, Expect, KeyChord, KeyCode, KeyModifiers, Pending, PendingPart, ReviewKind,
+    Selection, Target,
+};
 use crate::codeview::store;
 use crate::domain::keys::PrKey;
 use crate::domain::plural;
@@ -91,6 +94,14 @@ impl Action for CodeviewSend {
     /// comments and the event.
     fn prepare(&self, _sel: &Selection) -> Prepare {
         Prepare::Review
+    }
+
+    /// The reviews of the pull request, with the event of the review.
+    fn pending(&self, sel: &Selection, input: &ActionInput) -> Vec<Pending> {
+        let ActionInput::Review { event, .. } = input else {
+            return Vec::new();
+        };
+        own_part(sel, PendingPart::Review, Expect::Review(*event))
     }
 
     /// Sends the comments of `ActionInput::Review` with a headless

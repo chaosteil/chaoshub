@@ -304,14 +304,86 @@ pub(crate) struct LaunchRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub(crate) enum PrViewEvent {
-    /// The PR view sent an approval of `pr`. The request runs.
-    ApprovalStarted { pr: PrKey },
-    /// The approval of `pr` ended. `ok` is false when it failed or was
-    /// cancelled.
-    ApprovalDone { pr: PrKey, ok: bool },
+    /// The PR view started the action `id` on `pr`, with these pending
+    /// parts (see `app::pending`).
+    PendingStarted {
+        pr: PrKey,
+        id: String,
+        parts: Vec<Pending>,
+    },
+    /// The run of the action `id` on `pr` with these parts ended. `ok` is
+    /// false when it failed or was cancelled.
+    PendingDone {
+        pr: PrKey,
+        id: String,
+        parts: Vec<Pending>,
+        ok: bool,
+    },
     /// An action of the PR view changed `pr` on GitHub, for example a
     /// merge, a close, a draft change, a reply or a review.
     PrChanged { pr: PrKey },
+}
+
+/// A part of a pull request that an action changes on GitHub. While the
+/// change is on its way, the part pulses (see `app::pending`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "part", content = "id", rename_all = "snake_case")]
+pub(crate) enum PendingPart {
+    /// The reviews: an approval, a change request or a comment review.
+    Review,
+    /// The merge of the pull request.
+    Merge,
+    /// The state: open or closed.
+    State,
+    /// The draft flag.
+    Draft,
+    /// The checks.
+    Checks,
+    /// A review thread, by its GraphQL node id: a reply in the thread.
+    Thread(String),
+    /// A new comment on the pull request.
+    Comment,
+    /// One reaction of the viewer on a comment or a review: the GraphQL
+    /// node id of the comment or the review, and the kind.
+    Reaction(String, ReactionKind),
+}
+
+/// The change that a pending part waits for in the GitHub data. The part
+/// ends when the data shows the change, when the action fails, or at a
+/// time limit (see `app::pending`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "expect", content = "value", rename_all = "snake_case")]
+pub(crate) enum Expect {
+    /// The latest review of the viewer has this event. For an approval
+    /// and a change request, GitHub also requests no review of the
+    /// viewer any more.
+    Review(ReviewKind),
+    /// The latest review of the viewer or the review request changed,
+    /// after a review in codeview that chaoshub does not see.
+    ReviewChanged,
+    /// The pull request is merged, closed or in the merge queue.
+    Merged,
+    /// The pull request is closed.
+    Closed,
+    /// The draft flag has this value.
+    Draft(bool),
+    /// No failed check that can run again is left.
+    Rerun,
+    /// The thread or the pull request has more comments than at the
+    /// start.
+    NewComment,
+    /// The viewer has the reaction (`true`) or does not have it
+    /// (`false`).
+    Reaction(bool),
+}
+
+/// A part of one pull request that an action changes on GitHub, and the
+/// change that the part waits for.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) struct Pending {
+    pub pr: PrKey,
+    pub part: PendingPart,
+    pub expect: Expect,
 }
 
 /// A run of pr-agent: one tool on one pull request.
@@ -397,7 +469,8 @@ pub(crate) struct ReplySpec {
 }
 
 /// The event of a review of codeview comments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum ReviewKind {
     Comment,
     Approve,
@@ -588,6 +661,10 @@ pub(crate) enum ActionEvent {
     MergeStatus(MergeProgress),
     /// The next step of a merge run.
     MergeStep(MergeStep),
+    /// The parts (`Action::pending`) of the run whose `Done` comes next.
+    /// The runner sends it before the `Done` of a run with parts, so the
+    /// result ends the right run when the runs end in another order.
+    Parts(Vec<Pending>),
     Done(Result<String, String>),
 }
 

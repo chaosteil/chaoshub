@@ -28,7 +28,8 @@ use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 
 use crate::bus::{
-    ActionInput, Cmd, ConfirmSpec, KeyChord, LaunchRequest, Msg, PromptSpec, Selection, Target,
+    ActionInput, Cmd, ConfirmSpec, Expect, KeyChord, LaunchRequest, Msg, Pending, PendingPart,
+    PromptSpec, Selection, Target,
 };
 use crate::github::GithubClient;
 use crate::vcs::lock::RepoLocks;
@@ -37,6 +38,7 @@ pub(crate) use codeview_send::STAYS_LOCAL;
 pub(crate) use merge::STACK_NOT_LOADED;
 pub(crate) use react::ID as REACT_ID;
 pub(crate) use reply::ID as REPLY_ID;
+pub(crate) use rerun_checks::rerun_plan;
 
 /// What a running action can use. There is no launcher: panes come only
 /// from `Prepare::Terminal`.
@@ -115,6 +117,14 @@ pub(crate) trait Action: Send + Sync {
     fn applies(&self, sel: &Selection) -> Applicability;
     /// Pure, called on each key press after `applies` gave `Enabled`.
     fn prepare(&self, sel: &Selection) -> Prepare;
+    /// The parts of the pull requests that the action changes on GitHub
+    /// when it runs with `input`, each with the change that GitHub must
+    /// show. `app` pulses each part until the GitHub data shows the change
+    /// (see `app::pending`). The default is no part: the action changes
+    /// nothing on GitHub.
+    fn pending(&self, _sel: &Selection, _input: &ActionInput) -> Vec<Pending> {
+        Vec::new()
+    }
     /// Runs the action as a task. The runner sends `ActionEvent::Done`
     /// with the result.
     fn execute(
@@ -144,6 +154,17 @@ pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(|| {
         Box::new(close::Close),
     ]
 });
+
+/// The part `part` of the pull request of `sel`, which waits for
+/// `expect`, for `Action::pending`.
+fn own_part(sel: &Selection, part: PendingPart, expect: Expect) -> Vec<Pending> {
+    let Target::Pr { pr, .. } = &sel.target;
+    vec![Pending {
+        pr: pr.key.clone(),
+        part,
+        expect,
+    }]
+}
 
 /// The ids and the default keys that occur more than once in `actions`.
 fn duplicates(actions: &[Box<dyn Action>]) -> (Vec<&'static str>, Vec<KeyChord>) {
@@ -249,6 +270,74 @@ mod tests {
         let (ids, keys) = duplicates(&REGISTRY);
         assert_eq!(ids, [""; 0], "duplicate action ids");
         assert_eq!(keys, [], "duplicate default keys");
+    }
+
+    #[test]
+    fn the_actions_that_change_github_declare_their_parts() {
+        use crate::bus::{ReactSpec, ReplyTo, ReviewKind};
+        use crate::domain::detail::ReactionKind;
+
+        let pr: crate::domain::pr::PullRequest =
+            serde_json::from_str(include_str!("testdata/pr.json")).unwrap();
+        let key = pr.key.clone();
+        let sel = Selection {
+            target: Target::Pr {
+                repo: crate::domain::repo::Repo {
+                    key: pr.key.repo.clone(),
+                    path: None,
+                    settings: None,
+                },
+                pr,
+                stack: Vec::new(),
+                local: crate::domain::local::LocalMatch::None,
+            },
+            me: "me".into(),
+            action_config: None,
+        };
+        let parts = |id: &str, input: ActionInput| -> Vec<PendingPart> {
+            let action = REGISTRY.iter().find(|a| a.id() == id).unwrap();
+            let parts = action.pending(&sel, &input);
+            assert!(parts.iter().all(|p| p.pr == key), "{id}");
+            parts.into_iter().map(|p| p.part).collect()
+        };
+        let review = ActionInput::Review {
+            ids: Vec::new(),
+            event: ReviewKind::Approve,
+            body: String::new(),
+        };
+        let thread = ActionInput::Reply {
+            to: ReplyTo::Thread {
+                id: "T_1".into(),
+                place: "a.rs:1".into(),
+            },
+            body: "ok".into(),
+        };
+        let comment = ActionInput::Reply {
+            to: ReplyTo::Pr,
+            body: "ok".into(),
+        };
+        let react = ActionInput::React(ReactSpec {
+            subject: "C_1".into(),
+            kind: ReactionKind::Heart,
+            add: true,
+        });
+        assert_eq!(parts("codeview_send", review), [PendingPart::Review]);
+        assert_eq!(parts("merge", ActionInput::Confirmed), [PendingPart::Merge]);
+        assert_eq!(parts("close", ActionInput::Confirmed), [PendingPart::State]);
+        assert_eq!(parts("draft", ActionInput::None), [PendingPart::Draft]);
+        assert_eq!(
+            parts("rerun_checks", ActionInput::None),
+            [PendingPart::Checks]
+        );
+        assert_eq!(parts("reply", thread), [PendingPart::Thread("T_1".into())]);
+        assert_eq!(parts("reply", comment), [PendingPart::Comment]);
+        assert_eq!(
+            parts("react", react),
+            [PendingPart::Reaction("C_1".into(), ReactionKind::Heart)]
+        );
+        for id in ["review", "browser", "copy_url", "copy_change_id", "agent"] {
+            assert_eq!(parts(id, ActionInput::None), [], "{id} changes nothing");
+        }
     }
 
     #[test]

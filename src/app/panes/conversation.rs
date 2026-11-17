@@ -32,7 +32,7 @@ use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx, tree_toggled};
 use crate::bus::{KeyChord, KeyCode, KeyModifiers, ReactSpec, ReplySpec, ReplyTo, Size, Target};
 use crate::domain::detail::{
-    Comment, PrDetail, Reaction, ReactionKind, Review, ReviewState, Thread, has_mine,
+    Comment, PrDetail, Reaction, ReactionKind, Review, ReviewState, Thread, has_mine, set_mine,
 };
 use crate::domain::plural;
 use crate::domain::pr::PullRequest;
@@ -209,6 +209,21 @@ fn subject(detail: &PrDetail, item: Item) -> Option<(&str, &str, &[Reaction])> {
     }
 }
 
+/// The reactions of the comment or the review `id` as the viewer sees
+/// them: the GitHub data with the pending reactions of the viewer (see
+/// `app::pending`). A pending reaction shows before GitHub has it.
+fn shown(cx: &KeyCx<'_>, id: &str, reactions: &[Reaction]) -> Vec<Reaction> {
+    let mut shown = reactions.to_vec();
+    if let Some(Target::Pr { pr, .. }) = cx.target {
+        for (subject, kind, add) in cx.data.pending.reactions(&pr.key) {
+            if subject == id {
+                set_mine(&mut shown, kind, add);
+            }
+        }
+    }
+    shown
+}
+
 /// The detail of the pull request of the popup.
 fn detail<'a>(cx: &KeyCx<'a>) -> Option<&'a PrDetail> {
     let Some(Target::Pr { pr, .. }) = cx.target else {
@@ -222,7 +237,8 @@ fn detail<'a>(cx: &KeyCx<'a>) -> Option<&'a PrDetail> {
 /// collapse. `None` without a comment or a review.
 fn menu(cx: &KeyCx<'_>, item: Item) -> Option<PaneMenu> {
     let detail = detail(cx)?;
-    let (_, author, reactions) = subject(detail, item)?;
+    let (id, author, reactions) = subject(detail, item)?;
+    let reactions = shown(cx, id, reactions);
     let title = match item {
         Item::Review(_) => format!("review of {author}"),
         _ => format!("comment of {author}"),
@@ -246,7 +262,7 @@ fn menu(cx: &KeyCx<'_>, item: Item) -> Option<PaneMenu> {
             .iter()
             .zip(REACTION_KEYS)
             .map(|(&kind, key)| {
-                let mine = if has_mine(reactions, kind) {
+                let mine = if has_mine(&reactions, kind) {
                     " ✓"
                 } else {
                     ""
@@ -266,11 +282,12 @@ fn menu(cx: &KeyCx<'_>, item: Item) -> Option<PaneMenu> {
 fn react(cx: &KeyCx<'_>, ps: &PaneState, kind: ReactionKind) -> Option<Handled> {
     let item = cursor_item(cx, ps)?;
     let (id, _, reactions) = subject(detail(cx)?, item)?;
+    let reactions = shown(cx, id, reactions);
     Some(Handled {
         react: Some(ReactSpec {
             subject: id.to_owned(),
             kind,
-            add: !has_mine(reactions, kind),
+            add: !has_mine(&reactions, kind),
         }),
         ..Handled::default()
     })
@@ -505,13 +522,15 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<Ite
                 let item = Some(Item::Comment(index));
                 out.push((comment_header(0, comment, "commented", now), item));
                 out.extend(body(1, &comment.body, &comment.body_html).map(|n| (n, item)));
-                out.extend(reactions(1, &comment.reactions).map(|n| (n, item)));
+                let shown = shown(cx, &comment.id, &comment.reactions);
+                out.extend(reactions(1, &shown).map(|n| (n, item)));
             }
             Entry::Review(index, review) => {
                 let item = Some(Item::Review(index));
                 out.push((review_header(review, now), item));
                 out.extend(body(1, &review.body, &review.body_html).map(|n| (n, item)));
-                out.extend(reactions(1, &review.reactions).map(|n| (n, item)));
+                let shown = shown(cx, &review.id, &review.reactions);
+                out.extend(reactions(1, &shown).map(|n| (n, item)));
             }
             Entry::Thread(index, thread) => {
                 let open = expanded.contains(&index);
@@ -521,7 +540,8 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<Ite
                         let item = Some(Item::ThreadComment(index, at));
                         out.push((comment_header(1, comment, "", now), item));
                         out.extend(body(2, &comment.body, &comment.body_html).map(|n| (n, item)));
-                        out.extend(reactions(2, &comment.reactions).map(|n| (n, item)));
+                        let shown = shown(cx, &comment.id, &comment.reactions);
+                        out.extend(reactions(2, &shown).map(|n| (n, item)));
                     }
                 }
             }

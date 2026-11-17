@@ -35,7 +35,7 @@ pub(crate) const ENV: &str = "CHAOSHUB_LIST_SOCKET";
 
 /// The version of the message format. A message of another version is
 /// dropped.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 /// The largest message that the list reads. A longer datagram is cut,
 /// and then it does not decode.
@@ -219,6 +219,8 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
+    use crate::bus::{Expect, Pending, PendingPart, ReviewKind};
+    use crate::domain::detail::ReactionKind;
     use crate::domain::keys::{PrKey, RepoKey};
 
     /// The longest wait of a test for an event.
@@ -243,14 +245,28 @@ mod tests {
 
     #[test]
     fn events_encode_and_decode() {
-        let events = [
-            PrViewEvent::ApprovalStarted { pr: pr(7) },
-            PrViewEvent::ApprovalDone {
+        let parts = vec![
+            Pending {
                 pr: pr(7),
-                ok: true,
+                part: PendingPart::Review,
+                expect: Expect::Review(ReviewKind::Approve),
             },
-            PrViewEvent::ApprovalDone {
+            Pending {
                 pr: pr(7),
+                part: PendingPart::Reaction("C_1".into(), ReactionKind::Heart),
+                expect: Expect::Reaction(false),
+            },
+        ];
+        let events = [
+            PrViewEvent::PendingStarted {
+                pr: pr(7),
+                id: "codeview_send".into(),
+                parts: parts.clone(),
+            },
+            PrViewEvent::PendingDone {
+                pr: pr(7),
+                id: "codeview_send".into(),
+                parts,
                 ok: false,
             },
             PrViewEvent::PrChanged { pr: pr(8) },
@@ -262,14 +278,20 @@ mod tests {
 
     #[test]
     fn the_wire_format_is_stable() {
-        let json = String::from_utf8(encode(&PrViewEvent::ApprovalDone {
+        let json = String::from_utf8(encode(&PrViewEvent::PendingDone {
             pr: pr(7),
+            id: "draft".into(),
+            parts: vec![Pending {
+                pr: pr(7),
+                part: PendingPart::Draft,
+                expect: Expect::Draft(true),
+            }],
             ok: true,
         }))
         .unwrap();
         assert_eq!(
             json,
-            r#"{"v":1,"event":"approval_done","pr":{"repo":{"owner":"chaosteil","name":"chaoshub"},"number":7},"ok":true}"#
+            r#"{"v":2,"event":"pending_done","pr":{"repo":{"owner":"chaosteil","name":"chaoshub"},"number":7},"id":"draft","parts":[{"pr":{"repo":{"owner":"chaosteil","name":"chaoshub"},"number":7},"part":{"part":"draft"},"expect":{"expect":"draft","value":true}}],"ok":true}"#
         );
     }
 
@@ -278,9 +300,9 @@ mod tests {
         let cases: [&[u8]; 5] = [
             b"",
             b"not json",
-            br#"{"v":2,"event":"pr_changed","pr":{"repo":{"owner":"a","name":"b"},"number":1}}"#,
-            br#"{"v":1,"event":"merged","pr":{"repo":{"owner":"a","name":"b"},"number":1}}"#,
-            br#"{"v":1,"event":"pr_changed"}"#,
+            br#"{"v":1,"event":"pr_changed","pr":{"repo":{"owner":"a","name":"b"},"number":1}}"#,
+            br#"{"v":2,"event":"merged","pr":{"repo":{"owner":"a","name":"b"},"number":1}}"#,
+            br#"{"v":2,"event":"pr_changed"}"#,
         ];
         for bytes in cases {
             assert_eq!(decode(bytes), None, "{}", String::from_utf8_lossy(bytes));
@@ -304,10 +326,10 @@ mod tests {
         let (listener, rx) = listen(dir.path());
         let socket = UnixDatagram::unbound().unwrap();
         socket.send_to(b"garbage", listener.path()).unwrap();
-        send(listener.path(), &PrViewEvent::ApprovalStarted { pr: pr(9) });
+        send(listener.path(), &PrViewEvent::PrChanged { pr: pr(9) });
         assert_eq!(
             rx.recv_timeout(WAIT),
-            Ok(PrViewEvent::ApprovalStarted { pr: pr(9) })
+            Ok(PrViewEvent::PrChanged { pr: pr(9) })
         );
     }
 

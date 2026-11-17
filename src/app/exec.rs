@@ -361,6 +361,7 @@ impl Runtime {
             return;
         };
         let key = selection.target.key();
+        let parts = action.pending(&selection, &input);
         let (serial, cancel) = self.track(id, key.clone());
         let svc = Services {
             client: Arc::clone(&self.env.client),
@@ -376,6 +377,18 @@ impl Runtime {
                     result = task => result,
                     () = cancel.cancelled() => Err("cancelled".to_owned()),
                 };
+                // The parts go first, so `app` ends the run of this
+                // result, also when the runs end in another order.
+                if !parts.is_empty() {
+                    let parts = Msg::ActionEvent {
+                        id,
+                        key: key.clone(),
+                        event: ActionEvent::Parts(parts),
+                    };
+                    if tx.send(parts).await.is_err() {
+                        tracing::debug!(id, "app gone, action result dropped");
+                    }
+                }
                 let done = Msg::ActionEvent {
                     id,
                     key: key.clone(),

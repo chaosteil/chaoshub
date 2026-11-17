@@ -2,8 +2,10 @@
 
 use futures::future::BoxFuture;
 
-use crate::actions::{Action, Applicability, Group, Prepare, Services};
-use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, Selection, Target};
+use crate::actions::{Action, Applicability, Group, Prepare, Services, own_part};
+use crate::bus::{
+    ActionInput, Expect, KeyChord, KeyCode, KeyModifiers, Pending, PendingPart, Selection, Target,
+};
 use crate::domain::pr::PrState;
 
 /// The action that converts an open pull request to a draft, or marks a
@@ -40,6 +42,13 @@ impl Action for Draft {
 
     fn prepare(&self, _sel: &Selection) -> Prepare {
         Prepare::Run
+    }
+
+    /// The draft flag of the pull request, which flips.
+    fn pending(&self, sel: &Selection, _input: &ActionInput) -> Vec<Pending> {
+        let Target::Pr { pr, .. } = &sel.target;
+        let draft = !pr.head.value.is_draft;
+        own_part(sel, PendingPart::Draft, Expect::Draft(draft))
     }
 
     /// `markPullRequestReadyForReview` for a draft, else
