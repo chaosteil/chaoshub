@@ -1143,6 +1143,19 @@ quits. They stay when you close the popup or the detail, and the popup
 in the list shows the same marks as the popup in the detail. A review
 that went out clears the message.
 
+When you approve a pull request that requests your review, the pull
+request leaves the Review tab at once. chaoshub does not wait for
+GitHub. GitHub then removes the review request, so the pull request
+moves to the Team tab, and chaoshub shows it there at once too. The
+title count of the Review tab goes down at once. The notification does
+not announce the pull request in the Team tab. If the approval fails,
+the pull request comes back, and the status bar shows the error. The
+change is local only: when GitHub data from after the approval comes,
+GitHub decides. If GitHub still requests your review, the pull request
+comes back to the Review tab. An approval from a pull request process
+(`chaoshub pr`, the detail pane) shows in the list after the next sync,
+or when the pane closes.
+
 The text box of the message can have more than one line, and its line
 breaks go to GitHub:
 

@@ -110,8 +110,8 @@ fn in_tab(data: &AppData, tab: &str, pr: &PullRequest) -> bool {
     let scope = data.scopes.get(&pr.key);
     let rule = match tab {
         "mine" => scope == Some(&Scope::Mine),
-        "review" => scope == Some(&Scope::Team) && head.review_requested,
-        "team" => scope == Some(&Scope::Team) && !head.review_requested,
+        "review" => scope == Some(&Scope::Team) && data.review_requested(pr),
+        "team" => scope == Some(&Scope::Team) && !data.review_requested(pr),
         _ => false,
     };
     rule && head.state == PrState::Open && data.filters.matches(pr, data.now)

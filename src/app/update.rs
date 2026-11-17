@@ -21,9 +21,9 @@ use crate::app::panes::{PANES, Pane, PaneAction, PaneState, applicable, init_sta
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
-    AUTHOR_KEY, ActionDialog, ActionMenu, AppData, AppState, AuthorPicker, COLUMN_HEADERS_KEY,
-    Condition, FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaneHandleState,
-    PopupState, ReplyDialog, ReviewPopup, error_text, ui_key,
+    AUTHOR_KEY, ActionDialog, ActionMenu, AppData, AppState, Approval, AuthorPicker,
+    COLUMN_HEADERS_KEY, Condition, FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState,
+    PaneHandleState, PopupState, ReplyDialog, ReviewPopup, error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, cells, pr_ref};
 use crate::app::target::{pr_target, row_target};
@@ -193,7 +193,15 @@ pub(crate) fn update_full(
             event: ActionEvent::MergeStep(step),
             ..
         } => merge_step(state, key, step),
-        Msg::ActionEvent { id, key, event } => action_event(state, actions, id, key, event),
+        Msg::ActionEvent { id, key, event } => {
+            let back = approval_event(&mut state.data, id, &key, &event, Utc::now());
+            let mut cmds = action_event(state, actions, id, key, event);
+            if back {
+                state.bump();
+                cmds.extend(after_change(state, tabs));
+            }
+            cmds
+        }
         msg @ (Msg::AgentStarted { .. } | Msg::AgentFinished { .. } | Msg::AgentLoaded { .. }) => {
             agent_msg(state, msg)
         }
@@ -1018,7 +1026,12 @@ fn open_review(state: &mut AppState, id: &'static str, selection: Selection) -> 
 /// text box of the message, and the key of an event sends the review
 /// with the event and the marked comments. A blocked key sends nothing,
 /// and the status line says why. `esc` closes the popup before this.
-fn review_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) -> Vec<Cmd> {
+fn review_key(
+    state: &mut AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    chord: KeyChord,
+) -> Vec<Cmd> {
     let height = frame::areas(state).list.height;
     let Some(overlay) = state.ui.overlays.iter_mut().rev().find(|o| !o.closing) else {
         return Vec::new();
@@ -1063,8 +1076,80 @@ fn review_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) -> Vec<Cmd
             body: review.message(&state.data).to_owned(),
         },
     };
+    let approval = (event == ReviewKind::Approve).then(|| review.pr().key.clone());
     close_overlay(state);
-    vec![cmd]
+    let mut cmds = vec![cmd];
+    // An approval hides its pull request from the Review tab.
+    if let Some(key) = approval
+        && approval_sent(&mut state.data, key)
+    {
+        cmds.extend(after_change(state, tabs));
+    }
+    cmds
+}
+
+/// Starts the approval of `key`: the pull request leaves the Review tab
+/// at once, before GitHub answers. The approval also adds the pull
+/// request to the announced pull requests, so the notification does not
+/// announce it when it moves to the Team tab. A pull request that does
+/// not request your review gets no approval, because it is not in the
+/// Review tab. True when the approval started.
+fn approval_sent(data: &mut AppData, key: PrKey) -> bool {
+    if !data
+        .prs
+        .get(&key)
+        .is_some_and(|pr| pr.head.value.review_requested)
+    {
+        return false;
+    }
+    let added = data.notify.announced.insert(key.clone());
+    let before = data.approvals.get(&key).copied().unwrap_or_default();
+    let approval = Approval {
+        done_at: None,
+        announced: before.announced || added,
+    };
+    data.approvals.insert(key, approval);
+    data.revision += 1;
+    true
+}
+
+/// The end of a review send on `key` that started an approval. A sent
+/// approval covers the pull request until GitHub data from after `now`
+/// arrives. A failed approval ends: the pull request comes back to the
+/// Review tab. True when the pull request came back.
+///
+/// `now` is the clock, not `AppData::now`: `AppData::now` moves only on
+/// a tick, and data that a sync read before the end of the request must
+/// not end the approval.
+fn approval_event(
+    data: &mut AppData,
+    id: &'static str,
+    key: &TargetKey,
+    event: &ActionEvent,
+    now: DateTime<Utc>,
+) -> bool {
+    let ActionEvent::Done(result) = event else {
+        return false;
+    };
+    let TargetKey::Pr(key) = key;
+    if id != CODEVIEW_SEND_ID || !data.approvals.contains_key(key) {
+        return false;
+    }
+    if result.is_ok() {
+        if let Some(approval) = data.approvals.get_mut(key) {
+            approval.done_at = Some(now);
+        }
+        return false;
+    }
+    if data
+        .approvals
+        .remove(key)
+        .is_some_and(|approval| approval.announced)
+    {
+        data.notify.announced.remove(key);
+    }
+    data.revision += 1;
+    true
 }
 
 /// Moves the cursor of `review` over the comments that can go to GitHub,
@@ -1694,7 +1779,7 @@ fn overlay_key(
             }
             Vec::new()
         }
-        OverlayState::Review(_) => review_key(state, keymap, chord),
+        OverlayState::Review(_) => review_key(state, keymap, tabs, chord),
         OverlayState::Prompt { .. } | OverlayState::ReviewText { .. } => Vec::new(),
     }
 }
@@ -2813,6 +2898,17 @@ fn merge_pr(data: &mut AppData, incoming: PullRequest) -> bool {
     let mut changed = apply(&mut current.head, head, &key, "head");
     changed |= apply(&mut current.ci_state, ci_state, &key, "ci state");
     changed |= apply(&mut current.checks, checks, &key, "checks");
+    // GitHub data from after an approval replaces the approval. The
+    // pull request comes back to the Review tab when GitHub still
+    // requests your review.
+    if data
+        .approvals
+        .get(&key)
+        .is_some_and(|approval| !approval.covers(current))
+    {
+        data.approvals.remove(&key);
+        changed |= current.head.value.review_requested;
+    }
     changed
 }
 
@@ -2882,6 +2978,7 @@ fn drop_gone(data: &mut AppData, key: &PrKey, started_at: DateTime<Utc>) -> bool
     data.prs.remove(key);
     data.scopes.remove(key);
     data.details.remove(key);
+    data.approvals.remove(key);
     true
 }
 
@@ -9150,5 +9247,246 @@ mod tests {
             status_text(&state),
             Some("reply to a comment failed: offline")
         );
+    }
+
+    /// A state on the Review tab with three ready pull requests that
+    /// request your review: #88, #89 and #90, newest first. The cursor is
+    /// on #89.
+    fn approval_state() -> (AppState, PrKey) {
+        let mut state = AppState::new(Size {
+            width: 100,
+            height: 30,
+        });
+        state.data.now = crate::domain::test_time();
+        let mut snapshot = testdata::team_snapshot();
+        for (number, hours) in [(89, 0), (90, 1)] {
+            let mut pr = testdata::team_prs().remove(0);
+            pr.key.number = number;
+            pr.head.value.title = format!("Change {number}");
+            pr.head.value.updated_at = crate::domain::test_time() + TimeDelta::hours(hours);
+            snapshot.prs.push((Scope::Team, pr));
+        }
+        state.load(snapshot, Vec::new());
+        key(&mut state, '2');
+        key(&mut state, 'j');
+        assert_eq!(tab_numbers(&mut state), [90, 89, 88]);
+        assert_eq!(selected_number(&mut state), Some(89));
+        let key = state
+            .data
+            .prs
+            .keys()
+            .find(|key| key.number == 89)
+            .unwrap()
+            .clone();
+        (state, key)
+    }
+
+    /// The numbers of the pull request rows of the active tab.
+    fn tab_numbers(state: &mut AppState) -> Vec<u64> {
+        frame::active_list(state, &TABS)
+            .rows
+            .iter()
+            .filter_map(|row| match &row.item {
+                crate::app::models::RowItem::Pr(pr) => Some(pr.key.number),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Approves the pull request of the cursor row in the Review popup.
+    fn approve(state: &mut AppState, pr: &PrKey) -> Vec<Cmd> {
+        open_dialog(state, pr);
+        key(state, 'a')
+    }
+
+    /// The end of the review send on `pr`.
+    fn send_done(pr: &PrKey, result: Result<&str, &str>) -> Msg {
+        Msg::ActionEvent {
+            id: "codeview_send",
+            key: TargetKey::Pr(pr.clone()),
+            event: ActionEvent::Done(result.map(str::to_owned).map_err(str::to_owned)),
+        }
+    }
+
+    /// The pull request `pr` as GitHub returns it `secs` seconds from the
+    /// clock, with `requested` as the review request of the user.
+    fn github_pr(state: &AppState, pr: &PrKey, secs: i64, requested: bool) -> Msg {
+        let mut pr = state.data.prs[pr].clone();
+        pr.head.value.review_requested = requested;
+        pr.head.value.updated_at += TimeDelta::minutes(1);
+        let at = Utc::now() + TimeDelta::seconds(secs);
+        pr.head.observed_at = at;
+        pr.ci_state.observed_at = at;
+        pr.checks.observed_at = at;
+        Msg::PrRefreshed(Box::new(pr))
+    }
+
+    #[test]
+    fn an_approval_hides_the_pr_from_the_review_tab_at_once() {
+        let (mut state, pr) = approval_state();
+        assert_eq!(notify::ready_count(&state.data, "review"), 3);
+        let cmds = approve(&mut state, &pr);
+        assert!(
+            matches!(
+                cmds.first(),
+                Some(Cmd::RunAction {
+                    input: ActionInput::Review {
+                        event: ReviewKind::Approve,
+                        ..
+                    },
+                    ..
+                })
+            ),
+            "{cmds:?}"
+        );
+        assert!(
+            cmds.iter().any(|cmd| matches!(cmd, Cmd::SetInterest(_))),
+            "the workers get the new cursor row: {cmds:?}"
+        );
+        assert_eq!(tab_numbers(&mut state), [90, 88], "before GitHub answers");
+        assert_eq!(
+            selected_number(&mut state),
+            Some(88),
+            "the cursor goes to the next row"
+        );
+        assert_eq!(notify::ready_count(&state.data, "review"), 2);
+        assert!(
+            state.data.notify.announced.contains(&pr),
+            "the move to the Team tab is no news"
+        );
+        key(&mut state, '3');
+        assert!(
+            tab_numbers(&mut state).contains(&89),
+            "the Team tab shows the PR, as after a sync"
+        );
+    }
+
+    #[test]
+    fn github_data_from_after_the_approval_replaces_it() {
+        let (mut state, pr) = approval_state();
+        approve(&mut state, &pr);
+        let old = github_pr(&state, &pr, -60, true);
+        update(&mut state, &Keymap::default(), old);
+        assert_eq!(
+            tab_numbers(&mut state),
+            [90, 88],
+            "data from before the end of the request does not end the approval"
+        );
+        update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Ok("approved #89")),
+        );
+        assert_eq!(status_text(&state), Some("approved #89"));
+        assert_eq!(tab_numbers(&mut state), [90, 88]);
+        let old = github_pr(&state, &pr, -60, true);
+        update(&mut state, &Keymap::default(), old);
+        assert_eq!(tab_numbers(&mut state), [90, 88], "a late page of a sync");
+        assert!(state.data.approvals.contains_key(&pr));
+
+        let fresh = github_pr(&state, &pr, 60, false);
+        update(&mut state, &Keymap::default(), fresh);
+        assert!(state.data.approvals.is_empty(), "GitHub data replaces it");
+        assert_eq!(tab_numbers(&mut state), [90, 88], "GitHub agrees");
+        assert_eq!(notify::ready_count(&state.data, "review"), 2);
+    }
+
+    #[test]
+    fn the_pr_comes_back_when_github_still_requests_the_review() {
+        let (mut state, pr) = approval_state();
+        approve(&mut state, &pr);
+        update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Ok("approved #89")),
+        );
+        let fresh = github_pr(&state, &pr, 60, true);
+        update(&mut state, &Keymap::default(), fresh);
+        assert!(state.data.approvals.is_empty());
+        assert_eq!(tab_numbers(&mut state), [90, 89, 88], "GitHub wins");
+        assert_eq!(notify::ready_count(&state.data, "review"), 3);
+    }
+
+    #[test]
+    fn a_failed_approval_brings_the_pr_back_and_shows_the_error() {
+        let (mut state, pr) = approval_state();
+        approve(&mut state, &pr);
+        assert_eq!(tab_numbers(&mut state), [90, 88]);
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Err("HTTP 422")),
+        );
+        assert_eq!(status_text(&state), Some("review failed: HTTP 422"));
+        assert!(state.data.approvals.is_empty());
+        assert_eq!(tab_numbers(&mut state), [90, 89, 88]);
+        assert_eq!(
+            selected_number(&mut state),
+            Some(89),
+            "the cursor goes back to the PR"
+        );
+        assert!(
+            cmds.iter().any(|cmd| matches!(cmd, Cmd::SetInterest(_))),
+            "{cmds:?}"
+        );
+        assert_eq!(notify::ready_count(&state.data, "review"), 3);
+        assert!(
+            !state.data.notify.announced.contains(&pr),
+            "the approval does not keep its announced mark"
+        );
+    }
+
+    #[test]
+    fn a_comment_review_does_not_hide_the_pr() {
+        let (mut state, pr) = approval_state();
+        open_dialog(&mut state, &pr);
+        key(&mut state, 'm');
+        key(&mut state, 'o');
+        ctrl(&mut state, 's');
+        let cmds = key(&mut state, 'c');
+        assert!(
+            matches!(cmds.first(), Some(Cmd::RunAction { .. })),
+            "{cmds:?}"
+        );
+        assert!(state.data.approvals.is_empty());
+        assert_eq!(tab_numbers(&mut state), [90, 89, 88]);
+        update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Err("offline")),
+        );
+        assert_eq!(tab_numbers(&mut state), [90, 89, 88]);
+    }
+
+    #[test]
+    fn an_approved_pr_does_not_get_a_team_notice() {
+        let watch_team = |state: &mut AppState| {
+            state.data.notify.settings = Some(notify::NotifySettings {
+                tabs: vec!["team".into()],
+                debounce: TimeDelta::zero(),
+            });
+            state.data.synced.insert(Scope::Team, test_time());
+            notify::detect(&mut state.data, &HashSet::new());
+        };
+        let (mut state, pr) = approval_state();
+        watch_team(&mut state);
+        let fresh = github_pr(&state, &pr, 60, false);
+        update(&mut state, &Keymap::default(), fresh);
+        assert!(
+            state.data.notify.notice.is_some(),
+            "without an approval, the move to the Team tab is news"
+        );
+
+        let (mut state, pr) = approval_state();
+        watch_team(&mut state);
+        approve(&mut state, &pr);
+        update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Ok("approved #89")),
+        );
+        let fresh = github_pr(&state, &pr, 60, false);
+        update(&mut state, &Keymap::default(), fresh);
+        assert_eq!(state.data.notify.notice, None);
     }
 }

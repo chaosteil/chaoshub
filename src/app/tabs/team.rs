@@ -207,7 +207,7 @@ impl Team {
             .filter(|pr| data.scopes.get(&pr.key) == Some(&Scope::Team))
             .filter(|pr| pr.head.value.state == PrState::Open)
             .filter(|pr| show_hidden || data.filters.matches(pr, data.now))
-            .filter(|pr| pr.head.value.review_requested == requested)
+            .filter(|pr| data.review_requested(pr) == requested)
             .filter(|pr| show_hidden || all_open || is_ready(pr))
             .collect();
         prs.sort_by(|a, b| team_order(a, b));

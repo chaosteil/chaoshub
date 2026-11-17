@@ -130,6 +130,34 @@ pub(crate) struct AppData {
     pub title_spinner: bool,
     /// The notification of new pull requests.
     pub notify: NotifyState,
+    /// The approvals that you sent from chaoshub, by pull request. Each
+    /// one hides its pull request from the Review tab at once, until
+    /// GitHub data from after the approval arrives (see
+    /// `AppData::review_requested`).
+    pub approvals: BTreeMap<PrKey, Approval>,
+}
+
+/// An approval that chaoshub sent. While it covers its pull request, the
+/// tabs and the notification act as if GitHub requests no review of you,
+/// as GitHub does after an approval. The entry is local only: the cache
+/// does not get it, and GitHub data from after the approval replaces it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Approval {
+    /// The end of the request. `None` while the request runs.
+    pub done_at: Option<DateTime<Utc>>,
+    /// True when the approval added the pull request to the announced
+    /// pull requests of the notification. A failed approval removes it
+    /// again.
+    pub announced: bool,
+}
+
+impl Approval {
+    /// True while the approval covers `pr`: the request runs, or the
+    /// head of `pr` is from before the end of the request.
+    pub(crate) fn covers(&self, pr: &PullRequest) -> bool {
+        self.done_at
+            .is_none_or(|done_at| pr.head.observed_at < done_at)
+    }
 }
 
 /// The review draft of a pull request. It stays when the popups close.
@@ -254,6 +282,17 @@ pub(crate) struct PrefetchBatch {
 }
 
 impl AppData {
+    /// True when GitHub requests the review of you on `pr`, and no
+    /// approval of chaoshub covers `pr`. The Review tab, the Team tab and
+    /// the notification read this rule, not the field.
+    pub(crate) fn review_requested(&self, pr: &PullRequest) -> bool {
+        pr.head.value.review_requested
+            && !self
+                .approvals
+                .get(&pr.key)
+                .is_some_and(|approval| approval.covers(pr))
+    }
+
     /// True while a sync, a prefetch batch, a conversation load, a files
     /// load, a pr-agent run or a merge runs. The status bar then shows a
     /// spinner.
@@ -872,6 +911,7 @@ impl AppState {
                 animations: true,
                 title_spinner: true,
                 notify: NotifyState::default(),
+                approvals: BTreeMap::new(),
             },
             ui: UiState {
                 active: 0,
