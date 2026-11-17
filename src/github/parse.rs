@@ -599,8 +599,44 @@ pub(crate) mod ci_poll {
 /// Conversions for the `PrDetail` query.
 pub(crate) mod pr_detail {
     use super::{DateTime, GithubError, Observed, Utc, observed, uint};
-    use crate::domain::detail::{Comment, PrDetail, Review, ReviewState, Thread};
+    use crate::domain::detail::{
+        Comment, PrDetail, Reaction, ReactionKind, Review, ReviewState, Thread,
+    };
     use crate::github::queries::pr_detail as q;
+
+    /// The reactions of generated reaction groups, in the order of
+    /// GitHub. GitHub sends a group for each kind, also with a count of
+    /// zero, and such a group is left out. An unknown kind is left out.
+    /// The issue comments, the reviews and the thread comments have
+    /// distinct group types with the same fields.
+    macro_rules! reactions {
+        ($groups:expr) => {{
+            let mut reactions: Vec<Reaction> = Vec::new();
+            for group in $groups.unwrap_or_default() {
+                let kind = match group.content {
+                    q::ReactionContent::THUMBS_UP => ReactionKind::ThumbsUp,
+                    q::ReactionContent::THUMBS_DOWN => ReactionKind::ThumbsDown,
+                    q::ReactionContent::LAUGH => ReactionKind::Laugh,
+                    q::ReactionContent::HOORAY => ReactionKind::Hooray,
+                    q::ReactionContent::CONFUSED => ReactionKind::Confused,
+                    q::ReactionContent::HEART => ReactionKind::Heart,
+                    q::ReactionContent::ROCKET => ReactionKind::Rocket,
+                    q::ReactionContent::EYES => ReactionKind::Eyes,
+                    q::ReactionContent::Other(_) => continue,
+                };
+                let count: u32 = uint(group.reactors.total_count, "reactions")?;
+                if count > 0 {
+                    reactions.push(Reaction {
+                        kind,
+                        count,
+                        mine: group.viewer_has_reacted,
+                    });
+                }
+            }
+            reactions.sort_by_key(|r| r.kind);
+            reactions
+        }};
+    }
 
     /// A `Comment` from a generated comment node. The issue comments and
     /// the thread comments have distinct types with the same fields.
@@ -608,6 +644,7 @@ pub(crate) mod pr_detail {
         ($node:expr) => {{
             let node = $node;
             Comment {
+                id: node.id,
                 author: node
                     .author
                     .map_or_else(|| "ghost".to_owned(), |author| author.login),
@@ -615,6 +652,7 @@ pub(crate) mod pr_detail {
                 body_html: node.body_html,
                 created_at: node.created_at,
                 url: node.url,
+                reactions: reactions!(node.reaction_groups),
             }
         }};
     }
@@ -628,21 +666,20 @@ pub(crate) mod pr_detail {
         let Some(pr) = data.repository.and_then(|repo| repo.pull_request) else {
             return Ok(None);
         };
-        let comments = pr
-            .comments
-            .nodes
-            .unwrap_or_default()
-            .into_iter()
-            .flatten()
-            .map(|node| comment!(node))
-            .collect();
-        let reviews = pr
+        let mut comments = Vec::new();
+        for node in pr.comments.nodes.unwrap_or_default().into_iter().flatten() {
+            comments.push(comment!(node));
+        }
+        let mut reviews = Vec::new();
+        for node in pr
             .reviews
             .and_then(|reviews| reviews.nodes)
             .unwrap_or_default()
             .into_iter()
             .flatten()
-            .map(|node| Review {
+        {
+            reviews.push(Review {
+                id: node.id,
                 author: node
                     .author
                     .map_or_else(|| "ghost".to_owned(), |author| author.login),
@@ -658,8 +695,9 @@ pub(crate) mod pr_detail {
                 body: node.body,
                 body_html: node.body_html,
                 submitted_at: node.submitted_at,
-            })
-            .collect();
+                reactions: reactions!(node.reaction_groups),
+            });
+        }
         let mut threads = Vec::new();
         for node in pr
             .review_threads
@@ -673,14 +711,19 @@ pub(crate) mod pr_detail {
                 path: node.path,
                 line: node.line.map(|line| uint(line, "line")).transpose()?,
                 is_resolved: node.is_resolved,
-                comments: node
-                    .comments
-                    .nodes
-                    .unwrap_or_default()
-                    .into_iter()
-                    .flatten()
-                    .map(|node| comment!(node))
-                    .collect(),
+                comments: {
+                    let mut comments = Vec::new();
+                    for node in node
+                        .comments
+                        .nodes
+                        .unwrap_or_default()
+                        .into_iter()
+                        .flatten()
+                    {
+                        comments.push(comment!(node));
+                    }
+                    comments
+                },
             });
         }
         let detail = PrDetail {
@@ -1123,6 +1166,34 @@ mod tests {
         assert_eq!(lines, [(true, None, 2), (false, Some(550), 2)]);
         assert_eq!(detail.threads[0].path, "src/file-1.rs");
         assert_eq!(detail.threads[0].id, "PRRT_kwDOAAAAAAAAAAA1");
+    }
+
+    #[test]
+    fn pr_detail_maps_the_ids_and_the_reactions() {
+        use crate::domain::detail::{Reaction, ReactionKind};
+        let data = fixture(include_str!("testdata/pr_detail.json"));
+        let detail = pr_detail::detail(data, test_time()).unwrap().unwrap().value;
+        let reaction = |kind, count, mine| Reaction { kind, count, mine };
+        let first = &detail.comments[0];
+        assert_eq!(first.id, "IC_kwDOAAAAAAAAAAA1");
+        assert_eq!(
+            first.reactions,
+            [
+                reaction(ReactionKind::ThumbsUp, 2, true),
+                reaction(ReactionKind::Hooray, 1, false),
+            ],
+            "the groups with a count of zero are left out"
+        );
+        assert_eq!(detail.comments[1].reactions, []);
+        assert_eq!(detail.reviews[0].id, "PRR_kwDOAAAAAAAAAAA1");
+        assert_eq!(
+            detail.reviews[0].reactions,
+            [reaction(ReactionKind::Eyes, 3, false)]
+        );
+        assert_eq!(detail.reviews[1].reactions, [], "a null list is empty");
+        let thread = &detail.threads[0].comments[0];
+        assert_eq!(thread.id, "PRRC_kwDOAAAAAAAAAAA1");
+        assert_eq!(thread.reactions, [reaction(ReactionKind::Heart, 1, true)]);
     }
 
     #[test]

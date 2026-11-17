@@ -3246,11 +3246,13 @@ mod tests {
             .collect();
         detail.comments = (0..8)
             .map(|i| crate::domain::detail::Comment {
+                id: format!("IC_{i}"),
                 author: if i % 2 == 0 { "alice" } else { "bob" }.into(),
                 body: body.join("\n\n"),
                 body_html: String::new(),
                 created_at: crate::domain::test_time() + chrono::TimeDelta::minutes(i),
                 url: format!("https://github.com/c/{i}"),
+                reactions: Vec::new(),
             })
             .collect();
         let observed = crate::domain::observed::Observed {

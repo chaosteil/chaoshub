@@ -654,22 +654,26 @@ mod tests {
     /// A comment of `author` at `minutes` after the test time.
     fn comment(author: &str, minutes: i64) -> Comment {
         Comment {
+            id: format!("IC_{author}_{minutes}"),
             author: author.into(),
             body: "text".into(),
             body_html: String::new(),
             created_at: test_time() + TimeDelta::minutes(minutes),
             url: String::new(),
+            reactions: Vec::new(),
         }
     }
 
     /// A review of `author` in `state` at `minutes` after the test time.
     fn review(author: &str, state: ReviewState, minutes: Option<i64>) -> Review {
         Review {
+            id: format!("PRR_{author}"),
             author: author.into(),
             state,
             body: String::new(),
             body_html: String::new(),
             submitted_at: minutes.map(|m| test_time() + TimeDelta::minutes(m)),
+            reactions: Vec::new(),
         }
     }
 

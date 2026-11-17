@@ -549,11 +549,13 @@ mod tests {
         let detail = Observed {
             value: PrDetail {
                 comments: vec![Comment {
+                    id: "IC_1".into(),
                     author: "colleague".into(),
                     body: "Looks good.".into(),
                     body_html: String::new(),
                     created_at: test_time(),
                     url: "https://github.com/o/r/pull/1#issuecomment-1".into(),
+                    reactions: Vec::new(),
                 }],
                 reviews: Vec::new(),
                 threads: Vec::new(),

@@ -6938,11 +6938,13 @@ mod tests {
         detail.comments = (0..)
             .zip(bodies)
             .map(|(minute, body)| crate::domain::detail::Comment {
+                id: format!("IC_{minute}"),
                 author: "alice".into(),
                 body: body.clone(),
                 body_html: String::new(),
                 created_at: test_time() + TimeDelta::minutes(minute),
                 url: format!("https://github.com/c/{minute}"),
+                reactions: Vec::new(),
             })
             .collect();
         detail

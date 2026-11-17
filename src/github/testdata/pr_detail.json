@@ -6,6 +6,7 @@
         "comments": {
           "nodes": [
             {
+              "id": "IC_kwDOAAAAAAAAAAA1",
               "author": {
                 "__typename": "Bot",
                 "login": "ci-bot"
@@ -13,9 +14,68 @@
               "body": "Body 1.\r\nSecond line.  ",
               "bodyHTML": "<p dir=\"auto\">Body 1.<br>\nSecond line.</p>",
               "createdAt": "2026-10-08T22:32:12Z",
-              "url": "https://github.com/acme/monorepo/pull/3311#issuecomment-70007"
+              "url": "https://github.com/acme/monorepo/pull/3311#issuecomment-70007",
+              "reactionGroups": [
+                {
+                  "content": "THUMBS_UP",
+                  "viewerHasReacted": true,
+                  "reactors": {
+                    "totalCount": 2
+                  }
+                },
+                {
+                  "content": "THUMBS_DOWN",
+                  "viewerHasReacted": false,
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "LAUGH",
+                  "viewerHasReacted": false,
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HOORAY",
+                  "viewerHasReacted": false,
+                  "reactors": {
+                    "totalCount": 1
+                  }
+                },
+                {
+                  "content": "CONFUSED",
+                  "viewerHasReacted": false,
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "HEART",
+                  "viewerHasReacted": false,
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "ROCKET",
+                  "viewerHasReacted": false,
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "content": "EYES",
+                  "viewerHasReacted": false,
+                  "reactors": {
+                    "totalCount": 0
+                  }
+                }
+              ]
             },
             {
+              "id": "IC_kwDOAAAAAAAAAAA2",
               "author": {
                 "__typename": "Bot",
                 "login": "colleague-1"
@@ -23,13 +83,15 @@
               "body": "Body 2.\r\nSecond line.  ",
               "bodyHTML": "<p dir=\"auto\">Body 2.<br>\nSecond line.</p>",
               "createdAt": "2026-10-08T22:32:16Z",
-              "url": "https://github.com/acme/monorepo/pull/3311#issuecomment-70008"
+              "url": "https://github.com/acme/monorepo/pull/3311#issuecomment-70008",
+              "reactionGroups": []
             }
           ]
         },
         "reviews": {
           "nodes": [
             {
+              "id": "PRR_kwDOAAAAAAAAAAA1",
               "author": {
                 "__typename": "Bot",
                 "login": "colleague-1"
@@ -37,9 +99,19 @@
               "state": "COMMENTED",
               "body": "Body 3.\r\nSecond line.  ",
               "bodyHTML": "<p dir=\"auto\">Body 3.<br>\nSecond line.</p>",
-              "submittedAt": "2026-10-08T22:36:01Z"
+              "submittedAt": "2026-10-08T22:36:01Z",
+              "reactionGroups": [
+                {
+                  "content": "EYES",
+                  "viewerHasReacted": false,
+                  "reactors": {
+                    "totalCount": 3
+                  }
+                }
+              ]
             },
             {
+              "id": "PRR_kwDOAAAAAAAAAAA2",
               "author": {
                 "__typename": "User",
                 "login": "colleague-2"
@@ -47,9 +119,11 @@
               "state": "COMMENTED",
               "body": "",
               "bodyHTML": "",
-              "submittedAt": "2026-10-08T22:41:03Z"
+              "submittedAt": "2026-10-08T22:41:03Z",
+              "reactionGroups": null
             },
             {
+              "id": "PRR_kwDOAAAAAAAAAAA3",
               "author": {
                 "__typename": "User",
                 "login": "colleague-2"
@@ -57,7 +131,8 @@
               "state": "COMMENTED",
               "body": "",
               "bodyHTML": "",
-              "submittedAt": "2026-10-08T22:41:05Z"
+              "submittedAt": "2026-10-08T22:41:05Z",
+              "reactionGroups": null
             }
           ]
         },
@@ -71,6 +146,7 @@
               "comments": {
                 "nodes": [
                   {
+                    "id": "PRRC_kwDOAAAAAAAAAAA1",
                     "author": {
                       "__typename": "Bot",
                       "login": "colleague-1"
@@ -78,9 +154,19 @@
                     "body": "Body 6.\r\nSecond line.  ",
                     "bodyHTML": "<p dir=\"auto\">Body 6.<br>\nSecond line.</p>",
                     "createdAt": "2026-10-08T22:36:01Z",
-                    "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70003"
+                    "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70003",
+                    "reactionGroups": [
+                      {
+                        "content": "HEART",
+                        "viewerHasReacted": true,
+                        "reactors": {
+                          "totalCount": 1
+                        }
+                      }
+                    ]
                   },
                   {
+                    "id": "PRRC_kwDOAAAAAAAAAAA2",
                     "author": {
                       "__typename": "User",
                       "login": "colleague-2"
@@ -88,7 +174,8 @@
                     "body": "Body 7.\r\nSecond line.  ",
                     "bodyHTML": "<p dir=\"auto\">Body 7.<br>\nSecond line.</p>",
                     "createdAt": "2026-10-08T22:41:03Z",
-                    "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70005"
+                    "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70005",
+                    "reactionGroups": []
                   }
                 ]
               }
@@ -101,6 +188,7 @@
               "comments": {
                 "nodes": [
                   {
+                    "id": "PRRC_kwDOAAAAAAAAAAA3",
                     "author": {
                       "__typename": "Bot",
                       "login": "colleague-1"
@@ -108,9 +196,11 @@
                     "body": "Body 8.\r\nSecond line.  ",
                     "bodyHTML": "<p dir=\"auto\">Body 8.<br>\nSecond line.</p>",
                     "createdAt": "2026-10-08T22:36:01Z",
-                    "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70004"
+                    "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70004",
+                    "reactionGroups": []
                   },
                   {
+                    "id": "PRRC_kwDOAAAAAAAAAAA4",
                     "author": {
                       "__typename": "User",
                       "login": "colleague-2"
@@ -118,7 +208,8 @@
                     "body": "Body 9.\r\nSecond line.  ",
                     "bodyHTML": "<p dir=\"auto\">Body 9.<br>\nSecond line.</p>",
                     "createdAt": "2026-10-08T22:41:05Z",
-                    "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70006"
+                    "url": "https://github.com/acme/monorepo/pull/3311#discussion_r70006",
+                    "reactionGroups": []
                   }
                 ]
               }

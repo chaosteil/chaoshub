@@ -4,6 +4,7 @@ query PrDetail($owner: String!, $name: String!, $number: Int!) {
       headRefOid
       comments(first: 100) {
         nodes {
+          id
           author {
             __typename
             login
@@ -12,10 +13,18 @@ query PrDetail($owner: String!, $name: String!, $number: Int!) {
           bodyHTML
           createdAt
           url
+          reactionGroups {
+            content
+            viewerHasReacted
+            reactors {
+              totalCount
+            }
+          }
         }
       }
       reviews(last: 50) {
         nodes {
+          id
           author {
             __typename
             login
@@ -24,6 +33,13 @@ query PrDetail($owner: String!, $name: String!, $number: Int!) {
           body
           bodyHTML
           submittedAt
+          reactionGroups {
+            content
+            viewerHasReacted
+            reactors {
+              totalCount
+            }
+          }
         }
       }
       reviewThreads(first: 100) {
@@ -34,6 +50,7 @@ query PrDetail($owner: String!, $name: String!, $number: Int!) {
           line
           comments(first: 50) {
             nodes {
+              id
               author {
                 __typename
                 login
@@ -42,6 +59,13 @@ query PrDetail($owner: String!, $name: String!, $number: Int!) {
               bodyHTML
               createdAt
               url
+              reactionGroups {
+                content
+                viewerHasReacted
+                reactors {
+                  totalCount
+                }
+              }
             }
           }
         }

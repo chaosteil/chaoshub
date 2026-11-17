@@ -299,11 +299,13 @@ pub(crate) fn detail() -> crate::domain::detail::PrDetail {
     use crate::domain::detail::{Comment, PrDetail, Review, ReviewState, Thread};
 
     let comment = |author: &str, body: &str, minutes: i64| Comment {
+        id: format!("IC_{minutes}"),
         author: author.into(),
         body: body.into(),
         body_html: String::new(),
         created_at: test_time() + chrono::TimeDelta::minutes(minutes),
         url: format!("https://github.com/c/{minutes}"),
+        reactions: Vec::new(),
     };
     PrDetail {
         comments: vec![comment(
@@ -313,18 +315,22 @@ pub(crate) fn detail() -> crate::domain::detail::PrDetail {
         )],
         reviews: vec![
             Review {
+                id: "PRR_bob".into(),
                 author: "bob".into(),
                 state: ReviewState::ChangesRequested,
                 body: "Please split the **transition** module.".into(),
                 body_html: String::new(),
                 submitted_at: Some(test_time() + chrono::TimeDelta::hours(2)),
+                reactions: Vec::new(),
             },
             Review {
+                id: "PRR_carol".into(),
                 author: "carol".into(),
                 state: ReviewState::Pending,
                 body: String::new(),
                 body_html: String::new(),
                 submitted_at: None,
+                reactions: Vec::new(),
             },
         ],
         threads: vec![
