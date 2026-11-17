@@ -24,9 +24,9 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 
+use crate::app::notify::ready_count;
 use crate::app::state::{AppState, MergeState, OverlayState};
 use crate::bus::{BlockedKind, MergeProgress, Progress, Scope, TermState, TermStatus};
-use crate::domain::team::is_ready;
 
 /// How long the progress bar shows an error after a failure.
 pub(crate) const ERROR_PROGRESS: TimeDelta = TimeDelta::seconds(5);
@@ -49,9 +49,10 @@ pub(crate) fn term_status(state: &AppState) -> TermStatus {
     }
 }
 
-/// The title of the list or the standalone PR view. The review count
-/// follows the normal Review tab without its temporary view filters.
-/// Count once per frame generation, not on each terminal write.
+/// The title of the list or the standalone PR view. The review count is
+/// the ready set of the Review tab, the same set that the notice of new
+/// pull requests watches. The view filters do not change it. Count once
+/// per frame generation, not on each terminal write.
 pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
     let data = &state.data;
     let mut title = if let Some(key) = &state.ui.pinned {
@@ -62,17 +63,7 @@ pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
     } else if !data.synced.contains_key(&Scope::Team) {
         "chaoshub · ? review".to_owned()
     } else {
-        let count = data
-            .prs
-            .values()
-            .filter(|pr| {
-                data.scopes.get(&pr.key) == Some(&Scope::Team)
-                    && pr.head.value.review_requested
-                    && is_ready(pr)
-                    && data.filters.matches(pr, data.now)
-            })
-            .count();
-        format!("chaoshub · {count} review")
+        format!("chaoshub · {} review", ready_count(data, "review"))
     };
     let activity = match status.state {
         TermState::Idle | TermState::Clear => None,

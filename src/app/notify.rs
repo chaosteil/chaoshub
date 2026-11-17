@@ -117,13 +117,22 @@ fn in_tab(data: &AppData, tab: &str, pr: &PullRequest) -> bool {
     rule && head.state == PrState::Open && data.filters.matches(pr, data.now)
 }
 
-/// The ready set of the tab `tab`.
-fn ready_set(data: &AppData, tab: &str) -> BTreeSet<PrKey> {
+/// The pull requests of the ready set of the tab `tab`.
+fn ready<'a>(data: &'a AppData, tab: &'a str) -> impl Iterator<Item = &'a PullRequest> {
     data.prs
         .values()
-        .filter(|pr| in_tab(data, tab, pr) && is_ready(pr))
-        .map(|pr| pr.key.clone())
-        .collect()
+        .filter(move |pr| in_tab(data, tab, pr) && is_ready(pr))
+}
+
+/// The ready set of the tab `tab`.
+fn ready_set(data: &AppData, tab: &str) -> BTreeSet<PrKey> {
+    ready(data, tab).map(|pr| pr.key.clone()).collect()
+}
+
+/// The number of pull requests in the ready set of the tab `tab`. The
+/// terminal title shows this number for the Review tab.
+pub(crate) fn ready_count(data: &AppData, tab: &str) -> usize {
+    ready(data, tab).count()
 }
 
 /// Compares the ready set of each watched tab with the last one. A pull
