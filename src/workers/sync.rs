@@ -18,7 +18,9 @@
 //! of a pull request on request, for example after the base changes.
 //! When a refresh or a load gives an open pull request with an unknown
 //! merge state, the next tick comes after 3 s, at most 10 times in a
-//! row. A refresh or a load on request starts the count again.
+//! row. A refresh or a load on request starts the count again. The list
+//! mode reads such a pull request again in the same way after a refresh
+//! or a load on request, for example after an action.
 //!
 //! A full sync searches the open pull requests of the repo set. A delta
 //! searches all states, updated since `last_delta` minus 2 min, so merges
@@ -176,8 +178,15 @@ async fn run(ctx: WorkerCtx) {
     let mut next_full = now + syncer.interval(refresh.full_secs);
     let mut next_mine = now + syncer.interval(refresh.mine_secs);
     let mut next_team = now + syncer.interval(refresh.team_secs);
+    // The next read of the pull requests with an unknown merge state after
+    // a refresh or a load on request (see `Syncer::unknown_retry`).
+    let mut retry: Option<(Instant, Vec<PrRef>)> = None;
+    let mut retries = 0;
     loop {
         let mut due = next_full.min(next_mine).min(next_team);
+        if let Some((at, _)) = &retry {
+            due = due.min(*at);
+        }
         if let Some(paused) = syncer.paused_until {
             due = due.max(paused);
         }
@@ -185,8 +194,18 @@ async fn run(ctx: WorkerCtx) {
             request = requests.recv() => {
                 let alive = match request {
                     Some(SyncReq::Full(scope)) => syncer.full(scope).await,
-                    Some(SyncReq::Refresh(refs)) => syncer.refresh(&refs).await,
-                    Some(SyncReq::Load(key)) => syncer.load(&key).await,
+                    Some(SyncReq::Refresh(refs)) => {
+                        retries = 0;
+                        let alive = syncer.refresh(&refs).await;
+                        retry = syncer.unknown_retry(&mut retries);
+                        alive
+                    }
+                    Some(SyncReq::Load(key)) => {
+                        retries = 0;
+                        let alive = syncer.load(&key).await;
+                        retry = syncer.unknown_retry(&mut retries);
+                        alive
+                    }
                     None => false,
                 };
                 if !alive {
@@ -208,6 +227,12 @@ async fn run(ctx: WorkerCtx) {
             }
             () = tokio::time::sleep_until(due) => {
                 let now = Instant::now();
+                if let Some((_, refs)) = retry.take_if(|(at, _)| *at <= now) {
+                    if !syncer.refresh(&refs).await {
+                        return;
+                    }
+                    retry = syncer.unknown_retry(&mut retries);
+                }
                 if next_full <= now {
                     if !syncer.full_both().await {
                         return;
@@ -270,7 +295,7 @@ async fn run_pinned(
                 if !alive {
                     return;
                 }
-                if let Some(retry) = syncer.unknown_retry(&mut retries) {
+                if let Some((retry, _)) = syncer.unknown_retry(&mut retries) {
                     next = retry;
                 }
             }
@@ -285,9 +310,21 @@ async fn run_pinned(
                 }
                 next = syncer
                     .unknown_retry(&mut retries)
-                    .unwrap_or_else(|| Instant::now() + syncer.interval(mine_secs));
+                    .map_or_else(|| Instant::now() + syncer.interval(mine_secs), |(at, _)| at);
             }
         }
+    }
+}
+
+/// The reference of `pr` for a new read.
+fn pr_ref(pr: &PullRequest) -> PrRef {
+    let head = &pr.head.value;
+    PrRef {
+        key: pr.key.clone(),
+        node_id: pr.node_id.clone(),
+        head_oid: head.head_oid.clone(),
+        base_ref: head.base_ref.clone(),
+        base_oid: head.base_oid.clone(),
     }
 }
 
@@ -460,9 +497,9 @@ struct Syncer {
     budget: RateBudget,
     /// The end of a rate limit. No timed sync runs before it.
     paused_until: Option<Instant>,
-    /// True when the last refresh or load gave an open pull request with
-    /// a merge state that GitHub did not compute yet.
-    unknown: bool,
+    /// The open pull requests of the last refresh or load with a merge
+    /// state that GitHub did not compute yet.
+    unknown: Vec<PrRef>,
 }
 
 impl Syncer {
@@ -473,17 +510,20 @@ impl Syncer {
             team: ScopeState::default(),
             budget: RateBudget::default(),
             paused_until: None,
-            unknown: false,
+            unknown: Vec::new(),
         }
     }
 
-    /// The time of the next tick of the pinned mode after a refresh or a
-    /// load. GitHub computes the merge state on request. Thus, when the
-    /// refresh gave an unknown merge state, the next tick comes after
-    /// `UNKNOWN_RETRY`, at most `UNKNOWN_RETRIES` times in a row. `None`
-    /// for the usual interval. A known merge state sets `retries` to 0.
-    fn unknown_retry(&mut self, retries: &mut u32) -> Option<Instant> {
-        if !std::mem::take(&mut self.unknown) {
+    /// The time of the next read after a refresh or a load, and the pull
+    /// requests to read. GitHub computes the merge state on request. Thus,
+    /// when the refresh gave an unknown merge state, the next read comes
+    /// after `UNKNOWN_RETRY`, at most `UNKNOWN_RETRIES` times in a row: in
+    /// the pinned mode a tick, in the list mode a refresh of the pull
+    /// requests with an unknown merge state. `None` for no early read. A
+    /// known merge state sets `retries` to 0.
+    fn unknown_retry(&mut self, retries: &mut u32) -> Option<(Instant, Vec<PrRef>)> {
+        let unknown = std::mem::take(&mut self.unknown);
+        if unknown.is_empty() {
             *retries = 0;
             return None;
         }
@@ -491,7 +531,7 @@ impl Syncer {
             return None;
         }
         *retries += 1;
-        Some(Instant::now() + UNKNOWN_RETRY)
+        Some((Instant::now() + UNKNOWN_RETRY, unknown))
     }
 
     /// The interval for a base of `secs` seconds, doubled while the rate
@@ -952,7 +992,11 @@ impl Syncer {
     /// per pull request, and caches them in the `Lists` mode. False when
     /// `app` is gone.
     async fn refreshed(&mut self, login: &str, prs: Vec<PullRequest>) -> bool {
-        self.unknown = prs.iter().any(unknown_merge_state);
+        self.unknown = prs
+            .iter()
+            .filter(|pr| unknown_merge_state(pr))
+            .map(pr_ref)
+            .collect();
         let (mine, team): (Vec<PullRequest>, Vec<PullRequest>) = prs
             .into_iter()
             .partition(|pr| pr.head.value.author == login);
@@ -2487,7 +2531,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unknown_merge_state_brings_the_next_pinned_tick_sooner() {
+    async fn an_unknown_merge_state_brings_the_next_read_sooner() {
         let server = MockServer::start().await;
         let mut body: Value = serde_json::from_str(BY_NUMBER).unwrap();
         let pr = &mut body["data"]["repository"]["pullRequest"];
@@ -2500,15 +2544,17 @@ mod tests {
 
         let before = Instant::now();
         assert!(syncer.load(&key(1550)).await);
-        let retry = syncer.unknown_retry(&mut retries).unwrap();
+        let (retry, refs) = syncer.unknown_retry(&mut retries).unwrap();
         assert!(retry >= before + UNKNOWN_RETRY, "{retry:?}");
         assert!(retry <= Instant::now() + UNKNOWN_RETRY, "{retry:?}");
         assert_eq!(retries, 1);
+        let keys: Vec<&PrKey> = refs.iter().map(|r| &r.key).collect();
+        assert_eq!(keys, [&key(1550)], "the list mode reads this PR again");
         for _ in 1..UNKNOWN_RETRIES {
-            syncer.unknown = true;
+            syncer.unknown.clone_from(&refs);
             assert!(syncer.unknown_retry(&mut retries).is_some());
         }
-        syncer.unknown = true;
+        syncer.unknown.clone_from(&refs);
         assert_eq!(
             syncer.unknown_retry(&mut retries),
             None,
