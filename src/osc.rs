@@ -372,11 +372,6 @@ mod tests {
         );
         assert_eq!(clipboard(""), b"\x1b]52;c;\x1b\\");
     }
-}
-
-#[cfg(test)]
-mod title_tests {
-    use super::*;
 
     #[test]
     fn title_sequences_set_and_clear_the_title() {

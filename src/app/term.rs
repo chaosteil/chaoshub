@@ -208,9 +208,14 @@ fn syncing(state: &AppState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::frame;
+    use crate::app::models::RowItem;
     use crate::app::state::{ActionDialog, Failure, Overlay, PaneHandleState, PrefetchBatch};
+    use crate::app::tabs::TABS;
+    use crate::app::testdata;
     use crate::bus::{ConfirmSpec, OverlayKind, PromptSpec, Selection, Size, Target, TargetKey};
     use crate::domain::local::LocalMatch;
+    use crate::domain::pr::{CiState, PrState};
     use crate::domain::repo::Repo;
     use crate::domain::test_time;
 
@@ -539,19 +544,6 @@ mod tests {
             assert_eq!(term_status(&state), expected, "{name}");
         }
     }
-}
-
-#[cfg(test)]
-mod title_tests {
-    use super::*;
-    use crate::app::frame;
-    use crate::app::models::RowItem;
-    use crate::app::state::PrefetchBatch;
-    use crate::app::tabs::TABS;
-    use crate::app::testdata;
-    use crate::bus::Size;
-    use crate::domain::pr::{CiState, PrState};
-    use crate::domain::test_time;
 
     fn state() -> AppState {
         let mut state = AppState::new(Size {

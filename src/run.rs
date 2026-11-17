@@ -2191,6 +2191,81 @@ mod tests {
         assert_eq!(writer.clear_sequence(), out, "the panic hook too");
     }
 
+    /// The bytes of one `write` call with the title `title`.
+    fn write_title(writer: &mut TermWriter, title: &str, notice: Option<&Notice>) -> Vec<u8> {
+        let mut out = Vec::new();
+        let status = TermStatus {
+            state: TermState::Idle,
+            msg: None,
+            progress: Progress::Off,
+        };
+        writer
+            .write(&mut out, &status, title, notice, Instant::now())
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn the_title_is_written_only_when_it_changes() {
+        let mut writer = TermWriter::new(false, false, false).with_title(true);
+        assert_eq!(
+            write_title(&mut writer, "chaoshub · 3 review", None),
+            "\x1b]2;chaoshub · 3 review\x1b\\".as_bytes()
+        );
+        assert_eq!(write_title(&mut writer, "chaoshub · 3 review", None), b"");
+        assert_eq!(
+            write_title(&mut writer, "chaoshub · 2 review", None),
+            "\x1b]2;chaoshub · 2 review\x1b\\".as_bytes()
+        );
+    }
+
+    #[test]
+    fn title_updates_can_be_disabled() {
+        let mut writer = TermWriter::new(false, false, false).with_title(false);
+        assert_eq!(write_title(&mut writer, "chaoshub · 3 review", None), b"");
+        let mut out = Vec::new();
+        writer.clear(&mut out).unwrap();
+        assert_eq!(out, b"");
+    }
+
+    #[test]
+    fn quit_and_the_panic_clear_sequence_clear_the_title() {
+        let mut writer = TermWriter::new(false, false, false).with_title(true);
+        assert_eq!(writer.clear_sequence(), b"\x1b]2;\x1b\\");
+        let first = write_title(&mut writer, "chaoshub · 3 review", None);
+        let mut out = Vec::new();
+        writer.clear(&mut out).unwrap();
+        assert_eq!(out, b"\x1b]2;\x1b\\");
+        assert_eq!(write_title(&mut writer, "chaoshub · 3 review", None), first);
+    }
+
+    #[test]
+    fn a_foreground_handover_clears_the_title_and_keeps_the_notice() {
+        for notice in [
+            None,
+            Some(Notice {
+                seq: 1,
+                title: "chaoshub".into(),
+                msg: "New PR".into(),
+            }),
+        ] {
+            let mut writer = TermWriter::new(false, false, true).with_title(true);
+            write_title(&mut writer, "chaoshub · 3 review", notice.as_ref());
+            let mut out = Vec::new();
+            writer.hand_over(&mut out).unwrap();
+            let expected = if notice.is_some() {
+                b"\x1b]2;\x1b\\".as_slice()
+            } else {
+                b"\x1b]2;\x1b\\\x1b]7501;state=clear:app=chaoshub\x1b\\".as_slice()
+            };
+            assert_eq!(out, expected);
+            assert_eq!(
+                write_title(&mut writer, "chaoshub · 3 review", notice.as_ref()),
+                "\x1b]2;chaoshub · 3 review\x1b\\".as_bytes()
+            );
+        }
+    }
+
     #[test]
     fn notify_settings_follow_the_switch_and_the_detection() {
         let config = |enabled| NotifyConfig {
@@ -3555,84 +3630,5 @@ mod tests {
         )
         .unwrap();
         insta::assert_snapshot!(terminal.backend());
-    }
-}
-
-#[cfg(test)]
-mod title_tests {
-    use super::*;
-
-    fn write_title(writer: &mut TermWriter, title: &str, notice: Option<&Notice>) -> Vec<u8> {
-        let mut out = Vec::new();
-        let status = TermStatus {
-            state: TermState::Idle,
-            msg: None,
-            progress: Progress::Off,
-        };
-        writer
-            .write(&mut out, &status, title, notice, Instant::now())
-            .unwrap();
-        out
-    }
-
-    #[test]
-    fn the_title_is_written_only_when_it_changes() {
-        let mut writer = TermWriter::new(false, false, false).with_title(true);
-        assert_eq!(
-            write_title(&mut writer, "chaoshub · 3 review", None),
-            "\x1b]2;chaoshub · 3 review\x1b\\".as_bytes()
-        );
-        assert_eq!(write_title(&mut writer, "chaoshub · 3 review", None), b"");
-        assert_eq!(
-            write_title(&mut writer, "chaoshub · 2 review", None),
-            "\x1b]2;chaoshub · 2 review\x1b\\".as_bytes()
-        );
-    }
-
-    #[test]
-    fn title_updates_can_be_disabled() {
-        let mut writer = TermWriter::new(false, false, false).with_title(false);
-        assert_eq!(write_title(&mut writer, "chaoshub · 3 review", None), b"");
-        let mut out = Vec::new();
-        writer.clear(&mut out).unwrap();
-        assert_eq!(out, b"");
-    }
-
-    #[test]
-    fn quit_and_the_panic_clear_sequence_clear_the_title() {
-        let mut writer = TermWriter::new(false, false, false).with_title(true);
-        assert_eq!(writer.clear_sequence(), b"\x1b]2;\x1b\\");
-        let first = write_title(&mut writer, "chaoshub · 3 review", None);
-        let mut out = Vec::new();
-        writer.clear(&mut out).unwrap();
-        assert_eq!(out, b"\x1b]2;\x1b\\");
-        assert_eq!(write_title(&mut writer, "chaoshub · 3 review", None), first);
-    }
-
-    #[test]
-    fn a_foreground_handover_clears_the_title_and_keeps_the_notice() {
-        for notice in [
-            None,
-            Some(Notice {
-                seq: 1,
-                title: "chaoshub".into(),
-                msg: "New PR".into(),
-            }),
-        ] {
-            let mut writer = TermWriter::new(false, false, true).with_title(true);
-            write_title(&mut writer, "chaoshub · 3 review", notice.as_ref());
-            let mut out = Vec::new();
-            writer.hand_over(&mut out).unwrap();
-            let expected = if notice.is_some() {
-                b"\x1b]2;\x1b\\".as_slice()
-            } else {
-                b"\x1b]2;\x1b\\\x1b]7501;state=clear:app=chaoshub\x1b\\".as_slice()
-            };
-            assert_eq!(out, expected);
-            assert_eq!(
-                write_title(&mut writer, "chaoshub · 3 review", notice.as_ref()),
-                "\x1b]2;chaoshub · 3 review\x1b\\".as_bytes()
-            );
-        }
     }
 }
