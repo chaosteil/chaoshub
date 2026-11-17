@@ -254,6 +254,7 @@ chaoshub pr chaosteil/chaoshub-test 7
 | Cache (SQLite) | `~/.cache/chaoshub/chaoshub.db` (`$XDG_CACHE_HOME/chaoshub/chaoshub.db`) |
 | Log | `~/.local/state/chaoshub/chaoshub.log` (`$XDG_STATE_HOME/chaoshub/chaoshub.log`) |
 | pr-agent results | `~/.local/state/chaoshub/agent/<owner>/<repo>/<n>/` (see "pr-agent") |
+| List socket | `$XDG_RUNTIME_DIR/chaoshub/list-<pid>.sock`, else `~/.local/state/chaoshub/ipc/list-<pid>.sock` (see "How the PR view talks to the list") |
 
 chaoshub uses these XDG paths on macOS too, not `~/Library`.
 
@@ -1152,9 +1153,9 @@ not announce the pull request in the Team tab. If the approval fails,
 the pull request comes back, and the status bar shows the error. The
 change is local only: when GitHub data from after the approval comes,
 GitHub decides. If GitHub still requests your review, the pull request
-comes back to the Review tab. An approval from a pull request process
-(`chaoshub pr`, the detail pane) shows in the list after the next sync,
-or when the pane closes.
+comes back to the Review tab. An approval in the detail pane
+(`chaoshub pr`) hides the pull request in the list at once too (see
+"How the PR view talks to the list").
 
 The text box of the message can have more than one line, and its line
 breaks go to GitHub:
@@ -1512,6 +1513,7 @@ list:
 ```sh
 rex split -b $REX_BLOCK --split=<[detail] split> [--ratio <[detail] ratio>] \
   -c <repo path> --label chaoshub-detail-<owner>-<name>-<N>-<id> --json -- \
+  env CHAOSHUB_LIST_SOCKET=<socket path> \
   <chaoshub> --config <config path> --no-prefetch [--theme <style>] \
   [--palette <name>] [--repo <owner/name> ...] pr <owner/name> <N>
 ```
@@ -1520,7 +1522,53 @@ The pane gets the configuration file and the `--theme`, `--palette` and
 `--repo` options of the list. It always gets `--no-prefetch`, because
 the list already prefetches the pull request of its cursor row. A repo
 without a `path` runs in the directory of the list. chaoshub does not
-zoom the pane. It waits for the pane with `rex wait`.
+zoom the pane. It waits for the pane with `rex wait`. The
+`CHAOSHUB_LIST_SOCKET` env is there only when the list listens on its
+socket.
+
+### How the PR view talks to the list
+
+The PR view in the detail pane is a separate chaoshub process. It
+tells the list process about its changes through a local socket, so
+the list does not wait for the next sync.
+
+- At start, the list opens a Unix datagram socket, `list-<pid>.sock`.
+  The socket is in `$XDG_RUNTIME_DIR/chaoshub`, or in
+  `~/.local/state/chaoshub/ipc` when `XDG_RUNTIME_DIR` is not set (for
+  example on macOS).
+- The list gives the path to each PR view that it starts, in the env
+  `CHAOSHUB_LIST_SOCKET`.
+- For each event, the PR view sends one small JSON message, for
+  example `{"v":1,"event":"pr_changed","pr":{...}}`.
+- The list deletes its socket when it quits. At start, it also deletes
+  the sockets of list processes that do not run now.
+
+The PR view sends these events:
+
+| Event | When | What the list does |
+|---|---|---|
+| `approval_started` | The PR view sends an approval. | The pull request leaves the Review tab at once, as after an approval in the list. |
+| `approval_done` | The approval ends. `ok` is false when it failed or was cancelled. | A failure brings the pull request back. Then the list reads the pull request from GitHub again. |
+| `pr_changed` | A review that is not an approval, a reply, a merge, a close, a draft change or a rerun of the checks succeeds, or a codeview review pane ends. | The list reads the pull request from GitHub again. |
+
+Only an approval hides a pull request. A change request sends
+`pr_changed` only. If the pane of the PR view ends before the end of
+the approval comes, the approval ends at that time, and the next GitHub
+data decides.
+
+The channel is for the local user only:
+
+- The socket directory has mode 0700, and the socket has mode 0600.
+  Other users cannot open it.
+- The socket is a local Unix socket. It uses no network.
+- The PR view never waits for the list. When no list listens, the
+  message goes nowhere, and the PR view works as before.
+- A message that does not decode is dropped.
+
+Each list process has its own socket, so a PR view talks only to the
+list that started it. A PR view that you start yourself
+(`chaoshub pr OWNER/NAME N` in a shell) has no list socket. Its changes
+show in a list after the next sync.
 
 ### Terminal status: OSC 7501 and OSC 9;4
 
