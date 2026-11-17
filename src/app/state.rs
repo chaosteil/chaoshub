@@ -149,6 +149,10 @@ pub(crate) struct Approval {
     /// pull requests of the notification. A failed approval removes it
     /// again.
     pub announced: bool,
+    /// True when a PR view (`chaoshub pr`) sent the approval and told the
+    /// list by the list socket. When the pane of the PR view ends before
+    /// the end of the request comes, the approval ends at that time.
+    pub from_pane: bool,
 }
 
 impl Approval {

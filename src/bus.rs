@@ -696,6 +696,9 @@ pub(crate) enum Msg {
         name: &'static str,
         restart_in: Duration,
     },
+    /// An event from a PR view (`chaoshub pr`) that the list started, by
+    /// the list socket (see `ipc`).
+    PrView(PrViewEvent),
 }
 
 /// A command out of `app`. Each variant has one executor.
