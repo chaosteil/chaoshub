@@ -37,7 +37,13 @@
 //! requests by node id, at most 10 per request. Then it reads the open
 //! entries of their stacks that the worker knows with another place in
 //! the stack, or with no place. Thus a delta also finds a new stack when
-//! GitHub changed one of its pull requests after it made the stack. A
+//! GitHub changed one of its pull requests after it made the stack.
+//!
+//! A read of an open pull request with an unknown merge state does not
+//! give a settled version: GitHub computes the merge state later, and it
+//! does not change `updatedAt` then. Thus the next syncs read such a pull
+//! request again by node id, 30 s apart, at most 5 times for one version
+//! and at most 30 pull requests per sync (see `Reread`). A
 //! full sync also reads again at most 40
 //! pull requests whose known version is older than 1 h, oldest first, so
 //! the merge state and old cache rows stay up to date. At its first sync
@@ -117,6 +123,18 @@ const REFETCH_AFTER: TimeDelta = TimeDelta::hours(1);
 /// The most pull requests that one full sync reads again because of their
 /// age.
 const REFETCH_PER_SYNC: usize = 40;
+
+/// The shortest time between two reads of one pull request with an
+/// unknown merge state (see `Reread`).
+const REREAD_GAP: TimeDelta = TimeDelta::seconds(30);
+
+/// The most reads of one version of a pull request with an unknown merge
+/// state. After them, the worker gives up until the version changes.
+const REREADS: u32 = 5;
+
+/// The most pull requests that one sync reads again because their merge
+/// state is not known (see `Reread`).
+const REREADS_PER_SYNC: usize = 30;
 
 /// The overlap of a delta with the previous one, because the search index
 /// lags.
@@ -275,12 +293,43 @@ fn unknown_merge_state(pr: &PullRequest) -> bool {
         && (head.mergeable == Mergeable::Unknown || head.merge_state == MergeStateStatus::Unknown)
 }
 
+/// An open pull request that the worker reads again by node id, also
+/// when its version did not change. GitHub computes the merge state on
+/// request, and it does not change `updatedAt` when the merge state is
+/// ready. Thus a read with an unknown merge state is not a settled
+/// version: a delta does not find the change, because the search only
+/// gives pull requests with a new `updatedAt`.
+///
+/// Each sync reads the due entries after the stack entries of phase 2: at
+/// most `REREADS_PER_SYNC`, the oldest due time first. Two reads of one
+/// pull request are at least `REREAD_GAP` apart. After `REREADS` reads of
+/// one version, the worker gives up until the version changes. A read
+/// with a known merge state removes the entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Reread {
+    node_id: String,
+    /// The earliest time of the next read.
+    due: DateTime<Utc>,
+    /// The reads that are left. At 0, the worker does not read the pull
+    /// request again until its version changes.
+    left: u32,
+}
+
+/// True when `a` and `b` are the same version of a pull request. The
+/// time of the read does not count.
+fn same_version(a: &PrVersion, b: &PrVersion) -> bool {
+    a.updated_at == b.updated_at && a.head_oid == b.head_oid && a.stack == b.stack
+}
+
 /// What the worker remembers of one scope.
 #[derive(Debug)]
 struct ScopeState {
     /// The versions of the open pull requests that the worker knows in
     /// this scope.
     known: HashMap<PrKey, PrVersion>,
+    /// The open pull requests that the next syncs read again by node id,
+    /// also when their version did not change.
+    reread: HashMap<PrKey, Reread>,
     /// True after the worker loaded the cached versions into `known`.
     seeded: bool,
     /// The page size of phase 1. A timeout halves it.
@@ -293,6 +342,7 @@ impl Default for ScopeState {
     fn default() -> Self {
         Self {
             known: HashMap::new(),
+            reread: HashMap::new(),
             seeded: false,
             page_cap: PAGE_CAP,
             batch_cap: BATCH_CAP,
@@ -302,21 +352,68 @@ impl Default for ScopeState {
 
 impl ScopeState {
     /// Records the pull requests of a sync or a refresh: the versions of
-    /// open ones are known, others are not.
+    /// open ones are known, others are not. An open pull request with an
+    /// unknown merge state gets a `Reread`. The entry keeps its count of
+    /// reads while the version stays the same.
     fn note(&mut self, prs: &[PullRequest]) {
         for pr in prs {
-            if pr.head.value.state == PrState::Open {
-                let version = PrVersion {
-                    updated_at: pr.head.value.updated_at,
-                    head_oid: pr.head.value.head_oid.clone(),
-                    stack: pr.head.value.stack.as_ref().map(StackRef::place),
-                    observed_at: pr.head.observed_at,
-                };
-                self.known.insert(pr.key.clone(), version);
-            } else {
+            if pr.head.value.state != PrState::Open {
                 self.known.remove(&pr.key);
+                self.reread.remove(&pr.key);
+                continue;
+            }
+            let version = PrVersion {
+                updated_at: pr.head.value.updated_at,
+                head_oid: pr.head.value.head_oid.clone(),
+                stack: pr.head.value.stack.as_ref().map(StackRef::place),
+                observed_at: pr.head.observed_at,
+            };
+            let due = version.observed_at + REREAD_GAP;
+            let same = self
+                .known
+                .insert(pr.key.clone(), version.clone())
+                .is_some_and(|old| same_version(&old, &version));
+            if !unknown_merge_state(pr) {
+                self.reread.remove(&pr.key);
+                continue;
+            }
+            match self.reread.get_mut(&pr.key) {
+                Some(entry) if same => entry.due = entry.due.max(due),
+                _ => {
+                    let entry = Reread {
+                        node_id: pr.node_id.clone(),
+                        due,
+                        left: REREADS,
+                    };
+                    self.reread.insert(pr.key.clone(), entry);
+                }
             }
         }
+    }
+
+    /// The node ids of the `Reread` entries that are due at `now` and
+    /// not in `read`: at most `REREADS_PER_SYNC`, the oldest due time
+    /// first. Each entry uses one read, and its next read is due after
+    /// `REREAD_GAP`.
+    fn due_rereads(&mut self, now: DateTime<Utc>, read: &HashSet<String>) -> Vec<String> {
+        let mut due: Vec<(DateTime<Utc>, PrKey)> = self
+            .reread
+            .iter()
+            .filter(|(_, entry)| entry.left > 0 && entry.due <= now)
+            .filter(|(_, entry)| !read.contains(&entry.node_id))
+            .map(|(key, entry)| (entry.due, key.clone()))
+            .collect();
+        due.sort();
+        due.truncate(REREADS_PER_SYNC);
+        let mut ids = Vec::with_capacity(due.len());
+        for (_, key) in due {
+            if let Some(entry) = self.reread.get_mut(&key) {
+                entry.left -= 1;
+                entry.due = now + REREAD_GAP;
+                ids.push(entry.node_id.clone());
+            }
+        }
+        ids
     }
 
     /// The node ids of the open stack entries of `prs` whose known
@@ -494,6 +591,7 @@ impl Syncer {
         });
         if pages.complete {
             state.known.retain(|key, _| keys.contains(key));
+            state.reread.retain(|key, _| keys.contains(key));
         }
         let started_at = pages.started_at;
         if !self.end(scope, seen, started_at).await {
@@ -566,7 +664,8 @@ impl Syncer {
     /// `MAX_RESULTS`. After each page, phase 2 reads the new and the
     /// changed pull requests of the page. After the last page, phase 2
     /// reads the known open stack entries of these pull requests that
-    /// have an old place in the stack. In a full sync (`refetch`),
+    /// have an old place in the stack. Then it reads the due `Reread`
+    /// entries. In a full sync (`refetch`),
     /// phase 2 at the end also reads the unchanged pull requests whose
     /// known version is older than `REFETCH_AFTER`: at most
     /// `REFETCH_PER_SYNC`, oldest first.
@@ -649,6 +748,13 @@ impl Syncer {
             Err(err) => return Ok(Some(pages.failed(err))),
         }
         read.extend(followups);
+        let rereads = self.state(scope).due_rereads(Utc::now(), &read);
+        match self.fetch(scope, &rereads, &me, &mut pages).await {
+            Ok(true) => {}
+            Ok(false) => return Ok(None),
+            Err(err) => return Ok(Some(pages.failed(err))),
+        }
+        read.extend(rereads);
         stale.sort();
         let stale: Vec<String> = stale
             .into_iter()
@@ -1673,6 +1779,200 @@ mod tests {
         assert!(syncer.delta(Scope::Mine).await);
         assert_eq!(synced(&mut harness).await.1, [1587, 1586]);
         assert_eq!(by_ids(&server).await, [[ID_1587, ID_1586]]);
+    }
+
+    /// The node of an open pull request of the user, with the `updatedAt`
+    /// and the `headRefOid` of #1589. `merge` is the `mergeable` value:
+    /// `UNKNOWN` gives an unknown merge state, others a clean one.
+    fn open_node(number: u64, merge: &str) -> Value {
+        let mut node = page_nodes().remove(0);
+        node["id"] = json!(format!("PR_{number}"));
+        node["number"] = json!(number);
+        node["state"] = json!("OPEN");
+        node["mergeable"] = json!(merge);
+        node["mergeStateStatus"] = json!(if merge == "UNKNOWN" {
+            "UNKNOWN"
+        } else {
+            "CLEAN"
+        });
+        node
+    }
+
+    /// Answers the first `PrByIds` request with `first` and every later
+    /// one with `then`.
+    async fn serve_by_ids_then(server: &MockServer, first: Vec<Value>, then: Vec<Value>) {
+        Mock::given(method("POST"))
+            .and(body_string_contains("query PrByIds"))
+            .respond_with(ByIds(first))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(server)
+            .await;
+        serve_by_ids(server, then).await;
+    }
+
+    /// Writes a sync state of `scope` with a `last_delta`, so a delta
+    /// runs.
+    async fn put_last_delta(store: &crate::store::handle::StoreHandle, scope: Scope) {
+        let last = Utc::now() - TimeDelta::minutes(1);
+        store
+            .put_sync_state(
+                scope,
+                repo_set_hash(&["acme/deploy".to_owned()]),
+                crate::store::SyncState {
+                    last_full: Some(last),
+                    last_delta: Some(last),
+                    last_error: None,
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Refreshes `PR_<number>` and returns the number of the
+    /// `PrRefreshed`.
+    async fn refresh_one(syncer: &mut Syncer, harness: &mut Harness, number: u64) -> u64 {
+        let refs = [testkit::pr_ref(number, &format!("PR_{number}"), OID_1589)];
+        assert!(syncer.refresh(&refs).await);
+        assert!(matches!(harness.recv().await, Msg::Rate(_)));
+        match harness.recv().await {
+            Msg::PrRefreshed(pr) => pr.key.number,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Makes the `Reread` entry of `number` in Mine due now.
+    fn make_due(syncer: &mut Syncer, number: u64) {
+        syncer.mine.reread.get_mut(&key(number)).unwrap().due = Utc::now() - TimeDelta::seconds(1);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_merge_state_is_read_again_by_a_later_delta() {
+        let server = MockServer::start().await;
+        serve_searches(&server, stub_page(0, false), stub_page(0, false)).await;
+        serve_by_ids_then(
+            &server,
+            vec![open_node(1, "UNKNOWN")],
+            vec![open_node(1, "MERGEABLE")],
+        )
+        .await;
+        let (ctx, mut harness) = logged_in(&server);
+        put_last_delta(&ctx.store, Scope::Mine).await;
+        let mut syncer = Syncer::new(ctx);
+
+        assert_eq!(refresh_one(&mut syncer, &mut harness, 1).await, 1);
+        assert!(syncer.mine.known.contains_key(&key(1)));
+        assert_eq!(syncer.mine.reread[&key(1)].left, REREADS);
+
+        // The delta does not find #1, because its `updatedAt` stays the
+        // same. The entry is not due yet.
+        assert!(syncer.delta(Scope::Mine).await);
+        assert_eq!(synced(&mut harness).await.1, Vec::<u64>::new());
+        assert_eq!(by_ids(&server).await.len(), 1, "no read before REREAD_GAP");
+
+        make_due(&mut syncer, 1);
+        assert!(syncer.delta(Scope::Mine).await);
+        assert_eq!(synced(&mut harness).await.1, [1]);
+        assert_eq!(by_ids(&server).await, [["PR_1"], ["PR_1"]]);
+        assert!(
+            !syncer.mine.reread.contains_key(&key(1)),
+            "a known merge state is settled"
+        );
+
+        assert!(syncer.delta(Scope::Mine).await);
+        assert_eq!(synced(&mut harness).await.1, Vec::<u64>::new());
+        assert_eq!(by_ids(&server).await.len(), 2, "no read after it settled");
+        assert_eq!(searches(&server).await.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_settled_read_gets_no_reread() {
+        let server = MockServer::start().await;
+        serve_searches(&server, stub_page(0, false), stub_page(0, false)).await;
+        serve_by_ids(&server, vec![open_node(1, "MERGEABLE")]).await;
+        let (ctx, mut harness) = logged_in(&server);
+        put_last_delta(&ctx.store, Scope::Mine).await;
+        let mut syncer = Syncer::new(ctx);
+
+        assert_eq!(refresh_one(&mut syncer, &mut harness, 1).await, 1);
+        assert!(syncer.mine.known.contains_key(&key(1)));
+        assert!(syncer.mine.reread.is_empty());
+        assert!(syncer.delta(Scope::Mine).await);
+        assert_eq!(synced(&mut harness).await.1, Vec::<u64>::new());
+        assert_eq!(by_ids(&server).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_rereads_of_one_version_stop_after_rereads() {
+        let server = MockServer::start().await;
+        serve_searches(&server, stub_page(0, false), stub_page(0, false)).await;
+        serve_by_ids(&server, vec![open_node(1, "UNKNOWN")]).await;
+        let (ctx, mut harness) = logged_in(&server);
+        put_last_delta(&ctx.store, Scope::Mine).await;
+        let mut syncer = Syncer::new(ctx);
+
+        refresh_one(&mut syncer, &mut harness, 1).await;
+        for read in 1..=REREADS {
+            make_due(&mut syncer, 1);
+            assert!(syncer.delta(Scope::Mine).await);
+            assert_eq!(synced(&mut harness).await.1, [1], "read {read}");
+            assert_eq!(syncer.mine.reread[&key(1)].left, REREADS - read);
+        }
+        make_due(&mut syncer, 1);
+        assert!(syncer.delta(Scope::Mine).await);
+        assert_eq!(synced(&mut harness).await.1, Vec::<u64>::new());
+        let reads = usize::try_from(REREADS).unwrap();
+        assert_eq!(by_ids(&server).await.len(), 1 + reads, "the worker gave up");
+
+        // A refresh of the same version keeps the count. A new version
+        // starts it again.
+        refresh_one(&mut syncer, &mut harness, 1).await;
+        assert_eq!(syncer.mine.reread[&key(1)].left, 0);
+        let mut node = open_node(1, "UNKNOWN");
+        node["updatedAt"] = json!("2026-10-31T03:00:00Z");
+        let body = json!({ "data": { "nodes": [node], "rateLimit": rate_json() } });
+        let me = Me {
+            login: "chaosteil",
+            teams: &[],
+        };
+        let newer = crate::github::parse::pr_by_ids::prs(
+            crate::github::parse::fixture(&body.to_string()),
+            &me,
+            Utc::now(),
+        )
+        .unwrap();
+        syncer.mine.note(&newer);
+        assert_eq!(syncer.mine.reread[&key(1)].left, REREADS);
+    }
+
+    #[tokio::test]
+    async fn one_sync_rereads_at_most_rereads_per_sync() {
+        let server = MockServer::start().await;
+        serve_searches(&server, stub_page(0, false), stub_page(0, false)).await;
+        serve_by_ids(&server, Vec::new()).await;
+        let (ctx, mut harness) = logged_in(&server);
+        put_last_delta(&ctx.store, Scope::Mine).await;
+        let mut syncer = Syncer::new(ctx);
+        let count = REREADS_PER_SYNC + 5;
+        let start = Utc::now() - TimeDelta::hours(1);
+        for number in 0..count as u64 {
+            let entry = Reread {
+                node_id: format!("PR_{number}"),
+                due: start + TimeDelta::seconds(i64::try_from(number).unwrap()),
+                left: REREADS,
+            };
+            syncer.mine.reread.insert(key(number), entry);
+        }
+
+        assert!(syncer.delta(Scope::Mine).await);
+        synced(&mut harness).await;
+        let read: Vec<String> = by_ids(&server).await.concat();
+        let oldest: Vec<String> = (0..REREADS_PER_SYNC).map(|n| format!("PR_{n}")).collect();
+        assert_eq!(read, oldest, "the oldest due first, in batches");
+        assert_eq!(
+            by_ids(&server).await.len(),
+            REREADS_PER_SYNC.div_ceil(BATCH_CAP)
+        );
     }
 
     #[tokio::test]
