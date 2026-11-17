@@ -11,7 +11,9 @@
 //! of codeview cover each send.
 //!
 //! The action reads the comment files again first, and leaves out the
-//! comments that went out from codeview in the meantime. It writes the
+//! comments that went out from codeview in the meantime. When every chosen
+//! comment went out already, the action posts the review with only the
+//! message, so an approval does not stay behind. It writes the
 //! request of `codeview.bridge` to a temporary file in the state
 //! directory, runs
 //! `nvim --headless -c "lua require('codeview.bridge').submit_file('<path>')"`
@@ -52,8 +54,13 @@ use crate::domain::plural;
 use crate::domain::pr::PullRequest;
 use crate::github::ReviewEvent;
 
-/// The longest run of the headless nvim.
-const TIMEOUT: Duration = Duration::from_secs(120);
+/// The longest run of the headless nvim. codeview gives the post of a
+/// review 120 s, and the open of the pull request and the reads of GitHub
+/// come on top. A kill during the post can leave a review on GitHub
+/// without the sent marks of codeview, so the limit is well above that.
+/// codeview takes a lock older than 10 minutes as stale, so the limit
+/// stays at that time.
+const TIMEOUT: Duration = Duration::from_secs(600);
 
 /// The action that sends codeview comments through a headless codeview.
 pub(crate) struct CodeviewSend;
@@ -121,6 +128,7 @@ impl Action for CodeviewSend {
             if ids.is_empty() {
                 return message_review(&svc, &pr, event, &body).await;
             }
+            let message = body.clone();
             let repo = repo
                 .path
                 .ok_or_else(|| "the repo has no local path".to_owned())?;
@@ -141,13 +149,18 @@ impl Action for CodeviewSend {
                 repo,
                 comments_dir,
                 work_dir,
-                key: pr.key,
+                key: pr.key.clone(),
                 ids,
                 event,
                 body,
                 timeout: TIMEOUT,
             };
-            send(job).await
+            match send(job).await? {
+                Sent::Done(text) => Ok(text),
+                Sent::Gone(note) => message_review(&svc, &pr, event, &message)
+                    .await
+                    .map(|text| format!("{text}{note}")),
+            }
         })
     }
 }
@@ -214,7 +227,20 @@ struct Outcome {
     older: u64,
     skipped: Vec<Skipped>,
     already_sent: Vec<String>,
+    /// True when the review with the event went out. Newer codeview only.
+    reviewed: bool,
     error: String,
+}
+
+/// What a send did.
+#[derive(Debug, PartialEq, Eq)]
+enum Sent {
+    /// codeview ran. The text of the result.
+    Done(String),
+    /// Every chosen comment went out already, so codeview did not run.
+    /// The review with only the message goes out. The text names the
+    /// comments that went out already.
+    Gone(String),
 }
 
 /// A comment that stays local, with the reason.
@@ -253,11 +279,7 @@ async fn message_review(
     event: ReviewKind,
     body: &str,
 ) -> Result<String, String> {
-    let (event, done) = match event {
-        ReviewKind::Comment => (ReviewEvent::Comment, "commented on"),
-        ReviewKind::Approve => (ReviewEvent::Approve, "approved"),
-        ReviewKind::RequestChanges => (ReviewEvent::RequestChanges, "requested changes on"),
-    };
+    let (event, done) = verb(event);
     let empty = body.trim().is_empty();
     if empty && event != ReviewEvent::Approve {
         return Err("the review needs a message".to_owned());
@@ -269,15 +291,27 @@ async fn message_review(
     Ok(format!("{done} #{}", pr.key.number))
 }
 
+/// The event of GitHub of `event`, and the verb of the result text.
+fn verb(event: ReviewKind) -> (ReviewEvent, &'static str) {
+    match event {
+        ReviewKind::Comment => (ReviewEvent::Comment, "commented on"),
+        ReviewKind::Approve => (ReviewEvent::Approve, "approved"),
+        ReviewKind::RequestChanges => (ReviewEvent::RequestChanges, "requested changes on"),
+    }
+}
+
 /// Reads the comment files again, runs the headless codeview on the
 /// comments that are still unsent, and returns the text of the result.
-/// A send that posted no comment is an error: no review went out.
+/// A send that posted no comment and no review is an error. When every
+/// chosen comment went out already, codeview does not run, and the result
+/// is `Sent::Gone`. A comment review without a message then has nothing
+/// to post, so it is an error.
 ///
 /// The request names the chosen comments per push, so codeview posts the
 /// comments of an older push on the head commit of that push. A codeview
 /// that knows only version 1 gets the comments of one push again with
 /// version 1.
-async fn send(job: Job) -> Result<String, String> {
+async fn send(job: Job) -> Result<Sent, String> {
     let (dir, repo, number) = (job.comments_dir.clone(), job.repo.clone(), job.key.number);
     let comments = tokio::task::spawn_blocking(move || store::load(&dir, &repo, number))
         .await
@@ -305,7 +339,13 @@ async fn send(job: Job) -> Result<String, String> {
         }
     }
     if pushes.is_empty() {
-        return Err(SENT_ALREADY.to_owned());
+        if job.event == ReviewKind::Comment && job.body.trim().is_empty() {
+            return Err(SENT_ALREADY.to_owned());
+        }
+        return Ok(Sent::Gone(format!(
+            " · went out from codeview already: {}",
+            job.ids.join(", ")
+        )));
     }
     let gone: Vec<&String> = job
         .ids
@@ -343,6 +383,10 @@ async fn send(job: Job) -> Result<String, String> {
         );
     }
     if outcome.posted == 0 {
+        if outcome.reviewed {
+            let (_, done) = verb(job.event);
+            return Ok(Sent::Done(format!("{done} #{}{text}", job.key.number)));
+        }
         return Err(format!("{NOT_OUT}{text}"));
     }
     let older = if outcome.older > 0 {
@@ -352,10 +396,10 @@ async fn send(job: Job) -> Result<String, String> {
     };
     let name = job.event.name();
     let article = if name.starts_with('a') { "an" } else { "a" };
-    Ok(format!(
+    Ok(Sent::Done(format!(
         "posted {} as {article} {name} review{older}{text}",
         noun(outcome.posted)
-    ))
+    )))
 }
 
 /// Writes the request of `version` for `pushes` to a temporary file in
@@ -544,7 +588,9 @@ mod tests {
         let text = send(setup.job(&["c1", "c2"], TIMEOUT)).await.unwrap();
         assert_eq!(
             text,
-            "posted 1 comment as a comment review · went out from codeview already: c2"
+            Sent::Done(
+                "posted 1 comment as a comment review · went out from codeview already: c2".into()
+            )
         );
         let request = setup.request();
         assert_eq!(request["version"], 2);
@@ -573,7 +619,7 @@ mod tests {
         let text = send(job).await.unwrap();
         assert_eq!(
             text,
-            "posted 2 comments as an approve review (1 on an older push) · went out from codeview already: c2"
+            Sent::Done("posted 2 comments as an approve review (1 on an older push) · went out from codeview already: c2".into())
         );
         assert_eq!(
             setup.request()["pushes"],
@@ -593,9 +639,9 @@ mod tests {
         let text = send(setup.job(&["c1", "c3"], TIMEOUT)).await.unwrap();
         assert_eq!(
             text,
-            format!(
+            Sent::Done(format!(
                 "posted 1 comment as a comment review{STAYS_LOCAL}src/c.rs:L7-8 (old): cannot read the diff of the older push h0"
-            )
+            ))
         );
     }
 
@@ -607,7 +653,10 @@ printf '%s' '{"version":1,"ok":true,"posted":1,"skipped":[],"already_sent":[],"u
     async fn an_older_codeview_gets_the_comments_of_one_push_with_version_1() {
         let setup = Setup::new(OLD_CODEVIEW_BODY);
         let text = send(setup.job(&["c1"], TIMEOUT)).await.unwrap();
-        assert_eq!(text, "posted 1 comment as a comment review");
+        assert_eq!(
+            text,
+            Sent::Done("posted 1 comment as a comment review".into())
+        );
         let request = setup.request();
         assert_eq!(request["version"], 1, "the second request");
         assert_eq!(request["head"], "h1");
@@ -665,14 +714,72 @@ printf '%s' '{"version":1,"ok":true,"posted":1,"skipped":[],"already_sent":[],"u
     }
 
     #[tokio::test]
-    async fn comments_that_went_out_already_post_nothing() {
+    async fn comments_that_went_out_already_leave_only_the_message() {
         let setup = Setup::new(OK);
-        let err = send(setup.job(&["c2"], TIMEOUT)).await.unwrap_err();
-        assert_eq!(err, SENT_ALREADY);
+        let sent = send(setup.job(&["c2"], TIMEOUT)).await.unwrap();
+        assert_eq!(
+            sent,
+            Sent::Gone(" · went out from codeview already: c2".into())
+        );
         assert!(
             !setup.root.path().join("request.json").exists(),
             "nvim did not run"
         );
+    }
+
+    #[tokio::test]
+    async fn comments_that_went_out_already_post_no_comment_review_without_a_message() {
+        let setup = Setup::new(OK);
+        let mut job = setup.job(&["c2"], TIMEOUT);
+        job.body = " \n".into();
+        let err = send(job).await.unwrap_err();
+        assert_eq!(err, SENT_ALREADY);
+        assert!(!setup.root.path().join("request.json").exists());
+    }
+
+    #[tokio::test]
+    async fn a_review_without_new_comments_is_a_result() {
+        let body = r#"printf '%s' '{"version":2,"ok":true,"posted":0,"older":0,"skipped":[],"already_sent":["c1"],"reviewed":true,"url":"u","error":""}' > "$out""#;
+        let setup = Setup::new(body);
+        let mut job = setup.job(&["c1"], TIMEOUT);
+        job.event = ReviewKind::Approve;
+        let sent = send(job).await.unwrap();
+        assert_eq!(
+            sent,
+            Sent::Done("approved #14 · went out from codeview already: src/a.rs:L2 (new)".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_approval_of_comments_that_went_out_already_posts_the_approval_alone() {
+        let setup = Setup::new(OK);
+        let dir = setup.root.path();
+        let mut selection = selection();
+        let Target::Pr { repo, .. } = &mut selection.target;
+        repo.path = Some(dir.join("repo"));
+        let mut config = toml::Table::new();
+        config.insert(
+            CodeviewSend::COMMENTS_DIR.into(),
+            toml::Value::String(dir.join("comments").to_string_lossy().into_owned()),
+        );
+        selection.action_config = Some(config);
+        let input = ActionInput::Review {
+            ids: vec!["c2".into()],
+            event: ReviewKind::Approve,
+            body: String::new(),
+        };
+        let server = server().await;
+        let result = CodeviewSend
+            .execute(selection, input, services(&server))
+            .await;
+        assert_eq!(
+            result,
+            Ok("approved #7 · went out from codeview already: c2".to_owned())
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1, "only the approval");
+        let request: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(request["variables"]["event"], "APPROVE");
     }
 
     /// A selection of the pull request of `testdata/pr.json`, by

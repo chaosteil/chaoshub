@@ -1218,7 +1218,12 @@ breaks go to GitHub:
 | `ctrl-s` / `esc` | Goes back to the Review popup, with the text. |
 
 When a marked comment went out from codeview in the meantime, the send
-leaves it out. When codeview can post none of the marked comments, for
+leaves it out. When every marked comment went out already, the review
+goes out with only the message, so an approval does not stay behind. A
+comment review without a message then has nothing to post. codeview
+also finds a comment that GitHub holds already, for example after a
+send that stopped before codeview wrote its sent marks, and it does not
+post that comment again. When codeview can post none of the marked comments, for
 example because no comment maps to the diff, it sends no review. The
 status line then says `the review did not go out`, and names the
 comments that stay local. When the review went out, but some marked
@@ -1600,7 +1605,9 @@ the request. chaoshub then sends the comments of one push again with
 version 1 (`"head"` and `"ids"` in place of `"pushes"`). For comments
 of more than one push, the send then fails, and the status line asks
 you to update codeview. nvim gets `CHAOSHUB_AGENT_ROOT=<state dir>/agent`,
-like the review of `v`. chaoshub stops nvim after 120 seconds.
+like the review of `v`. chaoshub stops nvim after 10 minutes. codeview
+gives the post of a review 2 minutes, so a stop during the post is
+rare.
 
 chaoshub never posts these comments to GitHub itself. Only codeview
 posts, so its lock file and its sent marks stop a second send of the
