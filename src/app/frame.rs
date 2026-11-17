@@ -164,7 +164,10 @@ fn overlay_models(
                 OverlayState::Actions(menu) => {
                     let Target::Pr { pr, .. } = &*menu.target;
                     OverlayContent::Picker {
-                        title: format!("actions for #{}", pr.key.number),
+                        title: menu
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| format!("actions for #{}", pr.key.number)),
                         items: menu.items(&state.data, &state.cache.keymap, actions),
                         cursor: menu.row(menu.cursor),
                     }
@@ -508,9 +511,12 @@ fn overlay_hints(
                 .iter()
                 .filter(|_| target.is_some())
                 .map(|&(name, label)| app_hint(keymap, &[name], label, true));
+            let open = panes
+                .get(popup.active)
+                .map_or("expand", |pane| pane.open_hint());
             let mut hints = vec![
                 hint(&keys, "pane tabs"),
-                app_hint(keymap, &["open"], "expand", true),
+                app_hint(keymap, &["open"], open, true),
             ];
             hints.extend(own);
             hints.extend([

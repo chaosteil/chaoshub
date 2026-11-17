@@ -21,7 +21,7 @@ const APP_KEYS: &[(&[&str], &str)] = &[
     (&["top", "bottom"], "top, bottom"),
     (&["page_down", "page_up"], "half a page down, up"),
     (&["scroll_down", "scroll_up"], "scroll down, up"),
-    (&["open"], "open the popup"),
+    (&["open"], "open, comment menu"),
     (&["actions"], "open the actions menu"),
     (&["close_overlay"], "close the popup"),
     (&["filter"], "filter"),
@@ -336,6 +336,28 @@ mod tests {
         assert!(
             section.entries.contains(&entry("R", "reply to a comment")),
             "{:?}",
+            section.entries
+        );
+    }
+
+    #[test]
+    fn enter_names_the_comment_menu_and_react_has_no_key() {
+        let actions = &crate::actions::REGISTRY;
+        let model = help_model(&Keymap::default(), &TABS, actions);
+        let keys = &model.sections[0];
+        assert!(
+            keys.entries.contains(&entry("enter", "open, comment menu")),
+            "{:?}",
+            keys.entries
+        );
+        let section = model
+            .sections
+            .iter()
+            .find(|s| s.title == ACTIONS_TITLE)
+            .unwrap();
+        assert!(
+            section.entries.contains(&entry("", "react to a comment")),
+            "the comment menu has the keys of the reactions: {:?}",
             section.entries
         );
     }

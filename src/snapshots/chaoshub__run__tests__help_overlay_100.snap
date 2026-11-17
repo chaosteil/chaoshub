@@ -14,7 +14,7 @@ expression: screen(&mut app)
 "                                                            ▌ g G           top, bottom            ┃"
 "                                                            ▌ ctrl-d ctrl-u half a page down, up   ┃"
 "                                                            ▌ D U           scroll down, up        ┃"
-"                                                            ▌ enter         open the popup         ┃"
+"                                                            ▌ enter         open, comment menu     ┃"
 "                                                            ▌ space         open the actions menu  ┃"
 "                                                            ▌ esc q         close the popup        ┃"
 "                                                            ▌ /             filter                 ┃"

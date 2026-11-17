@@ -78,6 +78,11 @@ pub(crate) trait Pane: Send + Sync {
     fn hints(&self) -> &'static [(&'static str, &'static str)] {
         &[]
     }
+    /// The label of the `open` key in the key hints of the popup. The
+    /// default is `expand`.
+    fn open_hint(&self) -> &'static str {
+        "expand"
+    }
     /// The own actions of the pane, in display order. The actions menu
     /// of the popup shows them after the actions of the pull request.
     /// The default has none.
@@ -104,23 +109,36 @@ pub(crate) trait Pane: Send + Sync {
 }
 
 /// An own action of a pane: its key in the actions menu and its label.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PaneAction {
     pub key: KeyChord,
-    pub label: &'static str,
+    pub label: String,
 }
 
 impl PaneAction {
     /// The action of the character key `c` without modifiers.
-    pub(crate) fn char(c: char, label: &'static str) -> Self {
+    pub(crate) fn char(c: char, label: impl Into<String>) -> Self {
         Self {
             key: KeyChord {
                 code: crate::bus::KeyCode::Char(c),
                 mods: crate::bus::KeyModifiers::NONE,
             },
-            label,
+            label: label.into(),
         }
     }
+}
+
+/// A small menu that a pane opens over the popup, for example the
+/// comment menu of the conversation pane: a title and the items. A key
+/// of an item, or Enter on the cursor item, runs `Pane::run_action` with
+/// the key of the item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaneMenu {
+    pub title: String,
+    pub items: Vec<PaneAction>,
+    /// The indices of the items that have a gap row before them, in
+    /// increasing order.
+    pub gaps: Vec<usize>,
 }
 
 /// The pane registry, in popup order.
@@ -239,6 +257,8 @@ pub(crate) mod fake {
                 confirm: None,
                 open_pr: None,
                 reply: None,
+                menu: None,
+                react: None,
             })
         }
     }

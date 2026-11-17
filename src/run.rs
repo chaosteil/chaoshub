@@ -3247,6 +3247,30 @@ mod tests {
         insta::assert_snapshot!(screen(&mut reactions_app(160, 40)));
     }
 
+    /// The comment menu of Enter on the comment of alice in the
+    /// conversation popup with reactions.
+    fn comment_menu_app(width: u16, height: u16) -> App {
+        let mut app = reactions_app(width, height);
+        press(&mut app, 'g');
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(enter));
+        app.update(Msg::TransitionsDone);
+        app
+    }
+
+    #[test]
+    fn comment_menu_100() {
+        insta::assert_snapshot!(screen(&mut comment_menu_app(100, 30)));
+    }
+
+    #[test]
+    fn comment_menu_160() {
+        insta::assert_snapshot!(screen(&mut comment_menu_app(160, 40)));
+    }
+
     /// The conversation popup with the text box of a reply to the
     /// comment of alice open, with a line of text after the quote.
     fn reply_text_app(width: u16, height: u16) -> App {

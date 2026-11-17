@@ -8,7 +8,7 @@
     reason = "update, the tabs and the panes read the fields in later phases"
 )]
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -22,8 +22,9 @@ use crate::app::panes::agent::head;
 use crate::app::panes::{PaneAction, PaneState};
 use crate::app::tabs::{TABS, Tab, TabState};
 use crate::bus::{
-    ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReplyTo, ReviewButton, ReviewKind,
-    ReviewRow, ReviewSpec, Scope, Selection, Session, Size, SyncError, Target, TargetKey, UiEvent,
+    ConfirmSpec, Interest, OverlayKind, PromptSpec, RateInfo, ReactSpec, ReplyTo, ReviewButton,
+    ReviewKind, ReviewRow, ReviewSpec, Scope, Selection, Session, Size, SyncError, Target,
+    TargetKey, UiEvent,
 };
 use crate::bus::{MergeProgress, MergeStep};
 use crate::config::schema::FiltersConfig;
@@ -63,6 +64,10 @@ pub(crate) struct AppData {
     /// The jj scan of each repo.
     pub local: BTreeMap<RepoKey, Observed<LocalState>>,
     pub details: BTreeMap<PrKey, Observed<PrDetail>>,
+    /// The reactions of the viewer that the react action sends now, for
+    /// each pull request, oldest first. The conversation shows them
+    /// before GitHub has them, also after a new load of the detail.
+    pub reacting: BTreeMap<PrKey, VecDeque<ReactSpec>>,
     /// The pull requests whose conversation the detail worker reads from
     /// GitHub now.
     pub details_loading: BTreeSet<PrKey>,
@@ -803,6 +808,8 @@ impl AuthorPicker {
 pub(crate) struct ActionMenu {
     /// The pull request that the actions run on.
     pub target: Box<Target>,
+    /// The title of the menu. `None` gives `actions for #N`.
+    pub title: Option<String>,
     /// The ids of the actions, in display order.
     pub ids: Vec<&'static str>,
     /// The own actions of the active pane of the popup under the menu,
@@ -899,6 +906,7 @@ impl AppState {
                 scopes: BTreeMap::new(),
                 local: BTreeMap::new(),
                 details: BTreeMap::new(),
+                reacting: BTreeMap::new(),
                 details_loading: BTreeSet::new(),
                 detail_errors: BTreeMap::new(),
                 files: BTreeMap::new(),

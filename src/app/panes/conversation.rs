@@ -1,10 +1,17 @@
 //! The conversation pane of the pull request popup: issue comments,
 //! reviews and review threads in time order. A thread header shows
-//! `path:line · 3 comments · resolved`; Enter expands and collapses it.
+//! `path:line · 3 comments · resolved`. Enter on a thread header expands
+//! and collapses the thread.
 //! Comment bodies are markdown cells, which `ui` renders and wraps.
 //! The reactions of a comment or a review show on one row under its
 //! body: `👍 3  🎉 1`. The reactions of the viewer have the primary
 //! color.
+//!
+//! Enter on a comment, a review or a comment in an expanded thread opens
+//! the comment menu: reply, the eight reactions of GitHub (keys `1` to
+//! `8`), and in a thread, collapse the thread. A reaction that the viewer
+//! already has shows a `✓`, and the menu removes it again, as GitHub
+//! does.
 //!
 //! The reply key (`R`) opens a text box for the comment of the cursor.
 //! On a thread or a comment in a thread, the reply goes into the thread.
@@ -20,11 +27,13 @@ use chrono::{DateTime, Utc};
 use crate::actions::REPLY_ID;
 use crate::app::age::age;
 use crate::app::models::{Cell, CellStyle, PaneModel, TreeNode};
-use crate::app::panes::{Pane, PaneAction, PaneState};
+use crate::app::panes::{Pane, PaneAction, PaneMenu, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx, tree_toggled};
-use crate::bus::{KeyChord, ReplySpec, ReplyTo, Size, Target};
-use crate::domain::detail::{Comment, PrDetail, Reaction, Review, ReviewState, Thread};
+use crate::bus::{KeyChord, KeyCode, KeyModifiers, ReactSpec, ReplySpec, ReplyTo, Size, Target};
+use crate::domain::detail::{
+    Comment, PrDetail, Reaction, ReactionKind, Review, ReviewState, Thread, has_mine,
+};
 use crate::domain::plural;
 use crate::domain::pr::PullRequest;
 
@@ -76,6 +85,9 @@ impl Pane for Conversation {
         }
     }
 
+    /// The reply key opens the text box of a reply. Enter on a thread
+    /// header expands or collapses the thread. Enter on a comment or a
+    /// review opens the comment menu.
     fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
         if cx.keys.matches(REPLY_ID, key) {
             return reply(cx, ps);
@@ -83,24 +95,21 @@ impl Pane for Conversation {
         if !cx.keys.matches("open", key) {
             return None;
         }
-        let (thread, before) = {
-            let expanded = expanded(ps);
-            let nodes = nodes(cx, &expanded);
-            let Some(Item::Thread(thread)) = nodes.get(ps.cursor)?.1 else {
-                return None;
-            };
-            (thread, nodes.len())
-        };
-        let state = ps.ext.downcast_mut::<ConversationState>()?;
-        if !state.expanded.remove(&thread) {
-            state.expanded.insert(thread);
+        match cursor_item(cx, ps)? {
+            Item::Thread(thread) => toggle(cx, ps, thread),
+            item => Some(Handled {
+                menu: Some(menu(cx, item)?),
+                ..Handled::default()
+            }),
         }
-        let after = nodes(cx, &expanded(ps)).len();
-        Some(tree_toggled(ps.cursor, before, after))
     }
 
     fn hints(&self) -> &'static [(&'static str, &'static str)] {
         &[(REPLY_ID, "reply")]
+    }
+
+    fn open_hint(&self) -> &'static str {
+        "expand/react"
     }
 
     /// The reply, on the first chord of the reply key.
@@ -110,18 +119,161 @@ impl Pane for Conversation {
             .first()
             .map(|&key| PaneAction {
                 key,
-                label: "reply to the comment",
+                label: "reply to the comment".to_owned(),
             })
             .into_iter()
             .collect()
     }
 
+    /// The reply, and the items of the comment menu: a reaction key and
+    /// the collapse key.
     fn run_action(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
-        cx.keys
-            .matches(REPLY_ID, key)
-            .then(|| reply(cx, ps))
-            .flatten()
+        if cx.keys.matches(REPLY_ID, key) {
+            return reply(cx, ps);
+        }
+        if key == char_key(COLLAPSE_KEY) {
+            let Item::ThreadComment(thread, _) = cursor_item(cx, ps)? else {
+                return None;
+            };
+            return collapse(cx, ps, thread);
+        }
+        let kind = REACTION_KEYS
+            .iter()
+            .position(|&c| key == char_key(c))
+            .map(|i| ReactionKind::ALL[i])?;
+        react(cx, ps, kind)
     }
+}
+
+/// The keys of the reactions in the comment menu, in the order of
+/// `ReactionKind::ALL`.
+const REACTION_KEYS: [char; 8] = ['1', '2', '3', '4', '5', '6', '7', '8'];
+
+/// The key of the comment menu that collapses the thread of the comment.
+const COLLAPSE_KEY: char = 'c';
+
+/// The chord of the character `c` without modifiers.
+fn char_key(c: char) -> KeyChord {
+    KeyChord {
+        code: KeyCode::Char(c),
+        mods: KeyModifiers::NONE,
+    }
+}
+
+/// The item of the cursor node. `None` on a status line.
+fn cursor_item(cx: &KeyCx<'_>, ps: &PaneState) -> Option<Item> {
+    nodes(cx, &expanded(ps)).get(ps.cursor)?.1
+}
+
+/// Expands or collapses the thread at `thread`.
+fn toggle(cx: &KeyCx<'_>, ps: &mut PaneState, thread: usize) -> Option<Handled> {
+    let before = nodes(cx, &expanded(ps)).len();
+    let state = ps.ext.downcast_mut::<ConversationState>()?;
+    if !state.expanded.remove(&thread) {
+        state.expanded.insert(thread);
+    }
+    let after = nodes(cx, &expanded(ps)).len();
+    Some(tree_toggled(ps.cursor, before, after))
+}
+
+/// Collapses the expanded thread at `thread` from one of its comments.
+/// The cursor moves to the thread header.
+fn collapse(cx: &KeyCx<'_>, ps: &mut PaneState, thread: usize) -> Option<Handled> {
+    let header = nodes(cx, &expanded(ps))
+        .iter()
+        .position(|(_, item)| *item == Some(Item::Thread(thread)))?;
+    let state = ps.ext.downcast_mut::<ConversationState>()?;
+    state.expanded.remove(&thread);
+    ps.cursor = header;
+    Some(tree_toggled(header, 1, 0))
+}
+
+/// The comment or the review of `item` in `detail`: its node id, its
+/// author and its reactions. A thread header has none.
+fn subject(detail: &PrDetail, item: Item) -> Option<(&str, &str, &[Reaction])> {
+    match item {
+        Item::Comment(index) => detail
+            .comments
+            .get(index)
+            .map(|c| (c.id.as_str(), c.author.as_str(), c.reactions.as_slice())),
+        Item::Review(index) => detail
+            .reviews
+            .get(index)
+            .map(|r| (r.id.as_str(), r.author.as_str(), r.reactions.as_slice())),
+        Item::ThreadComment(thread, index) => detail
+            .threads
+            .get(thread)
+            .and_then(|t| t.comments.get(index))
+            .map(|c| (c.id.as_str(), c.author.as_str(), c.reactions.as_slice())),
+        Item::Thread(_) => None,
+    }
+}
+
+/// The detail of the pull request of the popup.
+fn detail<'a>(cx: &KeyCx<'a>) -> Option<&'a PrDetail> {
+    let Some(Target::Pr { pr, .. }) = cx.target else {
+        return None;
+    };
+    cx.data.details.get(&pr.key).map(|d| &d.value)
+}
+
+/// The comment menu of `item`: reply, a gap, the eight reactions with a
+/// `✓` on the reactions of the viewer, and in a thread a gap and
+/// collapse. `None` without a comment or a review.
+fn menu(cx: &KeyCx<'_>, item: Item) -> Option<PaneMenu> {
+    let detail = detail(cx)?;
+    let (_, author, reactions) = subject(detail, item)?;
+    let title = match item {
+        Item::Review(_) => format!("review of {author}"),
+        _ => format!("comment of {author}"),
+    };
+    let mut items: Vec<PaneAction> = cx
+        .keys
+        .chords(REPLY_ID)
+        .first()
+        .map(|&key| PaneAction {
+            key,
+            label: "reply".to_owned(),
+        })
+        .into_iter()
+        .collect();
+    let mut gaps = Vec::new();
+    if !items.is_empty() {
+        gaps.push(items.len());
+    }
+    items.extend(
+        ReactionKind::ALL
+            .iter()
+            .zip(REACTION_KEYS)
+            .map(|(&kind, key)| {
+                let mine = if has_mine(reactions, kind) {
+                    " ✓"
+                } else {
+                    ""
+                };
+                PaneAction::char(key, format!("{} {}{mine}", kind.emoji(), kind.name()))
+            }),
+    );
+    if matches!(item, Item::ThreadComment(..)) {
+        gaps.push(items.len());
+        items.push(PaneAction::char(COLLAPSE_KEY, "collapse the thread"));
+    }
+    Some(PaneMenu { title, items, gaps })
+}
+
+/// The reaction `kind` of the viewer on the comment of the cursor: an
+/// add, or a remove when the viewer already has it.
+fn react(cx: &KeyCx<'_>, ps: &PaneState, kind: ReactionKind) -> Option<Handled> {
+    let item = cursor_item(cx, ps)?;
+    let (id, _, reactions) = subject(detail(cx)?, item)?;
+    Some(Handled {
+        react: Some(ReactSpec {
+            subject: id.to_owned(),
+            kind,
+            add: !has_mine(reactions, kind),
+        }),
+        ..Handled::default()
+    })
 }
 
 /// The text box of a reply to the item of the cursor.
@@ -152,20 +304,22 @@ fn reply_spec(detail: Option<&PrDetail>, item: Option<Item>, number: u64) -> Rep
         return new_comment(String::new());
     };
     match item {
-        Some(Item::Thread(index)) => match detail.threads.get(index) {
-            Some(thread) => {
-                let place = place(thread);
-                ReplySpec {
-                    title: format!("reply on {place}"),
-                    to: ReplyTo::Thread {
-                        id: thread.id.clone(),
-                        place,
-                    },
-                    text: String::new(),
+        Some(Item::Thread(index) | Item::ThreadComment(index, _)) => {
+            match detail.threads.get(index) {
+                Some(thread) => {
+                    let place = place(thread);
+                    ReplySpec {
+                        title: format!("reply on {place}"),
+                        to: ReplyTo::Thread {
+                            id: thread.id.clone(),
+                            place,
+                        },
+                        text: String::new(),
+                    }
                 }
+                None => new_comment(String::new()),
             }
-            None => new_comment(String::new()),
-        },
+        }
         Some(Item::Comment(index)) => detail.comments.get(index).map_or_else(
             || new_comment(String::new()),
             |comment| new_comment(quote(&comment.author, &comment.body)),
@@ -210,7 +364,11 @@ enum Entry<'a> {
 enum Item {
     Comment(usize),
     Review(usize),
+    /// The header of a thread.
     Thread(usize),
+    /// A comment in an expanded thread: the index of the thread and the
+    /// index of the comment in the thread.
+    ThreadComment(usize, usize),
 }
 
 impl Entry<'_> {
@@ -296,8 +454,8 @@ fn reactions(depth: u8, reactions: &[Reaction]) -> Option<TreeNode> {
 }
 
 /// The nodes of the pane, each with its entry. A status line has none.
-/// A node of a thread has the item of the thread, but only the header
-/// expands and collapses it.
+/// The header of a thread has the item of the thread, and the nodes of
+/// a comment in the thread have the item of the comment.
 fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<Item>)> {
     let Some(Target::Pr { pr, .. }) = cx.target else {
         return Vec::new();
@@ -357,10 +515,10 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<Ite
             }
             Entry::Thread(index, thread) => {
                 let open = expanded.contains(&index);
-                let item = Some(Item::Thread(index));
-                out.push((thread_header(thread, open), item));
+                out.push((thread_header(thread, open), Some(Item::Thread(index))));
                 if open {
-                    for comment in &thread.comments {
+                    for (at, comment) in thread.comments.iter().enumerate() {
+                        let item = Some(Item::ThreadComment(index, at));
                         out.push((comment_header(1, comment, "", now), item));
                         out.extend(body(2, &comment.body, &comment.body_html).map(|n| (n, item)));
                         out.extend(reactions(2, &comment.reactions).map(|n| (n, item)));
@@ -579,11 +737,181 @@ mod tests {
             code: KeyCode::Enter,
             mods: KeyModifiers::NONE,
         };
-        assert_eq!(
-            Conversation.handle_key(enter, &cx, &mut ps),
-            None,
-            "Enter on a comment does nothing"
+        let handled = Conversation.handle_key(enter, &cx, &mut ps).unwrap();
+        assert!(handled.menu.is_some(), "Enter on a comment opens the menu");
+        assert!(!handled.changed);
+    }
+
+    /// The pane context of `state` on #7, with the default keys.
+    fn cx_of<'a>(
+        state: &'a AppState,
+        target: &'a Target,
+        areas: &'a crate::app::layout::Areas,
+    ) -> KeyCx<'a> {
+        KeyCx {
+            data: &state.data,
+            target: Some(target),
+            areas,
+            keys: &crate::app::keymap::DEFAULT,
+        }
+    }
+
+    fn chord(code: KeyCode) -> KeyChord {
+        KeyChord {
+            code,
+            mods: KeyModifiers::NONE,
+        }
+    }
+
+    /// The comment menu of Enter on the node `cursor` after the keys
+    /// `keys`. `None` when Enter opens no menu.
+    fn menu_at(state: &AppState, keys: &[KeyCode], cursor: usize) -> Option<PaneMenu> {
+        let mut ps = Conversation.init_state();
+        model_and_keys(state, &mut ps, keys);
+        ps.cursor = cursor;
+        let key = testdata::pr_key("chaoshub", 7);
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = cx_of(state, &target, &areas);
+        Conversation
+            .handle_key(chord(KeyCode::Enter), &cx, &mut ps)
+            .and_then(|h| h.menu)
+    }
+
+    /// The items of `menu` as `key  label` lines.
+    fn lines(menu: &PaneMenu) -> Vec<String> {
+        menu.items
+            .iter()
+            .map(|item| format!("{}  {}", crate::app::frame::key_text(item.key), item.label))
+            .collect()
+    }
+
+    #[test]
+    fn enter_on_a_comment_opens_the_comment_menu() {
+        let state = state_with(Some(testdata::detail_with_reactions()), None);
+        for cursor in 0..=2 {
+            let menu = menu_at(&state, &[], cursor).unwrap();
+            assert_eq!(menu.title, "comment of alice", "node {cursor}");
+            assert_eq!(
+                lines(&menu),
+                [
+                    "R  reply",
+                    "1  👍 thumbs up ✓",
+                    "2  👎 thumbs down",
+                    "3  😄 laugh",
+                    "4  🎉 hooray",
+                    "5  😕 confused",
+                    "6  ❤️ heart",
+                    "7  🚀 rocket",
+                    "8  👀 eyes",
+                ],
+                "only the reactions of the viewer have a ✓"
+            );
+            assert_eq!(menu.gaps, [1], "a gap after the reply");
+        }
+        // The nodes after alice: two threads, then bob and his body and
+        // his reactions.
+        let review = menu_at(&state, &[], 5).unwrap();
+        assert_eq!(review.title, "review of bob");
+        assert_eq!(review.items.len(), 9, "no collapse for a review");
+        assert!(lines(&review).iter().all(|line| !line.ends_with('✓')));
+    }
+
+    #[test]
+    fn enter_on_a_comment_in_a_thread_can_collapse_the_thread() {
+        let state = state_with(Some(testdata::detail_with_reactions()), None);
+        assert_eq!(menu_at(&state, &[], 3), None, "a thread header expands");
+        // Node 3 is the thread on `src/ui/list.rs:42`. After the expand,
+        // node 6 is the reactions of its first comment.
+        let mut ps = Conversation.init_state();
+        ps.cursor = 3;
+        model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        let key = testdata::pr_key("chaoshub", 7);
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = cx_of(&state, &target, &areas);
+        ps.cursor = 6;
+        let menu = Conversation
+            .handle_key(chord(KeyCode::Enter), &cx, &mut ps)
+            .and_then(|h| h.menu)
+            .unwrap();
+        assert_eq!(menu.title, "comment of bob");
+        let lines = lines(&menu);
+        assert_eq!(lines[8], "8  👀 eyes ✓");
+        assert_eq!(lines[9], "c  collapse the thread");
+        assert_eq!(menu.gaps, [1, 9]);
+        let handled = Conversation
+            .run_action(chord(KeyCode::Char('c')), &cx, &mut ps)
+            .unwrap();
+        assert!(handled.changed);
+        assert_eq!(ps.cursor, 3, "the cursor goes to the thread header");
+        let model = Conversation.model(
+            &cx,
+            &ps,
+            Size {
+                width: 80,
+                height: 20,
+            },
         );
+        assert_eq!(
+            outline(&model)[3],
+            "▸ src/ui/list.rs:42 · 2 comments · resolved"
+        );
+        assert_eq!(
+            Conversation.run_action(chord(KeyCode::Char('c')), &cx, &mut ps),
+            None,
+            "collapse needs a comment in a thread"
+        );
+    }
+
+    #[test]
+    fn enter_on_a_status_line_does_nothing() {
+        let loading = state_with(None, None);
+        assert_eq!(menu_at(&loading, &[], 0), None);
+        let mut stale = testdata::detail();
+        stale.head_oid = "an older head".into();
+        let stale = state_with(Some(stale), None);
+        assert_eq!(menu_at(&stale, &[], 0), None);
+    }
+
+    #[test]
+    fn a_reaction_key_toggles_the_reaction_of_the_viewer() {
+        let state = state_with(Some(testdata::detail_with_reactions()), None);
+        let key = testdata::pr_key("chaoshub", 7);
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = cx_of(&state, &target, &areas);
+        let mut ps = Conversation.init_state();
+        let react = |ps: &mut PaneState, c: char| {
+            Conversation
+                .run_action(chord(KeyCode::Char(c)), &cx, ps)
+                .and_then(|h| h.react)
+        };
+        let spec = |subject: &str, kind, add| {
+            Some(ReactSpec {
+                subject: subject.into(),
+                kind,
+                add,
+            })
+        };
+        assert_eq!(
+            react(&mut ps, '1'),
+            spec("IC_0", ReactionKind::ThumbsUp, false),
+            "the viewer has 👍, so the key removes it"
+        );
+        assert_eq!(
+            react(&mut ps, '4'),
+            spec("IC_0", ReactionKind::Hooray, true),
+            "🎉 of another person: the key adds the one of the viewer"
+        );
+        ps.cursor = 5;
+        assert_eq!(
+            react(&mut ps, '6'),
+            spec("PRR_bob", ReactionKind::Heart, true)
+        );
+        ps.cursor = 3;
+        assert_eq!(react(&mut ps, '1'), None, "a thread header has no reaction");
+        assert_eq!(react(&mut ps, '9'), None, "no ninth reaction");
     }
 
     #[test]

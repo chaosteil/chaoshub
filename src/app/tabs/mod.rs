@@ -18,9 +18,10 @@ use std::sync::LazyLock;
 use crate::app::keymap::Keymap;
 use crate::app::layout::Areas;
 use crate::app::models::{ListModel, RowItem};
+use crate::app::panes::PaneMenu;
 use crate::app::state::AppData;
 use crate::bus::{
-    Cmd, ConfirmSpec, Interest, KeyChord, PrRef, ReplySpec, Scope, Size, Target, UiEvent,
+    Cmd, ConfirmSpec, Interest, KeyChord, PrRef, ReactSpec, ReplySpec, Scope, Size, Target, UiEvent,
 };
 use crate::domain::keys::PrKey;
 use crate::domain::pr::PullRequest;
@@ -111,6 +112,12 @@ pub(crate) struct Handled {
     /// The text box of a reply to open. The reply action sends the text
     /// on the pull request of the popup. Only a pane sets it.
     pub reply: Option<ReplySpec>,
+    /// A menu to open over the popup. Only a pane sets it.
+    pub menu: Option<PaneMenu>,
+    /// A reaction of the viewer to add or to remove. The react action
+    /// sends it on the pull request of the popup, and the conversation
+    /// shows it at once. Only a pane sets it.
+    pub react: Option<ReactSpec>,
 }
 
 /// One tab of the main screen.

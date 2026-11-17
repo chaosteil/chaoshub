@@ -35,6 +35,7 @@ use crate::vcs::lock::RepoLocks;
 
 pub(crate) use codeview_send::STAYS_LOCAL;
 pub(crate) use merge::STACK_NOT_LOADED;
+pub(crate) use react::ID as REACT_ID;
 pub(crate) use reply::ID as REPLY_ID;
 
 /// What a running action can use. There is no launcher: panes come only

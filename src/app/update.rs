@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 
-use crate::actions::{Action, Applicability, Group, Prepare, REGISTRY, REPLY_ID, STAYS_LOCAL};
+use crate::actions::{
+    Action, Applicability, Group, Prepare, REACT_ID, REGISTRY, REPLY_ID, STAYS_LOCAL,
+};
 use crate::app::frame;
 use crate::app::help::help_model;
 use crate::app::keymap::{self, Keymap};
@@ -17,7 +19,9 @@ use crate::app::measure;
 use crate::app::models::{Cell, CellStyle, PaneModel, RowItem, TreeNode, review_list_rows};
 use crate::app::nav::{self, Motion, TreeRows};
 use crate::app::notify;
-use crate::app::panes::{PANES, Pane, PaneAction, PaneState, applicable, init_states, items};
+use crate::app::panes::{
+    PANES, Pane, PaneAction, PaneMenu, PaneState, applicable, init_states, items,
+};
 use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
@@ -33,11 +37,11 @@ use crate::bus::{
     KeyModifiers, LaunchRequest, MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection,
     Size, SyncError, Target, TargetKey, UiEvent,
 };
-use crate::bus::{ConfirmSpec, PromptSpec, ReplySpec, ReviewKind};
+use crate::bus::{ConfirmSpec, PromptSpec, ReactSpec, ReplySpec, ReviewKind};
 use crate::bus::{MergeProgress, MergeStep, PrViewEvent};
 use crate::domain::agent::{AgentResults, Record, Tool, ToolKind, short_tokens};
 use crate::domain::check::Check;
-use crate::domain::detail::PrDetail;
+use crate::domain::detail::{self, PrDetail};
 use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
@@ -447,6 +451,7 @@ fn open_menu(
         OverlayKind::Picker,
         OverlayState::Actions(ActionMenu {
             target: Box::new(target),
+            title: None,
             ids: shown.iter().map(|action| action.id()).collect(),
             pane,
             gaps,
@@ -529,14 +534,15 @@ fn run_menu_item(
         let target = (*menu.target).clone();
         return run_menu_action(state, panes, actions, id, target);
     }
-    let Some(action) = index
+    let Some(key) = index
         .checked_sub(menu.ids.len())
-        .and_then(|i| menu.pane.get(i).copied())
+        .and_then(|i| menu.pane.get(i))
+        .map(|action| action.key)
     else {
         return Vec::new();
     };
     close_overlay(state);
-    run_pane_action(state, keymap, panes, action.key)
+    run_pane_action(state, keymap, panes, key)
 }
 
 /// Runs the pane action of `key` in the active pane of the pull request
@@ -572,8 +578,8 @@ fn run_pane_action(
 }
 
 /// Applies what a pane of the popup of `key` handled: the generation,
-/// the UI events, a confirm popup, a reply text box, the commands and a
-/// popup on top.
+/// the UI events, a confirm popup, a reply text box, a pane menu, a
+/// reaction, the commands and a popup on top.
 fn popup_handled(
     state: &mut AppState,
     panes: &[Box<dyn Pane>],
@@ -590,7 +596,13 @@ fn popup_handled(
     if let Some(spec) = handled.reply {
         open_reply(state, key, spec);
     }
+    if let Some(menu) = handled.menu {
+        open_pane_menu(state, key, menu);
+    }
     let mut cmds = pane_cmds(state, handled.cmds);
+    if let Some(spec) = handled.react {
+        cmds.extend(send_reaction(state, key, spec));
+    }
     cmds.extend(open_pr(state, panes, handled.open_pr.as_ref()));
     cmds
 }
@@ -963,6 +975,105 @@ fn open_confirm(state: &mut AppState, key: &PrKey, id: &'static str, spec: Confi
         OverlayKind::Confirm,
         OverlayState::Confirm { action, spec },
     );
+}
+
+/// Opens the menu of a pane over the popup of the pull request `key`.
+/// The menu is an actions menu with only pane items.
+fn open_pane_menu(state: &mut AppState, key: &PrKey, menu: PaneMenu) {
+    let Some(target) = pr_target(&state.data, key) else {
+        return;
+    };
+    open_overlay(
+        state,
+        OverlayKind::Picker,
+        OverlayState::Actions(ActionMenu {
+            target: Box::new(target),
+            title: Some(menu.title),
+            ids: Vec::new(),
+            pane: menu.items,
+            gaps: menu.gaps,
+            cursor: 0,
+        }),
+    );
+}
+
+/// Runs the react action with `spec` on the pull request `key`. The
+/// conversation shows the reaction at once (an optimistic update), and
+/// `reacting` keeps it until the action is done. A failed action rolls
+/// it back.
+fn send_reaction(state: &mut AppState, key: &PrKey, spec: ReactSpec) -> Vec<Cmd> {
+    let Some(target) = pr_target(&state.data, key) else {
+        return Vec::new();
+    };
+    if let Some(detail) = state.data.details.get_mut(key) {
+        set_reaction(&mut detail.value, &spec, spec.add);
+    }
+    state
+        .data
+        .reacting
+        .entry(key.clone())
+        .or_default()
+        .push_back(spec.clone());
+    state.bump();
+    vec![Cmd::RunAction {
+        id: REACT_ID,
+        selection: Box::new(Selection {
+            target,
+            me: state.data.session.login.clone().unwrap_or_default(),
+            action_config: state.data.action_config.get(REACT_ID).cloned(),
+        }),
+        input: ActionInput::React(spec),
+    }]
+}
+
+/// Sets the reaction of the viewer of `spec` on its comment or review in
+/// `detail`: `add` adds it, else it goes away. A detail without the
+/// comment or the review does not change.
+fn set_reaction(detail: &mut PrDetail, spec: &ReactSpec, add: bool) {
+    let reactions = detail
+        .comments
+        .iter_mut()
+        .chain(
+            detail
+                .threads
+                .iter_mut()
+                .flat_map(|t| t.comments.iter_mut()),
+        )
+        .find(|comment| comment.id == spec.subject)
+        .map(|comment| &mut comment.reactions)
+        .or_else(|| {
+            detail
+                .reviews
+                .iter_mut()
+                .find(|review| review.id == spec.subject)
+                .map(|review| &mut review.reactions)
+        });
+    if let Some(reactions) = reactions {
+        detail::set_mine(reactions, spec.kind, add);
+    }
+}
+
+/// The end of a react action on `key`: the oldest reaction of
+/// `reacting` for `key` leaves. On a failure, the conversation rolls it
+/// back. The actions on one pull request can end in another order than
+/// they started. Then a rollback can hit the wrong reaction, but the
+/// reload of the follow-up rule gives the state of GitHub soon after.
+fn reaction_done(state: &mut AppState, key: &TargetKey, ok: bool) {
+    let TargetKey::Pr(pr) = key;
+    let Some(queue) = state.data.reacting.get_mut(pr) else {
+        return;
+    };
+    let spec = queue.pop_front();
+    if queue.is_empty() {
+        state.data.reacting.remove(pr);
+    }
+    let Some(spec) = spec else {
+        return;
+    };
+    if !ok && let Some(detail) = state.data.details.get_mut(pr) {
+        set_reaction(&mut detail.value, &spec, !spec.add);
+        state.bump();
+    }
 }
 
 /// Opens the text box of a reply on the pull request `key`. The reply
@@ -2127,7 +2238,7 @@ fn click_pane_tab(state: &mut AppState, panes: &[Box<dyn Pane>], index: usize) {
 
 /// A click on the row or the node at `index` of the active pane: the
 /// pane cursor moves to it. A click on the cursor node of a tree runs
-/// the `open` key of the pane, which expands or collapses it.
+/// the `open` key of the pane, for example an expand or a menu.
 fn click_pane_row(
     state: &mut AppState,
     keymap: &Keymap,
@@ -2142,6 +2253,7 @@ fn click_pane_row(
     else {
         return Vec::new();
     };
+    let pr = popup.key.clone();
     let handled = in_pane(
         &state.data,
         &areas,
@@ -2176,16 +2288,10 @@ fn click_pane_row(
         },
     )
     .flatten();
-    let Some(handled) = handled else {
-        return Vec::new();
-    };
-    if handled.changed {
-        state.bump();
+    match handled {
+        Some(handled) => popup_handled(state, panes, &pr, handled),
+        None => Vec::new(),
     }
-    state.ui.ui_events.extend(handled.events);
-    let mut cmds = handled.cmds;
-    cmds.extend(open_pr(state, panes, handled.open_pr.as_ref()));
-    cmds
 }
 
 /// A click on the row at `index` of the actions menu: it runs the item
@@ -2905,11 +3011,20 @@ fn detail_loaded(
             let cleared = data.detail_errors.remove(&key).is_some();
             let applied = match data.details.get_mut(&key) {
                 None => {
-                    data.details.insert(key, detail);
+                    data.details.insert(key.clone(), detail);
                     true
                 }
                 Some(current) => apply(current, detail, &key, "detail"),
             };
+            // A reaction that is still on its way stays in a new load.
+            if applied
+                && let (Some(queue), Some(current)) =
+                    (data.reacting.get(&key), data.details.get_mut(&key))
+            {
+                for spec in queue {
+                    set_reaction(&mut current.value, spec, spec.add);
+                }
+            }
             cleared || applied
         }
         Err(err) => {
@@ -3112,6 +3227,9 @@ fn action_event(
             Vec::new()
         }
         ActionEvent::Done(result) => {
+            if id == REACT_ID {
+                reaction_done(state, &key, result.is_ok());
+            }
             if result.is_ok() {
                 let TargetKey::Pr(pr) = &key;
                 state.ui.ui_events.push(UiEvent::RowFlash(pr.clone()));
@@ -3667,6 +3785,8 @@ mod tests {
             confirm: None,
             open_pr: None,
             reply: None,
+            menu: None,
+            react: None,
         };
         let (tabs, mut state) = setup(Some(handled));
         let j = press(KeyCode::Char('z'), KeyModifiers::NONE);
@@ -6250,9 +6370,14 @@ mod tests {
     }
 
     /// The labels of the pane actions of the actions menu on top.
-    fn pane_labels(state: &AppState) -> Vec<&'static str> {
+    fn pane_labels(state: &AppState) -> Vec<&str> {
         action_menu(state)
-            .map(|menu| menu.pane.iter().map(|action| action.label).collect())
+            .map(|menu| {
+                menu.pane
+                    .iter()
+                    .map(|action| action.label.as_str())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -10018,5 +10143,235 @@ mod tests {
         update(&mut list, &Keymap::default(), fresh);
         assert!(list.data.approvals.is_empty(), "GitHub decides");
         assert_eq!(tab_numbers(&mut list), [90, 88]);
+    }
+
+    /// The reply state with the reactions of
+    /// `testdata::detail_with_reactions`. The nodes: the comment of
+    /// alice, its body and its reactions, the two threads, the review of
+    /// bob, its body and its reactions.
+    fn react_state() -> (AppState, PrKey) {
+        let mut state = mine_state(20);
+        let pr = testdata::pr_key("chaoshub", 99);
+        let mut detail = testdata::detail_with_reactions();
+        detail
+            .head_oid
+            .clone_from(&state.data.prs[&pr].head.value.head_oid);
+        state
+            .data
+            .details
+            .insert(pr.clone(), testdata::observed(detail));
+        enter(&mut state);
+        key(&mut state, '3');
+        (state, pr)
+    }
+
+    /// The reactions of the comment of alice in the detail of `pr`.
+    fn alice_reactions(state: &AppState, pr: &PrKey) -> Vec<crate::domain::detail::Reaction> {
+        state.data.details[pr].value.comments[0].reactions.clone()
+    }
+
+    fn reaction(
+        kind: crate::domain::detail::ReactionKind,
+        count: u32,
+        mine: bool,
+    ) -> crate::domain::detail::Reaction {
+        crate::domain::detail::Reaction { kind, count, mine }
+    }
+
+    fn react_done(pr: &PrKey, result: Result<&str, &str>) -> Msg {
+        Msg::ActionEvent {
+            id: "react",
+            key: TargetKey::Pr(pr.clone()),
+            event: ActionEvent::Done(result.map(str::to_owned).map_err(str::to_owned)),
+        }
+    }
+
+    #[test]
+    fn enter_on_a_comment_opens_the_comment_menu_and_esc_closes_it() {
+        let (mut state, _) = react_state();
+        assert_eq!(enter(&mut state), vec![]);
+        let menu = action_menu(&state).unwrap();
+        assert_eq!(menu.title.as_deref(), Some("comment of alice"));
+        assert_eq!(menu.ids, Vec::<&str>::new(), "only pane items");
+        assert_eq!(menu.len(), 9);
+        assert_eq!(menu.gaps, [1]);
+        let model = frame::frame_model(&mut state);
+        let OverlayContent::Picker { title, items, .. } = &model.overlays[1].content else {
+            panic!("no picker");
+        };
+        assert_eq!(title, "comment of alice");
+        assert_eq!(items[0], "R  reply");
+        assert_eq!(items[1], "", "the gap row");
+        assert_eq!(items[2], "1  👍 thumbs up ✓");
+        assert_eq!(esc(&mut state), vec![]);
+        assert!(action_menu(&state).is_none());
+        assert!(sidebar(&state).is_some(), "esc closes only the menu");
+    }
+
+    #[test]
+    fn enter_on_a_thread_header_still_expands_it() {
+        let (mut state, _) = react_state();
+        for _ in 0..3 {
+            key(&mut state, 'j');
+        }
+        enter(&mut state);
+        assert!(action_menu(&state).is_none(), "no menu on a thread header");
+        let popup = sidebar(&state).unwrap();
+        let ps = &popup.panes[popup.active];
+        let expanded = &ps
+            .ext
+            .downcast_ref::<crate::app::panes::conversation::ConversationState>()
+            .unwrap()
+            .expanded;
+        assert!(expanded.contains(&0));
+    }
+
+    #[test]
+    fn a_reaction_key_in_the_menu_reacts_at_once_and_runs_the_action() {
+        use crate::domain::detail::ReactionKind::{Hooray, ThumbsUp};
+        let (mut state, pr) = react_state();
+        enter(&mut state);
+        let cmds = key(&mut state, '4');
+        let [Cmd::RunAction { id, input, .. }] = cmds.as_slice() else {
+            panic!("no action: {cmds:?}");
+        };
+        assert_eq!(*id, "react");
+        assert_eq!(
+            input,
+            &ActionInput::React(ReactSpec {
+                subject: "IC_0".into(),
+                kind: Hooray,
+                add: true,
+            })
+        );
+        assert!(action_menu(&state).is_none(), "the menu closes");
+        assert_eq!(
+            alice_reactions(&state, &pr),
+            [reaction(ThumbsUp, 3, true), reaction(Hooray, 2, true)],
+            "the optimistic update"
+        );
+        assert_eq!(state.data.reacting[&pr].len(), 1);
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            react_done(&pr, Ok("reacted 🎉 on #99")),
+        );
+        let reload = Cmd::ReloadDetail(vec![pr_ref(&state.data.prs[&pr])]);
+        assert!(cmds.contains(&reload), "{cmds:?}");
+        assert_eq!(status_text(&state), Some("reacted 🎉 on #99"));
+        assert!(state.data.reacting.is_empty());
+        assert_eq!(alice_reactions(&state, &pr)[1], reaction(Hooray, 2, true));
+    }
+
+    #[test]
+    fn the_menu_moves_with_j_and_k_and_enter_runs_the_cursor_item() {
+        use crate::domain::detail::ReactionKind::ThumbsUp;
+        let (mut state, pr) = react_state();
+        enter(&mut state);
+        key(&mut state, 'j');
+        key(&mut state, 'j');
+        key(&mut state, 'k');
+        let cmds = enter(&mut state);
+        let [Cmd::RunAction { input, .. }] = cmds.as_slice() else {
+            panic!("no action: {cmds:?}");
+        };
+        assert_eq!(
+            input,
+            &ActionInput::React(ReactSpec {
+                subject: "IC_0".into(),
+                kind: ThumbsUp,
+                add: false,
+            }),
+            "the viewer has 👍, so the item removes it"
+        );
+        assert_eq!(
+            alice_reactions(&state, &pr)[0],
+            reaction(ThumbsUp, 2, false)
+        );
+        enter(&mut state);
+        assert_eq!(key(&mut state, 'R'), vec![], "R in the menu is the reply");
+        assert!(matches!(
+            top(&state),
+            OverlayState::ReviewText { reply: Some(_), .. }
+        ));
+    }
+
+    #[test]
+    fn a_failed_reaction_rolls_back_and_shows_the_error() {
+        use crate::domain::detail::ReactionKind::{Hooray, ThumbsUp};
+        let (mut state, pr) = react_state();
+        let before = alice_reactions(&state, &pr);
+        enter(&mut state);
+        key(&mut state, '1');
+        assert_eq!(
+            alice_reactions(&state, &pr)[0],
+            reaction(ThumbsUp, 2, false)
+        );
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            react_done(&pr, Err("offline")),
+        );
+        assert_eq!(alice_reactions(&state, &pr), before, "the rollback");
+        assert_eq!(
+            status_text(&state),
+            Some("react to a comment failed: offline")
+        );
+        let reload = Cmd::ReloadDetail(vec![pr_ref(&state.data.prs[&pr])]);
+        assert!(cmds.contains(&reload), "a reload also after a failure");
+        enter(&mut state);
+        key(&mut state, '4');
+        assert_eq!(alice_reactions(&state, &pr)[1], reaction(Hooray, 2, true));
+        update(
+            &mut state,
+            &Keymap::default(),
+            react_done(&pr, Err("HTTP 502")),
+        );
+        assert_eq!(alice_reactions(&state, &pr), before);
+    }
+
+    #[test]
+    fn a_new_load_keeps_a_reaction_on_its_way() {
+        use crate::domain::detail::ReactionKind::Rocket;
+        let (mut state, pr) = react_state();
+        enter(&mut state);
+        key(&mut state, '7');
+        let mut fresh = testdata::detail_with_reactions();
+        fresh
+            .head_oid
+            .clone_from(&state.data.prs[&pr].head.value.head_oid);
+        let observed = Observed {
+            value: fresh,
+            observed_at: state.data.details[&pr].observed_at + TimeDelta::seconds(1),
+        };
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::DetailLoaded(pr.clone(), Ok(observed)),
+        );
+        assert_eq!(
+            alice_reactions(&state, &pr)[2],
+            reaction(Rocket, 1, true),
+            "the reaction stays until the action is done"
+        );
+        update(
+            &mut state,
+            &Keymap::default(),
+            react_done(&pr, Err("offline")),
+        );
+        assert_eq!(alice_reactions(&state, &pr).len(), 2, "the rollback");
+    }
+
+    #[test]
+    fn a_click_on_the_cursor_comment_opens_the_comment_menu() {
+        let (mut state, _) = react_state();
+        update(&mut state, &Keymap::default(), click_on(Hit::PaneRow(0)));
+        let menu = action_menu(&state).unwrap();
+        assert_eq!(menu.title.as_deref(), Some("comment of alice"));
+        let cmds = update(&mut state, &Keymap::default(), click_on(Hit::Item(2)));
+        assert!(
+            matches!(&cmds[..], [Cmd::RunAction { id: "react", .. }]),
+            "a click on an item runs it: {cmds:?}"
+        );
     }
 }
