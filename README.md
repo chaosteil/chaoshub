@@ -1518,7 +1518,7 @@ and OSC 9;4 is the progress bar. Every OSC 7501 record has
 | Situation | OSC 7501 | OSC 9;4 |
 |---|---|---|
 | Idle | `state=idle` | off |
-| First sync or `r` sync | `state=working`, `syncing <n> repos` | indeterminate |
+| First sync or `r` sync | `state=working`, `syncing <n> repos` (`syncing 1 repo`) | indeterminate |
 | Prefetch of more than one ref | `state=working`, `prefetching` | percent done |
 | Confirm or prompt popup open | `state=blocked`, `kind=question`, the popup title | unchanged |
 | Merge pending | `state=working`, `merging #N` | indeterminate |

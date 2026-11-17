@@ -12,7 +12,7 @@
 //! | Merge queued | `working`, `#N in merge queue` | indeterminate |
 //! | Merge merged | `done`, `merged #N` | 100 for 2 s, then off |
 //! | Merge failed | `error`, the reason | error for 5 s, then off |
-//! | First sync or requested sync running | `working`, `syncing <n> repos` | indeterminate |
+//! | First sync or requested sync running | `working`, `syncing <n> repos` (`syncing 1 repo`) | indeterminate |
 //! | Prefetch batch of more than one ref | `working`, `prefetching` | the percent done |
 //! | Sync failed, worker died | `error`, the reason | error for 5 s, then off |
 //! | Rate limited | `error`, `rate limited until HH:MM` | paused |
@@ -31,6 +31,7 @@ use crate::app::notify::ready_count;
 use crate::app::panes::description;
 use crate::app::state::{AppState, MergeState, OverlayState};
 use crate::bus::{BlockedKind, MergeProgress, Progress, Scope, TermState, TermStatus};
+use crate::domain::plural;
 use crate::domain::pr::{CiState, PrHead, PrState, PullRequest, ReviewDecision};
 
 /// How long the progress bar shows an error after a failure.
@@ -185,7 +186,10 @@ fn base_status(state: &AppState) -> TermStatus {
     if syncing(state) {
         return TermStatus {
             state: TermState::Working,
-            msg: Some(format!("syncing {} repos", data.session.repos.len())),
+            msg: Some(format!(
+                "syncing {}",
+                plural::count(data.session.repos.len(), "repo", "repos")
+            )),
             progress: Progress::Indeterminate,
         };
     }
@@ -560,6 +564,18 @@ mod tests {
                 "closing confirm overlay",
                 |s| s.ui.overlays.push(overlay(confirm("merge #7?"), true)),
                 status(TermState::Idle, None, Progress::Off),
+            ),
+            (
+                "sync of one repo uses the singular",
+                |s| {
+                    s.data.session.repos.truncate(1);
+                    s.data.sync.pending.insert(Scope::Team);
+                },
+                status(
+                    TermState::Working,
+                    Some("syncing 1 repo"),
+                    Progress::Indeterminate,
+                ),
             ),
             (
                 "prefetch batch",

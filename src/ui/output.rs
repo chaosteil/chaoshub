@@ -7,6 +7,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Clear, Widget};
 
 use crate::bus::Hit;
+use crate::domain::plural;
 use crate::theme::Theme;
 use crate::theme::ThemeBlock;
 use crate::ui::hits::HitMap;
@@ -68,7 +69,10 @@ pub(crate) fn render(
     } else if skip > 0 {
         format!("{} lines, last {rows} shown · Esc close", lines.len())
     } else {
-        format!("{} lines · Esc close", lines.len())
+        format!(
+            "{} · Esc close",
+            plural::count(lines.len(), "line", "lines")
+        )
     };
     buf.set_stringn(
         body.x,
@@ -105,12 +109,17 @@ mod tests {
 
     /// The text of the drawn output popup with 30 lines at `scroll`.
     fn drawn(scroll: usize) -> String {
+        let lines: Vec<String> = (1..=30).map(|i| format!("line {i}")).collect();
+        drawn_lines(&lines, scroll)
+    }
+
+    /// The text of the drawn output popup with `lines` at `scroll`.
+    fn drawn_lines(lines: &[String], scroll: usize) -> String {
         let area = Rect::new(0, 0, 40, 8);
         let mut buf = Buffer::empty(area);
-        let lines: Vec<String> = (1..=30).map(|i| format!("line {i}")).collect();
         let output = Output {
             title: "output",
-            lines: &lines,
+            lines,
             scroll,
         };
         render(
@@ -136,5 +145,11 @@ mod tests {
         assert!(!middle.contains("line 10 "), "{middle}");
         assert_eq!(drawn(29), drawn(25), "the last page");
         assert!(drawn(29).contains("30 lines, last 5 shown"));
+    }
+
+    #[test]
+    fn output_of_one_line_uses_the_singular() {
+        let text = drawn_lines(&["done".to_owned()], 0);
+        assert!(text.contains("1 line · Esc close"), "{text}");
     }
 }
