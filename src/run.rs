@@ -2223,20 +2223,26 @@ mod tests {
     fn the_title_is_written_only_when_it_changes() {
         let mut writer = TermWriter::new(false, false, false).with_title(true);
         assert_eq!(
-            write_title(&mut writer, "chaoshub · 3 review", None),
-            "\x1b]2;chaoshub · 3 review\x1b\\".as_bytes()
+            write_title(&mut writer, "chaoshub · 3 to review", None),
+            "\x1b]2;chaoshub · 3 to review\x1b\\".as_bytes()
         );
-        assert_eq!(write_title(&mut writer, "chaoshub · 3 review", None), b"");
         assert_eq!(
-            write_title(&mut writer, "chaoshub · 2 review", None),
-            "\x1b]2;chaoshub · 2 review\x1b\\".as_bytes()
+            write_title(&mut writer, "chaoshub · 3 to review", None),
+            b""
+        );
+        assert_eq!(
+            write_title(&mut writer, "chaoshub · 2 to review", None),
+            "\x1b]2;chaoshub · 2 to review\x1b\\".as_bytes()
         );
     }
 
     #[test]
     fn title_updates_can_be_disabled() {
         let mut writer = TermWriter::new(false, false, false).with_title(false);
-        assert_eq!(write_title(&mut writer, "chaoshub · 3 review", None), b"");
+        assert_eq!(
+            write_title(&mut writer, "chaoshub · 3 to review", None),
+            b""
+        );
         let mut out = Vec::new();
         writer.clear(&mut out).unwrap();
         assert_eq!(out, b"");
@@ -2246,11 +2252,14 @@ mod tests {
     fn quit_and_the_panic_clear_sequence_clear_the_title() {
         let mut writer = TermWriter::new(false, false, false).with_title(true);
         assert_eq!(writer.clear_sequence(), b"\x1b]2;\x1b\\");
-        let first = write_title(&mut writer, "chaoshub · 3 review", None);
+        let first = write_title(&mut writer, "chaoshub · 3 to review", None);
         let mut out = Vec::new();
         writer.clear(&mut out).unwrap();
         assert_eq!(out, b"\x1b]2;\x1b\\");
-        assert_eq!(write_title(&mut writer, "chaoshub · 3 review", None), first);
+        assert_eq!(
+            write_title(&mut writer, "chaoshub · 3 to review", None),
+            first
+        );
     }
 
     #[test]
@@ -2264,7 +2273,7 @@ mod tests {
             }),
         ] {
             let mut writer = TermWriter::new(false, false, true).with_title(true);
-            write_title(&mut writer, "chaoshub · 3 review", notice.as_ref());
+            write_title(&mut writer, "chaoshub · 3 to review", notice.as_ref());
             let mut out = Vec::new();
             writer.hand_over(&mut out).unwrap();
             let expected = if notice.is_some() {
@@ -2274,8 +2283,8 @@ mod tests {
             };
             assert_eq!(out, expected);
             assert_eq!(
-                write_title(&mut writer, "chaoshub · 3 review", notice.as_ref()),
-                "\x1b]2;chaoshub · 3 review\x1b\\".as_bytes()
+                write_title(&mut writer, "chaoshub · 3 to review", notice.as_ref()),
+                "\x1b]2;chaoshub · 3 to review\x1b\\".as_bytes()
             );
         }
     }

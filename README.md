@@ -644,11 +644,11 @@ When `title`, `program_status` or `progress` is not set, chaoshub writes
 the sequence only inside Rex (`REX_BLOCK` is set) and Ghostty
 (`TERM_PROGRAM=ghostty`). `true` forces it on, `false` forces it off.
 
-The list title is `chaoshub · 3 review`. The count uses the normal
+The list title is `chaoshub · 3 to review`. The count uses the normal
 Review tab: open PRs that request review from you or your teams, are
 not drafts, have green CI, and pass the age limit. Text and author
 filters and the `t` and `T` switches do not change it. Until the first
-review list sync completes, `? review` shows that the count is not
+review list sync completes, `? to review` shows that the count is not
 known yet.
 
 One short activity can follow the count, such as `syncing`,

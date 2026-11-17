@@ -67,9 +67,9 @@ pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
             None => format!("#{}", key.number),
         }
     } else if !data.synced.contains_key(&Scope::Team) {
-        "chaoshub · ? review".to_owned()
+        "chaoshub · ? to review".to_owned()
     } else {
-        format!("chaoshub · {} review", ready_count(data, "review"))
+        format!("chaoshub · {} to review", ready_count(data, "review"))
     };
     let activity = match status.state {
         TermState::Idle | TermState::Clear => None,
@@ -679,7 +679,7 @@ mod tests {
             })
             .collect();
         assert_eq!(numbers, [1, 12, 13]);
-        assert_eq!(frame.title, "chaoshub · 3 review");
+        assert_eq!(frame.title, "chaoshub · 3 to review");
         for active in 0..TABS.len() {
             state.ui.active = active;
             for tab in &mut state.ui.tabs {
@@ -687,7 +687,7 @@ mod tests {
                 tab.filter = "no match".into();
                 tab.show_hidden = true;
             }
-            assert_eq!(title(&state), "chaoshub · 3 review");
+            assert_eq!(title(&state), "chaoshub · 3 to review");
         }
     }
 
@@ -695,23 +695,23 @@ mod tests {
     fn an_unknown_count_is_not_reported_as_zero() {
         let mut state = state();
         state.data.synced.remove(&Scope::Team);
-        assert_eq!(title(&state), "chaoshub · ? review");
+        assert_eq!(title(&state), "chaoshub · ? to review");
         state.data.session.login = Some("me".into());
-        assert_eq!(title(&state), "chaoshub · ? review · syncing");
+        assert_eq!(title(&state), "chaoshub · ? to review · syncing");
         state.data.synced.insert(Scope::Team, test_time());
-        assert_eq!(title(&state), "chaoshub · 0 review");
+        assert_eq!(title(&state), "chaoshub · 0 to review");
     }
 
     #[test]
     fn the_title_includes_one_short_activity() {
         let mut state = state();
         state.data.prefetch = Some(PrefetchBatch { done: 1, total: 2 });
-        assert_eq!(title(&state), "chaoshub · 0 review · prefetching");
+        assert_eq!(title(&state), "chaoshub · 0 to review · prefetching");
         state.data.merge = Some(MergeState::new(
             testdata::pr_key("chaoshub", 42),
             test_time(),
         ));
-        assert_eq!(title(&state), "chaoshub · 0 review · merging #42");
+        assert_eq!(title(&state), "chaoshub · 0 to review · merging #42");
         let blocked = TermStatus {
             state: TermState::Blocked {
                 kind: BlockedKind::Question,
@@ -719,13 +719,16 @@ mod tests {
             msg: Some("A long question that does not belong in the title".into()),
             progress: Progress::Indeterminate,
         };
-        assert_eq!(term_title(&state, &blocked), "chaoshub · 0 review · input");
+        assert_eq!(
+            term_title(&state, &blocked),
+            "chaoshub · 0 to review · input"
+        );
         let error = TermStatus {
             state: TermState::Error,
             msg: Some("A long error that does not belong in the title".into()),
             progress: Progress::Error,
         };
-        assert_eq!(term_title(&state, &error), "chaoshub · 0 review · error");
+        assert_eq!(term_title(&state, &error), "chaoshub · 0 to review · error");
     }
 
     /// A state with the standalone PR view of `pr`.
