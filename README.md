@@ -635,7 +635,7 @@ and mouse controls (see "Mouse").
 
 | Key | Default | Meaning |
 |---|---|---|
-| `title` | detected | Sets the terminal title with the ready review count and the current activity. |
+| `title` | detected | Sets the terminal title with the ready review count, or the PR overview in the standalone PR view, and the current activity. |
 | `program_status` | detected | Writes OSC 7501, the program status. |
 | `progress` | detected | Writes OSC 9;4, the progress bar. |
 | `mouse` | `true` | Reads the mouse. `false` leaves the mouse to the terminal, so the terminal selects the text. chaoshub selects text itself (see "Mouse"), so `false` is only necessary to select across panes. |
@@ -653,8 +653,32 @@ known yet.
 
 One short activity can follow the count, such as `syncing`,
 `prefetching`, `merging #42`, `input` or `error`. The status bar shows
-the error details. A standalone PR pane shows its repository and PR
-number instead of a review count.
+the error details.
+
+The standalone PR view (`chaoshub pr`) shows a short overview of its
+pull request instead of a review count:
+
+```text
+#7 Fix the merge · blocked · CI failed · approved
+```
+
+The parts are:
+
+1. The PR number and the PR title. A title of more than 30 characters
+   is cut and ends with `…`.
+2. The verdict of the Description pane in lowercase: `ready`,
+   `blocked`, `waiting`, `checking`, `conflicts`, `draft`, `in queue`,
+   `merged` or `closed`.
+3. The CI state: `CI passed`, `CI failed` or `CI running`. A pull
+   request without checks has no CI part.
+4. The reviews: `approved`, `changes requested` or `review required`.
+   A pull request that needs no review and has no reviews has no review
+   part.
+
+A merged or closed pull request shows only the number, the title and
+the verdict. Before the pull request loads, the title is `#7 · loading`.
+The activity follows the overview, for example
+`#7 Fix the merge · ready · CI passed · approved · merging #7`.
 
 The title uses OSC 2. It updates only when its text changes. It clears
 when chaoshub exits or hands the terminal to another program, then

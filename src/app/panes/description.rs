@@ -142,8 +142,9 @@ fn readiness(cx: &KeyCx<'_>, pr: &PullRequest) -> Vec<Vec<Cell>> {
 }
 
 /// The badge text and the tone of the verdict: the first row of the
-/// verdict table that matches.
-fn badge(head: &PrHead, ci: CiState) -> (&'static str, Tone) {
+/// verdict table that matches. The title of the standalone PR view uses
+/// the same text.
+pub(crate) fn badge(head: &PrHead, ci: CiState) -> (&'static str, Tone) {
     if head.state == PrState::Merged {
         ("MERGED", Tone::Merge)
     } else if head.state == PrState::Closed {

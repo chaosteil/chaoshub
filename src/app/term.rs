@@ -25,8 +25,10 @@
 use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::app::notify::ready_count;
+use crate::app::panes::description;
 use crate::app::state::{AppState, MergeState, OverlayState};
 use crate::bus::{BlockedKind, MergeProgress, Progress, Scope, TermState, TermStatus};
+use crate::domain::pr::{CiState, PrHead, PrState, PullRequest, ReviewDecision};
 
 /// How long the progress bar shows an error after a failure.
 pub(crate) const ERROR_PROGRESS: TimeDelta = TimeDelta::seconds(5);
@@ -49,6 +51,10 @@ pub(crate) fn term_status(state: &AppState) -> TermStatus {
     }
 }
 
+/// The maximum length of the PR title in the title of the standalone PR
+/// view, in chars. Rex tabs are narrow.
+const PR_TITLE_MAX: usize = 30;
+
 /// The title of the list or the standalone PR view. The review count is
 /// the ready set of the Review tab, the same set that the notice of new
 /// pull requests watches. The view filters do not change it. Count once
@@ -56,10 +62,10 @@ pub(crate) fn term_status(state: &AppState) -> TermStatus {
 pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
     let data = &state.data;
     let mut title = if let Some(key) = &state.ui.pinned {
-        format!(
-            "chaoshub · {}/{}#{}",
-            key.repo.owner, key.repo.name, key.number
-        )
+        match data.prs.get(key) {
+            Some(pr) => pr_overview(pr),
+            None => format!("#{}", key.number),
+        }
     } else if !data.synced.contains_key(&Scope::Team) {
         "chaoshub · ? review".to_owned()
     } else {
@@ -91,6 +97,62 @@ pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
         title.push_str(&activity);
     }
     title
+}
+
+/// A short overview of a pull request for the title of the standalone PR
+/// view: `#7 <title> · <verdict> · <CI> · <reviews>`. The verdict is the
+/// badge of the description pane. A merged or closed pull request shows
+/// only the number, the title and the verdict. The CI and the reviews use the words of the merge
+/// confirm popup. They are not in the title when the pull request has no
+/// checks or needs no review.
+fn pr_overview(pr: &PullRequest) -> String {
+    let head = &pr.head.value;
+    let (badge, _) = description::badge(head, pr.ci_state.value);
+    let mut parts = vec![
+        format!("#{} {}", pr.key.number, short(head.title.trim())),
+        badge.to_lowercase(),
+    ];
+    if head.state == PrState::Open {
+        parts.extend(ci_text(pr.ci_state.value).map(str::to_owned));
+        parts.extend(review_text(head).map(str::to_owned));
+    }
+    parts.join(" · ")
+}
+
+/// The CI state: `CI passed`, `CI failed` or `CI running`. `None` without
+/// checks.
+fn ci_text(state: CiState) -> Option<&'static str> {
+    match state {
+        CiState::Success => Some("CI passed"),
+        CiState::Failure => Some("CI failed"),
+        CiState::Pending => Some("CI running"),
+        CiState::None => None,
+    }
+}
+
+/// The review state: `approved`, `changes requested` or `review
+/// required`. Without a review decision, the reviews count: `approved`
+/// with approvals, `changes requested` with change requests, else `None`.
+fn review_text(head: &PrHead) -> Option<&'static str> {
+    match head.review_decision {
+        Some(ReviewDecision::Approved) => Some("approved"),
+        Some(ReviewDecision::ChangesRequested) => Some("changes requested"),
+        Some(ReviewDecision::ReviewRequired) => Some("review required"),
+        None if head.changes_requested > 0 => Some("changes requested"),
+        None if head.approvals > 0 => Some("approved"),
+        None => None,
+    }
+}
+
+/// Cuts a PR title to `PR_TITLE_MAX` chars. A cut title ends with `…`.
+fn short(title: &str) -> String {
+    if title.chars().count() <= PR_TITLE_MAX {
+        return title.to_owned();
+    }
+    let mut out: String = title.chars().take(PR_TITLE_MAX - 1).collect();
+    out.truncate(out.trim_end().len());
+    out.push('…');
+    out
 }
 
 /// The terminal status without the overlays.
@@ -215,7 +277,7 @@ mod tests {
     use crate::app::testdata;
     use crate::bus::{ConfirmSpec, OverlayKind, PromptSpec, Selection, Size, Target, TargetKey};
     use crate::domain::local::LocalMatch;
-    use crate::domain::pr::{CiState, PrState};
+    use crate::domain::pr::{MergeStateStatus, Mergeable};
     use crate::domain::repo::Repo;
     use crate::domain::test_time;
 
@@ -666,17 +728,175 @@ mod tests {
         assert_eq!(term_title(&state, &error), "chaoshub · 0 review · error");
     }
 
-    #[test]
-    fn a_standalone_pr_title_identifies_the_pr_without_a_list_count() {
+    /// A state with the standalone PR view of `pr`.
+    fn pinned(pr: crate::domain::pr::PullRequest) -> AppState {
         let mut state = state();
-        let pr = testdata::pr("chaoshub", 7, "A PR title stays in the pane");
         state.ui.pinned = Some(pr.key.clone());
         state.data.prs.insert(pr.key.clone(), pr);
-        assert_eq!(title(&state), "chaoshub · chaosteil/chaoshub#7");
+        state
+    }
+
+    /// An open pull request that is ready to merge: green CI, approved,
+    /// no conflicts.
+    fn ready_pr() -> crate::domain::pr::PullRequest {
+        let mut pr = testdata::pr("chaoshub", 7, "Fix the merge");
+        pr.ci_state.value = CiState::Success;
+        let head = &mut pr.head.value;
+        head.review_decision = Some(ReviewDecision::Approved);
+        head.approvals = 2;
+        head.mergeable = Mergeable::Mergeable;
+        head.merge_state = MergeStateStatus::Clean;
+        pr
+    }
+
+    #[test]
+    fn a_standalone_pr_title_gives_an_overview_without_a_list_count() {
+        let mut state = pinned(ready_pr());
+        assert_eq!(
+            title(&state),
+            "#7 Fix the merge · ready · CI passed · approved"
+        );
         state.data.synced.clear();
         state.data.session.login = Some("me".into());
-        assert_eq!(title(&state), "chaoshub · chaosteil/chaoshub#7");
+        assert_eq!(
+            title(&state),
+            "#7 Fix the merge · ready · CI passed · approved"
+        );
         state.data.prs.clear();
-        assert_eq!(title(&state), "chaoshub · chaosteil/chaoshub#7 · loading");
+        assert_eq!(title(&state), "#7 · loading");
+    }
+
+    #[test]
+    fn the_pr_title_shows_each_verdict() {
+        type Change = fn(&mut crate::domain::pr::PullRequest);
+        let cases: [(&str, Change, &str); 12] = [
+            (
+                "ready",
+                |_| {},
+                "#7 Fix the merge · ready · CI passed · approved",
+            ),
+            (
+                "failed CI",
+                |pr| pr.ci_state.value = CiState::Failure,
+                "#7 Fix the merge · blocked · CI failed · approved",
+            ),
+            (
+                "running CI",
+                |pr| pr.ci_state.value = CiState::Pending,
+                "#7 Fix the merge · waiting · CI running · approved",
+            ),
+            (
+                "requested changes",
+                |pr| {
+                    pr.head.value.review_decision = Some(ReviewDecision::ChangesRequested);
+                },
+                "#7 Fix the merge · blocked · CI passed · changes requested",
+            ),
+            (
+                "required review",
+                |pr| {
+                    pr.head.value.review_decision = Some(ReviewDecision::ReviewRequired);
+                    pr.head.value.approvals = 0;
+                },
+                "#7 Fix the merge · blocked · CI passed · review required",
+            ),
+            (
+                "conflicts",
+                |pr| pr.head.value.mergeable = Mergeable::Conflicting,
+                "#7 Fix the merge · conflicts · CI passed · approved",
+            ),
+            (
+                "unknown merge state",
+                |pr| pr.head.value.mergeable = Mergeable::Unknown,
+                "#7 Fix the merge · checking · CI passed · approved",
+            ),
+            (
+                "draft",
+                |pr| pr.head.value.is_draft = true,
+                "#7 Fix the merge · draft · CI passed · approved",
+            ),
+            (
+                "merge queue",
+                |pr| pr.head.value.in_merge_queue = true,
+                "#7 Fix the merge · in queue · CI passed · approved",
+            ),
+            (
+                "no checks and no review decision",
+                |pr| {
+                    pr.ci_state.value = CiState::None;
+                    pr.head.value.review_decision = None;
+                    pr.head.value.approvals = 0;
+                },
+                "#7 Fix the merge · ready",
+            ),
+            (
+                "merged",
+                |pr| pr.head.value.state = PrState::Merged,
+                "#7 Fix the merge · merged",
+            ),
+            (
+                "closed",
+                |pr| pr.head.value.state = PrState::Closed,
+                "#7 Fix the merge · closed",
+            ),
+        ];
+        for (name, change, expected) in cases {
+            let mut pr = ready_pr();
+            change(&mut pr);
+            assert_eq!(title(&pinned(pr)), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_pr_title_counts_reviews_without_a_review_decision() {
+        let mut pr = ready_pr();
+        pr.head.value.review_decision = None;
+        assert_eq!(
+            title(&pinned(pr.clone())),
+            "#7 Fix the merge · ready · CI passed · approved"
+        );
+        pr.head.value.changes_requested = 1;
+        assert_eq!(
+            title(&pinned(pr)),
+            "#7 Fix the merge · ready · CI passed · changes requested"
+        );
+    }
+
+    #[test]
+    fn a_long_pr_title_is_cut() {
+        let mut pr = ready_pr();
+        pr.head.value.title = "  Add the terminal title overview to the PR view  ".into();
+        assert_eq!(
+            title(&pinned(pr)),
+            "#7 Add the terminal title overvi… · ready · CI passed · approved"
+        );
+        let mut pr = ready_pr();
+        pr.head.value.title = "1234567890123456789012345678 cut after the space".into();
+        assert_eq!(
+            title(&pinned(pr)),
+            "#7 1234567890123456789012345678… · ready · CI passed · approved"
+        );
+    }
+
+    #[test]
+    fn the_pr_title_keeps_the_activity() {
+        let mut state = pinned(ready_pr());
+        state.data.merge = Some(MergeState::new(
+            testdata::pr_key("chaoshub", 7),
+            test_time(),
+        ));
+        assert_eq!(
+            title(&state),
+            "#7 Fix the merge · ready · CI passed · approved · merging #7"
+        );
+        let error = TermStatus {
+            state: TermState::Error,
+            msg: Some("merge of #7 failed: checks failing".into()),
+            progress: Progress::Error,
+        };
+        assert_eq!(
+            term_title(&state, &error),
+            "#7 Fix the merge · ready · CI passed · approved · error"
+        );
     }
 }
