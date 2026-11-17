@@ -15,10 +15,6 @@
 //!   list that started it.
 //! - At bind time, the list deletes the sockets of list processes that
 //!   do not run now.
-#![allow(
-    dead_code,
-    reason = "the list and the PR view use the channel in a later commit"
-)]
 
 use std::fs;
 use std::io;

@@ -16,6 +16,18 @@ pub fn state_dir() -> Option<PathBuf> {
     Some(strategy.state_dir()?.join("chaoshub"))
 }
 
+/// The directory of the list sockets (see `ipc`):
+/// `$XDG_RUNTIME_DIR/chaoshub` when the runtime directory is known, else
+/// `ipc` in the state directory. `None` when the home directory is
+/// unknown.
+pub(crate) fn socket_dir() -> Option<PathBuf> {
+    let strategy = etcetera::choose_base_strategy().ok()?;
+    match strategy.runtime_dir() {
+        Some(dir) => Some(dir.join("chaoshub")),
+        None => Some(state_dir()?.join("ipc")),
+    }
+}
+
 /// The config directory of chaoshub: `$XDG_CONFIG_HOME/chaoshub`, by
 /// default `~/.config/chaoshub`. `None` when the home directory is unknown.
 pub(crate) fn config_dir() -> Option<PathBuf> {
@@ -85,5 +97,7 @@ mod tests {
         let db = cache_db().unwrap();
         assert!(db.ends_with("chaoshub/chaoshub.db"));
         assert!(state_dir().unwrap().ends_with("chaoshub"));
+        let sockets = socket_dir().unwrap();
+        assert!(sockets.ends_with("chaoshub") || sockets.ends_with("chaoshub/ipc"));
     }
 }

@@ -740,6 +740,9 @@ pub(crate) enum Cmd {
     LoadAgent(PrKey),
     /// Reads the codeview comment files of a pull request.
     LoadCodeview(PrKey),
+    /// Tells the list process that started this PR view about an event,
+    /// by the list socket. Without a list socket, nothing happens.
+    TellList(PrViewEvent),
     /// Opens the text in the editor of the user. The event loop runs the
     /// editor in the foreground and sends `Msg::TextEdited`.
     EditText(String),

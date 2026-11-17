@@ -121,6 +121,9 @@ pub(crate) struct Runtime {
     /// True when a quit closes the open panes. The pinned mode leaves
     /// them open.
     close_panes_on_quit: bool,
+    /// The socket of the list process that started this PR view, from
+    /// `CHAOSHUB_LIST_SOCKET`. `Cmd::TellList` sends to it.
+    list: Option<PathBuf>,
 }
 
 impl Runtime {
@@ -146,7 +149,14 @@ impl Runtime {
             alive_poll: ALIVE_POLL,
             quit: false,
             close_panes_on_quit,
+            list: None,
         }
+    }
+
+    /// Sends `Cmd::TellList` to the list socket at `path`.
+    pub(crate) fn with_list(mut self, path: Option<PathBuf>) -> Self {
+        self.list = path;
+        self
     }
 
     /// The root token. Quit cancels it.
@@ -199,6 +209,11 @@ impl Runtime {
             Cmd::RunAgent(job) => self.run_agent(job),
             Cmd::LoadAgent(key) => self.load_agent(key),
             Cmd::LoadCodeview(key) => self.load_codeview(key),
+            Cmd::TellList(event) => {
+                if let Some(path) = &self.list {
+                    crate::ipc::send(path, &event);
+                }
+            }
             Cmd::EditText(_) => tracing::warn!("the event loop runs the editor"),
         }
     }
@@ -721,6 +736,31 @@ mod tests {
         assert_eq!(f.sync.recv().await, Some(SyncReq::Full(Scope::Mine)));
         assert_eq!(f.sync.recv().await, Some(SyncReq::Full(Scope::Team)));
         assert_eq!(f.jj.recv().await, Some(JjReq::Scan(repo())));
+    }
+
+    #[tokio::test]
+    async fn tell_list_sends_to_the_list_socket_and_skips_without_one() {
+        let event = crate::bus::PrViewEvent::PrChanged {
+            pr: crate::domain::keys::PrKey {
+                repo: repo(),
+                number: 7,
+            },
+        };
+        // Without a socket, nothing happens.
+        let mut f = fixture(Handle::current(), 4);
+        f.runtime.exec(Cmd::TellList(event.clone()));
+        // A socket that no list listens on: the send fails and returns.
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = fixture(Handle::current(), 4);
+        f.runtime = f.runtime.with_list(Some(dir.path().join("list-1.sock")));
+        f.runtime.exec(Cmd::TellList(event.clone()));
+        // A list that listens gets the event.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let listener =
+            crate::ipc::Listener::bind(dir.path(), move |event| tx.send(event).is_ok()).unwrap();
+        f.runtime = f.runtime.with_list(Some(listener.path().to_path_buf()));
+        f.runtime.exec(Cmd::TellList(event.clone()));
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(event));
     }
 
     #[test]

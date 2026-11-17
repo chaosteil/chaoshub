@@ -135,6 +135,10 @@ pub(crate) struct AppData {
     /// GitHub data from after the approval arrives (see
     /// `AppData::review_requested`).
     pub approvals: BTreeMap<PrKey, Approval>,
+    /// The approvals of the pinned mode that went to the list process as
+    /// `PrViewEvent::ApprovalStarted`. The end of each one goes to the
+    /// list too.
+    pub told_approvals: BTreeSet<PrKey>,
 }
 
 /// An approval that chaoshub sent. While it covers its pull request, the
@@ -191,6 +195,9 @@ pub(crate) struct DetailPane {
     pub argv: Vec<String>,
     /// The directory of the list process, for a repo without a path.
     pub cwd: PathBuf,
+    /// The env of the pane: the list socket (see `ipc`), when the list
+    /// listens on one.
+    pub env: Vec<(String, String)>,
     /// The `[detail] split` direction.
     pub split: Option<String>,
     /// The `[detail] ratio` in percent.
@@ -916,6 +923,7 @@ impl AppState {
                 title_spinner: true,
                 notify: NotifyState::default(),
                 approvals: BTreeMap::new(),
+                told_approvals: BTreeSet::new(),
             },
             ui: UiState {
                 active: 0,

@@ -3,8 +3,10 @@
 //!
 //! Threads: the event loop runs on the main thread and is the only code
 //! that touches the terminal. The reader thread reads terminal events. The
-//! signal thread turns SIGTERM and SIGINT into `Msg::Signal`. The tokio
-//! runtime runs the workers and the action tasks.
+//! signal thread turns SIGTERM and SIGINT into `Msg::Signal`. The ipc
+//! thread of the list turns the events of its PR views into
+//! `Msg::PrView` (see `ipc`). The tokio runtime runs the workers and the
+//! action tasks.
 
 use std::collections::VecDeque;
 use std::io::{self, Stdout, Write};
@@ -48,6 +50,7 @@ use crate::config::{self, Config, paths};
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::repo::Repo;
 use crate::github::{GITHUB_API, GithubClient, TokenSource};
+use crate::ipc;
 use crate::launch::Launcher;
 use crate::launch::rex::RexLauncher;
 use crate::osc;
@@ -169,6 +172,20 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
 
     let reader = Reader::spawn(tx.clone())?;
     let signals = spawn_signals(tx.clone())?;
+    // The list listens for the events of its PR views. The PR view
+    // finds the socket in its env.
+    let listener = detail
+        .as_ref()
+        .and_then(|_| list_listener(paths::socket_dir(), tx.clone()));
+    let detail = detail.map(|mut detail| {
+        if let Some(listener) = &listener {
+            detail.env.push((
+                ipc::ENV.to_owned(),
+                listener.path().to_string_lossy().into_owned(),
+            ));
+        }
+        detail
+    });
     let app = App::new(
         size,
         keymap,
@@ -208,7 +225,8 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         app,
         // The pinned process leaves the panes that it opened, for
         // example a codeview review, open on quit.
-        runtime: Runtime::new(tokio.handle().clone(), senders, env, pinned.is_none()),
+        runtime: Runtime::new(tokio.handle().clone(), senders, env, pinned.is_none())
+            .with_list(list_socket(pinned.is_some(), std::env::var_os(ipc::ENV))),
         handle: tokio.handle().clone(),
         transitions,
         theme,
@@ -241,6 +259,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         tracing::warn!(%err, "cannot clear the terminal status");
     }
 
+    drop(listener);
     signals.close();
     reader.stop();
     drop(guard);
@@ -558,9 +577,38 @@ fn detail_pane(args: &DetailArgs) -> Option<DetailPane> {
     Some(DetailPane {
         argv: command,
         cwd: std::env::current_dir().unwrap_or_default(),
+        env: Vec::new(),
         split: Some(args.split.clone()),
         ratio: args.ratio,
     })
+}
+
+/// The socket of the list process in `dir`, with a listener thread that
+/// sends each event as `Msg::PrView`. `None` when the directory is
+/// unknown or the bind fails: then the PR views do not tell the list,
+/// and the list sees their changes after the next sync.
+fn list_listener(dir: Option<PathBuf>, tx: mpsc::Sender<Msg>) -> Option<ipc::Listener> {
+    let dir = dir?;
+    match ipc::Listener::bind(&dir, move |event| {
+        tx.blocking_send(Msg::PrView(event)).is_ok()
+    }) {
+        Ok(listener) => {
+            tracing::debug!(path = %listener.path().display(), "the list listens");
+            Some(listener)
+        }
+        Err(err) => {
+            tracing::warn!(%err, dir = %dir.display(), "cannot bind the list socket");
+            None
+        }
+    }
+}
+
+/// The list socket of a pinned process: `env`, the value of
+/// `CHAOSHUB_LIST_SOCKET`. `None` in the list mode, and for a PR view
+/// that no list started.
+fn list_socket(pinned: bool, env: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    env.filter(|path| pinned && !path.is_empty())
+        .map(PathBuf::from)
 }
 
 /// The key of the pull request of `chaoshub pr OWNER/NAME NUMBER`.
@@ -1588,6 +1636,41 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::*;
+
+    #[test]
+    fn only_a_pinned_process_with_the_env_tells_a_list() {
+        let env = Some(std::ffi::OsString::from("/run/list-1.sock"));
+        assert_eq!(
+            list_socket(true, env.clone()),
+            Some(PathBuf::from("/run/list-1.sock"))
+        );
+        assert_eq!(list_socket(false, env), None, "the list mode");
+        assert_eq!(list_socket(true, None), None, "no list started it");
+        assert_eq!(list_socket(true, Some("".into())), None);
+    }
+
+    #[test]
+    fn the_list_listener_sends_each_event_as_a_message() {
+        assert!(list_listener(None, mpsc::channel(1).0).is_none());
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        let listener = list_listener(Some(dir.path().join("ipc")), tx).unwrap();
+        let event = crate::bus::PrViewEvent::PrChanged {
+            pr: PrKey {
+                repo: RepoKey {
+                    owner: "o".into(),
+                    name: "r".into(),
+                },
+                number: 3,
+            },
+        };
+        ipc::send(listener.path(), &event);
+        let msg = rx.blocking_recv();
+        assert!(
+            matches!(&msg, Some(Msg::PrView(got)) if *got == event),
+            "{msg:?}"
+        );
+    }
 
     #[test]
     fn the_theme_flag_wins_over_the_config() {

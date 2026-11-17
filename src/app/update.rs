@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 
-use crate::actions::{Action, Applicability, Prepare, REGISTRY, REPLY_ID};
+use crate::actions::{Action, Applicability, Group, Prepare, REGISTRY, REPLY_ID};
 use crate::app::frame;
 use crate::app::help::help_model;
 use crate::app::keymap::{self, Keymap};
@@ -195,7 +195,9 @@ pub(crate) fn update_full(
         } => merge_step(state, key, step),
         Msg::ActionEvent { id, key, event } => {
             let back = approval_event(&mut state.data, id, &key, &event, Utc::now());
+            let tell = tell_list_done(state, actions, id, &key, &event);
             let mut cmds = action_event(state, actions, id, key, event);
+            cmds.extend(tell);
             if back {
                 state.bump();
                 cmds.extend(after_change(state, tabs));
@@ -229,6 +231,9 @@ pub(crate) fn update_full(
             if id == REVIEW_ID {
                 let TargetKey::Pr(pr) = &key;
                 cmds.push(Cmd::LoadCodeview(pr.clone()));
+                if state.ui.pinned.is_some() {
+                    cmds.push(Cmd::TellList(PrViewEvent::PrChanged { pr: pr.clone() }));
+                }
             }
             cmds
         }
@@ -857,7 +862,7 @@ fn open_pane(state: &mut AppState, target: &Target) -> Vec<Cmd> {
     let request = LaunchRequest {
         argv,
         cwd: repo.path.clone().unwrap_or(detail.cwd),
-        env: Vec::new(),
+        env: detail.env,
         label: format!(
             "chaoshub-detail-{owner}-{name}-{number}-{:04x}",
             rand::random::<u16>()
@@ -1084,6 +1089,16 @@ fn review_key(
     let approval = (event == ReviewKind::Approve).then(|| review.pr().key.clone());
     close_overlay(state);
     let mut cmds = vec![cmd];
+    // The pinned mode tells the list about the approval, so the list
+    // hides the pull request too.
+    if let Some(key) = &approval
+        && state.ui.pinned.is_some()
+    {
+        state.data.told_approvals.insert(key.clone());
+        cmds.push(Cmd::TellList(PrViewEvent::ApprovalStarted {
+            pr: key.clone(),
+        }));
+    }
     // An approval hides its pull request from the Review tab.
     if let Some(key) = approval
         && approval_sent(&mut state.data, key)
@@ -1091,6 +1106,36 @@ fn review_key(
         cmds.extend(after_change(state, tabs));
     }
     cmds
+}
+
+/// The event for the list process at the end of the action `id` on
+/// `key` in the pinned mode. The end of an approval that the list knows
+/// about is `ApprovalDone`. A success of an action that changes the pull
+/// request on GitHub (the groups `Review` and `Change`) is `PrChanged`.
+/// Other ends tell the list nothing.
+fn tell_list_done(
+    state: &mut AppState,
+    actions: &[Box<dyn Action>],
+    id: &'static str,
+    key: &TargetKey,
+    event: &ActionEvent,
+) -> Option<Cmd> {
+    let ActionEvent::Done(result) = event else {
+        return None;
+    };
+    state.ui.pinned.as_ref()?;
+    let TargetKey::Pr(pr) = key;
+    if id == CODEVIEW_SEND_ID && state.data.told_approvals.remove(pr) {
+        return Some(Cmd::TellList(PrViewEvent::ApprovalDone {
+            pr: pr.clone(),
+            ok: result.is_ok(),
+        }));
+    }
+    let changes = actions
+        .iter()
+        .find(|action| action.id() == id)
+        .is_some_and(|action| matches!(action.group(), Group::Review | Group::Change));
+    (result.is_ok() && changes).then(|| Cmd::TellList(PrViewEvent::PrChanged { pr: pr.clone() }))
 }
 
 /// Starts the approval of `key`: the pull request leaves the Review tab
@@ -7929,6 +7974,7 @@ mod tests {
         crate::app::state::DetailPane {
             argv: vec!["/bin/chaoshub".into(), "--config".into(), "/c.toml".into()],
             cwd: "/home/me".into(),
+            env: vec![("CHAOSHUB_LIST_SOCKET".into(), "/run/list-1.sock".into())],
             split: Some("left".into()),
             ratio: Some(40),
         }
@@ -7988,7 +8034,11 @@ mod tests {
             ]
         );
         assert_eq!(request.cwd, std::path::PathBuf::from("/code/chaoshub"));
-        assert_eq!(request.env, []);
+        assert_eq!(
+            request.env,
+            [("CHAOSHUB_LIST_SOCKET".into(), "/run/list-1.sock".into())],
+            "the pane gets the list socket"
+        );
         assert!(!request.zoom);
         assert_eq!(request.split.as_deref(), Some("left"));
         assert_eq!(request.ratio, Some(40));
@@ -9679,5 +9729,221 @@ mod tests {
         assert!(refreshes(&cmds, &pr), "{cmds:?}");
         assert!(state.data.approvals.is_empty(), "no overlay");
         assert_eq!(tab_numbers(&mut state), [90, 89, 88]);
+    }
+
+    /// The approval state, pinned to #89: the PR view of #89.
+    fn pr_view_state() -> (AppState, PrKey) {
+        let (mut state, pr) = approval_state();
+        pin(&mut state, pr.clone());
+        (state, pr)
+    }
+
+    /// The events of `cmds` for the list process.
+    fn told(cmds: &[Cmd]) -> Vec<PrViewEvent> {
+        cmds.iter()
+            .filter_map(|cmd| match cmd {
+                Cmd::TellList(event) => Some(event.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The end of the action `id` on `pr`.
+    fn action_done(id: &'static str, pr: &PrKey, result: Result<&str, &str>) -> Msg {
+        Msg::ActionEvent {
+            id,
+            key: TargetKey::Pr(pr.clone()),
+            event: ActionEvent::Done(result.map(str::to_owned).map_err(str::to_owned)),
+        }
+    }
+
+    #[test]
+    fn the_pr_view_tells_the_list_about_an_approval_and_its_end() {
+        let (mut state, pr) = pr_view_state();
+        let cmds = approve(&mut state, &pr);
+        assert_eq!(
+            told(&cmds),
+            [PrViewEvent::ApprovalStarted { pr: pr.clone() }]
+        );
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Ok("approved #89")),
+        );
+        assert_eq!(
+            told(&cmds),
+            [PrViewEvent::ApprovalDone {
+                pr: pr.clone(),
+                ok: true
+            }],
+            "one event, not also a PrChanged"
+        );
+        assert!(state.data.told_approvals.is_empty());
+    }
+
+    #[test]
+    fn the_pr_view_tells_the_list_about_a_failed_approval() {
+        let (mut state, pr) = pr_view_state();
+        approve(&mut state, &pr);
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Err("cancelled")),
+        );
+        assert_eq!(
+            told(&cmds),
+            [PrViewEvent::ApprovalDone {
+                pr: pr.clone(),
+                ok: false
+            }]
+        );
+    }
+
+    #[test]
+    fn a_change_request_in_the_pr_view_only_refreshes_the_list() {
+        let (mut state, pr) = pr_view_state();
+        open_dialog(&mut state, &pr);
+        key(&mut state, 'm');
+        key(&mut state, 'x');
+        esc(&mut state);
+        let cmds = key(&mut state, 'r');
+        assert!(
+            matches!(
+                cmds.first(),
+                Some(Cmd::RunAction {
+                    input: ActionInput::Review {
+                        event: ReviewKind::RequestChanges,
+                        ..
+                    },
+                    ..
+                })
+            ),
+            "{cmds:?}"
+        );
+        assert_eq!(told(&cmds), [], "no overlay in the list");
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Ok("changes requested")),
+        );
+        assert_eq!(told(&cmds), [PrViewEvent::PrChanged { pr: pr.clone() }]);
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Err("offline")),
+        );
+        assert_eq!(told(&cmds), [], "a failure changes nothing");
+    }
+
+    #[test]
+    fn the_pr_view_tells_the_list_about_the_actions_that_change_the_pr() {
+        let (mut state, pr) = pr_view_state();
+        for id in [
+            "merge",
+            "merge_stack",
+            "close",
+            "draft",
+            "reply",
+            "rerun_checks",
+        ] {
+            let cmds = update(&mut state, &Keymap::default(), action_done(id, &pr, Ok("")));
+            assert_eq!(
+                told(&cmds),
+                [PrViewEvent::PrChanged { pr: pr.clone() }],
+                "{id}"
+            );
+            let cmds = update(
+                &mut state,
+                &Keymap::default(),
+                action_done(id, &pr, Err("offline")),
+            );
+            assert_eq!(told(&cmds), [], "{id} failed");
+        }
+        for id in ["copy_url", "copy_change_id", "browser", "agent"] {
+            let cmds = update(&mut state, &Keymap::default(), action_done(id, &pr, Ok("")));
+            assert_eq!(told(&cmds), [], "{id} changes nothing on GitHub");
+        }
+        let ended = Msg::PaneEnded {
+            id: REVIEW_ID,
+            key: TargetKey::Pr(pr.clone()),
+        };
+        let cmds = update(&mut state, &Keymap::default(), ended);
+        assert_eq!(
+            told(&cmds),
+            [PrViewEvent::PrChanged { pr: pr.clone() }],
+            "codeview can send comments"
+        );
+    }
+
+    #[test]
+    fn the_list_tells_no_list() {
+        let (mut state, pr) = approval_state();
+        let cmds = approve(&mut state, &pr);
+        assert_eq!(told(&cmds), []);
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Ok("approved #89")),
+        );
+        assert_eq!(told(&cmds), []);
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            action_done("merge", &pr, Ok("")),
+        );
+        assert_eq!(told(&cmds), []);
+        assert!(state.data.told_approvals.is_empty());
+    }
+
+    /// Sends the events of `cmds` of the PR view to the list socket at
+    /// `path`, and applies each event that the listener got to `list`.
+    fn relay(
+        cmds: &[Cmd],
+        path: &std::path::Path,
+        rx: &std::sync::mpsc::Receiver<PrViewEvent>,
+        list: &mut AppState,
+    ) {
+        for event in told(cmds) {
+            crate::ipc::send(path, &event);
+            let got = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            assert_eq!(got, event);
+            update(list, &Keymap::default(), Msg::PrView(got));
+        }
+    }
+
+    #[test]
+    fn an_approval_in_the_pr_view_reaches_the_list_over_the_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let listener =
+            crate::ipc::Listener::bind(dir.path(), move |event| tx.send(event).is_ok()).unwrap();
+        let (mut list, pr) = approval_state();
+        let (mut view, _) = pr_view_state();
+
+        let cmds = approve(&mut view, &pr);
+        relay(&cmds, listener.path(), &rx, &mut list);
+        assert_eq!(tab_numbers(&mut list), [90, 88], "hidden at once");
+
+        let cmds = update(
+            &mut view,
+            &Keymap::default(),
+            send_done(&pr, Err("HTTP 422")),
+        );
+        relay(&cmds, listener.path(), &rx, &mut list);
+        assert_eq!(tab_numbers(&mut list), [90, 89, 88], "back after a failure");
+
+        let cmds = approve(&mut view, &pr);
+        relay(&cmds, listener.path(), &rx, &mut list);
+        let cmds = update(
+            &mut view,
+            &Keymap::default(),
+            send_done(&pr, Ok("approved #89")),
+        );
+        relay(&cmds, listener.path(), &rx, &mut list);
+        assert_eq!(tab_numbers(&mut list), [90, 88]);
+        let fresh = github_pr(&list, &pr, 60, false);
+        update(&mut list, &Keymap::default(), fresh);
+        assert!(list.data.approvals.is_empty(), "GitHub decides");
+        assert_eq!(tab_numbers(&mut list), [90, 88]);
     }
 }
