@@ -636,7 +636,7 @@ and mouse controls (see "Mouse").
 
 | Key | Default | Meaning |
 |---|---|---|
-| `title` | detected | Sets the terminal title with the ready review count, or the PR overview in the standalone PR view, and the current activity. |
+| `title` | detected | Sets the terminal title with the count of ready PRs to review, or the PR overview in the standalone PR view, and the current activity. |
 | `program_status` | detected | Writes OSC 7501, the program status. |
 | `progress` | detected | Writes OSC 9;4, the progress bar. |
 | `mouse` | `true` | Reads the mouse. `false` leaves the mouse to the terminal, so the terminal selects the text. chaoshub selects text itself (see "Mouse"), so `false` is only necessary to select across panes. |
@@ -645,28 +645,29 @@ When `title`, `program_status` or `progress` is not set, chaoshub writes
 the sequence only inside Rex (`REX_BLOCK` is set) and Ghostty
 (`TERM_PROGRAM=ghostty`). `true` forces it on, `false` forces it off.
 
-The list title is `chaoshub · 3 review`. The count uses the normal
+The list title is `chaoshub · 3 PRs to review`, or
+`chaoshub · 1 PR to review` for one PR. The count uses the normal
 Review tab: open PRs that request review from you or your teams, are
 not drafts, have green CI, and pass the age limit. Text and author
 filters and the `t` and `T` switches do not change it. Until the first
-review list sync completes, `? review` shows that the count is not
-known yet.
+review list sync completes, `? PRs to review` shows that the count is
+not known yet.
 
 One short activity can follow the count, such as `merging #42`,
 `input` or `error`. While chaoshub syncs or prefetches pull requests, a
-spinner follows the count instead, for example `chaoshub · 3 review ·
-⠋`. The spinner moves five times per second. The status bar names the
+spinner follows the count instead, for example
+`chaoshub · 3 PRs to review · ⠋`. The spinner moves five times per second. The status bar names the
 work and shows the error details.
 
 Rex shows its own spinner on the tab for the OSC 7501 `working` state.
 For this reason, the title has no spinner when chaoshub runs in Rex
 (`REX_BLOCK` is set) and writes OSC 7501 (`program_status`). While
-chaoshub syncs, the title is then only `chaoshub · 3 review`. The other
+chaoshub syncs, the title is then only `chaoshub · 3 PRs to review`. The other
 activities do not change. Ghostty and other terminals keep the title
 spinner.
 
 The standalone PR view (`chaoshub pr`) shows a short overview of its
-pull request instead of a review count:
+pull request instead of the count of PRs to review:
 
 ```text
 #7 Fix the merge · blocked · CI failed · approved

@@ -66,9 +66,10 @@ const PR_TITLE_MAX: usize = 30;
 /// second, and `TermWriter` writes it only on a change.
 const TITLE_SPINNER_FRAME: Duration = SPINNER_FRAME.saturating_mul(2);
 
-/// The title of the list or the standalone PR view. The review count is
-/// the ready set of the Review tab, the same set that the notice of new
-/// pull requests watches. The view filters do not change it. Count once
+/// The title of the list or the standalone PR view. The list title
+/// counts PRs: `chaoshub · 1 PR to review`, `chaoshub · 3 PRs to review`.
+/// The count is the ready set of the Review tab, the same set that the
+/// notice of new pull requests watches. The view filters do not change it. Count once
 /// per frame generation, not on each terminal write. While the list
 /// syncs or prefetches, a spinner follows the count. The words are in
 /// the status bar. When the terminal shows its own spinner for the
@@ -82,9 +83,10 @@ pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
             None => format!("#{}", key.number),
         }
     } else if !data.synced.contains_key(&Scope::Team) {
-        "chaoshub · ? review".to_owned()
+        "chaoshub · ? PRs to review".to_owned()
     } else {
-        format!("chaoshub · {} review", ready_count(data, "review"))
+        let count = ready_count(data, "review");
+        format!("chaoshub · {} to review", plural::count(count, "PR", "PRs"))
     };
     let activity = match status.state {
         TermState::Idle | TermState::Clear => None,
@@ -706,7 +708,7 @@ mod tests {
             })
             .collect();
         assert_eq!(numbers, [1, 12, 13]);
-        assert_eq!(frame.title, "chaoshub · 3 review");
+        assert_eq!(frame.title, "chaoshub · 3 PRs to review");
         for active in 0..TABS.len() {
             state.ui.active = active;
             for tab in &mut state.ui.tabs {
@@ -714,22 +716,39 @@ mod tests {
                 tab.filter = "no match".into();
                 tab.show_hidden = true;
             }
-            assert_eq!(title(&state), "chaoshub · 3 review");
+            assert_eq!(title(&state), "chaoshub · 3 PRs to review");
         }
+    }
+
+    #[test]
+    fn the_title_count_uses_the_singular_for_one_pr() {
+        let mut state = state();
+        let mut pr = testdata::pr("chaoshub", 1, "Review me");
+        pr.head.value.review_requested = true;
+        pr.ci_state.value = CiState::Success;
+        let snapshot = crate::store::Snapshot {
+            prs: vec![(Scope::Team, pr)],
+            ..crate::store::Snapshot::default()
+        };
+        state.load(snapshot, Vec::new());
+        for scope in [Scope::Mine, Scope::Team] {
+            state.data.synced.insert(scope, test_time());
+        }
+        assert_eq!(title(&state), "chaoshub · 1 PR to review");
     }
 
     #[test]
     fn an_unknown_count_is_not_reported_as_zero() {
         let mut state = state();
         state.data.synced.remove(&Scope::Team);
-        assert_eq!(title(&state), "chaoshub · ? review");
+        assert_eq!(title(&state), "chaoshub · ? PRs to review");
         state.data.session.login = Some("me".into());
         assert_eq!(
             title(&state),
-            format!("chaoshub · ? review · {}", title_spinner(&state))
+            format!("chaoshub · ? PRs to review · {}", title_spinner(&state))
         );
         state.data.synced.insert(Scope::Team, test_time());
-        assert_eq!(title(&state), "chaoshub · 0 review");
+        assert_eq!(title(&state), "chaoshub · 0 PRs to review");
     }
 
     #[test]
@@ -738,13 +757,13 @@ mod tests {
         state.data.prefetch = Some(PrefetchBatch { done: 1, total: 2 });
         assert_eq!(
             title(&state),
-            format!("chaoshub · 0 review · {}", title_spinner(&state))
+            format!("chaoshub · 0 PRs to review · {}", title_spinner(&state))
         );
         state.data.merge = Some(MergeState::new(
             testdata::pr_key("chaoshub", 42),
             test_time(),
         ));
-        assert_eq!(title(&state), "chaoshub · 0 review · merging #42");
+        assert_eq!(title(&state), "chaoshub · 0 PRs to review · merging #42");
         let blocked = TermStatus {
             state: TermState::Blocked {
                 kind: BlockedKind::Question,
@@ -752,35 +771,41 @@ mod tests {
             msg: Some("A long question that does not belong in the title".into()),
             progress: Progress::Indeterminate,
         };
-        assert_eq!(term_title(&state, &blocked), "chaoshub · 0 review · input");
+        assert_eq!(
+            term_title(&state, &blocked),
+            "chaoshub · 0 PRs to review · input"
+        );
         let error = TermStatus {
             state: TermState::Error,
             msg: Some("A long error that does not belong in the title".into()),
             progress: Progress::Error,
         };
-        assert_eq!(term_title(&state, &error), "chaoshub · 0 review · error");
+        assert_eq!(
+            term_title(&state, &error),
+            "chaoshub · 0 PRs to review · error"
+        );
     }
 
     #[test]
     fn a_terminal_with_its_own_spinner_gets_no_title_spinner() {
         let mut state = state();
         state.data.title_spinner = false;
-        assert_eq!(title(&state), "chaoshub · 0 review", "idle");
+        assert_eq!(title(&state), "chaoshub · 0 PRs to review", "idle");
         state.data.sync.pending.insert(Scope::Mine);
         assert_eq!(term_status(&state).state, TermState::Working);
-        assert_eq!(title(&state), "chaoshub · 0 review", "syncing");
+        assert_eq!(title(&state), "chaoshub · 0 PRs to review", "syncing");
         state.data.sync.pending.clear();
         state.data.prefetch = Some(PrefetchBatch { done: 1, total: 2 });
         assert_eq!(term_status(&state).state, TermState::Working);
-        assert_eq!(title(&state), "chaoshub · 0 review", "prefetching");
+        assert_eq!(title(&state), "chaoshub · 0 PRs to review", "prefetching");
         state.data.title_spinner = true;
         assert_eq!(
             title(&state),
-            format!("chaoshub · 0 review · {}", title_spinner(&state)),
+            format!("chaoshub · 0 PRs to review · {}", title_spinner(&state)),
             "the other terminals"
         );
         state.data.prefetch = None;
-        assert_eq!(title(&state), "chaoshub · 0 review", "idle again");
+        assert_eq!(title(&state), "chaoshub · 0 PRs to review", "idle again");
     }
 
     #[test]
@@ -791,7 +816,7 @@ mod tests {
             testdata::pr_key("chaoshub", 42),
             test_time(),
         ));
-        assert_eq!(title(&state), "chaoshub · 0 review · merging #42");
+        assert_eq!(title(&state), "chaoshub · 0 PRs to review · merging #42");
         state.data.merge = None;
         let blocked = TermStatus {
             state: TermState::Blocked {
@@ -800,13 +825,19 @@ mod tests {
             msg: Some("A question".into()),
             progress: Progress::Indeterminate,
         };
-        assert_eq!(term_title(&state, &blocked), "chaoshub · 0 review · input");
+        assert_eq!(
+            term_title(&state, &blocked),
+            "chaoshub · 0 PRs to review · input"
+        );
         let error = TermStatus {
             state: TermState::Error,
             msg: Some("An error".into()),
             progress: Progress::Error,
         };
-        assert_eq!(term_title(&state, &error), "chaoshub · 0 review · error");
+        assert_eq!(
+            term_title(&state, &error),
+            "chaoshub · 0 PRs to review · error"
+        );
         let done = TermStatus {
             state: TermState::Done,
             msg: Some("merged #42".into()),
@@ -814,7 +845,7 @@ mod tests {
         };
         assert_eq!(
             term_title(&state, &done),
-            "chaoshub · 0 review · merged #42"
+            "chaoshub · 0 PRs to review · merged #42"
         );
     }
 
@@ -829,11 +860,11 @@ mod tests {
         let mut state = state();
         state.data.sync.pending.insert(Scope::Mine);
         let first = title(&state);
-        assert_eq!(first, "chaoshub · 0 review · ⠋");
+        assert_eq!(first, "chaoshub · 0 PRs to review · ⠋");
         state.data.now += SPINNER_FRAME;
         assert_eq!(title(&state), first, "one status bar frame later");
         state.data.now += SPINNER_FRAME;
-        assert_eq!(title(&state), "chaoshub · 0 review · ⠙");
+        assert_eq!(title(&state), "chaoshub · 0 PRs to review · ⠙");
         let titles: HashSet<String> = (0..20)
             .map(|_| {
                 state.data.now += SPINNER_FRAME;
