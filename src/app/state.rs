@@ -123,6 +123,10 @@ pub(crate) struct AppData {
     /// False when `[theme] animations = false`. The merge badge then does
     /// not pulse.
     pub animations: bool,
+    /// False when the terminal shows its own spinner for the OSC 7501
+    /// `working` record, as Rex does. The list title then has no
+    /// spinner.
+    pub title_spinner: bool,
     /// The notification of new pull requests.
     pub notify: NotifyState,
 }
@@ -865,6 +869,7 @@ impl AppState {
                 reviews: BTreeMap::new(),
                 selection_shift: 0,
                 animations: true,
+                title_spinner: true,
                 notify: NotifyState::default(),
             },
             ui: UiState {

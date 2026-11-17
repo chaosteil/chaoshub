@@ -124,6 +124,15 @@ impl App {
         self
     }
 
+    /// Sets whether the list title shows a spinner while chaoshub works.
+    /// `false` when the terminal shows its own spinner for the program
+    /// status.
+    pub(crate) fn with_title_spinner(mut self, on: bool) -> Self {
+        self.state.data.title_spinner = on;
+        self.state.bump();
+        self
+    }
+
     /// Turns the notification of new pull requests on with `Some`.
     pub(crate) fn with_notify(mut self, settings: Option<NotifySettings>) -> Self {
         self.state.data.notify.settings = settings;

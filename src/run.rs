@@ -123,8 +123,10 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         Transitions::new(config.theme.animations, config.theme.animation_ms).with_theme(theme);
     let detected = term_status_detected();
     let notify = notify_settings(&config.notify, detected, pinned.is_some());
+    let program_status = config.terminal.program_status.unwrap_or(detected);
+    let title_spinner = title_spinner(program_status, in_rex());
     let term = TermWriter::new(
-        config.terminal.program_status.unwrap_or(detected),
+        program_status,
         config.terminal.progress.unwrap_or(detected),
         notify.is_some(),
     )
@@ -181,6 +183,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     .with_detail_pane(detail)
     .with_selection_shift(theme.selected_row().shift)
     .with_animations(settings.config.theme.animations)
+    .with_title_spinner(title_spinner)
     .with_notify(notify);
     // The pinned app comes before the first interest, so the workers
     // start with the pinned interest.
@@ -1172,8 +1175,20 @@ fn restore_terminal() {
 /// True inside Rex (`REX_BLOCK` set) and Ghostty (`TERM_PROGRAM=ghostty`),
 /// the terminals that show OSC 7501 and OSC 9;4.
 fn term_status_detected() -> bool {
+    in_rex() || std::env::var("TERM_PROGRAM").is_ok_and(|term| term == "ghostty")
+}
+
+/// True inside a Rex pane: `REX_BLOCK` is set.
+fn in_rex() -> bool {
     std::env::var_os("REX_BLOCK").is_some()
-        || std::env::var("TERM_PROGRAM").is_ok_and(|term| term == "ghostty")
+}
+
+/// True when the list title shows a spinner while chaoshub works. Rex
+/// shows its own spinner on the tab for the OSC 7501 `working` record.
+/// When chaoshub writes this record in Rex, a second spinner in the
+/// title is not necessary. Other terminals keep the title spinner.
+fn title_spinner(program_status: bool, rex: bool) -> bool {
+    !(program_status && rex)
 }
 
 /// The settings of the notification of new pull requests, or `None` when
@@ -2313,6 +2328,24 @@ mod tests {
             assert_eq!(
                 write_title(&mut writer, "chaoshub · 3 review", notice.as_ref()),
                 "\x1b]2;chaoshub · 3 review\x1b\\".as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn only_rex_with_program_status_hides_the_title_spinner() {
+        // (program_status, rex, title spinner)
+        let cases = [
+            (true, true, false),
+            (false, true, true),
+            (true, false, true),
+            (false, false, true),
+        ];
+        for (program_status, rex, on) in cases {
+            assert_eq!(
+                title_spinner(program_status, rex),
+                on,
+                "{program_status} {rex}"
             );
         }
     }

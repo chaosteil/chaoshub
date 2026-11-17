@@ -658,6 +658,13 @@ spinner follows the count instead, for example `chaoshub · 3 review ·
 ⠋`. The spinner moves five times per second. The status bar names the
 work and shows the error details.
 
+Rex shows its own spinner on the tab for the OSC 7501 `working` state.
+For this reason, the title has no spinner when chaoshub runs in Rex
+(`REX_BLOCK` is set) and writes OSC 7501 (`program_status`). While
+chaoshub syncs, the title is then only `chaoshub · 3 review`. The other
+activities do not change. Ghostty and other terminals keep the title
+spinner.
+
 The standalone PR view (`chaoshub pr`) shows a short overview of its
 pull request instead of a review count:
 

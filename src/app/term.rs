@@ -70,7 +70,9 @@ const TITLE_SPINNER_FRAME: Duration = SPINNER_FRAME.saturating_mul(2);
 /// pull requests watches. The view filters do not change it. Count once
 /// per frame generation, not on each terminal write. While the list
 /// syncs or prefetches, a spinner follows the count. The words are in
-/// the status bar.
+/// the status bar. When the terminal shows its own spinner for the
+/// program status (`title_spinner` is false), the title has only the
+/// count.
 pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
     let data = &state.data;
     let mut title = if let Some(key) = &state.ui.pinned {
@@ -89,9 +91,9 @@ pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
         TermState::Error => Some("error".to_owned()),
         TermState::Done => status.msg.clone(),
         TermState::Working if data.merge.is_some() => status.msg.clone(),
-        TermState::Working if state.ui.pinned.is_none() => {
-            Some(spinner_at(data.now, TITLE_SPINNER_FRAME).to_owned())
-        }
+        TermState::Working if state.ui.pinned.is_none() => data
+            .title_spinner
+            .then(|| spinner_at(data.now, TITLE_SPINNER_FRAME).to_owned()),
         TermState::Working => state
             .ui
             .pinned
@@ -741,6 +743,63 @@ mod tests {
             progress: Progress::Error,
         };
         assert_eq!(term_title(&state, &error), "chaoshub · 0 review · error");
+    }
+
+    #[test]
+    fn a_terminal_with_its_own_spinner_gets_no_title_spinner() {
+        let mut state = state();
+        state.data.title_spinner = false;
+        assert_eq!(title(&state), "chaoshub · 0 review", "idle");
+        state.data.sync.pending.insert(Scope::Mine);
+        assert_eq!(term_status(&state).state, TermState::Working);
+        assert_eq!(title(&state), "chaoshub · 0 review", "syncing");
+        state.data.sync.pending.clear();
+        state.data.prefetch = Some(PrefetchBatch { done: 1, total: 2 });
+        assert_eq!(term_status(&state).state, TermState::Working);
+        assert_eq!(title(&state), "chaoshub · 0 review", "prefetching");
+        state.data.title_spinner = true;
+        assert_eq!(
+            title(&state),
+            format!("chaoshub · 0 review · {}", title_spinner(&state)),
+            "the other terminals"
+        );
+        state.data.prefetch = None;
+        assert_eq!(title(&state), "chaoshub · 0 review", "idle again");
+    }
+
+    #[test]
+    fn a_terminal_with_its_own_spinner_keeps_the_word_activities() {
+        let mut state = state();
+        state.data.title_spinner = false;
+        state.data.merge = Some(MergeState::new(
+            testdata::pr_key("chaoshub", 42),
+            test_time(),
+        ));
+        assert_eq!(title(&state), "chaoshub · 0 review · merging #42");
+        state.data.merge = None;
+        let blocked = TermStatus {
+            state: TermState::Blocked {
+                kind: BlockedKind::Question,
+            },
+            msg: Some("A question".into()),
+            progress: Progress::Indeterminate,
+        };
+        assert_eq!(term_title(&state, &blocked), "chaoshub · 0 review · input");
+        let error = TermStatus {
+            state: TermState::Error,
+            msg: Some("An error".into()),
+            progress: Progress::Error,
+        };
+        assert_eq!(term_title(&state, &error), "chaoshub · 0 review · error");
+        let done = TermStatus {
+            state: TermState::Done,
+            msg: Some("merged #42".into()),
+            progress: Progress::Percent(100),
+        };
+        assert_eq!(
+            term_title(&state, &done),
+            "chaoshub · 0 review · merged #42"
+        );
     }
 
     /// The frame of the title spinner at the time of `state`.
