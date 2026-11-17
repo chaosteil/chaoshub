@@ -12,9 +12,8 @@ use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::repo::RepoSettings;
-use crate::domain::stack::StackRef;
 use crate::store::error::StoreError;
-use crate::store::{PrVersion, Snapshot, SyncState};
+use crate::store::{Snapshot, SyncState};
 
 /// Closed and merged pull requests stay this long after their last sync.
 const SWEEP_AFTER_DAYS: i64 = 30;
@@ -197,35 +196,24 @@ pub(crate) fn put_sync_state(
     Ok(())
 }
 
-/// The versions of the open pull requests of `scope`. A row that does not
-/// parse is skipped and logged. Rows without a creation time are read
-/// again from GitHub on the next sync.
-pub(crate) fn pr_versions(
-    conn: &Connection,
-    scope: Scope,
-) -> Result<Vec<(PrKey, PrVersion)>, StoreError> {
+/// The open pull requests of `scope`. A row that does not parse is
+/// skipped and logged. Rows without a creation time are skipped, so the
+/// next sync reads them again from GitHub.
+pub(crate) fn open_prs(conn: &Connection, scope: Scope) -> Result<Vec<PullRequest>, StoreError> {
     let mut stmt = conn.prepare(
         "SELECT json FROM pull_requests WHERE state = 'OPEN' AND scope = ?1 \
          ORDER BY owner, name, number",
     )?;
     let rows = stmt.query_map(params![scope_text(scope)], |row| row.get::<_, Vec<u8>>(0))?;
-    let mut versions = Vec::new();
+    let mut prs = Vec::new();
     for row in rows {
         match serde_json::from_slice::<PullRequest>(&row?) {
-            Ok(pr) if pr.head.value.created_at.is_some() => versions.push((
-                pr.key,
-                PrVersion {
-                    updated_at: pr.head.value.updated_at,
-                    stack: pr.head.value.stack.as_ref().map(StackRef::place),
-                    head_oid: pr.head.value.head_oid,
-                    observed_at: pr.head.observed_at,
-                },
-            )),
+            Ok(pr) if pr.head.value.created_at.is_some() => prs.push(pr),
             Ok(_) => {}
             Err(err) => tracing::warn!(%err, "cached pull request does not parse, skipped"),
         }
     }
-    Ok(versions)
+    Ok(prs)
 }
 
 /// Writes the conversation of a pull request. `fetched_at` is the time

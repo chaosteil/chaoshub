@@ -47,7 +47,9 @@
 //! full sync also reads again at most 40
 //! pull requests whose known version is older than 1 h, oldest first, so
 //! the merge state and old cache rows stay up to date. At its first sync
-//! of a scope, the worker loads the known versions from the cache.
+//! of a scope, the worker loads the known versions from the cache. A
+//! cached row with an unknown merge state, or older than 5 min, gets a
+//! `Reread` that is due at once, so the first sync reads it again.
 //!
 //! The worker sends `SyncStarted` before the first page of a sync. It
 //! sends each phase 2 batch in a `PrsSynced` when the batch arrives, and
@@ -84,7 +86,7 @@ use crate::config::schema::FiltersConfig;
 use crate::domain::keys::PrKey;
 use crate::domain::pr::{MergeStateStatus, Mergeable, PrState, PullRequest};
 use crate::domain::repo::Repo;
-use crate::domain::stack::{StackPlace, StackRef};
+use crate::domain::stack::StackPlace;
 use crate::github::GithubError;
 use crate::github::PrStubPage;
 use crate::github::budget::RateBudget;
@@ -133,8 +135,12 @@ const REREAD_GAP: TimeDelta = TimeDelta::seconds(30);
 const REREADS: u32 = 5;
 
 /// The most pull requests that one sync reads again because their merge
-/// state is not known (see `Reread`).
+/// state is not known or their cache row is old (see `Reread`).
 const REREADS_PER_SYNC: usize = 30;
+
+/// The age of a cache row at start after which the first sync reads the
+/// pull request again (see `Syncer::seed`).
+const START_FRESH: TimeDelta = TimeDelta::minutes(5);
 
 /// The overlap of a delta with the previous one, because the search index
 /// lags.
@@ -362,12 +368,7 @@ impl ScopeState {
                 self.reread.remove(&pr.key);
                 continue;
             }
-            let version = PrVersion {
-                updated_at: pr.head.value.updated_at,
-                head_oid: pr.head.value.head_oid.clone(),
-                stack: pr.head.value.stack.as_ref().map(StackRef::place),
-                observed_at: pr.head.observed_at,
-            };
+            let version = PrVersion::of(pr);
             let due = version.observed_at + REREAD_GAP;
             let same = self
                 .known
@@ -518,15 +519,35 @@ impl Syncer {
 
     /// Loads the cached versions of `scope` into `known` before the first
     /// sync of the scope. A version that the worker knows already stays.
+    ///
+    /// A cached row can be out of date with the same `updatedAt`, for
+    /// example when it holds an unknown merge state or a review request
+    /// that ended later. Thus a row with an unknown merge state, or a row
+    /// older than `START_FRESH`, gets a `Reread` that is due at once. The
+    /// first sync reads these rows in its phase 2 batches, the oldest row
+    /// first.
     async fn seed(&mut self, scope: Scope) {
         if self.state(scope).seeded {
             return;
         }
-        match self.ctx.store.pr_versions(scope).await {
-            Ok(versions) => {
+        match self.ctx.store.open_prs(scope).await {
+            Ok(prs) => {
+                let fresh_after = Utc::now() - START_FRESH;
                 let state = self.state(scope);
-                for (key, version) in versions {
-                    state.known.entry(key).or_insert(version);
+                for pr in prs {
+                    if state.known.contains_key(&pr.key) {
+                        continue;
+                    }
+                    let version = PrVersion::of(&pr);
+                    if unknown_merge_state(&pr) || version.observed_at < fresh_after {
+                        let entry = Reread {
+                            node_id: pr.node_id.clone(),
+                            due: version.observed_at,
+                            left: REREADS,
+                        };
+                        state.reread.insert(pr.key.clone(), entry);
+                    }
+                    state.known.insert(pr.key, version);
                 }
                 state.seeded = true;
             }
@@ -1980,19 +2001,9 @@ mod tests {
         let server = MockServer::start().await;
         serve_page1(&server).await;
         let (ctx, mut harness) = logged_in(&server);
-        let me = Me {
-            login: "chaosteil",
-            teams: &[],
-        };
-        let mut cached = crate::github::parse::pr_by_ids::prs(
-            crate::github::parse::fixture(include_str!("../github/testdata/pr_by_ids_lists.json")),
-            &me,
-            Utc::now(),
-        )
-        .unwrap()
-        .remove(0);
+        let mut cached = cached_prs(Utc::now()).remove(0);
         assert_eq!(cached.key, key(1589));
-        cached.head.value.state = PrState::Open;
+        settle(&mut cached);
         ctx.store.put_prs(Scope::Mine, vec![cached]).await.unwrap();
         let mut syncer = Syncer::new(ctx);
 
@@ -2000,7 +2011,65 @@ mod tests {
         assert_eq!(synced(&mut harness).await.1, [1587, 1586]);
         assert!(syncer.mine.seeded);
         assert!(syncer.mine.known.contains_key(&key(1589)));
+        assert!(syncer.mine.reread.is_empty(), "a fresh settled row stays");
         assert_eq!(by_ids(&server).await, [[ID_1587, ID_1586]]);
+    }
+
+    /// The pull requests of `pr_by_ids_lists.json`, observed at
+    /// `observed_at`, all open. #1589, #1587 and #1586 come first, with
+    /// an unknown merge state.
+    fn cached_prs(observed_at: DateTime<Utc>) -> Vec<PullRequest> {
+        let me = Me {
+            login: "chaosteil",
+            teams: &[],
+        };
+        let mut prs = crate::github::parse::pr_by_ids::prs(
+            crate::github::parse::fixture(include_str!("../github/testdata/pr_by_ids_lists.json")),
+            &me,
+            observed_at,
+        )
+        .unwrap();
+        for pr in &mut prs {
+            pr.head.value.state = PrState::Open;
+        }
+        prs
+    }
+
+    /// Gives `pr` a known merge state.
+    fn settle(pr: &mut PullRequest) {
+        pr.head.value.mergeable = Mergeable::Mergeable;
+        pr.head.value.merge_state = MergeStateStatus::Clean;
+    }
+
+    #[tokio::test]
+    async fn the_first_sync_reads_old_and_unknown_cache_rows_again() {
+        let server = MockServer::start().await;
+        serve_page1(&server).await;
+        let (ctx, mut harness) = logged_in(&server);
+        let now = Utc::now();
+        let mut fresh = cached_prs(now);
+        let mut old = cached_prs(now - START_FRESH - TimeDelta::minutes(1));
+        // #1589 is fresh and settled, #1587 is old and settled, #1586 is
+        // fresh with an unknown merge state.
+        let mut rows = vec![fresh.remove(0), old.remove(1), fresh.remove(1)];
+        settle(&mut rows[0]);
+        settle(&mut rows[1]);
+        assert_eq!(
+            rows.iter().map(|pr| pr.key.number).collect::<Vec<_>>(),
+            [1589, 1587, 1586]
+        );
+        ctx.store.put_prs(Scope::Mine, rows).await.unwrap();
+        let mut syncer = Syncer::new(ctx);
+
+        assert!(syncer.full(Scope::Mine).await);
+        assert_eq!(
+            sync_pages(&mut harness).await.1,
+            [vec![1587, 1586]],
+            "one batch, the oldest row first, and no stub changed"
+        );
+        assert_eq!(by_ids(&server).await, [[ID_1587, ID_1586]]);
+        assert_eq!(searches(&server).await.len(), 1);
+        assert!(syncer.mine.reread.is_empty(), "both reads gave merged");
     }
 
     #[tokio::test]

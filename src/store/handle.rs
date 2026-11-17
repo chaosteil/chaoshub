@@ -11,8 +11,8 @@ use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
 use crate::domain::pr::PullRequest;
+use crate::store::SyncState;
 use crate::store::error::StoreError;
-use crate::store::{PrVersion, SyncState};
 
 /// The capacity of the operation channel.
 pub(crate) const CHANNEL_CAPACITY: usize = 64;
@@ -47,9 +47,9 @@ pub(crate) enum StoreOp {
         state: SyncState,
         reply: Reply<()>,
     },
-    PrVersions {
+    OpenPrs {
         scope: Scope,
-        reply: Reply<Vec<(PrKey, PrVersion)>>,
+        reply: Reply<Vec<PullRequest>>,
     },
     PutDetail {
         key: PrKey,
@@ -162,13 +162,10 @@ impl StoreHandle {
         .await
     }
 
-    /// The versions of the open pull requests that the cache holds for
-    /// `scope`.
-    pub(crate) async fn pr_versions(
-        &self,
-        scope: Scope,
-    ) -> Result<Vec<(PrKey, PrVersion)>, StoreError> {
-        self.request(|reply| StoreOp::PrVersions { scope, reply })
+    /// The open pull requests that the cache holds for `scope`, for the
+    /// known versions of the sync worker.
+    pub(crate) async fn open_prs(&self, scope: Scope) -> Result<Vec<PullRequest>, StoreError> {
+        self.request(|reply| StoreOp::OpenPrs { scope, reply })
             .await
     }
 

@@ -23,7 +23,7 @@ use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
 use crate::domain::pr::PullRequest;
 use crate::domain::repo::RepoSettings;
-use crate::domain::stack::StackPlace;
+use crate::domain::stack::{StackPlace, StackRef};
 use crate::store::error::StoreError;
 use crate::store::handle::{CHANNEL_CAPACITY, StoreHandle};
 
@@ -83,6 +83,19 @@ pub(crate) struct PrVersion {
     pub stack: Option<StackPlace>,
     /// The time when the head was observed.
     pub observed_at: DateTime<Utc>,
+}
+
+impl PrVersion {
+    /// The version of `pr`.
+    pub(crate) fn of(pr: &PullRequest) -> Self {
+        let head = &pr.head.value;
+        Self {
+            updated_at: head.updated_at,
+            head_oid: head.head_oid.clone(),
+            stack: head.stack.as_ref().map(StackRef::place),
+            observed_at: pr.head.observed_at,
+        }
+    }
 }
 
 impl Store {
@@ -478,7 +491,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pr_versions_reads_the_open_rows_of_the_scope() {
+    async fn open_prs_reads_the_open_rows_of_the_scope() {
         let (_, handle) = Store::open(Path::new(":memory:")).unwrap();
         let t = test_time();
         let open = sample_pr(1, PrState::Open, t);
@@ -497,19 +510,18 @@ mod tests {
             .await
             .unwrap();
 
+        let prs = handle.open_prs(Scope::Mine).await.unwrap();
+        assert_eq!(prs, [open]);
         assert_eq!(
-            handle.pr_versions(Scope::Mine).await.unwrap(),
-            [(
-                open.key,
-                PrVersion {
-                    updated_at: t,
-                    head_oid: "oid1".into(),
-                    stack: None,
-                    observed_at: t,
-                }
-            )]
+            PrVersion::of(&prs[0]),
+            PrVersion {
+                updated_at: t,
+                head_oid: "oid1".into(),
+                stack: None,
+                observed_at: t,
+            }
         );
-        assert_eq!(handle.pr_versions(Scope::Team).await.unwrap().len(), 1);
+        assert_eq!(handle.open_prs(Scope::Team).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -707,7 +719,7 @@ mod tests {
         let mut pr = sample_pr(1, PrState::Open, test_time());
         pr.head.value.created_at = None;
         handle.put_prs(Scope::Mine, vec![pr.clone()]).await.unwrap();
-        assert_eq!(handle.pr_versions(Scope::Mine).await.unwrap(), Vec::new());
+        assert_eq!(handle.open_prs(Scope::Mine).await.unwrap(), Vec::new());
         let (snapshot, _) = Store::open(&path).unwrap();
         assert_eq!(snapshot.prs, [(Scope::Mine, pr)]);
     }
