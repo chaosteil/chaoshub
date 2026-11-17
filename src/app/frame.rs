@@ -827,7 +827,13 @@ fn pinned_status(data: &AppData, key: &PrKey) -> Vec<Cell> {
 
 /// The frame of the spinner at the time `now`.
 pub(crate) fn spinner(now: DateTime<Utc>) -> &'static str {
-    let step = now.timestamp_millis() / i64::try_from(SPINNER_FRAME.as_millis()).unwrap_or(1);
+    spinner_at(now, SPINNER_FRAME)
+}
+
+/// The frame of the spinner at the time `now`, when one frame shows for
+/// `frame`.
+pub(crate) fn spinner_at(now: DateTime<Utc>, frame: Duration) -> &'static str {
+    let step = now.timestamp_millis() / i64::try_from(frame.as_millis().max(1)).unwrap_or(1);
     SPINNER[usize::try_from(step).unwrap_or(0) % SPINNER.len()]
 }
 

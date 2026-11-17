@@ -652,9 +652,11 @@ filters and the `t` and `T` switches do not change it. Until the first
 review list sync completes, `? review` shows that the count is not
 known yet.
 
-One short activity can follow the count, such as `syncing`,
-`prefetching`, `merging #42`, `input` or `error`. The status bar shows
-the error details.
+One short activity can follow the count, such as `merging #42`,
+`input` or `error`. While chaoshub syncs or prefetches pull requests, a
+spinner follows the count instead, for example `chaoshub · 3 review ·
+⠋`. The spinner moves five times per second. The status bar names the
+work and shows the error details.
 
 The standalone PR view (`chaoshub pr`) shows a short overview of its
 pull request instead of a review count:

@@ -22,8 +22,11 @@
 //! A final merge state stays until the next key press after the end of
 //! the run, when the pull request shows the end.
 
+use std::time::Duration;
+
 use chrono::{DateTime, TimeDelta, Utc};
 
+use crate::app::frame::{SPINNER_FRAME, spinner_at};
 use crate::app::notify::ready_count;
 use crate::app::panes::description;
 use crate::app::state::{AppState, MergeState, OverlayState};
@@ -55,10 +58,19 @@ pub(crate) fn term_status(state: &AppState) -> TermStatus {
 /// view, in chars. Rex tabs are narrow.
 const PR_TITLE_MAX: usize = 30;
 
+/// How long one frame of the spinner in the title shows: two frames of
+/// the status bar spinner. The title changes only with the frame
+/// generation, and the status bar spinner bumps the generation once per
+/// `SPINNER_FRAME`. As a result, the title changes at most 5 times per
+/// second, and `TermWriter` writes it only on a change.
+const TITLE_SPINNER_FRAME: Duration = SPINNER_FRAME.saturating_mul(2);
+
 /// The title of the list or the standalone PR view. The review count is
 /// the ready set of the Review tab, the same set that the notice of new
 /// pull requests watches. The view filters do not change it. Count once
-/// per frame generation, not on each terminal write.
+/// per frame generation, not on each terminal write. While the list
+/// syncs or prefetches, a spinner follows the count. The words are in
+/// the status bar.
 pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
     let data = &state.data;
     let mut title = if let Some(key) = &state.ui.pinned {
@@ -77,14 +89,9 @@ pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
         TermState::Error => Some("error".to_owned()),
         TermState::Done => status.msg.clone(),
         TermState::Working if data.merge.is_some() => status.msg.clone(),
-        TermState::Working if state.ui.pinned.is_none() => Some(
-            if syncing(state) {
-                "syncing"
-            } else {
-                "prefetching"
-            }
-            .to_owned(),
-        ),
+        TermState::Working if state.ui.pinned.is_none() => {
+            Some(spinner_at(data.now, TITLE_SPINNER_FRAME).to_owned())
+        }
         TermState::Working => state
             .ui
             .pinned
@@ -269,6 +276,8 @@ fn syncing(state: &AppState) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use crate::app::frame;
     use crate::app::models::RowItem;
@@ -697,7 +706,10 @@ mod tests {
         state.data.synced.remove(&Scope::Team);
         assert_eq!(title(&state), "chaoshub · ? review");
         state.data.session.login = Some("me".into());
-        assert_eq!(title(&state), "chaoshub · ? review · syncing");
+        assert_eq!(
+            title(&state),
+            format!("chaoshub · ? review · {}", title_spinner(&state))
+        );
         state.data.synced.insert(Scope::Team, test_time());
         assert_eq!(title(&state), "chaoshub · 0 review");
     }
@@ -706,7 +718,10 @@ mod tests {
     fn the_title_includes_one_short_activity() {
         let mut state = state();
         state.data.prefetch = Some(PrefetchBatch { done: 1, total: 2 });
-        assert_eq!(title(&state), "chaoshub · 0 review · prefetching");
+        assert_eq!(
+            title(&state),
+            format!("chaoshub · 0 review · {}", title_spinner(&state))
+        );
         state.data.merge = Some(MergeState::new(
             testdata::pr_key("chaoshub", 42),
             test_time(),
@@ -726,6 +741,31 @@ mod tests {
             progress: Progress::Error,
         };
         assert_eq!(term_title(&state, &error), "chaoshub · 0 review · error");
+    }
+
+    /// The frame of the title spinner at the time of `state`.
+    fn title_spinner(state: &AppState) -> &'static str {
+        spinner_at(state.data.now, TITLE_SPINNER_FRAME)
+    }
+
+    #[test]
+    fn the_title_spinner_moves_at_half_the_rate_of_the_status_bar() {
+        // `test_time` is a whole second, so a title frame starts at it.
+        let mut state = state();
+        state.data.sync.pending.insert(Scope::Mine);
+        let first = title(&state);
+        assert_eq!(first, "chaoshub · 0 review · ⠋");
+        state.data.now += SPINNER_FRAME;
+        assert_eq!(title(&state), first, "one status bar frame later");
+        state.data.now += SPINNER_FRAME;
+        assert_eq!(title(&state), "chaoshub · 0 review · ⠙");
+        let titles: HashSet<String> = (0..20)
+            .map(|_| {
+                state.data.now += SPINNER_FRAME;
+                title(&state)
+            })
+            .collect();
+        assert_eq!(titles.len(), 10, "the frames of the status bar spinner");
     }
 
     /// A state with the standalone PR view of `pr`.
