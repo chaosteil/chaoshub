@@ -1,0 +1,18 @@
+---
+source: src/app/panes/conversation.rs
+expression: pulses(&model)
+---
+alice · commented 3h ago
+  Looks good, one question about `layout`.
+  «👍 2»  🎉 1  «🚀 1»
+src/ui/list.rs:42 · 2 comments · resolved
+  bob · 2h ago
+    Off by one?
+    👀 1
+  chaosteil · 2h ago
+    Fixed.
+«src/ui/pane.rs:7 · 1 comment»
+bob · requested changes 1h ago
+  Please split the **transition** module.
+  «❤️ 3»
+«sending your comment…»

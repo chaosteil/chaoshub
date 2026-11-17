@@ -329,7 +329,7 @@ mod tests {
     use super::*;
     use crate::app::models::CellStyle;
     use crate::ui::testdata;
-    use ratatui::style::Color;
+    use ratatui::style::{Color, Modifier};
 
     fn draw(model: &PaneModel, cursor: usize, width: u16, height: u16) -> String {
         draw_at(model, cursor, 0, width, height)
@@ -579,6 +579,42 @@ mod tests {
         assert_eq!(texts, ["alice ", "wrote a ", "long line"]);
         assert_eq!(rows[0].spans[0].style.fg, Some(p.info));
         assert_eq!(rows[1].spans[0].style.fg, Some(p.fg));
+    }
+
+    #[test]
+    fn a_pending_part_pulses_its_text_color() {
+        let model = PaneModel::Lines {
+            lines: [0, 128, 255]
+                .into_iter()
+                .map(|mix| vec![testdata::cell("REVIEWS", CellStyle::Pulse(mix))])
+                .collect(),
+            wrap: true,
+        };
+        let pierre = testdata::pierre();
+        let ansi16 = testdata::ansi16();
+        let cases = [
+            (
+                &pierre,
+                [
+                    pierre.palette.success,
+                    Color::Rgb(0x52, 0x97, 0xbe),
+                    pierre.palette.purple,
+                ],
+            ),
+            (&ansi16, [Color::Green, Color::Green, Color::Green]),
+        ];
+        for (theme, colors) in cases {
+            let area = Rect::new(0, 0, 12, 3);
+            let mut buf = Buffer::empty(area);
+            render(&model, 0, 0, area, &mut buf, theme, &mut HitMap::default());
+            for (y, color) in (0..).zip(colors) {
+                for x in 0..7 {
+                    assert_eq!(buf[(x, y)].fg, color, "{x}, {y}");
+                    assert!(buf[(x, y)].modifier.contains(Modifier::BOLD));
+                    assert_ne!(buf[(x, y)].bg, color, "only the text pulses");
+                }
+            }
+        }
     }
 
     #[test]

@@ -22,10 +22,10 @@
 
 use std::fmt::Write as _;
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 
 use crate::app::age::age;
-use crate::app::frame::spinner;
+use crate::app::frame::{pulse, spinner};
 use crate::app::keymap::{Keymap, chord_text};
 use crate::app::models::{Cell, CellStyle, PaneModel, Tone};
 use crate::app::panes::agent::head;
@@ -34,7 +34,7 @@ use crate::app::panes::{Pane, PaneState};
 use crate::app::state::{AppData, MergeState};
 use crate::app::tabs::cells::{self, cell};
 use crate::app::tabs::{Handled, KeyCx};
-use crate::bus::{KeyChord, MergeProgress, MergeStep, Size, Target};
+use crate::bus::{KeyChord, MergeProgress, MergeStep, PendingPart, Size, Target};
 use crate::domain::check::{Check, CheckConclusion, CheckStatus};
 use crate::domain::detail::{PrDetail, ReviewState};
 use crate::domain::plural;
@@ -144,11 +144,36 @@ fn readiness(cx: &KeyCx<'_>, pr: &PullRequest) -> Vec<Vec<Cell>> {
     // A stale detail still shows: it is the best data until the new load.
     let detail = cx.data.details.get(&pr.key).map(|d| &d.value);
     let error = cx.data.detail_errors.contains_key(&pr.key);
-    vec![
-        merge_verdict(cx.data, pr).unwrap_or_else(|| verdict(head, pr.ci_state.value, checks)),
-        signals(head, checks, detail),
-        activity(head, detail, error, cx.data.now),
-    ]
+    let data = cx.data;
+    let verdict = merge_verdict(data, pr).unwrap_or_else(|| {
+        let mut line = verdict(head, pr.ci_state.value, checks);
+        // A merge, a close or a draft change on its way pulses the badge,
+        // as a running merge does.
+        let state = [PendingPart::Merge, PendingPart::State, PendingPart::Draft]
+            .iter()
+            .find_map(|part| data.pending_pulse(&pr.key, part));
+        if let (Some(mix), Some(badge)) = (state, line.first_mut()) {
+            badge.style = CellStyle::MergeBadge(mix);
+        }
+        line
+    });
+    let mut signals = signals(head, checks, detail);
+    for (label, part) in [
+        ("CHECKS", PendingPart::Checks),
+        ("REVIEWS", PendingPart::Review),
+    ] {
+        if let Some(mix) = data.pending_pulse(&pr.key, &part) {
+            pulse_label(&mut signals, label, mix);
+        }
+    }
+    vec![verdict, signals, activity(head, detail, error, data.now)]
+}
+
+/// The label cell `label` of `line` pulses with the mix `mix`.
+fn pulse_label(line: &mut [Cell], label: &str, mix: u8) {
+    if let Some(cell) = line.iter_mut().find(|cell| cell.text == label) {
+        cell.style = CellStyle::Pulse(mix);
+    }
 }
 
 /// The badge text and the tone of the verdict: the first row of the
@@ -326,32 +351,6 @@ fn merging_text(merge: &MergeState) -> String {
             total,
         } => format!("MERGING {index}/{total} #{number}"),
     }
-}
-
-/// The time of one pulse of the merge badge: from green to purple and back
-/// to green.
-const PULSE: TimeDelta = TimeDelta::milliseconds(1500);
-
-/// The color mix of the merge badge `elapsed` after the start of the run:
-/// 0 is the success green, 255 the merge purple. The mix follows a cosine,
-/// so it starts on green and slows down at both colors. With `animations`
-/// off, it stays on green.
-fn pulse(elapsed: TimeDelta, animations: bool) -> u8 {
-    if !animations {
-        return 0;
-    }
-    let period = PULSE.num_milliseconds();
-    let phase = elapsed.num_milliseconds().rem_euclid(period);
-    let phase = f64::from(u32::try_from(phase).unwrap_or(0))
-        / f64::from(u32::try_from(period).unwrap_or(1));
-    let mix = (1.0 - (std::f64::consts::TAU * phase).cos()) / 2.0 * 255.0;
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "mix is rounded and between 0 and 255"
-    )]
-    let mix = mix.round() as u8;
-    mix
 }
 
 /// The space between two groups of the signals line.
@@ -1286,6 +1285,36 @@ mod tests {
     fn line_1(state: &AppState) -> Vec<Cell> {
         let (lines, ..) = codeview_pane(state, &crate::app::keymap::DEFAULT);
         lines[0].clone()
+    }
+
+    #[test]
+    fn a_pending_change_pulses_the_badge_and_the_signal_labels() {
+        use crate::bus::{Expect, ReviewKind};
+        let mut state = codeview_state(None);
+        state.data.now = test_time();
+        let key = testdata::pr_key("chaoshub", 7);
+        let (lines, ..) = codeview_pane(&state, &crate::app::keymap::DEFAULT);
+        assert!(matches!(lines[0][0].style, CellStyle::Badge(_)));
+        testdata::pend(
+            &mut state,
+            &key,
+            vec![
+                (PendingPart::Draft, Expect::Draft(true)),
+                (PendingPart::Review, Expect::Review(ReviewKind::Approve)),
+                (PendingPart::Checks, Expect::Rerun),
+            ],
+        );
+        let (lines, ..) = codeview_pane(&state, &crate::app::keymap::DEFAULT);
+        assert_eq!(lines[0][0].style, CellStyle::MergeBadge(0), "the badge");
+        let pulsing: Vec<&str> = lines[1]
+            .iter()
+            .filter(|cell| cell.style == CellStyle::Pulse(0))
+            .map(|cell| cell.text.as_str())
+            .collect();
+        assert_eq!(pulsing, ["CHECKS", "REVIEWS"]);
+        state.data.now += TimeDelta::milliseconds(750);
+        let (lines, ..) = codeview_pane(&state, &crate::app::keymap::DEFAULT);
+        assert_eq!(lines[0][0].style, CellStyle::MergeBadge(255), "it pulses");
     }
 
     #[test]

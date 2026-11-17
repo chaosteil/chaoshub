@@ -245,7 +245,7 @@ fn header_row(stack_id: &str, text: String) -> Row {
 fn pr_row(pr: &PullRequest, cx: &KeyCx<'_>) -> Row {
     let head = &pr.head.value;
     let cells: Vec<Cell> = vec![
-        cell(head.title.clone(), CellStyle::Normal),
+        cells::title(pr, cx.data.pending_pulse_any(&pr.key)),
         cell(format!("#{}", pr.key.number), CellStyle::Dim),
         cell(pr.key.repo.name.clone(), CellStyle::Dim),
         cell(head.author.clone(), CellStyle::Info),

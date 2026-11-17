@@ -428,3 +428,29 @@ pub(crate) fn files() -> crate::domain::files::PrFiles {
         head_oid: "oid7".into(),
     }
 }
+
+/// Starts a run of a test action at `state.data.now` with the pending
+/// parts `parts`, each on `pr`. The parts pulse with the mix 0 at that
+/// time.
+pub(crate) fn pend(
+    state: &mut crate::app::state::AppState,
+    pr: &PrKey,
+    parts: Vec<(crate::bus::PendingPart, crate::bus::Expect)>,
+) {
+    let parts = parts
+        .into_iter()
+        .map(|(part, expect)| crate::bus::Pending {
+            pr: pr.clone(),
+            part,
+            expect,
+        })
+        .collect();
+    let data = &mut state.data;
+    let view = crate::app::pending::View {
+        prs: &data.prs,
+        details: &data.details,
+    };
+    let now = data.now;
+    data.pending
+        .start("test", pr.clone(), parts, false, now, view);
+}

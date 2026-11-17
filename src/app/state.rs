@@ -285,19 +285,28 @@ impl AppData {
             || !self.agent_jobs.is_empty()
     }
 
+    /// The color mix of the pulse of `part` of `pr` while an action
+    /// changes it on GitHub (see `frame::pulse`), else `None`.
+    pub(crate) fn pending_pulse(&self, pr: &PrKey, part: &PendingPart) -> Option<u8> {
+        self.pending
+            .started(pr, part)
+            .map(|started| frame::pulse(self.now - started, self.animations))
+    }
+
+    /// The color mix of the pulse while an action changes any part of
+    /// `pr` on GitHub, else `None`.
+    pub(crate) fn pending_pulse_any(&self, pr: &PrKey) -> Option<u8> {
+        self.pending
+            .any_started(pr)
+            .map(|started| frame::pulse(self.now - started, self.animations))
+    }
+
     /// The spinner frame for `part` of `pr` while an action changes it on
-    /// GitHub, else `None`.
+    /// GitHub, else `None`. Only a place that cannot pulse, such as a
+    /// plain text, shows it.
     pub(crate) fn pending_spinner(&self, pr: &PrKey, part: &PendingPart) -> Option<&'static str> {
         self.pending
             .started(pr, part)
-            .map(|_| frame::spinner(self.now))
-    }
-
-    /// The spinner frame while an action changes any part of `pr` on
-    /// GitHub, else `None`.
-    pub(crate) fn pending_any(&self, pr: &PrKey) -> Option<&'static str> {
-        self.pending
-            .any_started(pr)
             .map(|_| frame::spinner(self.now))
     }
 

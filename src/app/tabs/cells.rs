@@ -82,6 +82,13 @@ pub(crate) fn review(decision: Option<ReviewDecision>) -> Cell {
     }
 }
 
+/// The title of a pull request row. While an action changes the pull
+/// request on GitHub, the title pulses with the mix `pulse`.
+pub(crate) fn title(pr: &PullRequest, pulse: Option<u8>) -> Cell {
+    let style = pulse.map_or(CellStyle::Normal, CellStyle::Pulse);
+    cell(pr.head.value.title.clone(), style)
+}
+
 /// The flags: `D` draft, `C` conflicting, `Q` merge queue, `◆` an open
 /// pane.
 pub(crate) fn flags(pr: &PullRequest, pane: bool) -> Cell {

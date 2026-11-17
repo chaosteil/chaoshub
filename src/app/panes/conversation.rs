@@ -30,7 +30,9 @@ use crate::app::models::{Cell, CellStyle, PaneModel, TreeNode};
 use crate::app::panes::{Pane, PaneAction, PaneMenu, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx, tree_toggled};
-use crate::bus::{KeyChord, KeyCode, KeyModifiers, ReactSpec, ReplySpec, ReplyTo, Size, Target};
+use crate::bus::{
+    KeyChord, KeyCode, KeyModifiers, PendingPart, ReactSpec, ReplySpec, ReplyTo, Size, Target,
+};
 use crate::domain::detail::{
     Comment, PrDetail, Reaction, ReactionKind, Review, ReviewState, Thread, has_mine, set_mine,
 };
@@ -452,22 +454,58 @@ fn body(depth: u8, text: &str, html: &str) -> Option<TreeNode> {
 
 /// The reactions of a comment or a review as a node: `👍 3  🎉 1`, in
 /// the order of GitHub. The reactions of the viewer have the primary
-/// color, the others are dim. `None` without reactions.
-fn reactions(depth: u8, reactions: &[Reaction]) -> Option<TreeNode> {
+/// color, the others are dim. A reaction of `pulses` pulses with its
+/// mix: it is on its way to GitHub. A removed reaction that is on its
+/// way and has no count left shows as `👍 0`. `None` without reactions.
+fn reactions(depth: u8, reactions: &[Reaction], pulses: &[(ReactionKind, u8)]) -> Option<TreeNode> {
+    let pulse = |kind: ReactionKind| {
+        pulses
+            .iter()
+            .find(|(pending, _)| *pending == kind)
+            .map(|&(_, mix)| mix)
+    };
     let mut cells = Vec::new();
-    for reaction in reactions {
+    let mut push = |text: String, style: CellStyle| {
         if !cells.is_empty() {
             cells.push(cell("  ", CellStyle::Normal));
         }
-        let style = if reaction.mine {
-            CellStyle::Primary
-        } else {
-            CellStyle::Dim
-        };
-        let text = format!("{} {}", reaction.kind.emoji(), reaction.count);
         cells.push(cell(text, style));
+    };
+    for reaction in reactions {
+        let style = match pulse(reaction.kind) {
+            Some(mix) => CellStyle::Pulse(mix),
+            None if reaction.mine => CellStyle::Primary,
+            None => CellStyle::Dim,
+        };
+        push(
+            format!("{} {}", reaction.kind.emoji(), reaction.count),
+            style,
+        );
+    }
+    for &(kind, mix) in pulses {
+        if !reactions.iter().any(|reaction| reaction.kind == kind) {
+            push(format!("{} 0", kind.emoji()), CellStyle::Pulse(mix));
+        }
     }
     (!cells.is_empty()).then(|| node(depth, None, cells))
+}
+
+/// The reactions node of the comment or the review `id`, as the viewer
+/// sees it: with the pending reactions of the viewer, which pulse.
+fn reaction_node(cx: &KeyCx<'_>, depth: u8, id: &str, raw: &[Reaction]) -> Option<TreeNode> {
+    let shown = shown(cx, id, raw);
+    let mut pulses = Vec::new();
+    if let Some(Target::Pr { pr, .. }) = cx.target {
+        for (subject, kind, _) in cx.data.pending.reactions(&pr.key) {
+            let part = PendingPart::Reaction(subject.to_owned(), kind);
+            if subject == id
+                && let Some(mix) = cx.data.pending_pulse(&pr.key, &part)
+            {
+                pulses.push((kind, mix));
+            }
+        }
+    }
+    reactions(depth, &shown, &pulses)
 }
 
 /// The nodes of the pane, each with its entry. A status line has none.
@@ -522,29 +560,43 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<Ite
                 let item = Some(Item::Comment(index));
                 out.push((comment_header(0, comment, "commented", now), item));
                 out.extend(body(1, &comment.body, &comment.body_html).map(|n| (n, item)));
-                let shown = shown(cx, &comment.id, &comment.reactions);
-                out.extend(reactions(1, &shown).map(|n| (n, item)));
+                out.extend(
+                    reaction_node(cx, 1, &comment.id, &comment.reactions).map(|n| (n, item)),
+                );
             }
             Entry::Review(index, review) => {
                 let item = Some(Item::Review(index));
                 out.push((review_header(review, now), item));
                 out.extend(body(1, &review.body, &review.body_html).map(|n| (n, item)));
-                let shown = shown(cx, &review.id, &review.reactions);
-                out.extend(reactions(1, &shown).map(|n| (n, item)));
+                out.extend(reaction_node(cx, 1, &review.id, &review.reactions).map(|n| (n, item)));
             }
             Entry::Thread(index, thread) => {
                 let open = expanded.contains(&index);
-                out.push((thread_header(thread, open), Some(Item::Thread(index))));
+                let pulse = cx
+                    .data
+                    .pending_pulse(&pr.key, &PendingPart::Thread(thread.id.clone()));
+                let header = thread_header(thread, open, pulse);
+                out.push((header, Some(Item::Thread(index))));
                 if open {
                     for (at, comment) in thread.comments.iter().enumerate() {
                         let item = Some(Item::ThreadComment(index, at));
                         out.push((comment_header(1, comment, "", now), item));
                         out.extend(body(2, &comment.body, &comment.body_html).map(|n| (n, item)));
-                        let shown = shown(cx, &comment.id, &comment.reactions);
-                        out.extend(reactions(2, &shown).map(|n| (n, item)));
+                        let node = reaction_node(cx, 2, &comment.id, &comment.reactions);
+                        out.extend(node.map(|n| (n, item)));
                     }
                 }
             }
+        }
+    }
+    // A new comment or a review on its way has no place in the data yet.
+    // A pulsing line at the end stands for it.
+    for (part, text) in [
+        (PendingPart::Review, "sending your review…"),
+        (PendingPart::Comment, "sending your comment…"),
+    ] {
+        if let Some(mix) = cx.data.pending_pulse(&pr.key, &part) {
+            out.push((node(0, None, vec![cell(text, CellStyle::Pulse(mix))]), None));
         }
     }
     out
@@ -606,8 +658,10 @@ fn place(thread: &Thread) -> String {
     }
 }
 
-/// `path:line · 3 comments · resolved`. A resolved thread is grey.
-fn thread_header(thread: &Thread, open: bool) -> TreeNode {
+/// `path:line · 3 comments · resolved`. A resolved thread is grey. While
+/// a reply to the thread is on its way, the header pulses with the mix
+/// `pulse`.
+fn thread_header(thread: &Thread, open: bool, pulse: Option<u8>) -> TreeNode {
     let place = place(thread);
     let count = thread.comments.len();
     let noun = plural::noun(count, "comment", "comments");
@@ -616,6 +670,7 @@ fn thread_header(thread: &Thread, open: bool) -> TreeNode {
     } else {
         ("", CellStyle::Normal)
     };
+    let style = pulse.map_or(style, CellStyle::Pulse);
     node(
         0,
         Some(open),
@@ -963,6 +1018,82 @@ mod tests {
         let handled = Conversation.handle_key(enter, &cx, &mut ps).unwrap();
         assert!(handled.changed);
         assert_eq!(handled.events, [], "a collapse is instant");
+    }
+
+    /// The outline of `model`, with each pulsing cell in `«»`.
+    fn pulses(model: &PaneModel) -> String {
+        let PaneModel::Tree { nodes } = model else {
+            panic!("not a tree");
+        };
+        nodes
+            .iter()
+            .map(|n| {
+                let text: String = n
+                    .cells
+                    .iter()
+                    .map(|c| match c.style {
+                        CellStyle::Pulse(_) => format!("«{}»", c.text),
+                        _ => c.text.clone(),
+                    })
+                    .collect();
+                format!("{}{text}", "  ".repeat(usize::from(n.depth)))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_parts_on_their_way_pulse_in_the_conversation() {
+        use crate::bus::Expect;
+        let mut state = state_with(Some(testdata::detail_with_reactions()), None);
+        let key = testdata::pr_key("chaoshub", 7);
+        testdata::pend(
+            &mut state,
+            &key,
+            vec![
+                (PendingPart::Thread("PRRT_7".into()), Expect::NewComment),
+                (
+                    PendingPart::Reaction("IC_0".into(), ReactionKind::ThumbsUp),
+                    Expect::Reaction(false),
+                ),
+                (
+                    PendingPart::Reaction("IC_0".into(), ReactionKind::Rocket),
+                    Expect::Reaction(true),
+                ),
+                (
+                    PendingPart::Reaction("PRR_bob".into(), ReactionKind::Heart),
+                    Expect::Reaction(true),
+                ),
+                (PendingPart::Comment, Expect::NewComment),
+            ],
+        );
+        let mut ps = Conversation.init_state();
+        ps.cursor = 3;
+        let model = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        insta::assert_snapshot!(pulses(&model));
+    }
+
+    #[test]
+    fn a_removed_reaction_on_its_way_shows_with_no_count() {
+        use crate::bus::Expect;
+        let mut state = state_with(Some(testdata::detail_with_reactions()), None);
+        let key = testdata::pr_key("chaoshub", 7);
+        let thread_comment = state.data.details[&key].value.threads[0].comments[0]
+            .id
+            .clone();
+        testdata::pend(
+            &mut state,
+            &key,
+            vec![(
+                PendingPart::Reaction(thread_comment, ReactionKind::Eyes),
+                Expect::Reaction(false),
+            )],
+        );
+        let mut ps = Conversation.init_state();
+        ps.cursor = 3;
+        let model = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        let text = pulses(&model);
+        assert!(text.contains("    «👀 0»"), "{text}");
     }
 
     #[test]

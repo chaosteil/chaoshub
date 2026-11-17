@@ -18,6 +18,11 @@ pub(crate) fn cell_style(cell: CellStyle, palette: &Palette) -> Style {
             .bg(blend(palette.success, palette.purple, mix))
             .add_modifier(Modifier::BOLD);
     }
+    if let CellStyle::Pulse(mix) = cell {
+        return Style::new()
+            .fg(blend(palette.success, palette.purple, mix))
+            .add_modifier(Modifier::BOLD);
+    }
     if let CellStyle::Badge(tone) = cell {
         let bg = match tone {
             Tone::Success => palette.success,
@@ -62,6 +67,7 @@ pub(crate) fn cell_style(cell: CellStyle, palette: &Palette) -> Style {
         CellStyle::Merge
         | CellStyle::Badge(_)
         | CellStyle::MergeBadge(_)
+        | CellStyle::Pulse(_)
         | CellStyle::Code(..)
         | CellStyle::Word(..) => palette.purple,
     };

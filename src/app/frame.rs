@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use textwrap::core::display_width;
 
 use crate::actions::{Action, Applicability, REGISTRY};
@@ -25,8 +25,8 @@ use crate::app::tabs::{KeyCx, TABS, Tab};
 use crate::app::target::{pr_target, row_target};
 use crate::app::term::{term_status, term_title};
 use crate::bus::{
-    KeyChord, KeyCode, KeyModifiers, Progress, ReviewKind, Scope, Selection, Size, Target,
-    TermState, TermStatus,
+    KeyChord, KeyCode, KeyModifiers, PendingPart, Progress, ReviewKind, Scope, Selection, Size,
+    Target, TermState, TermStatus,
 };
 use crate::domain::keys::PrKey;
 use crate::domain::plural;
@@ -291,6 +291,11 @@ fn popup_content(
         PrState::Closed => "closed",
         PrState::Merged => "merged",
     };
+    // A spinner shows before the state while an action changes it.
+    let state = match state_spinner(data, &pr.key) {
+        Some(spin) => format!("{spin} {state}"),
+        None => state.to_owned(),
+    };
     let old_detail = data
         .details
         .get(&pr.key)
@@ -334,6 +339,14 @@ fn popup_content(
         cursor,
         scroll,
     }
+}
+
+/// The spinner frame while an action changes the state of `key` on
+/// GitHub: a merge, a close or a change of the draft flag. Else `None`.
+pub(crate) fn state_spinner(data: &AppData, key: &PrKey) -> Option<&'static str> {
+    [PendingPart::Merge, PendingPart::State, PendingPart::Draft]
+        .iter()
+        .find_map(|part| data.pending_spinner(key, part))
 }
 
 /// The key hint bar of the active context: the top overlay that is not
@@ -830,6 +843,32 @@ fn pinned_status(data: &AppData, key: &PrKey) -> Vec<Cell> {
             style: CellStyle::Dim,
         },
     ]
+}
+
+/// The time of one pulse of the merge badge and of a pending part: from
+/// green to purple and back to green.
+const PULSE: TimeDelta = TimeDelta::milliseconds(1500);
+
+/// The color mix of the merge badge `elapsed` after the start of the run:
+/// 0 is the success green, 255 the merge purple. The mix follows a cosine,
+/// so it starts on green and slows down at both colors. With `animations`
+/// off, it stays on green.
+pub(crate) fn pulse(elapsed: TimeDelta, animations: bool) -> u8 {
+    if !animations {
+        return 0;
+    }
+    let period = PULSE.num_milliseconds();
+    let phase = elapsed.num_milliseconds().rem_euclid(period);
+    let phase = f64::from(u32::try_from(phase).unwrap_or(0))
+        / f64::from(u32::try_from(period).unwrap_or(1));
+    let mix = (1.0 - (std::f64::consts::TAU * phase).cos()) / 2.0 * 255.0;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "mix is rounded and between 0 and 255"
+    )]
+    let mix = mix.round() as u8;
+    mix
 }
 
 /// The frame of the spinner at the time `now`.

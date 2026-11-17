@@ -284,7 +284,8 @@ fn group_rows(
         };
         let local = view.matches.get(&pr.key).unwrap_or(&LocalMatch::None);
         let pane = cx.data.pane_open(&TargetKey::Pr(pr.key.clone()));
-        let mut row = pr_row(pr, local, set, glyph, pane);
+        let pulse = cx.data.pending_pulse_any(&pr.key);
+        let mut row = pr_row(pr, local, set, glyph, pane, pulse);
         if hidden.contains(&pr.key) {
             row.style = RowStyle::Dim;
             row.hidden = true;
@@ -353,11 +354,19 @@ fn local_cells(local: &LocalMatch, set: Columns) -> Vec<Cell> {
 }
 
 /// The row of one pull request. `pane` is true while a pane of it is
-/// open.
-fn pr_row(pr: &PullRequest, local: &LocalMatch, set: Columns, glyph: char, pane: bool) -> Row {
+/// open. `pulse` is the mix of the title while an action changes the
+/// pull request on GitHub.
+fn pr_row(
+    pr: &PullRequest,
+    local: &LocalMatch,
+    set: Columns,
+    glyph: char,
+    pane: bool,
+    pulse: Option<u8>,
+) -> Row {
     let head = &pr.head.value;
     let mut cells: Vec<Cell> = vec![
-        cell(head.title.clone(), CellStyle::Normal),
+        cells::title(pr, pulse),
         cell(format!("#{}", pr.key.number), CellStyle::Dim),
     ];
     cells.extend(local_cells(local, set));
@@ -450,6 +459,30 @@ mod tests {
             .iter()
             .map(|row| (row.glyph, row.cells[0].text.clone()))
             .collect()
+    }
+
+    #[test]
+    fn the_title_of_a_pull_request_with_a_pending_part_pulses() {
+        use crate::bus::{Expect, PendingPart};
+        let mut state = seeded();
+        let key = testdata::pr_key("chaoshub", 12);
+        testdata::pend(&mut state, &key, vec![(PendingPart::Merge, Expect::Merged)]);
+        let model = model(&state, &TabState::default());
+        let styles: Vec<(String, CellStyle)> = model
+            .rows
+            .iter()
+            .filter(|row| matches!(row.item, RowItem::Pr(_)))
+            .map(|row| (row.cells[0].text.clone(), row.cells[0].style))
+            .collect();
+        assert_eq!(
+            styles,
+            [
+                ("Fix the export".into(), CellStyle::Normal),
+                ("Add the top".into(), CellStyle::Normal),
+                ("Add the middle".into(), CellStyle::Pulse(0)),
+                ("Add the base".into(), CellStyle::Normal),
+            ]
+        );
     }
 
     #[test]

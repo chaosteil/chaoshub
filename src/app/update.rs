@@ -5210,6 +5210,20 @@ mod tests {
         };
         assert_eq!(title, "#103 feat(ui): popup frame with pane tabs");
         assert_eq!(subtitle, "chaosteil · chaosteil/103 -> main · draft");
+        // The header is plain text, so a state change on its way shows the
+        // spinner there, not a pulse.
+        let pr = testdata::pr_key("chaoshub", 103);
+        let draft = (PendingPart::Draft, Expect::Draft(false));
+        testdata::pend(&mut state, &pr, vec![draft]);
+        state.bump();
+        let OverlayContent::Popup { subtitle, .. } = popup_content(&mut state, &panes) else {
+            panic!("not a popup");
+        };
+        let spin = frame::spinner(state.data.now);
+        assert_eq!(
+            subtitle,
+            format!("chaosteil · chaosteil/103 -> main · {spin} draft")
+        );
         let keys: Vec<(char, &str)> = tabs.iter().map(|t| (t.key, t.title)).collect();
         assert_eq!(keys, [('1', "a"), ('2', "b")], "pane c does not apply");
         assert_eq!((active, cursor), (0, 0));

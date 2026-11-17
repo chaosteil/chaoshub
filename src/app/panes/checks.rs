@@ -9,7 +9,7 @@ use crate::app::models::{
 use crate::app::panes::{Pane, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx, pr_ref};
-use crate::bus::{Cmd, KeyChord, Size, Target};
+use crate::bus::{Cmd, KeyChord, PendingPart, Size, Target};
 use crate::domain::check::{Check, CheckConclusion, CheckStatus};
 
 /// The checks pane.
@@ -54,12 +54,17 @@ impl Pane for Checks {
             };
         };
         let item = RowItem::Pr(pr_ref(pr));
+        // While a re-run is on its way, the failed checks pulse.
+        let rerun = cx.data.pending_pulse(&pr.key, &PendingPart::Checks);
         let rows = pr
             .checks
             .value
             .iter()
             .map(|check| {
-                let (state, style) = state(check);
+                let (state, mut style) = state(check);
+                if let Some(mix) = rerun.filter(|_| check.conclusion.is_some_and(failed)) {
+                    style = CellStyle::Pulse(mix);
+                }
                 Row {
                     item: item.clone(),
                     cells: vec![
@@ -245,6 +250,50 @@ mod tests {
             assert_eq!(state(&check), (text, style), "{}", check.name);
             assert_eq!(duration(&check, now), time, "{}", check.name);
         }
+    }
+
+    #[test]
+    fn a_rerun_on_its_way_pulses_the_failed_checks() {
+        let mut state = AppState::new(Size {
+            width: 100,
+            height: 30,
+        });
+        let mut pr = testdata::pr("chaoshub", 7, "Seven");
+        pr.checks.value = vec![
+            check(
+                "build",
+                CheckStatus::Completed,
+                Some(CheckConclusion::Success),
+                Some(70),
+            ),
+            check(
+                "test",
+                CheckStatus::Completed,
+                Some(CheckConclusion::Failure),
+                Some(9),
+            ),
+        ];
+        state.data.prs.insert(pr.key.clone(), pr.clone());
+        let parts = vec![(PendingPart::Checks, crate::bus::Expect::Rerun)];
+        testdata::pend(&mut state, &pr.key, parts);
+        let target = pr_target(&state.data, &pr.key).unwrap();
+        let areas = layout(state.data.size);
+        let keys = Keymap::default();
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &keys,
+        };
+        let size = Size {
+            width: 80,
+            height: 20,
+        };
+        let PaneModel::Table { rows, .. } = Checks.model(&cx, &PaneState::default(), size) else {
+            panic!("not a table");
+        };
+        assert_eq!(rows[0].cells[1], cell("✓ success", CellStyle::Success));
+        assert_eq!(rows[1].cells[1], cell("✗ failure", CellStyle::Pulse(0)));
     }
 
     #[test]

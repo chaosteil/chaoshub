@@ -157,6 +157,10 @@ pub(crate) enum CellStyle {
     /// a mix of the success color and the purple. The mix is 0 for the
     /// success color and 255 for the purple.
     MergeBadge(u8),
+    /// The text of a part that an action changes on GitHub now: bold, in
+    /// a mix of the success color and the purple, as the merge badge.
+    /// The mix moves, so the text pulses (see `app::pending`).
+    Pulse(u8),
     /// An added line of a diff. Its row gets the add tint.
     DiffAdd,
     /// A removed line of a diff. Its row gets the remove tint.

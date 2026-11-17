@@ -79,6 +79,11 @@ impl Pane for StackPane {
             } else {
                 ("  ", CellStyle::Normal)
             };
+            // An entry that a merge changes now pulses.
+            let title_style = cx
+                .data
+                .pending_pulse_any(&entry.key)
+                .map_or(title_style, CellStyle::Pulse);
             nodes.push(node(vec![
                 cell(format!("{marker}{position} "), CellStyle::Dim),
                 cell(format!("#{} ", entry.key.number), CellStyle::Primary),
