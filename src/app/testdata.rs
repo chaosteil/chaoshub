@@ -449,6 +449,7 @@ pub(crate) fn pend(
     let view = crate::app::pending::View {
         prs: &data.prs,
         details: &data.details,
+        computing: &data.computing,
     };
     let now = data.now;
     data.pending

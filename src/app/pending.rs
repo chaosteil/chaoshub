@@ -57,6 +57,9 @@ pub(crate) const REREAD_WAITS: [TimeDelta; 5] = [
 pub(crate) struct View<'a> {
     pub prs: &'a BTreeMap<PrKey, PullRequest>,
     pub details: &'a BTreeMap<PrKey, Observed<PrDetail>>,
+    /// The pull requests whose merge state GitHub computes now
+    /// (`AppData::computing`).
+    pub computing: &'a BTreeMap<PrKey, DateTime<Utc>>,
 }
 
 /// The parts that actions change on GitHub now, the runs that wait for
@@ -404,13 +407,15 @@ fn detail_part(part: &PendingPart) -> bool {
 }
 
 /// True when `pr` is open and GitHub did not compute its merge state yet.
+/// The data can then keep the last known state (`AppData::computing`).
 fn unknown_merge_state(view: View<'_>, pr: &PrKey) -> bool {
-    view.prs.get(pr).is_some_and(|pr| {
-        let head = &pr.head.value;
-        head.state == PrState::Open
-            && (head.mergeable == Mergeable::Unknown
-                || head.merge_state == MergeStateStatus::Unknown)
-    })
+    view.computing.contains_key(pr)
+        || view.prs.get(pr).is_some_and(|pr| {
+            let head = &pr.head.value;
+            head.state == PrState::Open
+                && (head.mergeable == Mergeable::Unknown
+                    || head.merge_state == MergeStateStatus::Unknown)
+        })
 }
 
 /// The data of `part` at its start, for the changes that compare with the
@@ -510,6 +515,7 @@ mod tests {
     struct Data {
         prs: BTreeMap<PrKey, PullRequest>,
         details: BTreeMap<PrKey, Observed<PrDetail>>,
+        computing: BTreeMap<PrKey, DateTime<Utc>>,
     }
 
     impl Data {
@@ -522,6 +528,7 @@ mod tests {
             Self {
                 prs: BTreeMap::from([(pr.key.clone(), pr)]),
                 details,
+                computing: BTreeMap::new(),
             }
         }
 
@@ -529,6 +536,7 @@ mod tests {
             View {
                 prs: &self.prs,
                 details: &self.details,
+                computing: &self.computing,
             }
         }
 

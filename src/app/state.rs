@@ -136,7 +136,16 @@ pub(crate) struct AppData {
     /// pending approval hides its pull request from the Review tab, and a
     /// pending reaction shows in the conversation.
     pub pending: PendingMap,
+    /// The open pull requests whose merge state GitHub computes now, with
+    /// the time of the first read without a state. Their data keeps the
+    /// last known state while the head and the base stay, so the badge
+    /// does not fall back to CHECKING. The badge pulses until
+    /// `COMPUTE_PULSE` after that time.
+    pub computing: BTreeMap<PrKey, DateTime<Utc>>,
 }
+
+/// How long the badge of a pull request in `AppData::computing` pulses.
+pub(crate) const COMPUTE_PULSE: chrono::TimeDelta = chrono::TimeDelta::seconds(60);
 
 /// The review draft of a pull request. It stays when the popups close.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -277,6 +286,10 @@ impl AppData {
     pub(crate) fn busy(&self) -> bool {
         self.merging().is_some()
             || self.pending.busy()
+            || self
+                .computing
+                .values()
+                .any(|&since| self.now - since < COMPUTE_PULSE)
             || !self.sync.pending.is_empty()
             || !self.sync.running.is_empty()
             || self.prefetch.is_some()
@@ -299,6 +312,13 @@ impl AppData {
         self.pending
             .any_started(pr)
             .map(|started| frame::pulse(self.now - started, self.animations))
+    }
+
+    /// The color mix of the pulse of the badge of `pr` while GitHub
+    /// computes its merge state, for at most `COMPUTE_PULSE`. Else `None`.
+    pub(crate) fn computing_pulse(&self, pr: &PrKey) -> Option<u8> {
+        let since = *self.computing.get(pr)?;
+        (self.now - since < COMPUTE_PULSE).then(|| frame::pulse(self.now - since, self.animations))
     }
 
     /// The spinner frame for `part` of `pr` while an action changes it on
@@ -920,6 +940,7 @@ impl AppState {
                 title_spinner: true,
                 notify: NotifyState::default(),
                 pending: PendingMap::default(),
+                computing: BTreeMap::new(),
             },
             ui: UiState {
                 active: 0,

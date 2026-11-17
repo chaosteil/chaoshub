@@ -155,6 +155,16 @@ fn readiness(cx: &KeyCx<'_>, pr: &PullRequest) -> Vec<Vec<Cell>> {
         if let (Some(mix), Some(badge)) = (state, line.first_mut()) {
             badge.style = CellStyle::MergeBadge(mix);
         }
+        // The badge keeps the last known merge state while GitHub
+        // computes it again. It pulses and says so.
+        if let Some(mix) = data.computing_pulse(&pr.key) {
+            if let Some(badge) = line.first_mut() {
+                badge.style = CellStyle::MergeBadge(mix);
+            }
+            let gap = if line.len() == 1 { " ╱ " } else { " · " };
+            line.push(cell(gap, CellStyle::Dim));
+            line.push(cell("computing the merge state", CellStyle::Dim));
+        }
         line
     });
     let mut signals = signals(head, checks, detail);
@@ -1315,6 +1325,32 @@ mod tests {
         state.data.now += TimeDelta::milliseconds(750);
         let (lines, ..) = codeview_pane(&state, &crate::app::keymap::DEFAULT);
         assert_eq!(lines[0][0].style, CellStyle::MergeBadge(255), "it pulses");
+    }
+
+    #[test]
+    fn a_merge_state_that_github_computes_keeps_its_badge_and_pulses() {
+        let mut state = codeview_state(None);
+        state.data.now = test_time();
+        let key = testdata::pr_key("chaoshub", 7);
+        let head = &mut state.data.prs.get_mut(&key).unwrap().head.value;
+        head.mergeable = Mergeable::Mergeable;
+        head.merge_state = MergeStateStatus::Clean;
+        state.data.computing.insert(key.clone(), test_time());
+        let (lines, ..) = codeview_pane(&state, &crate::app::keymap::DEFAULT);
+        assert_eq!(lines[0][0], cell(" READY ", CellStyle::MergeBadge(0)));
+        assert_eq!(
+            text(&lines[0]),
+            " READY  ╱ ready to merge · computing the merge state"
+        );
+        assert!(state.data.busy(), "the pulse ticks");
+        state.data.now += crate::app::state::COMPUTE_PULSE;
+        let (lines, ..) = codeview_pane(&state, &crate::app::keymap::DEFAULT);
+        assert_eq!(
+            lines[0][0],
+            cell(" READY ", CellStyle::Badge(Tone::Success)),
+            "the pulse ends, the badge stays"
+        );
+        assert!(!state.data.busy());
     }
 
     #[test]

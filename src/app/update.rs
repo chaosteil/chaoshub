@@ -3,7 +3,7 @@
 //! There is one function per message family. Commands are plain data, so
 //! the tests compare them with `assert_eq!`.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -50,7 +50,7 @@ use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::{Observed, apply_newer};
 use crate::domain::plural;
-use crate::domain::pr::{CiState, PrState, PullRequest};
+use crate::domain::pr::{CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest};
 use crate::domain::repo::Repo;
 
 /// Applies one message to the state, with the tabs of `TABS`.
@@ -90,6 +90,7 @@ pub(crate) fn update_full(
     let view = View {
         prs: &data.prs,
         details: &data.details,
+        computing: &data.computing,
     };
     if data.pending.sweep(view, now) {
         state.bump();
@@ -1252,6 +1253,7 @@ fn start_parts(
     let view = View {
         prs: &data.prs,
         details: &data.details,
+        computing: &data.computing,
     };
     if !data.pending.start(id, target, parts, from_pane, now, view) {
         return;
@@ -1351,6 +1353,7 @@ fn pending_rereads(state: &mut AppState, now: DateTime<Utc>) -> Vec<Cmd> {
     let view = View {
         prs: &data.prs,
         details: &data.details,
+        computing: &data.computing,
     };
     let mut cmds = Vec::new();
     for read in data.pending.due_rereads(view, now) {
@@ -3163,10 +3166,48 @@ fn merge_pr(data: &mut AppData, incoming: PullRequest) -> bool {
     if head.observed_at >= current.head.observed_at {
         current.node_id = node_id;
     }
+    let head = keep_merge_state(&mut data.computing, current, head);
     let mut changed = apply(&mut current.head, head, &key, "head");
     changed |= apply(&mut current.ci_state, ci_state, &key, "ci state");
     changed |= apply(&mut current.checks, checks, &key, "checks");
     changed
+}
+
+/// The head `incoming` of `current`, with the last known merge state
+/// when GitHub computes it again. GitHub gives `UNKNOWN` while it
+/// computes, for example some time after a review. While the head commit
+/// and the base commit stay, the old state is still the best guess, so
+/// the head keeps it and the pull request goes into `computing`. A known
+/// state, a new commit and a closed pull request end `computing`. An
+/// older head changes nothing.
+fn keep_merge_state(
+    computing: &mut BTreeMap<PrKey, DateTime<Utc>>,
+    current: &PullRequest,
+    mut incoming: Observed<PrHead>,
+) -> Observed<PrHead> {
+    if incoming.observed_at < current.head.observed_at {
+        return incoming;
+    }
+    let old = &current.head.value;
+    let new = &mut incoming.value;
+    let unknown = |mergeable: Mergeable, state: MergeStateStatus| {
+        mergeable == Mergeable::Unknown || state == MergeStateStatus::Unknown
+    };
+    let same = new.head_oid == old.head_oid && new.base_oid == old.base_oid;
+    if new.state == PrState::Open
+        && unknown(new.mergeable, new.merge_state)
+        && !unknown(old.mergeable, old.merge_state)
+        && same
+    {
+        new.mergeable = old.mergeable;
+        new.merge_state = old.merge_state;
+        computing
+            .entry(current.key.clone())
+            .or_insert(incoming.observed_at);
+    } else {
+        computing.remove(&current.key);
+    }
+    incoming
 }
 
 /// Applies `incoming` when it is not older. True when the value changed.
@@ -3235,6 +3276,7 @@ fn drop_gone(data: &mut AppData, key: &PrKey, started_at: DateTime<Utc>) -> bool
     data.prs.remove(key);
     data.scopes.remove(key);
     data.details.remove(key);
+    data.computing.remove(key);
     true
 }
 
@@ -3535,12 +3577,22 @@ fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<
     if new_minute
         || state.data.merging().is_some()
         || state.data.pending.has_parts()
+        || computing_pulsed(&state.data, previous)
         || *status != frame::status_model(state, tabs)
         || *term != term_status(state)
     {
         state.bump();
     }
     cmds
+}
+
+/// True when a merge state badge pulsed at the time `previous` of the last
+/// tick (`AppData::computing_pulse`). The frame after the end of the
+/// pulse draws again too.
+fn computing_pulsed(data: &AppData, previous: DateTime<Utc>) -> bool {
+    data.computing
+        .values()
+        .any(|&since| previous - since < crate::app::state::COMPUTE_PULSE)
 }
 
 /// The scopes that had a sync, before a change of the data.
@@ -4532,6 +4584,60 @@ mod tests {
             vec![]
         );
         assert_eq!(state.generation, generation, "older data is not visible");
+    }
+
+    #[test]
+    fn an_unknown_merge_state_keeps_the_last_known_one() {
+        let mut data = AppState::new(Size {
+            width: 100,
+            height: 30,
+        })
+        .data;
+        let mut known = pr_at(1, "Mine", 0);
+        known.head.value.mergeable = Mergeable::Mergeable;
+        known.head.value.merge_state = MergeStateStatus::Clean;
+        merge_pr(&mut data, known.clone());
+        let key = known.key.clone();
+        let read = |secs: i64, change: &dyn Fn(&mut PrHead)| {
+            let mut pr = known.clone();
+            pr.head.observed_at += TimeDelta::seconds(secs);
+            pr.head.value.mergeable = Mergeable::Unknown;
+            pr.head.value.merge_state = MergeStateStatus::Unknown;
+            change(&mut pr.head.value);
+            pr
+        };
+        merge_pr(&mut data, read(1, &|_| {}));
+        let head = &data.prs[&key].head.value;
+        assert_eq!(
+            (head.mergeable, head.merge_state),
+            (Mergeable::Mergeable, MergeStateStatus::Clean),
+            "GitHub computes it again: the old state stays"
+        );
+        let since = data.computing[&key];
+        merge_pr(&mut data, read(2, &|_| {}));
+        assert_eq!(data.computing[&key], since, "the first read counts");
+        merge_pr(
+            &mut data,
+            read(3, &|head| {
+                head.mergeable = Mergeable::Conflicting;
+                head.merge_state = MergeStateStatus::Dirty;
+            }),
+        );
+        assert!(data.computing.is_empty(), "GitHub knows it again");
+        assert_eq!(data.prs[&key].head.value.mergeable, Mergeable::Conflicting);
+
+        merge_pr(&mut data, read(4, &|_| {}));
+        assert!(data.computing.contains_key(&key));
+        merge_pr(&mut data, read(5, &|head| head.head_oid = "new".into()));
+        let head = &data.prs[&key].head.value;
+        assert_eq!(head.mergeable, Mergeable::Unknown, "a new commit: CHECKING");
+        assert!(data.computing.is_empty());
+        merge_pr(&mut data, read(6, &|head| head.head_oid = "new".into()));
+        assert_eq!(
+            data.prs[&key].head.value.mergeable,
+            Mergeable::Unknown,
+            "no known state"
+        );
     }
 
     fn stacked(number: u64, position: u32) -> PullRequest {
