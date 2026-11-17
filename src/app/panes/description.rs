@@ -34,6 +34,7 @@ use crate::app::tabs::{Handled, KeyCx};
 use crate::bus::{KeyChord, MergeProgress, MergeStep, Size, Target};
 use crate::domain::check::{Check, CheckConclusion, CheckStatus};
 use crate::domain::detail::{PrDetail, ReviewState};
+use crate::domain::plural;
 use crate::domain::pr::{
     CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest, ReviewDecision,
 };
@@ -110,7 +111,7 @@ fn codeview_line(cx: &KeyCx<'_>, pr: &PullRequest) -> Option<Vec<Cell>> {
     if count == 0 {
         return None;
     }
-    let noun = if count == 1 { "comment" } else { "comments" };
+    let noun = plural::noun(count, "comment", "comments");
     let text = match review_keys(cx.keys) {
         Some(keys) => format!("{count} unsent codeview {noun} · {keys} to review"),
         None => format!("{count} unsent codeview {noun}"),
@@ -194,11 +195,7 @@ fn tone_style(tone: Tone) -> CellStyle {
 
 /// `1 check` or `N checks`.
 fn checks_noun(count: usize) -> String {
-    if count == 1 {
-        "1 check".to_owned()
-    } else {
-        format!("{count} checks")
-    }
+    plural::count(count, "check", "checks")
 }
 
 /// The number of checks with a failing conclusion.
@@ -449,11 +446,7 @@ fn thread_signal(detail: Option<&PrDetail>) -> Vec<Cell> {
 
 /// The size of the change: `3 files +42 −7`.
 fn size(head: &PrHead) -> Vec<Cell> {
-    let files = if head.changed_files == 1 {
-        "1 file".to_owned()
-    } else {
-        format!("{} files", head.changed_files)
-    };
+    let files = plural::count(head.changed_files, "file", "files");
     vec![
         cell(files, CellStyle::Primary),
         cell(format!(" +{}", head.additions), CellStyle::Success),

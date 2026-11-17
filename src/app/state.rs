@@ -34,6 +34,7 @@ use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
+use crate::domain::plural;
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::repo::Repo;
 use crate::store::Snapshot;
@@ -660,8 +661,8 @@ impl ReviewPopup {
             _ => 0,
         };
         if older > 0 {
-            let noun = if older == 1 { "comment" } else { "comments" };
-            rows.push(ReviewRow::Note(format!("{older} {noun} on an older push")));
+            let older = plural::count(older, "comment", "comments");
+            rows.push(ReviewRow::Note(format!("{older} on an older push")));
         }
         if rows.is_empty() {
             rows.push(ReviewRow::Note(

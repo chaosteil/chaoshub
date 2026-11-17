@@ -29,6 +29,7 @@ use crate::bus::{
     TermState, TermStatus,
 };
 use crate::domain::keys::PrKey;
+use crate::domain::plural;
 use crate::domain::pr::PrState;
 
 /// The frames of the spinner in the status bar.
@@ -859,13 +860,14 @@ fn activity(data: &AppData) -> Option<String> {
     }
     match data.details_loading.len() {
         0 => {}
-        1 => parts.push("loading 1 conversation".to_owned()),
-        n => parts.push(format!("loading {n} conversations")),
+        n => parts.push(format!(
+            "loading {}",
+            plural::count(n, "conversation", "conversations")
+        )),
     }
     match data.files_loading.len() {
         0 => {}
-        1 => parts.push("loading 1 diff".to_owned()),
-        n => parts.push(format!("loading {n} diffs")),
+        n => parts.push(format!("loading {}", plural::count(n, "diff", "diffs"))),
     }
     for (key, kind) in &data.agent_jobs {
         parts.push(format!("agent {} #{}", kind.name(), key.number));
@@ -878,7 +880,7 @@ fn activity(data: &AppData) -> Option<String> {
 fn sync_text(state: &AppState, tabs: &[Box<dyn Tab>]) -> String {
     let data = &state.data;
     let repos = data.session.repos.len();
-    let noun = if repos == 1 { "repo" } else { "repos" };
+    let noun = plural::noun(repos, "repo", "repos");
     let scope = tabs.get(state.ui.active).and_then(|tab| tab.scope());
     match (
         scope.and_then(|scope| data.synced.get(&scope)),

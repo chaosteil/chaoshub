@@ -15,6 +15,7 @@ pub(crate) mod local;
 pub(crate) mod matching;
 pub(crate) mod merge;
 pub(crate) mod observed;
+pub(crate) mod plural;
 pub(crate) mod pr;
 pub(crate) mod repo;
 pub(crate) mod stack;

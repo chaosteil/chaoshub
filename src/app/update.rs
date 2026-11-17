@@ -42,6 +42,7 @@ use crate::domain::files::PrFiles;
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::{Observed, apply_newer};
+use crate::domain::plural;
 use crate::domain::pr::{CiState, PrState, PullRequest};
 use crate::domain::repo::Repo;
 
@@ -1760,8 +1761,8 @@ fn scroll_text(overlay: &mut OverlayState, motion: Motion) -> bool {
 /// line says how many lines it has.
 fn copy_text(state: &mut AppState, text: String) -> Vec<Cmd> {
     let count = text.lines().count();
-    let noun = if count == 1 { "line" } else { "lines" };
-    state.message(format!("copied {count} {noun}"), CellStyle::Dim, INFO_TTL);
+    let lines = plural::count(count, "line", "lines");
+    state.message(format!("copied {lines}"), CellStyle::Dim, INFO_TTL);
     vec![Cmd::Copy(text)]
 }
 

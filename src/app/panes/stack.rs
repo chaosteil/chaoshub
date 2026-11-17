@@ -8,6 +8,7 @@ use crate::app::panes::{Pane, PaneState};
 use crate::app::tabs::cells::{self, cell};
 use crate::app::tabs::{Handled, KeyCx};
 use crate::bus::{Cmd, KeyChord, Size, Target, TargetKey};
+use crate::domain::plural;
 use crate::domain::pr::PullRequest;
 
 /// The stack pane.
@@ -56,7 +57,7 @@ impl Pane for StackPane {
         let Some(info) = &pr.head.value.stack else {
             return PaneModel::Tree { nodes };
         };
-        let noun = if info.size == 1 { "PR" } else { "PRs" };
+        let noun = plural::noun(info.size, "PR", "PRs");
         nodes.push(node(vec![cell(
             format!(
                 "stack #{} -> {} · {} {noun} · position 1 merges first",

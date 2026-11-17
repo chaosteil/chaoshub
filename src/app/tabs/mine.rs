@@ -23,6 +23,7 @@ use crate::bus::{Interest, KeyChord, Scope, Size, TargetKey};
 use crate::domain::keys::PrKey;
 use crate::domain::local::LocalMatch;
 use crate::domain::matching::{group_stacks, match_prs};
+use crate::domain::plural;
 use crate::domain::pr::{PrState, PullRequest};
 use crate::domain::stack::StackGroup;
 
@@ -264,7 +265,7 @@ fn group_rows(
         .filter_map(|key| cx.data.prs.get(key))
         .collect();
     if let Some(stack) = &group.stack {
-        let noun = if stack.size == 1 { "PR" } else { "PRs" };
+        let noun = plural::noun(stack.size, "PR", "PRs");
         rows.push(header(
             stack.id.clone(),
             format!(

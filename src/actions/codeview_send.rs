@@ -35,6 +35,7 @@ use crate::actions::{Action, Applicability, Group, Prepare, Services};
 use crate::bus::{ActionInput, KeyChord, KeyCode, KeyModifiers, ReviewKind, Selection, Target};
 use crate::codeview::store;
 use crate::domain::keys::PrKey;
+use crate::domain::plural;
 use crate::domain::pr::PullRequest;
 use crate::github::ReviewEvent;
 
@@ -305,11 +306,7 @@ async fn send(job: Job) -> Result<String, String> {
 
 /// `1 comment` or `N comments`.
 fn noun(count: u64) -> String {
-    if count == 1 {
-        "1 comment".to_owned()
-    } else {
-        format!("{count} comments")
-    }
+    plural::count(count, "comment", "comments")
 }
 
 /// Runs the headless codeview on the request file and reads the result

@@ -19,6 +19,7 @@ use crate::bus::{Cmd, HighlightJob, HighlightReq, Highlighted, KeyChord, Msg, Si
 use crate::domain::diff::{LineKind, Piece, Pieces, numbered};
 use crate::domain::files::{ChangedFile, FileStatus, PrFiles};
 use crate::domain::keys::PrKey;
+use crate::domain::plural;
 use crate::domain::pr::PullRequest;
 
 /// The files pane.
@@ -353,7 +354,7 @@ fn is_stale(files: &PrFiles, pr: &PullRequest) -> bool {
 /// `12 files · +340 −56`, and a hint when GitHub has more files.
 fn summary(files: &PrFiles) -> TreeNode {
     let count = files.files.len();
-    let noun = if count == 1 { "file" } else { "files" };
+    let noun = plural::noun(count, "file", "files");
     let additions: u32 = files.files.iter().map(|f| f.additions).sum();
     let deletions: u32 = files.files.iter().map(|f| f.deletions).sum();
     let mut cells = vec![

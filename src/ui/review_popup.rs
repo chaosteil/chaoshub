@@ -14,6 +14,7 @@ use crate::app::measure::wrap_ranges;
 use crate::app::models::{REVIEW_FRAME_ROWS, REVIEW_LIST_ROWS};
 use crate::app::nav::keep_visible;
 use crate::bus::{Hit, ReviewRow, ReviewSpec};
+use crate::domain::plural;
 use crate::theme::Theme;
 use crate::theme::ThemeBlock;
 use crate::ui::hits::HitMap;
@@ -211,7 +212,7 @@ fn message_lines<'a>(message: &'a str, width: usize, theme: &Theme) -> Vec<Line<
         .collect();
     if rows.len() > MESSAGE_ROWS {
         let more = rows.len() - MESSAGE_ROWS;
-        let noun = if more == 1 { "line" } else { "lines" };
+        let noun = plural::noun(more, "line", "lines");
         lines.push(Line::styled(
             format!("… {more} more {noun}"),
             Style::new().fg(p.fg_mute),

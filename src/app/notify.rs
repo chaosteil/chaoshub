@@ -23,6 +23,7 @@ use crate::app::state::AppData;
 use crate::app::tabs::{TABS, pr_ref};
 use crate::bus::{Cmd, Persist, PrRef, Scope};
 use crate::domain::keys::PrKey;
+use crate::domain::plural;
 use crate::domain::pr::{CiState, PrState, PullRequest};
 use crate::domain::team::is_ready;
 
@@ -229,7 +230,7 @@ fn one_text(tab: &str, pr: &PullRequest) -> String {
 /// The text of `count` pull requests of the tab `tab` in a notice. A
 /// tab without its own text starts with the title of the tab.
 fn count_text(tab: &str, count: usize) -> String {
-    let prs = if count == 1 { "PR" } else { "PRs" };
+    let prs = plural::noun(count, "PR", "PRs");
     match tab {
         "mine" => format!("{count} of your PRs ready for review"),
         "review" => format!("{count} {prs} ready for your review"),

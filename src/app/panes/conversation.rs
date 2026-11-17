@@ -22,6 +22,7 @@ use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx, tree_toggled};
 use crate::bus::{KeyChord, ReplySpec, ReplyTo, Size, Target};
 use crate::domain::detail::{Comment, PrDetail, Review, ReviewState, Thread};
+use crate::domain::plural;
 use crate::domain::pr::PullRequest;
 
 /// The conversation pane.
@@ -405,7 +406,7 @@ fn place(thread: &Thread) -> String {
 fn thread_header(thread: &Thread, open: bool) -> TreeNode {
     let place = place(thread);
     let count = thread.comments.len();
-    let noun = if count == 1 { "comment" } else { "comments" };
+    let noun = plural::noun(count, "comment", "comments");
     let (resolved, style) = if thread.is_resolved {
         (" · resolved", CellStyle::Dim)
     } else {
