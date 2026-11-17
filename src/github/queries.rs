@@ -106,6 +106,24 @@ pub(crate) struct PrDetail;
 )]
 pub(crate) struct AddReview;
 
+/// `addPullRequestReviewThreadReply`: a reply in a review thread.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/add_thread_reply.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct AddThreadReply;
+
+/// `addComment`: a new comment on a pull request.
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/github/schema.docs.graphql",
+    query_path = "src/github/queries/add_comment.graphql",
+    response_derives = "Debug"
+)]
+pub(crate) struct AddComment;
+
 /// `markPullRequestReadyForReview`.
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -285,6 +303,39 @@ impl GithubClient {
         data.add_pull_request_review
             .and_then(|payload| payload.pull_request_review)
             .ok_or_else(|| no_payload("addPullRequestReview"))?;
+        Ok(rate)
+    }
+
+    /// Adds a reply with `body` to the review thread with the node id
+    /// `id`.
+    pub(crate) async fn add_thread_reply(
+        &self,
+        id: &str,
+        body: &str,
+    ) -> Result<RateInfo, GithubError> {
+        let vars = add_thread_reply::Variables {
+            id: id.to_owned(),
+            body: body.to_owned(),
+        };
+        let (data, rate) = self.run::<AddThreadReply>(vars).await?;
+        data.add_pull_request_review_thread_reply
+            .and_then(|payload| payload.comment)
+            .ok_or_else(|| no_payload("addPullRequestReviewThreadReply"))?;
+        Ok(rate)
+    }
+
+    /// Adds a comment with `body` to the pull request with the node id
+    /// `id`.
+    pub(crate) async fn add_comment(&self, id: &str, body: &str) -> Result<RateInfo, GithubError> {
+        let vars = add_comment::Variables {
+            id: id.to_owned(),
+            body: body.to_owned(),
+        };
+        let (data, rate) = self.run::<AddComment>(vars).await?;
+        data.add_comment
+            .and_then(|payload| payload.comment_edge)
+            .and_then(|edge| edge.node)
+            .ok_or_else(|| no_payload("addComment"))?;
         Ok(rate)
     }
 
@@ -583,6 +634,58 @@ mod tests {
                     json!({ "id": "PR_1", "event": "REQUEST_CHANGES", "body": "Please fix." })
                 ),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_reply_and_comment_send_the_id_and_the_body() {
+        let server = mutation_server(json!({
+            "addPullRequestReviewThreadReply": { "comment": { "id": "PRRC_1" } },
+            "addComment": { "commentEdge": { "node": { "id": "IC_1" } } }
+        }))
+        .await;
+        let client = client(&server);
+        let rate = client
+            .add_thread_reply("PRRT_1", "Fixed.\nThanks.")
+            .await
+            .unwrap();
+        assert_eq!(rate.remaining, 4990);
+        client
+            .add_comment("PR_1", "> @alice: Why?\n\nBecause.")
+            .await
+            .unwrap();
+        assert_eq!(
+            sent(&server).await,
+            [
+                (
+                    json!("AddThreadReply"),
+                    json!({ "id": "PRRT_1", "body": "Fixed.\nThanks." })
+                ),
+                (
+                    json!("AddComment"),
+                    json!({ "id": "PR_1", "body": "> @alice: Why?\n\nBecause." })
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_null_reply_or_comment_is_an_error() {
+        let server = mutation_server(json!({
+            "addPullRequestReviewThreadReply": { "comment": null },
+            "addComment": { "commentEdge": null }
+        }))
+        .await;
+        let client = client(&server);
+        let err = client.add_thread_reply("PRRT_1", "Hi").await.unwrap_err();
+        assert!(
+            matches!(&err, GithubError::Graphql(m) if m == &["addPullRequestReviewThreadReply returned no result"]),
+            "{err:?}"
+        );
+        let err = client.add_comment("PR_1", "Hi").await.unwrap_err();
+        assert!(
+            matches!(&err, GithubError::Graphql(m) if m == &["addComment returned no result"]),
+            "{err:?}"
         );
     }
 
