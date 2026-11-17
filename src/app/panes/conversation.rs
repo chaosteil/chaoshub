@@ -2,6 +2,9 @@
 //! reviews and review threads in time order. A thread header shows
 //! `path:line · 3 comments · resolved`; Enter expands and collapses it.
 //! Comment bodies are markdown cells, which `ui` renders and wraps.
+//! The reactions of a comment or a review show on one row under its
+//! body: `👍 3  🎉 1`. The reactions of the viewer have the primary
+//! color.
 //!
 //! The reply key (`R`) opens a text box for the comment of the cursor.
 //! On a thread or a comment in a thread, the reply goes into the thread.
@@ -21,7 +24,7 @@ use crate::app::panes::{Pane, PaneAction, PaneState};
 use crate::app::tabs::cells::cell;
 use crate::app::tabs::{Handled, KeyCx, tree_toggled};
 use crate::bus::{KeyChord, ReplySpec, ReplyTo, Size, Target};
-use crate::domain::detail::{Comment, PrDetail, Review, ReviewState, Thread};
+use crate::domain::detail::{Comment, PrDetail, Reaction, Review, ReviewState, Thread};
 use crate::domain::plural;
 use crate::domain::pr::PullRequest;
 
@@ -272,6 +275,26 @@ fn body(depth: u8, text: &str, html: &str) -> Option<TreeNode> {
     (!text.is_empty()).then(|| node(depth, None, vec![cell(text, CellStyle::Markdown)]))
 }
 
+/// The reactions of a comment or a review as a node: `👍 3  🎉 1`, in
+/// the order of GitHub. The reactions of the viewer have the primary
+/// color, the others are dim. `None` without reactions.
+fn reactions(depth: u8, reactions: &[Reaction]) -> Option<TreeNode> {
+    let mut cells = Vec::new();
+    for reaction in reactions {
+        if !cells.is_empty() {
+            cells.push(cell("  ", CellStyle::Normal));
+        }
+        let style = if reaction.mine {
+            CellStyle::Primary
+        } else {
+            CellStyle::Dim
+        };
+        let text = format!("{} {}", reaction.kind.emoji(), reaction.count);
+        cells.push(cell(text, style));
+    }
+    (!cells.is_empty()).then(|| node(depth, None, cells))
+}
+
 /// The nodes of the pane, each with its entry. A status line has none.
 /// A node of a thread has the item of the thread, but only the header
 /// expands and collapses it.
@@ -324,11 +347,13 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<Ite
                 let item = Some(Item::Comment(index));
                 out.push((comment_header(0, comment, "commented", now), item));
                 out.extend(body(1, &comment.body, &comment.body_html).map(|n| (n, item)));
+                out.extend(reactions(1, &comment.reactions).map(|n| (n, item)));
             }
             Entry::Review(index, review) => {
                 let item = Some(Item::Review(index));
                 out.push((review_header(review, now), item));
                 out.extend(body(1, &review.body, &review.body_html).map(|n| (n, item)));
+                out.extend(reactions(1, &review.reactions).map(|n| (n, item)));
             }
             Entry::Thread(index, thread) => {
                 let open = expanded.contains(&index);
@@ -338,6 +363,7 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<Ite
                     for comment in &thread.comments {
                         out.push((comment_header(1, comment, "", now), item));
                         out.extend(body(2, &comment.body, &comment.body_html).map(|n| (n, item)));
+                        out.extend(reactions(2, &comment.reactions).map(|n| (n, item)));
                     }
                 }
             }
@@ -589,6 +615,42 @@ mod tests {
         let handled = Conversation.handle_key(enter, &cx, &mut ps).unwrap();
         assert!(handled.changed);
         assert_eq!(handled.events, [], "a collapse is instant");
+    }
+
+    #[test]
+    fn the_reactions_show_under_the_body() {
+        let state = state_with(Some(testdata::detail_with_reactions()), None);
+        let mut ps = Conversation.init_state();
+        ps.cursor = 3;
+        let model = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        assert_eq!(
+            outline(&model),
+            [
+                "alice · commented 3h ago",
+                "  Looks good, one question about `layout`.",
+                "  👍 3  🎉 1",
+                "▾ src/ui/list.rs:42 · 2 comments · resolved",
+                "  bob · 2h ago",
+                "    Off by one?",
+                "    👀 1",
+                "  chaosteil · 2h ago",
+                "    Fixed.",
+                "▸ src/ui/pane.rs:7 · 1 comment",
+                "bob · requested changes 1h ago",
+                "  Please split the **transition** module.",
+                "  ❤️ 2",
+            ]
+        );
+        let PaneModel::Tree { nodes } = &model else {
+            unreachable!()
+        };
+        let styles: Vec<CellStyle> = nodes[2].cells.iter().map(|c| c.style).collect();
+        assert_eq!(
+            styles,
+            [CellStyle::Primary, CellStyle::Normal, CellStyle::Dim],
+            "the reaction of the viewer has the primary color"
+        );
+        assert_eq!(nodes[12].cells[0].style, CellStyle::Dim);
     }
 
     #[test]

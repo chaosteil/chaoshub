@@ -356,6 +356,23 @@ pub(crate) fn detail() -> crate::domain::detail::PrDetail {
     }
 }
 
+/// The conversation of `detail` with reactions: two on the
+/// comment of alice, one of them of the viewer, one on the review of
+/// bob, and one of the viewer on the first comment of the thread on
+/// `src/ui/list.rs:42`.
+pub(crate) fn detail_with_reactions() -> crate::domain::detail::PrDetail {
+    use crate::domain::detail::{Reaction, ReactionKind};
+    let reaction = |kind, count, mine| Reaction { kind, count, mine };
+    let mut detail = detail();
+    detail.comments[0].reactions = vec![
+        reaction(ReactionKind::ThumbsUp, 3, true),
+        reaction(ReactionKind::Hooray, 1, false),
+    ];
+    detail.reviews[0].reactions = vec![reaction(ReactionKind::Heart, 2, false)];
+    detail.threads[0].comments[0].reactions = vec![reaction(ReactionKind::Eyes, 1, true)];
+    detail
+}
+
 /// The changed files at head `oid7`: an added file, a removed file, a
 /// modified file in a nested directory, a renamed file and a binary file
 /// without a patch.

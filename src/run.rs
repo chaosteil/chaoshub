@@ -3212,6 +3212,41 @@ mod tests {
         insta::assert_snapshot!(screen(&mut conversation_app(160, 40)));
     }
 
+    /// The conversation popup on #101 with the reactions of
+    /// `testdata::detail_with_reactions`, and the thread on
+    /// `src/ui/list.rs:42` expanded.
+    fn reactions_app(width: u16, height: u16) -> App {
+        let mut app = popup_app(width, height);
+        let key = crate::app::testdata::pr_key("chaoshub", 101);
+        let mut detail = crate::app::testdata::detail_with_reactions();
+        detail.head_oid = "oid101".into();
+        let observed = crate::domain::observed::Observed {
+            value: detail,
+            observed_at: crate::domain::test_time(),
+        };
+        app.update(Msg::DetailLoaded(key, Ok(observed)));
+        press(&mut app, '3');
+        for _ in 0..3 {
+            press(&mut app, 'j');
+        }
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(enter));
+        app
+    }
+
+    #[test]
+    fn popup_conversation_reactions_100() {
+        insta::assert_snapshot!(screen(&mut reactions_app(100, 30)));
+    }
+
+    #[test]
+    fn popup_conversation_reactions_160() {
+        insta::assert_snapshot!(screen(&mut reactions_app(160, 40)));
+    }
+
     /// The conversation popup with the text box of a reply to the
     /// comment of alice open, with a line of text after the quote.
     fn reply_text_app(width: u16, height: u16) -> App {
