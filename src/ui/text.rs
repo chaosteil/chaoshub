@@ -4,9 +4,19 @@ use textwrap::core::display_width;
 
 use crate::app::models::Align;
 
-/// The display width of a text in cells.
+/// The emoji presentation selector (VS16). After a narrow char, it makes
+/// an emoji of two cells, for example `❤️`.
+const EMOJI_SELECTOR: char = '\u{FE0F}';
+
+/// The display width of a text in cells. A narrow char with the emoji
+/// selector after it is two cells, as in ratatui and in the terminal.
 pub(crate) fn width(text: &str) -> usize {
-    display_width(text)
+    let selected = text
+        .chars()
+        .zip(text.chars().skip(1))
+        .filter(|&(c, next)| next == EMOJI_SELECTOR && char_width(c) == 1)
+        .count();
+    display_width(text) + selected
 }
 
 /// The display width of a char in cells.
@@ -28,13 +38,21 @@ pub(crate) fn truncate(text: &str, max: usize) -> String {
     }
     let mut out = String::new();
     let mut used = 0;
+    // The width of the char before: an emoji selector after a narrow
+    // char adds one cell.
+    let mut before = 0;
     for c in text.chars() {
-        let w = char_width(c);
+        let w = if c == EMOJI_SELECTOR && before == 1 {
+            1
+        } else {
+            char_width(c)
+        };
         if used + w > max - 1 {
             break;
         }
         out.push(c);
         used += w;
+        before = w;
     }
     out.push('…');
     out
@@ -69,6 +87,20 @@ mod tests {
     #[test]
     fn truncate_counts_wide_chars() {
         assert_eq!(truncate("日本語の文", 5), "日本…");
+    }
+
+    #[test]
+    fn an_emoji_with_the_emoji_selector_is_two_cells() {
+        assert_eq!(width("❤️"), 2);
+        assert_eq!(width("❤"), 1, "the text heart");
+        assert_eq!(width("👍 3  ❤️ 1"), 10);
+        assert_eq!(
+            width("❤️ 1"),
+            ratatui::text::Span::raw("❤️ 1").width(),
+            "the width of ratatui"
+        );
+        assert_eq!(truncate("a❤️bc", 4), "a❤️…");
+        assert_eq!(truncate("ab❤️c", 4), "ab❤…", "no half emoji");
     }
 
     #[test]
