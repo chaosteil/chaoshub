@@ -15,6 +15,15 @@
       ];
       forAllSystems = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
       cargoToml = lib.importTOML ./Cargo.toml;
+      # The devShell uses the Rust of nixpkgs. CI uses rustup and the exact
+      # version of rust-toolchain.toml. When a nixpkgs update gives another
+      # version, the devShell does not start. Then set the new version in
+      # rust-toolchain.toml too, so that the two stay equal.
+      toolchain = (lib.importTOML ./rust-toolchain.toml).toolchain.channel;
+      sameRust =
+        pkgs:
+        lib.assertMsg (pkgs.rustc.version == toolchain && pkgs.clippy.version == toolchain)
+          "nixpkgs has rustc ${pkgs.rustc.version} and clippy ${pkgs.clippy.version}, but rust-toolchain.toml has ${toolchain}";
     in
     {
       packages = forAllSystems (pkgs: {
@@ -74,15 +83,17 @@
       });
 
       devShells = forAllSystems (pkgs: {
-        default = pkgs.mkShell {
-          inputsFrom = [ self.packages.${pkgs.stdenv.hostPlatform.system}.default ];
-          packages = [
-            pkgs.cargo-nextest
-            pkgs.clippy
-            pkgs.rustfmt
-            pkgs.gh
-          ];
-        };
+        default =
+          assert sameRust pkgs;
+          pkgs.mkShell {
+            inputsFrom = [ self.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+            packages = [
+              pkgs.cargo-nextest
+              pkgs.clippy
+              pkgs.rustfmt
+              pkgs.gh
+            ];
+          };
       });
     };
 }
