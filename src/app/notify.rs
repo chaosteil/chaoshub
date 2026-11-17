@@ -184,36 +184,58 @@ pub(crate) fn announce(data: &mut AppData, now: DateTime<Utc>) -> Option<(String
     Some((msg, persist_announced(data)))
 }
 
-/// The text of a notice. The text starts with the title of the tab, as
-/// the tab bar shows it, because a desktop notification can cut the end
-/// of a long text. One pull request: `Review: #123 <title> (<author>)`.
+/// The text of a notice. The text says why the pull requests are in the
+/// notice, and it starts with this reason, because a desktop
+/// notification can cut the end of a long text. One pull request, by tab:
+///
+/// - Mine: `Your PR ready for review: #123 <title>`
+/// - Review: `Ready for your review: #123 <title> (<author>)`
+/// - Team: `Team PR ready for review: #123 <title> (<author>)`
+///
 /// More: the count of each tab in tab bar order, for example
-/// `Team: 3 new PRs` or `Review: 2 new PRs · Team: 1 new PR`.
+/// `3 team PRs ready for review` or
+/// `2 PRs ready for your review · 1 team PR ready for review`.
 fn notice_text(data: &AppData, pending: &[(String, PrKey)]) -> String {
     if let [(tab, key)] = pending
         && let Some(pr) = data.prs.get(key)
     {
-        let head = &pr.head.value;
-        return format!(
-            "{}: #{} {} ({})",
-            tab_title(tab),
-            key.number,
-            head.title,
-            head.author
-        );
+        return one_text(tab, pr);
     }
     TABS.iter()
         .map(|tab| {
             let count = pending.iter().filter(|(t, _)| t == tab.id()).count();
-            (tab.title(), count)
+            (tab.id(), count)
         })
         .filter(|(_, count)| *count > 0)
-        .map(|(title, count)| {
-            let prs = if count == 1 { "PR" } else { "PRs" };
-            format!("{title}: {count} new {prs}")
-        })
+        .map(|(tab, count)| count_text(tab, count))
         .collect::<Vec<_>>()
         .join(" · ")
+}
+
+/// The text of a notice with one pull request of the tab `tab`. The
+/// Mine tab does not show the author, because the author is the user.
+/// A tab without its own text starts with the title of the tab.
+fn one_text(tab: &str, pr: &PullRequest) -> String {
+    let head = &pr.head.value;
+    let (number, title, author) = (pr.key.number, &head.title, &head.author);
+    match tab {
+        "mine" => format!("Your PR ready for review: #{number} {title}"),
+        "review" => format!("Ready for your review: #{number} {title} ({author})"),
+        "team" => format!("Team PR ready for review: #{number} {title} ({author})"),
+        _ => format!("{}: #{number} {title} ({author})", tab_title(tab)),
+    }
+}
+
+/// The text of `count` pull requests of the tab `tab` in a notice. A
+/// tab without its own text starts with the title of the tab.
+fn count_text(tab: &str, count: usize) -> String {
+    let prs = if count == 1 { "PR" } else { "PRs" };
+    match tab {
+        "mine" => format!("{count} of your PRs ready for review"),
+        "review" => format!("{count} {prs} ready for your review"),
+        "team" => format!("{count} team {prs} ready for review"),
+        _ => format!("{}: {count} new {prs}", tab_title(tab)),
+    }
 }
 
 /// The title of the tab with the id `id` in the tab bar. The id itself
@@ -366,14 +388,14 @@ mod tests {
         detect_at(&mut state, 0);
         assert_eq!(
             announce_at(&mut state, 0).as_deref(),
-            Some("Team: #2 Add the thing (alice)")
+            Some("Team PR ready for review: #2 Add the thing (alice)")
         );
         assert_eq!(
             state.data.notify.notice,
             Some(Notice {
                 seq: 1,
                 title: "chaoshub".into(),
-                msg: "Team: #2 Add the thing (alice)".into(),
+                msg: "Team PR ready for review: #2 Add the thing (alice)".into(),
             })
         );
         assert_eq!(announce_at(&mut state, 60), None, "one notice only");
@@ -392,7 +414,7 @@ mod tests {
         detect_at(&mut state, 10);
         assert_eq!(
             announce_at(&mut state, 10).as_deref(),
-            Some("Team: #2 Draft (alice)")
+            Some("Team PR ready for review: #2 Draft (alice)")
         );
     }
 
@@ -409,7 +431,7 @@ mod tests {
         detect_at(&mut state, 10);
         assert_eq!(
             announce_at(&mut state, 10).as_deref(),
-            Some("Team: #2 Pending (alice)")
+            Some("Team PR ready for review: #2 Pending (alice)")
         );
     }
 
@@ -504,7 +526,7 @@ mod tests {
         detect_at(&mut state, 0);
         assert_eq!(
             announce_at(&mut state, 0).as_deref(),
-            Some("Team: #2 Hidden in the list (alice)")
+            Some("Team PR ready for review: #2 Hidden in the list (alice)")
         );
     }
 
@@ -520,7 +542,7 @@ mod tests {
         assert_eq!(announce_at(&mut state, 24), None);
         assert_eq!(
             announce_at(&mut state, 25).as_deref(),
-            Some("Team: 2 new PRs")
+            Some("2 team PRs ready for review")
         );
     }
 
@@ -539,7 +561,7 @@ mod tests {
         // last one came at 70 s.
         assert_eq!(
             announce_at(&mut state, 75).as_deref(),
-            Some("Team: 8 new PRs")
+            Some("8 team PRs ready for review")
         );
     }
 
@@ -560,26 +582,33 @@ mod tests {
         detect_at(&mut state, 0);
         assert_eq!(
             announce_at(&mut state, 0).as_deref(),
-            Some("Review: 2 new PRs · Team: 1 new PR")
+            Some("2 PRs ready for your review · 1 team PR ready for review")
         );
         put(&mut state, Scope::Team, review_pr(5, "D"));
         put(&mut state, Scope::Team, team_pr(6, "E"));
         detect_at(&mut state, 10);
         assert_eq!(
             announce_at(&mut state, 10).as_deref(),
-            Some("Review: 1 new PR · Team: 1 new PR")
+            Some("1 PR ready for your review · 1 team PR ready for review")
         );
         assert_eq!(state.data.notify.notice.as_ref().map(|n| n.seq), Some(2));
     }
 
     #[test]
-    fn the_notice_names_the_tab_of_one_pull_request() {
-        let mut state = synced(&["team", "review"], 0);
+    fn the_notice_says_why_one_pull_request_is_in_it() {
+        let mut state = synced(&["team", "review", "mine"], 0);
         put(&mut state, Scope::Team, review_pr(2, "Review me"));
         detect_at(&mut state, 0);
         assert_eq!(
             announce_at(&mut state, 0).as_deref(),
-            Some("Review: #2 Review me (bob)")
+            Some("Ready for your review: #2 Review me (bob)")
+        );
+        put(&mut state, Scope::Mine, team_pr(3, "My change"));
+        detect_at(&mut state, 10);
+        assert_eq!(
+            announce_at(&mut state, 10).as_deref(),
+            Some("Your PR ready for review: #3 My change"),
+            "the Mine tab does not name the author"
         );
     }
 
@@ -593,7 +622,9 @@ mod tests {
         detect_at(&mut state, 0);
         assert_eq!(
             announce_at(&mut state, 0).as_deref(),
-            Some("Mine: 2 new PRs · Review: 1 new PR · Team: 1 new PR")
+            Some(
+                "2 of your PRs ready for review · 1 PR ready for your review · 1 team PR ready for review"
+            )
         );
     }
 

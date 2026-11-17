@@ -2048,15 +2048,19 @@ mod tests {
     fn term_writer_writes_a_notice_once_and_clears_it() {
         let mut writer = TermWriter::new(false, false, true);
         assert_eq!(written_notice(&mut writer, None), b"");
-        let first = notice(1, "Team: 3 new PRs");
+        let first = notice(1, "3 team PRs ready for review");
         assert_eq!(
             written_notice(&mut writer, Some(&first)),
-            osc::record_done("new-prs", "chaoshub", "Team: 3 new PRs")
+            osc::record_done("new-prs", "chaoshub", "3 team PRs ready for review")
         );
         assert_eq!(written_notice(&mut writer, Some(&first)), b"");
-        let same_text = notice(2, "Team: 3 new PRs");
+        let same_text = notice(2, "3 team PRs ready for review");
         let mut renewed = osc::record_clear("new-prs");
-        renewed.extend(osc::record_done("new-prs", "chaoshub", "Team: 3 new PRs"));
+        renewed.extend(osc::record_done(
+            "new-prs",
+            "chaoshub",
+            "3 team PRs ready for review",
+        ));
         assert_eq!(
             written_notice(&mut writer, Some(&same_text)),
             renewed,
@@ -2082,23 +2086,36 @@ mod tests {
             first
         });
         assert_eq!(
-            written_notice(&mut writer, Some(&notice(1, "Team: #1 Old (alice)"))),
-            osc::record_done("new-prs", "chaoshub", "Team: #1 Old (alice)"),
+            written_notice(
+                &mut writer,
+                Some(&notice(1, "Team PR ready for review: #1 Old (alice)"))
+            ),
+            osc::record_done(
+                "new-prs",
+                "chaoshub",
+                "Team PR ready for review: #1 Old (alice)"
+            ),
             "the first notice is a new record"
         );
         let mut expected = osc::record_clear("new-prs");
         expected.extend(osc::record_done(
             "new-prs",
             "chaoshub",
-            "Review: #2 New (bob)",
+            "Ready for your review: #2 New (bob)",
         ));
         assert_eq!(
-            written_notice(&mut writer, Some(&notice(2, "Review: #2 New (bob)"))),
+            written_notice(
+                &mut writer,
+                Some(&notice(2, "Ready for your review: #2 New (bob)"))
+            ),
             expected,
             "the old record goes before the new one"
         );
         assert_eq!(
-            written_notice(&mut writer, Some(&notice(2, "Review: #2 New (bob)"))),
+            written_notice(
+                &mut writer,
+                Some(&notice(2, "Ready for your review: #2 New (bob)"))
+            ),
             b"",
             "the same notice is not written again"
         );
@@ -2107,8 +2124,15 @@ mod tests {
             osc::record_clear("new-prs")
         );
         assert_eq!(
-            written_notice(&mut writer, Some(&notice(3, "Team: #3 Next (carol)"))),
-            osc::record_done("new-prs", "chaoshub", "Team: #3 Next (carol)"),
+            written_notice(
+                &mut writer,
+                Some(&notice(3, "Team PR ready for review: #3 Next (carol)"))
+            ),
+            osc::record_done(
+                "new-prs",
+                "chaoshub",
+                "Team PR ready for review: #3 Next (carol)"
+            ),
             "after a clear, no second clear"
         );
     }
@@ -2116,17 +2140,27 @@ mod tests {
     #[test]
     fn term_writer_sends_a_desktop_notification_with_each_new_notice() {
         let mut writer = TermWriter::new(false, false, true).with_desktop(true);
-        let mut expected = osc::record_done("new-prs", "chaoshub", "Team: #1 Old (alice)");
+        let mut expected = osc::record_done(
+            "new-prs",
+            "chaoshub",
+            "Team PR ready for review: #1 Old (alice)",
+        );
         expected.extend(osc::desktop_notification(
             "chaoshub",
-            "Team: #1 Old (alice)",
+            "Team PR ready for review: #1 Old (alice)",
         ));
         assert_eq!(
-            written_notice(&mut writer, Some(&notice(1, "Team: #1 Old (alice)"))),
+            written_notice(
+                &mut writer,
+                Some(&notice(1, "Team PR ready for review: #1 Old (alice)"))
+            ),
             expected
         );
         assert_eq!(
-            written_notice(&mut writer, Some(&notice(1, "Team: #1 Old (alice)"))),
+            written_notice(
+                &mut writer,
+                Some(&notice(1, "Team PR ready for review: #1 Old (alice)"))
+            ),
             b"",
             "one desktop notification for each notice"
         );
@@ -2134,14 +2168,17 @@ mod tests {
         expected.extend(osc::record_done(
             "new-prs",
             "chaoshub",
-            "Review: #2 New (bob)",
+            "Ready for your review: #2 New (bob)",
         ));
         expected.extend(osc::desktop_notification(
             "chaoshub",
-            "Review: #2 New (bob)",
+            "Ready for your review: #2 New (bob)",
         ));
         assert_eq!(
-            written_notice(&mut writer, Some(&notice(2, "Review: #2 New (bob)"))),
+            written_notice(
+                &mut writer,
+                Some(&notice(2, "Ready for your review: #2 New (bob)"))
+            ),
             expected
         );
         assert_eq!(

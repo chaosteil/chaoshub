@@ -8883,7 +8883,7 @@ mod tests {
     fn a_new_ready_pull_request_shows_a_notice_and_a_status_message() {
         let mut state = notify_state(0);
         let cmds = update(&mut state, &Keymap::default(), new_team_pr());
-        let text = "Team: #90 feat(ui): add a notice (erin)";
+        let text = "Team PR ready for review: #90 feat(ui): add a notice (erin)";
         assert_eq!(notice_msg(&state), Some(text));
         assert_eq!(
             state.ui.status.as_ref().map(|msg| msg.text.as_str()),
@@ -8906,7 +8906,7 @@ mod tests {
         assert!(matches!(cmds.as_slice(), [Cmd::Persist(_)]));
         assert_eq!(
             notice_msg(&state),
-            Some("Team: #90 feat(ui): add a notice (erin)")
+            Some("Team PR ready for review: #90 feat(ui): add a notice (erin)")
         );
     }
 
@@ -8925,7 +8925,7 @@ mod tests {
         );
         assert_eq!(
             notice_msg(&state),
-            Some("Team: #84 fix(vcs): parse empty bookmarks (dave)")
+            Some("Team PR ready for review: #84 fix(vcs): parse empty bookmarks (dave)")
         );
     }
 

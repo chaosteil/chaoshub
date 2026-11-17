@@ -1526,9 +1526,9 @@ successful sync.
 ### Notice of new pull requests
 
 chaoshub tells you when new pull requests are ready for review. The
-terminal shows a notice, for example `Team: 3 new PRs`. Rex shows the
-notice as a dot and a message on the tab, and as a desktop notification
-with the text.
+terminal shows a notice, for example `3 team PRs ready for review`.
+Rex shows the notice as a dot and a message on the tab, and as a
+desktop notification with the text.
 
 A pull request is new when it becomes ready in a watched tab (`[notify]
 tabs`) for the first time. Ready means open, not a draft, CI green, and
@@ -1553,14 +1553,22 @@ The notice waits for `[notify] debounce` (15 s by default) after a new
 pull request. Each new pull request starts the wait again, so one
 notice tells you about all of them. A steady stream gets a notice at
 the latest 5 debounce times after the first new pull request. The text
-of the notice starts with the tab name, as the tab bar shows it. A
-desktop notification can cut a long text, but the tab name stays. The
-text is one of these:
+of the notice starts with the reason for the notice. A desktop
+notification can cut a long text, but the reason stays. For one pull
+request, the text is one of these:
 
-- `Review: #123 <title> (<author>)` for one pull request.
-- `Team: 3 new PRs` for more pull requests of one tab.
-- `Review: 2 new PRs · Team: 1 new PR` for pull requests of more tabs,
-  in tab bar order.
+- `Your PR ready for review: #123 <title>` for the Mine tab.
+- `Ready for your review: #123 <title> (<author>)` for the Review tab.
+- `Team PR ready for review: #123 <title> (<author>)` for the Team tab.
+
+For more pull requests, the text gives the count of each tab, in tab
+bar order:
+
+- `2 of your PRs ready for review` for the Mine tab.
+- `3 PRs ready for your review` for the Review tab.
+- `3 team PRs ready for review` for the Team tab.
+- `2 PRs ready for your review · 1 team PR ready for review` for pull
+  requests of more tabs.
 
 The status bar shows the same text. The notice stays until the next key
 press in chaoshub. A quit removes it too.
