@@ -1,5 +1,6 @@
-# The four required checks of AGENTS.md. release.yml also calls this
-# workflow before it builds a release.
+# The four required checks of AGENTS.md. Each step runs one step of
+# scripts/check.sh, so CI and a local run use the same commands.
+# release.yml also calls this workflow before it builds a release.
 name: CI
 
 on:
@@ -38,10 +39,10 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install jj
       - name: Build
-        run: cargo build
+        run: scripts/check.sh build
       - name: Test
-        run: cargo nextest run
+        run: scripts/check.sh test
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: scripts/check.sh clippy
       - name: Format
-        run: cargo fmt --check
+        run: scripts/check.sh fmt
