@@ -10248,6 +10248,35 @@ mod tests {
     }
 
     #[test]
+    fn the_pr_view_expects_the_approval_until_github_shows_it() {
+        let (mut state, pr) = pr_view_state();
+        approve(&mut state, &pr);
+        assert_eq!(state.data.pending.review(&pr), Some(ReviewKind::Approve));
+        update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Err("HTTP 422")),
+        );
+        assert_eq!(state.data.pending.review(&pr), None, "the rollback");
+        approve(&mut state, &pr);
+        update(
+            &mut state,
+            &Keymap::default(),
+            send_done(&pr, Ok("approved #89")),
+        );
+        let early = github_pr(&state, &pr, 60, true);
+        update(&mut state, &Keymap::default(), early);
+        assert_eq!(
+            state.data.pending.review(&pr),
+            Some(ReviewKind::Approve),
+            "an early read keeps the expected approval"
+        );
+        let fresh = github_pr(&state, &pr, 61, false);
+        update(&mut state, &Keymap::default(), fresh);
+        assert_eq!(state.data.pending.review(&pr), None, "GitHub replaces it");
+    }
+
+    #[test]
     fn the_pr_view_tells_the_list_about_a_failed_approval() {
         let (mut state, pr) = pr_view_state();
         approve(&mut state, &pr);

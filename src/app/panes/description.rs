@@ -34,9 +34,10 @@ use crate::app::panes::{Pane, PaneState};
 use crate::app::state::{AppData, MergeState};
 use crate::app::tabs::cells::{self, cell};
 use crate::app::tabs::{Handled, KeyCx};
-use crate::bus::{KeyChord, MergeProgress, MergeStep, PendingPart, Size, Target};
+use crate::bus::{KeyChord, MergeProgress, MergeStep, PendingPart, ReviewKind, Size, Target};
 use crate::domain::check::{Check, CheckConclusion, CheckStatus};
 use crate::domain::detail::{PrDetail, ReviewState};
+use crate::domain::keys::PrKey;
 use crate::domain::plural;
 use crate::domain::pr::{
     CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest, ReviewDecision,
@@ -176,7 +177,31 @@ fn readiness(cx: &KeyCx<'_>, pr: &PullRequest) -> Vec<Vec<Cell>> {
             pulse_label(&mut signals, label, mix);
         }
     }
+    expected_review(data, &pr.key, &mut signals);
     vec![verdict, signals, activity(head, detail, error, data.now)]
+}
+
+/// Your review on its way to GitHub shows at once after the `REVIEWS`
+/// label of `line`, as GitHub will show it: `✓ you`, `✗ you` or `you
+/// commented`. It pulses until GitHub shows the review (see
+/// `app::pending`). A review in codeview has no known event, so only the
+/// label pulses.
+fn expected_review(data: &AppData, key: &PrKey, line: &mut Vec<Cell>) {
+    let (Some(kind), Some(mix)) = (
+        data.pending.review(key),
+        data.pending_pulse(key, &PendingPart::Review),
+    ) else {
+        return;
+    };
+    let Some(at) = line.iter().position(|cell| cell.text == "REVIEWS") else {
+        return;
+    };
+    let text = match kind {
+        ReviewKind::Approve => " ✓ you",
+        ReviewKind::RequestChanges => " ✗ you",
+        ReviewKind::Comment => " you commented",
+    };
+    line.insert(at + 1, cell(text, CellStyle::Pulse(mix)));
 }
 
 /// The label cell `label` of `line` pulses with the mix `mix`.
@@ -1321,10 +1346,51 @@ mod tests {
             .filter(|cell| cell.style == CellStyle::Pulse(0))
             .map(|cell| cell.text.as_str())
             .collect();
-        assert_eq!(pulsing, ["CHECKS", "REVIEWS"]);
+        assert_eq!(pulsing, ["CHECKS", "REVIEWS", " ✓ you"]);
         state.data.now += TimeDelta::milliseconds(750);
         let (lines, ..) = codeview_pane(&state, &crate::app::keymap::DEFAULT);
         assert_eq!(lines[0][0].style, CellStyle::MergeBadge(255), "it pulses");
+    }
+
+    #[test]
+    fn the_pr_view_shows_your_review_at_once_until_github_shows_it() {
+        use crate::bus::Expect;
+        let key = testdata::pr_key("chaoshub", 7);
+        for (kind, expected) in [
+            (ReviewKind::Approve, "REVIEWS ✓ you none"),
+            (ReviewKind::RequestChanges, "REVIEWS ✗ you none"),
+            (ReviewKind::Comment, "REVIEWS you commented none"),
+        ] {
+            let mut state = codeview_state(None);
+            state.data.now = test_time();
+            let (lines, ..) = codeview_pane(&state, &crate::app::keymap::DEFAULT);
+            assert!(text(&lines[1]).starts_with("CHECKS none   REVIEWS none"));
+            testdata::pend(
+                &mut state,
+                &key,
+                vec![(PendingPart::Review, Expect::Review(kind))],
+            );
+            let (lines, ..) = codeview_pane(&state, &crate::app::keymap::DEFAULT);
+            assert!(
+                text(&lines[1]).contains(expected),
+                "{kind:?}: {}",
+                text(&lines[1])
+            );
+            let at = lines[1].iter().position(|c| c.text == "REVIEWS").unwrap();
+            assert_eq!(lines[1][at + 1].style, CellStyle::Pulse(0));
+        }
+        let mut state = codeview_state(None);
+        state.data.now = test_time();
+        testdata::pend(
+            &mut state,
+            &key,
+            vec![(PendingPart::Review, Expect::ReviewChanged)],
+        );
+        let (lines, ..) = codeview_pane(&state, &crate::app::keymap::DEFAULT);
+        assert!(
+            text(&lines[1]).contains("REVIEWS none"),
+            "codeview: only the label pulses"
+        );
     }
 
     #[test]
