@@ -453,7 +453,7 @@ fn direct_hints(
             let chord = keymap.detail_chords(action.id()).first().copied()?;
             Some(KeyHint {
                 key: key_text(chord),
-                label: action.id().replace('_', " "),
+                label: action.hint(),
                 primary: false,
                 chord: Some(chord),
             })
@@ -1265,11 +1265,17 @@ mod tests {
             Some(("o", false)),
             "the direct key of browser is a secondary hint"
         );
+        let send = hints.iter().find(|hint| hint.label == "send comments");
+        assert_eq!(
+            send.map(|hint| (hint.key.as_str(), hint.primary)),
+            Some(("r", false)),
+            "codeview_send has a hint label of its own"
+        );
         for action in REGISTRY.iter() {
             if keymap::DETAIL_ACTIONS.contains(&action.id()) {
                 continue;
             }
-            let label = action.id().replace('_', " ");
+            let label = action.hint();
             assert!(
                 !hints.iter().any(|hint| hint.label == label),
                 "no hint of the action {}",

@@ -14,7 +14,7 @@ expression: screen(&mut app)
 "                    ▌                                                                              ┃"
 "                    ▌ Key issu◢━ ACTIONS FOR #101 ╱━━━━━━━━━━━━━━╱╱╱━◥                             ┃"
 "                    ▌ * Possib▌▶  v  review in codeview            ◤◤┃ an pass the end.            ┃"
-"                    ▌         ▌  r  review                           ┃                             ┃"
+"                    ▌         ▌  r  send comments                    ┃                             ┃"
 "                    ▌ Improve ▌                                      ┃ e-sonnet-5-5 · head oid101  ┃"
 "                    ▌ possible▌  o  open in the browser              ┃ rsor                        ┃"
 "                    ▌         ▌  y  copy the url                     ┃                             ┃"

@@ -1284,7 +1284,7 @@ the selected row or of the detail. These bindings have no default.
 | `copy_url` | `y` | Copies the pull request URL. |
 | `copy_change_id` | `i` | Copies the jj change id of the local change that matches the pull request. In a git repo, it copies the local branch name, and the actions menu shows "copy the branch name". Hidden when no local change matches. |
 | `agent` | `p` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
-| `codeview_send` | `r` | Opens the Review popup, also directly in the list and in the detail. In the conversation pane, `r` is the reply, so use `space` then `r` there. In the popup, you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). |
+| `codeview_send` | `r` | Opens the Review popup, also directly in the list and in the detail. In the conversation pane, `r` is the reply, so use `space` then `r` there. In the popup, you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). The hint bar, the help and the actions menu show it as "send comments". |
 | `reply` | `r` | Only in the conversation pane of the pull request detail: replies to the comment of the cursor (see "Replies"). The actions menu shows it only as an action of the conversation pane, without a key, because `r` there opens the Review popup. |
 | `react` | none | Only in the comment menu of the conversation pane: adds or removes your reaction on the comment (see "Reactions"). It has no key of its own, and the actions menu does not show it. |
 

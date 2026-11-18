@@ -80,7 +80,11 @@ impl Action for CodeviewSend {
     }
 
     fn label(&self) -> &'static str {
-        "review"
+        "send comments"
+    }
+
+    fn hint(&self) -> String {
+        self.label().to_owned()
     }
 
     fn default_key(&self) -> Option<KeyChord> {

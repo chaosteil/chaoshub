@@ -9995,7 +9995,7 @@ mod tests {
             send_done(&pr, Err("HTTP 422")),
         );
         assert!(state.data.pending.is_empty());
-        assert_eq!(status_text(&state), Some("review failed: HTTP 422"));
+        assert_eq!(status_text(&state), Some("send comments failed: HTTP 422"));
     }
 
     #[test]
@@ -10027,7 +10027,7 @@ mod tests {
             &Keymap::default(),
             send_done(&pr, Err("HTTP 422")),
         );
-        assert_eq!(status_text(&state), Some("review failed: HTTP 422"));
+        assert_eq!(status_text(&state), Some("send comments failed: HTTP 422"));
         assert_eq!(state.data.pending.review(&pr), None);
         assert_eq!(tab_numbers(&mut state), [90, 89, 88]);
         assert_eq!(

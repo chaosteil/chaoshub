@@ -12,7 +12,7 @@ expression: screen(&mut app)
 "                    ▌ CHECKS none   REVIEWS ○   THREADS …   3 files +42 −7                         ┃"
 "                    ▌ loading ◢━ ACTIONS FOR #88 ╱━━━━━━━━━━━━━━━╱╱╱━◥                             ┃"
 "                    ▌         ▌▶  v  review in codeview (the repo …◤◤┃                             ┃"
-"                    ▌ (no desc▌  r  review                           ┃                             ┃"
+"                    ▌ (no desc▌  r  send comments                    ┃                             ┃"
 "                    ▌         ▌                                      ┃                             ┃"
 "                    ▌         ▌  o  open in the browser              ┃                             ┃"
 "                    ▌         ▌  y  copy the url                     ┃                             ┃"

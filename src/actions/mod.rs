@@ -104,6 +104,11 @@ pub(crate) trait Action: Send + Sync {
     /// `[keys]` and the table name in `[actions.<id>]`.
     fn id(&self) -> &'static str;
     fn label(&self) -> &'static str;
+    /// The short label of the hint bar. The default is the id, with
+    /// spaces in place of the underscores.
+    fn hint(&self) -> String {
+        self.id().replace('_', " ")
+    }
     /// The label for `target`. The actions menu shows it. The default is
     /// `label`.
     fn target_label(&self, _target: &Target) -> &'static str {
