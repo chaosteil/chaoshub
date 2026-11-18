@@ -780,6 +780,20 @@ tabs = ["review"]
 debounce = "1m"
 ```
 
+### `[rex]`
+
+What chaoshub asks in the command palette of Rex (see "Questions in
+the Rex palette").
+
+```toml
+[rex]
+palette_menu = false
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `palette_menu` | `false` | `true` opens the actions menu (`space`) in the Rex palette, in place of the menu of chaoshub. Without the palette, the menu of chaoshub opens. The author picker and the one-line prompts use the palette without this key. |
+
 ### `[workspaces]`
 
 | Key | Default | Meaning |
@@ -1328,6 +1342,9 @@ menu:
   opens the Review popup.
 - `esc` or `q` closes the menu.
 
+Inside Rex, with `[rex] palette_menu = true`, `space` opens the menu
+in the Rex palette (see "Questions in the Rex palette").
+
 The action keys work in the actions menu. In the pull request detail
 (the sidebar and the Rex pane), `space` opens the same menu for the
 pull request of the detail. There, as in the list, only `v`, `r`, `o`,
@@ -1742,6 +1759,11 @@ in place of its own popup. It does this for these popups:
   pane), and the text prompt of an action. The palette shows a text
   field with the title and the placeholder of the prompt. Your text
   goes to the same place as the text of the prompt popup.
+- The actions menu (`space`), only with `[rex] palette_menu = true`.
+  Each action shows its key at the end of its row. A disabled action
+  shows its reason below its label. In the pull request detail, the
+  actions of the active pane come after the other actions. The keys of
+  the actions do not work in the palette: type to filter, then pick.
 
 Rex shows the question in each Rex app that is connected to the Rex
 server, also on other devices. The first answer counts.

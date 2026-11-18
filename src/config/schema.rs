@@ -341,6 +341,16 @@ impl Default for TerminalConfig {
     }
 }
 
+/// The `[rex]` section: what chaoshub asks in the command palette of
+/// Rex (see `launch::palette`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub(crate) struct RexConfig {
+    /// True when `space` opens the actions menu in the command palette
+    /// of Rex, in place of the menu of chaoshub. Off by default.
+    pub palette_menu: bool,
+}
+
 /// The tab ids that `[notify] tabs` accepts.
 pub(crate) const NOTIFY_TABS: &[&str] = &["mine", "review", "team"];
 

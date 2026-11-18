@@ -37,6 +37,9 @@ animation_ms = 120
 [terminal]
 progress = true
 
+[rex]
+palette_menu = true
+
 [keys]
 merge = "M"
 refresh = "ctrl-r"
