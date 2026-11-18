@@ -1,7 +1,10 @@
 //! The codeview send action: sends chosen codeview comments as one review.
 //!
-//! The key of the action (`r`, in the actions menu) opens the Review
-//! popup, and a key of an event there starts the action with
+//! The key of the action (`r`) opens the Review popup. It works directly
+//! in the list and in the pull request detail, and in the actions menu.
+//! In the conversation pane, `r` is the reply, so there only the actions
+//! menu opens the popup. A key of an event in the popup starts the action
+//! with
 //! `ActionInput::Review`. The popup is the only way to approve, to request
 //! changes and to send codeview comments. It opens also for a repo
 //! without a local path. With comments, it

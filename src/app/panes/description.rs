@@ -16,7 +16,7 @@
 //!
 //! When the pull request has codeview comments that went to GitHub not
 //! yet, one dim line between the block and the body counts them, for
-//! example `3 unsent codeview comments (1 on an older push) · space r to
+//! example `3 unsent codeview comments (1 on an older push) · r to
 //! review`. The Review popup lists and sends them. Without such comments,
 //! the pane shows no line.
 
@@ -113,7 +113,7 @@ impl Pane for DescriptionPane {
 }
 
 /// The dim line that counts the unsent codeview comments of `pr`, with
-/// the count of the comments on an older push and the keys of the Review
+/// the count of the comments on an older push and the key of the Review
 /// popup. `None` without such comments, before the load and after a
 /// failed load.
 fn codeview_line(cx: &KeyCx<'_>, pr: &PullRequest) -> Option<Vec<Cell>> {
@@ -131,18 +131,17 @@ fn codeview_line(cx: &KeyCx<'_>, pr: &PullRequest) -> Option<Vec<Cell>> {
     if older > 0 {
         let _ = write!(text, " ({older} on an older push)");
     }
-    if let Some(keys) = review_keys(cx.keys) {
-        let _ = write!(text, " · {keys} to review");
+    if let Some(key) = review_key(cx.keys) {
+        let _ = write!(text, " · {key} to review");
     }
     Some(vec![cell(text, CellStyle::Dim)])
 }
 
-/// The keys that open the Review popup, for example `space r`. `None`
-/// when the actions menu or the review action has no key.
-fn review_keys(keys: &Keymap) -> Option<String> {
-    let menu = keys.chords("actions").first()?;
-    let review = keys.chords("codeview_send").first()?;
-    Some(format!("{} {}", chord_text(*menu), chord_text(*review)))
+/// The key that opens the Review popup directly, for example `r`. `None`
+/// when the review action has no direct key.
+fn review_key(keys: &Keymap) -> Option<String> {
+    let review = keys.detail_chords("codeview_send").first().copied()?;
+    Some(chord_text(review))
 }
 
 /// The three lines of the readiness block: the verdict, the signals and
@@ -1297,7 +1296,7 @@ mod tests {
             codeview_texts(&state, &crate::app::keymap::DEFAULT)[3..],
             [
                 "",
-                "4 unsent codeview comments (1 on an older push) · space r to review",
+                "4 unsent codeview comments (1 on an older push) · r to review",
                 "",
                 "(no description)",
             ]
@@ -1317,10 +1316,7 @@ mod tests {
             std::collections::BTreeMap::from([("codeview_send".to_owned(), "ctrl-r".to_owned())]);
         let keys = Keymap::new(&overrides).unwrap();
         let lines = codeview_texts(&state, &keys);
-        assert_eq!(
-            lines[4],
-            "1 unsent codeview comment · space ctrl-r to review"
-        );
+        assert_eq!(lines[4], "1 unsent codeview comment · ctrl-r to review");
         let overrides =
             std::collections::BTreeMap::from([("codeview_send".to_owned(), String::new())]);
         let keys = Keymap::new(&overrides).unwrap();
@@ -1349,7 +1345,7 @@ mod tests {
         let state = codeview_state(Some(Ok(older)));
         assert_eq!(
             codeview_texts(&state, &crate::app::keymap::DEFAULT)[4],
-            "1 unsent codeview comment (1 on an older push) · space r to review"
+            "1 unsent codeview comment (1 on an older push) · r to review"
         );
     }
 

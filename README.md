@@ -950,7 +950,7 @@ selects the next pane:
 
 | Key | Pane | What it shows |
 |---|---|---|
-| `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the pull request has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments (1 on an older push) · space r to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
+| `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the pull request has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments (1 on an older push) · r to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order, with the reactions of each comment. `r` replies to the comment of the cursor (see "Replies" below). `enter` on a thread expands or collapses it. `enter` on a comment opens the comment menu: reply, or react (see "Reactions" below). |
 | `4` | Files | The changed files as a tree, with the diff of each file inline. See "Diff colors" below. |
@@ -968,13 +968,15 @@ more rows than it shows, a thin scrollbar shows at its right edge. The
 mouse does not use the scrollbar.
 
 In the detail, only the keys that change nothing on GitHub work
-directly: the navigation keys, `R` (refresh), `v` (codeview), `o`
-(browser), `y` and `i` (copy). In the conversation pane, `r` opens the
-text box of a reply. Only `ctrl-s` in the text box sends the reply to
-GitHub. `enter` on a comment opens the comment menu, and only a key of
-the menu sends a reaction. The other actions are in the actions
-menu. Press `space` to open it on top of the detail, then the key of
-the action. For example, `space` then `r` opens the Review popup,
+directly: the navigation keys, `R` (refresh), `v` (codeview), `r`
+(the Review popup), `o` (browser), `y` and `i` (copy). `r` only opens
+the Review popup. Only a key in the popup sends the review. In the
+conversation pane, `r` opens the text box of a reply instead. Only
+`ctrl-s` in the text box sends the reply to GitHub. `enter` on a
+comment opens the comment menu, and only a key of the menu sends a
+reaction. The other actions are in the actions menu. Press `space` to
+open it on top of the detail, then the key of the action. For example,
+`space` then `r` opens the Review popup, also in the conversation pane,
 and `space` then `m` opens the merge confirm popup. `esc` closes the
 menu, and the detail shows again. The pane keys, the motion keys and
 the keys of the active pane come first: in the checks pane, `o` opens
@@ -1142,8 +1144,9 @@ request, to request changes, and to send codeview comments. chaoshub
 reads the comment files of codeview (`[codeview] comments_dir`) and
 never writes them.
 
-Press `space`, then `r`, to open the Review popup. This works in the
-list and in the pull request detail. The popup opens at once with the
+Press `r` to open the Review popup. This works in the list and in the
+pull request detail. In the conversation pane, `r` is the reply, so
+there press `space`, then `r`. `space`, then `r`, works in every place. The popup opens at once with the
 comments that chaoshub has, and reads the comment files again. When the
 read ends, the popup shows the new comments. The popup also opens
 without comments, and for a repo without a `path`. When the read
@@ -1245,9 +1248,10 @@ pull request of the detail. When an action cannot run, the status line
 says why.
 
 In the list, only the action keys that change nothing on GitHub work
-directly on the selected row: `v` (codeview), `o` (browser), `y` and
-`i` (copy). The other action keys do nothing in the list. Thus a wrong
-key cannot send a review. A row without a pull request, for example a
+directly on the selected row: `v` (codeview), `r` (the Review popup),
+`o` (browser), `y` and `i` (copy). `r` only opens the Review popup, and
+only a key in the popup sends the review. The other action keys do
+nothing in the list. Thus a wrong key cannot send a review. A row without a pull request, for example a
 stack header, runs no action. The key hint bar shows the direct keys
 that the row can run. The `actions` key (`space`) opens the actions
 menu of the selected row. The menu shows each action for the row, with
@@ -1262,8 +1266,8 @@ menu:
 
 The action keys work in the actions menu. In the pull request detail
 (the sidebar and the Rex pane), `space` opens the same menu for the
-pull request of the detail. There, as in the list, only `v`, `o`, `y`
-and `i` also work directly. To run another action directly in the list
+pull request of the detail. There, as in the list, only `v`, `r`, `o`,
+`y` and `i` also work directly. To run another action directly in the list
 and in the detail, bind a key to `detail_<id>` in `[keys]`. For
 example, `detail_merge = "m"` makes `m` open the merge confirm popup of
 the selected row or of the detail. These bindings have no default.
@@ -1280,7 +1284,7 @@ the selected row or of the detail. These bindings have no default.
 | `copy_url` | `y` | Copies the pull request URL. |
 | `copy_change_id` | `i` | Copies the jj change id of the local change that matches the pull request. In a git repo, it copies the local branch name, and the actions menu shows "copy the branch name". Hidden when no local change matches. |
 | `agent` | `p` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
-| `codeview_send` | `r` | Opens the Review popup. There you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). |
+| `codeview_send` | `r` | Opens the Review popup, also directly in the list and in the detail. In the conversation pane, `r` is the reply, so use `space` then `r` there. In the popup, you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). |
 | `reply` | `r` | Only in the conversation pane of the pull request detail: replies to the comment of the cursor (see "Replies"). The actions menu shows it only as an action of the conversation pane, without a key, because `r` there opens the Review popup. |
 | `react` | none | Only in the comment menu of the conversation pane: adds or removes your reaction on the comment (see "Reactions"). It has no key of its own, and the actions menu does not show it. |
 

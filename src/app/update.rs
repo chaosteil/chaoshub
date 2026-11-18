@@ -6040,7 +6040,7 @@ mod tests {
     fn the_state_keys_do_nothing_directly_in_the_list() {
         let actions = state_actions();
         let mut state = action_state(&pr_row(102));
-        for c in ['r', 'd', 'x', 'm', 's', 'c', 'p'] {
+        for c in ['d', 'x', 'm', 's', 'c', 'p'] {
             let cmds = act(&mut state, &actions, KeyCode::Char(c));
             assert!(
                 !cmds.iter().any(|cmd| matches!(cmd, Cmd::RunAction { .. })),
@@ -6446,7 +6446,6 @@ mod tests {
     /// change the pull request.
     fn state_actions() -> Vec<Box<dyn Action>> {
         [
-            ("codeview_send", 'r'),
             ("draft", 'd'),
             ("rerun_checks", 'x'),
             ("merge", 'm'),
@@ -6463,7 +6462,7 @@ mod tests {
     fn the_state_keys_do_nothing_directly_in_the_sidebar() {
         let actions = state_actions();
         let mut state = sidebar_state(102, &actions);
-        for c in ['r', 'd', 'x', 'm', 's', 'c', 'p'] {
+        for c in ['d', 'x', 'm', 's', 'c', 'p'] {
             let cmds = act(&mut state, &actions, KeyCode::Char(c));
             assert!(
                 !cmds.iter().any(|cmd| matches!(cmd, Cmd::RunAction { .. })),
@@ -8967,6 +8966,34 @@ mod tests {
             vec![Cmd::LoadCodeview(pr.clone())],
             "from the popup"
         );
+        assert_eq!(&dialog(&state).pr().key, &pr);
+        esc(&mut state);
+        assert!(matches!(top(&state), OverlayState::Popup(_)));
+    }
+
+    #[test]
+    fn r_opens_the_review_popup_directly_from_the_list_and_the_popup() {
+        let (mut state, pr) = agent_state();
+        assert_eq!(
+            key(&mut state, 'r'),
+            vec![Cmd::LoadCodeview(pr.clone())],
+            "from the list"
+        );
+        let kinds: Vec<OverlayKind> = state.ui.overlays.iter().map(|o| o.kind).collect();
+        assert_eq!(kinds, [OverlayKind::Confirm], "no actions menu");
+        assert_eq!(dialog(&state).action.id, "codeview_send");
+        assert_eq!(&dialog(&state).pr().key, &pr);
+        esc(&mut state);
+        update(&mut state, &Keymap::default(), Msg::TransitionsDone);
+        assert!(state.ui.overlays.is_empty());
+        let (mut state, pr) = codeview_state();
+        assert_eq!(
+            key(&mut state, 'r'),
+            vec![Cmd::LoadCodeview(pr.clone())],
+            "from the popup"
+        );
+        let kinds: Vec<OverlayKind> = state.ui.overlays.iter().map(|o| o.kind).collect();
+        assert_eq!(kinds, [OverlayKind::Popup, OverlayKind::Confirm]);
         assert_eq!(&dialog(&state).pr().key, &pr);
         esc(&mut state);
         assert!(matches!(top(&state), OverlayState::Popup(_)));
