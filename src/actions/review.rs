@@ -86,12 +86,8 @@ impl Action for Review {
             ],
             cwd: repo.path.clone().unwrap_or_default(),
             env: agent_env().into_iter().chain(pr_data_env(pr)).collect(),
-            label: format!(
-                "chaoshub-review-{}-{}-{number}-{:04x}",
-                repo.key.owner,
-                repo.key.name,
-                rand::random::<u16>()
-            ),
+            // Rex shows the label in the header of the block.
+            label: format!("review #{number} {}", pr.head.value.short_title()),
             zoom,
             split: None,
             ratio: None,
@@ -231,15 +227,9 @@ mod tests {
             )]
         );
         assert!(req.zoom, "the pane zooms by default");
-        let suffix = req
-            .label
-            .strip_prefix("chaoshub-review-chaosteil-chaoshub-7-")
-            .unwrap();
-        assert_eq!(suffix.len(), 4, "{}", req.label);
-        assert!(
-            suffix.chars().all(|c| c.is_ascii_hexdigit()),
-            "{}",
-            req.label
+        assert_eq!(
+            req.label, "review #7 Add the review action",
+            "Rex shows the label in the block header"
         );
     }
 

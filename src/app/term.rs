@@ -55,10 +55,6 @@ pub(crate) fn term_status(state: &AppState) -> TermStatus {
     }
 }
 
-/// The maximum length of the PR title in the title of the standalone PR
-/// view, in chars. Rex tabs are narrow.
-const PR_TITLE_MAX: usize = 30;
-
 /// How long one frame of the spinner in the title shows: two frames of
 /// the status bar spinner. The title changes only with the frame
 /// generation, and the status bar spinner bumps the generation once per
@@ -112,16 +108,17 @@ pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
 }
 
 /// A short overview of a pull request for the title of the standalone PR
-/// view: `#7 <title> · <verdict> · <CI> · <reviews>`. The verdict is the
+/// view and for the label of its Rex block:
+/// `#7 <title> · <verdict> · <CI> · <reviews>`. The verdict is the
 /// badge of the description pane. A merged or closed pull request shows
 /// only the number, the title and the verdict. The CI and the reviews use the words of the merge
 /// confirm popup. They are not in the title when the pull request has no
 /// checks or needs no review.
-fn pr_overview(pr: &PullRequest) -> String {
+pub(crate) fn pr_overview(pr: &PullRequest) -> String {
     let head = &pr.head.value;
     let (badge, _) = description::badge(head, pr.ci_state.value);
     let mut parts = vec![
-        format!("#{} {}", pr.key.number, short(head.title.trim())),
+        format!("#{} {}", pr.key.number, head.short_title()),
         badge.to_lowercase(),
     ];
     if head.state == PrState::Open {
@@ -154,17 +151,6 @@ fn review_text(head: &PrHead) -> Option<&'static str> {
         None if head.approvals > 0 => Some("approved"),
         None => None,
     }
-}
-
-/// Cuts a PR title to `PR_TITLE_MAX` chars. A cut title ends with `…`.
-fn short(title: &str) -> String {
-    if title.chars().count() <= PR_TITLE_MAX {
-        return title.to_owned();
-    }
-    let mut out: String = title.chars().take(PR_TITLE_MAX - 1).collect();
-    out.truncate(out.trim_end().len());
-    out.push('…');
-    out
 }
 
 /// The terminal status without the overlays.

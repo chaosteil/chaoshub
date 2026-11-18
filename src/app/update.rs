@@ -32,7 +32,7 @@ use crate::app::state::{
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, cells, pr_ref};
 use crate::app::target::{pr_target, row_target};
-use crate::app::term::term_status;
+use crate::app::term::{self, term_status};
 use crate::bus::{
     ActionEvent, ActionInput, AgentJob, Cmd, Hit, KeyChord, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, LaunchRequest, MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection,
@@ -935,10 +935,8 @@ fn open_pane(state: &mut AppState, target: &Target) -> Vec<Cmd> {
         argv,
         cwd: repo.path.clone().unwrap_or(detail.cwd),
         env: detail.env,
-        label: format!(
-            "chaoshub-detail-{owner}-{name}-{number}-{:04x}",
-            rand::random::<u16>()
-        ),
+        // Rex shows the label in the header of the block.
+        label: term::pr_overview(pr),
         zoom: false,
         split: detail.split,
         ratio: detail.ratio,
@@ -8330,12 +8328,10 @@ mod tests {
         assert!(!request.zoom);
         assert_eq!(request.split.as_deref(), Some("left"));
         assert_eq!(request.ratio, Some(40));
-        let suffix = request
-            .label
-            .strip_prefix("chaoshub-detail-chaosteil-chaoshub-99-")
-            .unwrap();
-        assert_eq!(suffix.len(), 4, "{}", request.label);
-        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(
+            request.label, "#99 fix(store): reopen the connec… · checking",
+            "Rex shows the PR overview in the header of the block"
+        );
         assert!(state.ui.overlays.is_empty(), "no sidebar");
         assert_eq!(
             state.data.panes.get(&(DETAIL_ID, key.clone())),

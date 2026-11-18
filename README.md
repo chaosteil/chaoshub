@@ -1561,10 +1561,11 @@ base commit yet, or when the data is longer than 100 KiB.
 
 Inside Rex, chaoshub opens a pane beside its own block with
 `rex split -b $REX_BLOCK --split=<split> [--ratio <ratio>] -c <repo path>
---label <label> --json -- nvim ...`. With `zoom`, it runs
-`rex zoom -b <block> --on`. It waits for the pane with `rex wait <block>`. The
-Rex binary is `$REX_BIN_DIR/rex` when that file exists, else `rex` on
-your `PATH`.
+--label "review #<N> <title>" --json -- nvim ...`. Rex shows the label
+in the header of the block. A title of more than 30 chars is cut and
+ends with `…`. With `zoom`, it runs `rex zoom -b <block> --on`. It waits
+for the pane with `rex wait <block>`. The Rex binary is
+`$REX_BIN_DIR/rex` when that file exists, else `rex` on your `PATH`.
 
 Outside Rex, or with `launcher = "inline"`, chaoshub leaves its screen,
 runs nvim in the same terminal, and comes back when nvim quits. No
@@ -1625,11 +1626,15 @@ list:
 
 ```sh
 rex split -b $REX_BLOCK --split=<[detail] split> [--ratio <[detail] ratio>] \
-  -c <repo path> --label chaoshub-detail-<owner>-<name>-<N>-<id> --json -- \
+  -c <repo path> --label "<PR overview>" --json -- \
   env CHAOSHUB_LIST_SOCKET=<socket path> \
   <chaoshub> --config <config path> --no-prefetch [--theme <style>] \
   [--palette <name>] [--repo <owner/name> ...] pr <owner/name> <N>
 ```
+
+The label is the PR overview of the terminal title of the PR view (see
+`[terminal]`), for example `#7 Fix the merge · ready · CI passed ·
+approved`. Rex shows it in the header of the block.
 
 The pane gets the configuration file and the `--theme`, `--palette` and
 `--repo` options of the list. It always gets `--no-prefetch`, because

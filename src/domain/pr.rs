@@ -80,6 +80,25 @@ pub(crate) struct PrHead {
     pub repo_settings: RepoSettings,
 }
 
+/// The maximum length of a short PR title, in chars. Rex tabs and block
+/// labels are narrow.
+const SHORT_TITLE_MAX: usize = 30;
+
+impl PrHead {
+    /// The title without the spaces at the ends, cut to
+    /// `SHORT_TITLE_MAX` chars. A cut title ends with `…`.
+    pub(crate) fn short_title(&self) -> String {
+        let title = self.title.trim();
+        if title.chars().count() <= SHORT_TITLE_MAX {
+            return title.to_owned();
+        }
+        let mut out: String = title.chars().take(SHORT_TITLE_MAX - 1).collect();
+        out.truncate(out.trim_end().len());
+        out.push('…');
+        out
+    }
+}
+
 /// The state of a pull request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum PrState {
