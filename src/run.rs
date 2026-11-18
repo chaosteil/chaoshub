@@ -53,6 +53,7 @@ use crate::domain::repo::Repo;
 use crate::github::{GITHUB_API, GithubClient, TokenSource};
 use crate::ipc;
 use crate::launch::Launcher;
+use crate::launch::palette::{Palette, RexPalette};
 use crate::launch::rex::{self, RexLauncher};
 use crate::osc;
 use crate::store::handle::StoreHandle;
@@ -222,7 +223,12 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     let (senders, channels) = channels(store.clone(), first_interest(&app), session);
     let client = Arc::new(GithubClient::new(TokenSource::gh(), GITHUB_API)?);
     let locks = RepoLocks::default();
-    let env = action_env(&settings, Arc::clone(&client), locks.clone(), tx.clone());
+    let palette = rex_palette(RexLauncher::from_env());
+    if let Some(palette) = palette.clone() {
+        spawn_palette_check(tokio.handle(), palette, tx.clone());
+    }
+    let mut env = action_env(&settings, Arc::clone(&client), locks.clone(), tx.clone());
+    env.palette = palette.map(|palette| palette as Arc<dyn Palette>);
     let mode = match &pinned {
         Some(key) => WorkerMode::Pinned(key.clone()),
         None => WorkerMode::Lists,
@@ -381,7 +387,26 @@ fn action_env(
         codeview_dir: crate::codeview::store::comments_dir(
             settings.config.codeview.comments_dir.as_deref(),
         ),
+        palette: None,
     }
+}
+
+/// The command palette of Rex inside Rex, with the binary of `rex`, the
+/// launcher of the environment. `None` outside Rex. The setting
+/// `launcher` does not change it.
+fn rex_palette(rex: Option<RexLauncher>) -> Option<Arc<RexPalette>> {
+    rex.map(|rex| Arc::new(RexPalette::new(rex.bin)))
+}
+
+/// Starts the check of the command palette of Rex: when Rex can ask
+/// questions, it sends `Msg::PaletteReady`. Until then, and when Rex
+/// cannot ask, chaoshub opens its own overlays.
+fn spawn_palette_check(handle: &Handle, palette: Arc<RexPalette>, tx: mpsc::Sender<Msg>) {
+    handle.spawn(async move {
+        if palette.detect().await && tx.send(Msg::PaletteReady).await.is_err() {
+            tracing::debug!("app is gone, the palette check is dropped");
+        }
+    });
 }
 
 /// The capacity of the request channels of the sync, the detail, the jj
@@ -1918,6 +1943,15 @@ mod tests {
             split: "right".into(),
             ratio: None,
         }
+    }
+
+    #[test]
+    fn the_palette_needs_rex() {
+        assert_eq!(
+            rex_palette(Some(rex())).as_deref(),
+            Some(&RexPalette::new(PathBuf::from("rex")))
+        );
+        assert_eq!(rex_palette(None), None);
     }
 
     #[test]

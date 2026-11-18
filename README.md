@@ -978,7 +978,7 @@ for `[keys]`.
 | `confirm` | `y` | Confirms in a confirm popup. `enter` also confirms. |
 | `cancel` | `n` | Cancels a confirm popup. |
 | `filter` | `/` | Types a fuzzy filter for the active tab. |
-| `authors` | `a` | Opens the author picker of the Review or the Team tab. |
+| `authors` | `a` | Opens the author picker of the Review or the Team tab. Inside Rex, the picker can open in the Rex palette (see "Questions in the Rex palette"). |
 | `toggle_all` | `t` | On the Review and the Team tab, shows every open pull request, not only the ready ones. |
 | `show_hidden` | `T` | Shows every open pull request of the active tab, also the rows that the age limit, the ready rule, the author picker and the filter text hide (see "Hidden rows"). Only the help overlay shows this key, not the key hint bar. |
 | `refresh` | `R` | Syncs both lists now. In the pull request detail, syncs the pull request and its stack, and scans its repo. |
@@ -1730,6 +1730,58 @@ zoom the pane. It waits for the pane with `rex wait <block>`. The
 `CHAOSHUB_LIST_SOCKET` env is there only when the list listens on its
 socket.
 
+### Questions in the Rex palette
+
+Inside Rex, chaoshub can ask a question in the command palette of Rex
+in place of its own popup. It does this for these popups:
+
+- The author picker (`a`). Each author has the `person` icon, and
+  `all authors` comes first. The current choice shows `current` at the
+  end of its row.
+
+Rex shows the question in each Rex app that is connected to the Rex
+server, also on other devices. The first answer counts.
+
+`rex.ui` works only in an action of the `init.lua` of the Rex server.
+An action of a `rex do` script gets `unsupported`. For this reason,
+[`contrib/rex/chaoshub.lua`](contrib/rex/chaoshub.lua) registers the
+action `chaoshub_ask`. Load the file from your `init.lua` (see "Open a
+pull request from the Rex palette"). Without the action, chaoshub opens
+its own popups.
+
+chaoshub uses the palette only when all these conditions are true:
+
+- chaoshub runs inside Rex (`REX_BLOCK` is set).
+- At start, `rex api call server.version` gives `api_revision` 17 or
+  more. Revision 17 added `rex.ui`.
+- At start, `rex actions --json` has the action `chaoshub_ask`.
+- At start, `rex client ls --json` shows a connected client of the
+  kind `app`.
+
+To ask, chaoshub runs the action:
+
+```sh
+rex --timeout 330s do chaoshub_ask --args - --json
+```
+
+The question goes to the action as JSON on stdin, for example
+`{"ask": {"kind": "pick", "title": "author", "items": [...]},
+"timeout": 300}`. The action gives `{"answer": "..."}` or
+`{"reason": "..."}`. Rex shows the question for 5 minutes. The rex
+binary is the same one as for the panes. After a change of `init.lua`,
+restart chaoshub, because it checks only at start.
+
+While the question waits, the status bar shows
+`waiting for an answer in Rex`. chaoshub then ignores the mouse and
+its keys, so no second question can start. `esc` or `q` stops the
+wait, and `ctrl-c` quits.
+
+- When you answer, chaoshub does what its popup does with that answer.
+- When you close the question (`cancelled`), or when you do not answer
+  in time (`timeout`), chaoshub does nothing.
+- When Rex cannot ask (`no_client`, `unsupported`, `busy` or `failed`),
+  or when the rex command fails, chaoshub opens its own popup.
+
 ### How the PR view talks to the list
 
 The PR view in the detail pane is a separate chaoshub process. It
@@ -1778,7 +1830,11 @@ show in a list after the next sync.
 
 [`contrib/rex/chaoshub.lua`](contrib/rex/chaoshub.lua) adds the Rex
 action `chaoshub: open PR…` to the command palette. It works from any
-block, also when no chaoshub list runs.
+block, also when no chaoshub list runs. The file also adds the action
+`chaoshub_ask` (`chaoshub: ask a question of the TUI`). The chaoshub
+TUI uses it to ask its questions in the palette (see "Questions in the
+Rex palette"). Started from the palette, it has no question and does
+nothing.
 
 1. The action runs `chaoshub list --json` (see "List the pull
    requests"). It reads only the cache, so the list is as old as the
@@ -1943,6 +1999,8 @@ has 2 pull requests left. The right part shows these items:
   pull requests load from GitHub.
 - `agent review #7`: a pr-agent run of one tool on one pull request.
   Each run has its own item.
+- `waiting for an answer in Rex`: a question waits in the command
+  palette of Rex (see "Questions in the Rex palette").
 
 When no work runs, the spinner and the items go away. A sync first
 reads a light list of the pull requests in pages. Then it reads the full

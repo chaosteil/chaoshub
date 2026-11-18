@@ -132,6 +132,9 @@ pub(crate) struct AppData {
     /// True in a PR view that a list started in a Rex pane: chaoshub keeps
     /// the label of the Rex block at the PR overview.
     pub rex_label: bool,
+    /// True when the command palette of Rex can ask questions (see
+    /// `Msg::PaletteReady`). The author picker then asks there.
+    pub palette: bool,
     /// The notification of new pull requests.
     pub notify: NotifyState,
     /// The parts of pull requests that actions change on GitHub now. Each
@@ -380,6 +383,22 @@ pub(crate) struct UiState {
     /// The `column_headers` value in the `ui_state` table of the cache,
     /// if any. It wins over `[theme] column_headers`.
     pub saved_column_headers: Option<bool>,
+    /// The question in the command palette of Rex that has no answer
+    /// yet. `None` when no question waits.
+    pub palette_wait: Option<PaletteWait>,
+    /// The serial of the last `Cmd::AskPalette`.
+    pub palette_serial: u64,
+}
+
+/// A question in the command palette of Rex that waits for its answer,
+/// with the overlay of the same question. chaoshub opens the overlay
+/// when Rex cannot ask.
+#[derive(Debug)]
+pub(crate) struct PaletteWait {
+    /// The serial of the `Cmd::AskPalette` of the question.
+    pub serial: u64,
+    pub kind: OverlayKind,
+    pub overlay: OverlayState,
 }
 
 /// The state of the syncs, for the status bar and the terminal status.
@@ -947,6 +966,7 @@ impl AppState {
                 animations: true,
                 title_spinner: true,
                 rex_label: false,
+                palette: false,
                 notify: NotifyState::default(),
                 pending: PendingMap::default(),
                 computing: BTreeMap::new(),
@@ -962,6 +982,8 @@ impl AppState {
                 pinned: None,
                 column_headers: true,
                 saved_column_headers: None,
+                palette_wait: None,
+                palette_serial: 0,
             },
             generation: 0,
             cache: ModelCache::default(),

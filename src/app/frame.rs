@@ -793,7 +793,8 @@ fn list_model(state: &mut AppState, tabs: &[Box<dyn Tab>], index: usize, size: S
 
 /// The status bar: the active tab, the repo count and the data age on
 /// the left, the last message in the center, the work that runs and the
-/// help hint on the right. In the pinned mode the left shows the pull
+/// help hint on the right. A question in the command palette of Rex
+/// counts as work that runs. In the pinned mode the left shows the pull
 /// request, its repo and the age of its data.
 pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusModel {
     let left = if let Some(key) = &state.ui.pinned {
@@ -814,7 +815,16 @@ pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusMod
         left
     };
     let mut right = Vec::new();
-    if let Some(label) = activity(&state.data) {
+    let waiting = state
+        .ui
+        .palette_wait
+        .as_ref()
+        .map(|_| crate::app::palette::WAITING.to_owned());
+    let label = waiting
+        .into_iter()
+        .chain(activity(&state.data))
+        .reduce(|first, rest| format!("{first} · {rest}"));
+    if let Some(label) = label {
         right.push(Cell {
             text: spinner(state.data.now).to_owned(),
             style: CellStyle::Primary,

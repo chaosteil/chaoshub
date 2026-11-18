@@ -25,11 +25,12 @@ use crate::agent::run::Job;
 use crate::agent::store::Store;
 use crate::bus::{
     ActionEvent, ActionInput, AgentJob, Cmd, DetailReq, HighlightReq, Interest, JjReq,
-    LaunchRequest, Msg, Selection, Session, SyncReq, TargetKey,
+    LaunchRequest, Msg, PaletteAsk, PaletteReply, Selection, Session, SyncReq, TargetKey,
 };
 use crate::config::schema::AgentConfig;
 use crate::domain::keys::PrKey;
 use crate::github::{GithubClient, TokenSource};
+use crate::launch::palette::Palette;
 use crate::launch::{LaunchHandle, Launcher};
 use crate::store::handle::StoreHandle;
 use crate::vcs::lock::RepoLocks;
@@ -77,6 +78,9 @@ pub(crate) struct ActionEnv {
     /// The directory of the codeview comment files. `None` when the home
     /// directory is unknown.
     pub codeview_dir: Option<PathBuf>,
+    /// The command palette of Rex for `Cmd::AskPalette`. `None` outside
+    /// Rex.
+    pub palette: Option<Arc<dyn Palette>>,
 }
 
 /// What the pr-agent runs need: the `[agent]` section, the result files
@@ -93,6 +97,7 @@ impl std::fmt::Debug for ActionEnv {
         f.debug_struct("ActionEnv")
             .field("actions", &self.registry.len())
             .field("launcher", &self.launcher.is_some())
+            .field("palette", &self.palette.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -124,6 +129,9 @@ pub(crate) struct Runtime {
     /// The socket of the list process that started this PR view, from
     /// `CHAOSHUB_LIST_SOCKET`. `Cmd::TellList` sends to it.
     list: Option<PathBuf>,
+    /// The token of the question in the command palette of Rex that
+    /// waits for its answer. A cancel stops the question.
+    palette_ask: Option<CancellationToken>,
 }
 
 impl Runtime {
@@ -150,6 +158,7 @@ impl Runtime {
             quit: false,
             close_panes_on_quit,
             list: None,
+            palette_ask: None,
         }
     }
 
@@ -215,7 +224,42 @@ impl Runtime {
                 }
             }
             Cmd::EditText(_) => tracing::warn!("the event loop runs the editor"),
+            Cmd::AskPalette { serial, ask } => self.ask_palette(serial, *ask),
+            Cmd::CancelPalette => {
+                if let Some(token) = self.palette_ask.take() {
+                    token.cancel();
+                }
+            }
         }
+    }
+
+    /// Asks `ask` in the command palette of Rex in a task with a child
+    /// token of the root token, and sends `PaletteAnswered` with the
+    /// reply. A cancel of the token drops the question, and so stops the
+    /// rex process, and sends nothing. A new question stops the old one.
+    /// Without a palette, the reply is a fallback.
+    fn ask_palette(&mut self, serial: u64, ask: PaletteAsk) {
+        if let Some(token) = self.palette_ask.take() {
+            token.cancel();
+        }
+        let tx = self.env.tx.clone();
+        let Some(palette) = self.env.palette.clone() else {
+            self.handle.spawn(async move {
+                let reply = PaletteReply::Fallback("no Rex palette".to_owned());
+                send(&tx, Msg::PaletteAnswered { serial, reply }).await;
+            });
+            return;
+        };
+        let token = self.root.child_token();
+        self.palette_ask = Some(token.clone());
+        self.handle.spawn(async move {
+            tokio::select! {
+                reply = palette.ask(&ask) => {
+                    send(&tx, Msg::PaletteAnswered { serial, reply }).await;
+                }
+                () = token.cancelled() => {}
+            }
+        });
     }
 
     /// Spawns a pr-agent run with a child token of the root token. The
@@ -682,6 +726,7 @@ mod tests {
             launcher,
             agent: None,
             codeview_dir: None,
+            palette: None,
         };
         Fixture {
             runtime: Runtime::new(handle, senders, env, true),
@@ -1257,6 +1302,125 @@ mod tests {
             "no PaneEnded after a failed launch"
         );
         assert_eq!(launcher.calls(), ["launch pane-3"]);
+    }
+
+    /// A palette that records its questions. It answers with `reply`
+    /// when the test notifies `answer`. `asked` counts the questions,
+    /// and `dropped` counts the questions that ended without a reply.
+    struct FakePalette {
+        reply: PaletteReply,
+        answer: tokio::sync::Notify,
+        asked: Mutex<Vec<PaletteAsk>>,
+        dropped: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl FakePalette {
+        fn new(reply: PaletteReply) -> Self {
+            Self {
+                reply,
+                answer: tokio::sync::Notify::new(),
+                asked: Mutex::new(Vec::new()),
+                dropped: Arc::default(),
+            }
+        }
+
+        fn asked(&self) -> usize {
+            self.asked.lock().unwrap().len()
+        }
+    }
+
+    /// Counts a drop of the future of a question before its reply.
+    struct DropCount(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Drop for DropCount {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl Palette for FakePalette {
+        fn ask(&self, ask: &PaletteAsk) -> futures::future::BoxFuture<'_, PaletteReply> {
+            self.asked.lock().unwrap().push(ask.clone());
+            let guard = DropCount(Arc::clone(&self.dropped));
+            Box::pin(async move {
+                self.answer.notified().await;
+                std::mem::forget(guard);
+                self.reply.clone()
+            })
+        }
+    }
+
+    fn palette_fixture(tokio: &tokio::runtime::Runtime, palette: &Arc<FakePalette>) -> Fixture {
+        let mut f = fixture(tokio.handle().clone(), 4);
+        f.runtime.env.palette = Some(Arc::clone(palette) as Arc<dyn Palette>);
+        f
+    }
+
+    fn ask_palette(serial: u64) -> Cmd {
+        Cmd::AskPalette {
+            serial,
+            ask: Box::new(PaletteAsk::Input {
+                title: "ask".into(),
+                placeholder: String::new(),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_palette_question_sends_its_reply() {
+        let tokio = tokio();
+        let palette = Arc::new(FakePalette::new(PaletteReply::Answer("yes".into())));
+        let mut f = palette_fixture(&tokio, &palette);
+        f.runtime.exec(ask_palette(3));
+        eventually(|| palette.asked() == 1);
+        palette.answer.notify_one();
+        assert_eq!(
+            f.msgs.blocking_recv(),
+            Some(Msg::PaletteAnswered {
+                serial: 3,
+                reply: PaletteReply::Answer("yes".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn cancel_palette_drops_the_question_without_a_reply() {
+        let tokio = tokio();
+        let palette = Arc::new(FakePalette::new(PaletteReply::Cancelled));
+        let mut f = palette_fixture(&tokio, &palette);
+        f.runtime.exec(ask_palette(1));
+        eventually(|| palette.asked() == 1);
+        f.runtime.exec(Cmd::CancelPalette);
+        eventually(|| palette.dropped.load(std::sync::atomic::Ordering::SeqCst) == 1);
+        // A new question stops the old one too.
+        f.runtime.exec(ask_palette(2));
+        eventually(|| palette.asked() == 2);
+        f.runtime.exec(ask_palette(3));
+        eventually(|| palette.dropped.load(std::sync::atomic::Ordering::SeqCst) == 2);
+        palette.answer.notify_one();
+        assert_eq!(
+            f.msgs.blocking_recv(),
+            Some(Msg::PaletteAnswered {
+                serial: 3,
+                reply: PaletteReply::Cancelled,
+            })
+        );
+        f.runtime.exec(Cmd::Quit);
+        assert!(f.msgs.try_recv().is_err(), "no reply for 1 and 2");
+    }
+
+    #[test]
+    fn without_a_palette_a_question_falls_back() {
+        let tokio = tokio();
+        let mut f = fixture(tokio.handle().clone(), 4);
+        f.runtime.exec(ask_palette(5));
+        assert!(matches!(
+            f.msgs.blocking_recv(),
+            Some(Msg::PaletteAnswered {
+                serial: 5,
+                reply: PaletteReply::Fallback(_),
+            })
+        ));
     }
 
     #[test]

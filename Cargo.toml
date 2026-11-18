@@ -65,7 +65,7 @@ syntect = { version = "5.3.0", default-features = false, features = ["parsing", 
 tachyonfx = "0.25.2"
 textwrap = "0.16.4"
 thiserror = "2.0.21"
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "process", "sync", "time", "macros"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "process", "sync", "time", "macros", "io-util"] }
 tokio-util = "0.7.20"
 toml = "1.1.8"
 tracing = "0.1.44"

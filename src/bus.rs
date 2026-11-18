@@ -299,6 +299,58 @@ pub(crate) struct LaunchRequest {
     pub ratio: Option<u8>,
 }
 
+/// A question for the command palette of Rex (`rex.ui`). It goes to the
+/// Rex action `chaoshub_ask` as JSON, so the field names are the ones of
+/// `rex.ui`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum PaletteAsk {
+    /// One line of text: `rex.ui.input`.
+    Input {
+        title: String,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        placeholder: String,
+    },
+    /// One item of a list: `rex.ui.pick`. The answer is the id of the
+    /// item.
+    Pick {
+        title: String,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        placeholder: String,
+        items: Vec<PaletteItem>,
+    },
+}
+
+/// One item of a `PaletteAsk::Pick`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PaletteItem {
+    /// The answer when the user picks the item. Each item has its own id.
+    pub id: String,
+    pub title: String,
+    /// The second line of the item.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
+    /// The short text at the end of the row, for example a key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// One of the icon names of `rex.ui`, for example `person`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<&'static str>,
+}
+
+/// The result of a `PaletteAsk`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PaletteReply {
+    /// The text of an input, or the id of the picked item.
+    Answer(String),
+    /// The user closed the question, or did not answer in time. chaoshub
+    /// then does nothing.
+    Cancelled,
+    /// Rex cannot ask: no app, an old app, a busy app, or a failure.
+    /// chaoshub then opens its own popup. The text says why.
+    Fallback(String),
+}
+
 /// One event from a PR view (`chaoshub pr`) to the list process that
 /// started it. The list socket carries it (see `ipc`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -794,6 +846,14 @@ pub(crate) enum Msg {
     /// An event from a PR view (`chaoshub pr`) that the list started, by
     /// the list socket (see `ipc`).
     PrView(PrViewEvent),
+    /// The check at the start found that the command palette of Rex can
+    /// ask questions (see `Cmd::AskPalette`).
+    PaletteReady,
+    /// The reply to the `Cmd::AskPalette` with this serial.
+    PaletteAnswered {
+        serial: u64,
+        reply: PaletteReply,
+    },
 }
 
 /// A command out of `app`. Each variant has one executor.
@@ -841,6 +901,15 @@ pub(crate) enum Cmd {
     /// Opens the text in the editor of the user. The event loop runs the
     /// editor in the foreground and sends `Msg::TextEdited`.
     EditText(String),
+    /// Asks a question in the command palette of Rex. The runtime sends
+    /// `Msg::PaletteAnswered` with the same serial.
+    AskPalette {
+        serial: u64,
+        ask: Box<PaletteAsk>,
+    },
+    /// Stops the wait for the answer of the open `Cmd::AskPalette`. No
+    /// `Msg::PaletteAnswered` comes for it.
+    CancelPalette,
     Persist(Persist),
     Copy(String),
     OpenUrl(String),

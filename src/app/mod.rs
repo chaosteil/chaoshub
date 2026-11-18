@@ -14,6 +14,7 @@ mod merge;
 pub(crate) mod models;
 pub(crate) mod nav;
 mod notify;
+mod palette;
 mod panes;
 mod pending;
 mod state;
@@ -182,10 +183,11 @@ impl App {
     }
 
     /// True while a requested sync, a prefetch batch or a merge runs (see
-    /// `AppData::busy`): the status bar shows a spinner, and `run` ticks
-    /// every `SPINNER_FRAME`.
+    /// `AppData::busy`), or while a question waits in the command palette
+    /// of Rex: the status bar shows a spinner, and `run` ticks every
+    /// `SPINNER_FRAME`.
     pub(crate) fn busy(&self) -> bool {
-        self.state.data.busy()
+        self.state.data.busy() || self.state.ui.palette_wait.is_some()
     }
 
     /// The redraw signal.

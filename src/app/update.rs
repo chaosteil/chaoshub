@@ -19,6 +19,7 @@ use crate::app::measure;
 use crate::app::models::{Cell, CellStyle, PaneModel, RowItem, TreeNode, review_list_rows};
 use crate::app::nav::{self, Motion, TreeRows};
 use crate::app::notify;
+use crate::app::palette;
 use crate::app::panes::{
     PANES, Pane, PaneAction, PaneMenu, PaneState, applicable, init_states, items,
 };
@@ -27,16 +28,16 @@ use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
     AUTHOR_KEY, ActionDialog, ActionMenu, AppData, AppState, AuthorPicker, COLUMN_HEADERS_KEY,
-    Condition, FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaneHandleState,
-    PopupState, ReplyDialog, ReviewPopup, error_text, ui_key,
+    Condition, FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaletteWait,
+    PaneHandleState, PopupState, ReplyDialog, ReviewPopup, error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, cells, pr_ref};
 use crate::app::target::{pr_target, row_target};
 use crate::app::term::{self, term_status};
 use crate::bus::{
     ActionEvent, ActionInput, AgentJob, Cmd, Hit, KeyChord, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, LaunchRequest, MouseKind, Msg, OverlayKind, Persist, PrRef, Scope, Selection,
-    Size, SyncError, Target, TargetKey, UiEvent,
+    KeyModifiers, LaunchRequest, MouseKind, Msg, OverlayKind, PaletteReply, Persist, PrRef, Scope,
+    Selection, Size, SyncError, Target, TargetKey, UiEvent,
 };
 use crate::bus::{
     ConfirmSpec, Expect, Pending, PendingPart, PromptSpec, ReactSpec, ReplySpec, ReviewKind,
@@ -137,6 +138,9 @@ fn dispatch(
             }
             key(state, keymap, tabs, panes, actions, &event)
         }
+        // A question in the Rex palette blocks the mouse, as it blocks
+        // the keys.
+        Msg::Mouse { .. } if state.ui.palette_wait.is_some() => Vec::new(),
         Msg::Mouse { kind, hit, .. } => mouse(state, keymap, tabs, panes, actions, kind, hit),
         Msg::Resize(size) => resize(state, size),
         Msg::Tick => tick(state, tabs, Utc::now()),
@@ -310,6 +314,11 @@ fn dispatch(
             Vec::new()
         }
         Msg::PrView(event) => pr_view_event(state, actions, event, Utc::now()),
+        Msg::PaletteReady => {
+            state.data.palette = true;
+            Vec::new()
+        }
+        Msg::PaletteAnswered { serial, reply } => palette_answered(state, tabs, serial, reply),
     }
 }
 
@@ -357,6 +366,9 @@ fn key(
     if quits && control {
         return quit();
     }
+    if state.ui.palette_wait.is_some() {
+        return palette_wait_key(state, keymap, chord);
+    }
     if state.ui.overlays.iter().any(|overlay| !overlay.closing) {
         return overlay_key(state, keymap, tabs, panes, actions, chord);
     }
@@ -385,8 +397,7 @@ fn key(
         return Vec::new();
     }
     if keymap.matches("authors", chord) {
-        open_authors(state, tabs);
-        return Vec::new();
+        return open_authors(state, tabs);
     }
     if keymap.matches("show_hidden", chord) {
         return toggle_show_hidden(state, tabs);
@@ -819,11 +830,12 @@ fn prompt_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
 }
 
 /// Opens the author picker of the active tab, with the cursor on the
-/// current author. A tab without authors shows a message.
-fn open_authors(state: &mut AppState, tabs: &[Box<dyn Tab>]) {
+/// current author, or asks for the author in the command palette of Rex
+/// (see `open_or_ask`). A tab without authors shows a message.
+fn open_authors(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
     let index = state.ui.active;
     let Some(tab) = tabs.get(index) else {
-        return;
+        return Vec::new();
     };
     let areas = frame::areas(state);
     let cx = KeyCx {
@@ -835,13 +847,13 @@ fn open_authors(state: &mut AppState, tabs: &[Box<dyn Tab>]) {
     let authors = tab.authors(&cx);
     if authors.is_empty() {
         state.message("no authors to pick here", CellStyle::Dim, INFO_TTL);
-        return;
+        return Vec::new();
     }
     let current = state.ui.tabs.get(index).and_then(|ts| ts.author.as_ref());
     let cursor = current
         .and_then(|author| authors.iter().position(|a| a == author))
         .map_or(0, |i| i + 1);
-    open_overlay(
+    open_or_ask(
         state,
         OverlayKind::Picker,
         OverlayState::Authors(AuthorPicker {
@@ -849,7 +861,92 @@ fn open_authors(state: &mut AppState, tabs: &[Box<dyn Tab>]) {
             authors,
             cursor,
         }),
-    );
+    )
+}
+
+/// Asks the question of `overlay` in the command palette of Rex, when
+/// Rex can ask and the overlay has a palette form (see `palette::ask`).
+/// Else it opens `overlay`. The overlay waits in `palette_wait` for the
+/// answer, and opens when Rex cannot ask after all. While a question
+/// waits, a second question asks nothing.
+fn open_or_ask(state: &mut AppState, kind: OverlayKind, overlay: OverlayState) -> Vec<Cmd> {
+    if state.ui.palette_wait.is_some() {
+        state.message(palette::WAITING, CellStyle::Dim, INFO_TTL);
+        return Vec::new();
+    }
+    let Some(ask) = palette::ask(&overlay).filter(|_| state.data.palette) else {
+        open_overlay(state, kind, overlay);
+        return Vec::new();
+    };
+    state.ui.palette_serial += 1;
+    let serial = state.ui.palette_serial;
+    state.ui.palette_wait = Some(PaletteWait {
+        serial,
+        kind,
+        overlay,
+    });
+    state.bump();
+    vec![Cmd::AskPalette {
+        serial,
+        ask: Box::new(ask),
+    }]
+}
+
+/// A key while a question waits in the command palette of Rex. The
+/// `close_overlay` keys stop the wait. Every other key only says that
+/// chaoshub waits, so no key opens a second question.
+fn palette_wait_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) -> Vec<Cmd> {
+    if keymap.matches("close_overlay", chord) {
+        state.ui.palette_wait = None;
+        state.message("stopped the wait for Rex", CellStyle::Dim, INFO_TTL);
+        return vec![Cmd::CancelPalette];
+    }
+    let keys = keymap
+        .chords("close_overlay")
+        .first()
+        .map(|&chord| frame::key_text(chord));
+    let text = match keys {
+        Some(key) => format!("{} · {key} stops the wait", palette::WAITING),
+        None => palette::WAITING.to_owned(),
+    };
+    state.message(text, CellStyle::Dim, INFO_TTL);
+    Vec::new()
+}
+
+/// The reply of the command palette of Rex to the question with the
+/// serial `serial`. An answer does what the overlay does with it. A
+/// cancel does nothing. A fallback opens the overlay. A reply to an
+/// older question, for example one whose wait the user stopped, does
+/// nothing.
+fn palette_answered(
+    state: &mut AppState,
+    tabs: &[Box<dyn Tab>],
+    serial: u64,
+    reply: PaletteReply,
+) -> Vec<Cmd> {
+    let Some(wait) = state.ui.palette_wait.take_if(|wait| wait.serial == serial) else {
+        return Vec::new();
+    };
+    state.bump();
+    let answer = match reply {
+        PaletteReply::Answer(answer) => answer,
+        PaletteReply::Cancelled => return Vec::new(),
+        PaletteReply::Fallback(reason) => {
+            tracing::debug!(reason, "the Rex palette cannot ask, the overlay opens");
+            open_overlay(state, wait.kind, wait.overlay);
+            return Vec::new();
+        }
+    };
+    match wait.overlay {
+        OverlayState::Authors(mut picker) => match palette::author_cursor(&picker, &answer) {
+            Some(cursor) => {
+                picker.cursor = cursor;
+                set_author(state, tabs, picker.tab, picker.chosen())
+            }
+            None => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
 }
 
 /// The pane bookkeeping of a terminal command: the pane of `(id, key)`
@@ -2072,6 +2169,17 @@ fn pick_author(
     author: Option<String>,
 ) -> Vec<Cmd> {
     close_overlay(state);
+    set_author(state, tabs, tab, author)
+}
+
+/// Filters the tab at `tab` by `author`, and saves the filter. `None`
+/// shows every author.
+fn set_author(
+    state: &mut AppState,
+    tabs: &[Box<dyn Tab>],
+    tab: usize,
+    author: Option<String>,
+) -> Vec<Cmd> {
     if let Some(ts) = state.ui.tabs.get_mut(tab) {
         ts.author.clone_from(&author);
     }
@@ -3757,7 +3865,7 @@ mod tests {
     use crate::app::state::Overlay;
     use crate::app::tabs::fake::FakeTab;
     use crate::app::testdata;
-    use crate::bus::{HighlightReq, Interest, RateInfo, ReplyTo, Session};
+    use crate::bus::{HighlightReq, Interest, PaletteAsk, RateInfo, ReplyTo, Session};
     use crate::domain::test_time;
 
     const SIZE: Size = Size {
@@ -5209,6 +5317,173 @@ mod tests {
         assert_eq!(
             state.ui.status.as_ref().map(|m| m.text.as_str()),
             Some("no authors to pick here")
+        );
+    }
+
+    /// The serial and the question of the only command of `cmds`, an
+    /// `AskPalette`.
+    fn asked(cmds: &[Cmd]) -> (u64, PaletteAsk) {
+        let [Cmd::AskPalette { serial, ask }] = cmds else {
+            panic!("not one palette question: {cmds:?}");
+        };
+        (*serial, (**ask).clone())
+    }
+
+    /// The ids and the details of the items of a pick.
+    fn pick_items(ask: &PaletteAsk) -> Vec<(String, Option<String>)> {
+        let PaletteAsk::Pick { items, .. } = ask else {
+            panic!("not a pick: {ask:?}");
+        };
+        items
+            .iter()
+            .map(|item| (item.id.clone(), item.detail.clone()))
+            .collect()
+    }
+
+    fn answered(serial: u64, reply: PaletteReply) -> Msg {
+        Msg::PaletteAnswered { serial, reply }
+    }
+
+    /// The team tab with the Rex palette ready.
+    fn palette_state() -> AppState {
+        let mut state = team_state();
+        assert_eq!(
+            update(&mut state, &Keymap::default(), Msg::PaletteReady),
+            vec![]
+        );
+        state
+    }
+
+    #[test]
+    fn in_rex_the_author_picker_asks_in_the_palette() {
+        let mut state = palette_state();
+        state.ui.ui_events.clear();
+        let (serial, ask) = asked(&key(&mut state, 'a'));
+        let current = Some("current".to_owned());
+        assert_eq!(
+            pick_items(&ask),
+            [
+                ("all authors".to_owned(), current.clone()),
+                ("bob".to_owned(), None),
+                ("dave".to_owned(), None),
+            ]
+        );
+        assert!(state.ui.overlays.is_empty(), "no overlay opens");
+        assert_eq!(state.ui.ui_events, []);
+        let right = frame::status_model(&state, &TABS).right;
+        assert!(
+            right
+                .iter()
+                .any(|cell| cell.text.contains(palette::WAITING)),
+            "{right:?}"
+        );
+        // While the question waits, the keys only say so.
+        assert_eq!(key(&mut state, 'a'), vec![]);
+        assert_eq!(key(&mut state, '1'), vec![]);
+        assert_eq!(state.ui.active, 2, "1 does not switch the tab");
+        assert_eq!(
+            status_text(&state),
+            Some("waiting for an answer in Rex · Esc stops the wait")
+        );
+        let click = Msg::Mouse {
+            kind: MouseKind::Click,
+            x: 1,
+            y: 1,
+            hit: None,
+        };
+        assert_eq!(update(&mut state, &Keymap::default(), click), vec![]);
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            answered(serial, PaletteReply::Answer("bob".into())),
+        );
+        assert_eq!(cmds[0], persist("author", "team", "bob".into()));
+        assert_eq!(state.ui.tabs[2].author.as_deref(), Some("bob"));
+        assert!(state.ui.palette_wait.is_none());
+        assert!(state.ui.overlays.is_empty());
+        // The next question marks bob, and `all authors` clears the
+        // filter.
+        let (serial, ask) = asked(&key(&mut state, 'a'));
+        assert_eq!(pick_items(&ask)[1], ("bob".to_owned(), current));
+        update(
+            &mut state,
+            &Keymap::default(),
+            answered(serial, PaletteReply::Answer("all authors".into())),
+        );
+        assert_eq!(state.ui.tabs[2].author, None);
+        // An id that is not an author changes nothing.
+        let (serial, _) = asked(&key(&mut state, 'a'));
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            answered(serial, PaletteReply::Answer("carol".into())),
+        );
+        assert_eq!(cmds, vec![]);
+        assert_eq!(state.ui.tabs[2].author, None);
+        assert!(state.ui.palette_wait.is_none());
+    }
+
+    #[test]
+    fn a_palette_fallback_opens_the_picker_and_a_cancel_does_nothing() {
+        for reason in ["no_client", "unsupported", "busy", "failed"] {
+            let mut state = palette_state();
+            let (serial, _) = asked(&key(&mut state, 'a'));
+            let fallback = PaletteReply::Fallback(reason.into());
+            assert_eq!(
+                update(&mut state, &Keymap::default(), answered(serial, fallback)),
+                vec![]
+            );
+            assert_eq!(
+                picker(&state).map(|p| p.cursor),
+                Some(0),
+                "{reason}: the picker opens"
+            );
+            assert!(state.ui.palette_wait.is_none());
+            // The keys of the picker work again.
+            key(&mut state, 'j');
+            assert_eq!(picker(&state).map(|p| p.cursor), Some(1));
+        }
+        let mut state = palette_state();
+        let (serial, _) = asked(&key(&mut state, 'a'));
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            answered(serial, PaletteReply::Cancelled),
+        );
+        assert_eq!(cmds, vec![]);
+        assert!(state.ui.overlays.is_empty(), "a cancel opens nothing");
+        assert!(state.ui.palette_wait.is_none());
+        assert_eq!(state.ui.tabs[2].author, None);
+    }
+
+    #[test]
+    fn esc_stops_the_palette_wait_and_an_old_answer_does_nothing() {
+        let mut state = palette_state();
+        let (first, _) = asked(&key(&mut state, 'a'));
+        let esc = press(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(
+            update(&mut state, &Keymap::default(), esc),
+            vec![Cmd::CancelPalette]
+        );
+        assert!(state.ui.palette_wait.is_none());
+        let (second, _) = asked(&key(&mut state, 'a'));
+        assert!(second > first);
+        for reply in [
+            PaletteReply::Answer("bob".into()),
+            PaletteReply::Fallback("busy".into()),
+        ] {
+            assert_eq!(
+                update(&mut state, &Keymap::default(), answered(first, reply)),
+                vec![]
+            );
+        }
+        assert!(state.ui.overlays.is_empty());
+        assert_eq!(state.ui.tabs[2].author, None);
+        assert!(state.ui.palette_wait.is_some(), "the new question waits");
+        let ctrl_c = press(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(
+            update(&mut state, &Keymap::default(), ctrl_c),
+            vec![Cmd::Quit]
         );
     }
 

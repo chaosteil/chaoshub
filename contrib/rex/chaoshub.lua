@@ -1,4 +1,6 @@
--- The Rex palette action "chaoshub: open PR…".
+-- The Rex palette action "chaoshub: open PR…", and the action
+-- "chaoshub_ask" that the chaoshub TUI uses to ask its questions in the
+-- palette.
 --
 -- The action reads the pull requests of the chaoshub tabs with
 -- `chaoshub list --json`, shows them in the command palette with
@@ -21,7 +23,8 @@
 --
 --   rex.bind("cmd+shift+o", "chaoshub_open_pr")
 --
--- See "Open a pull request from the Rex palette" in the chaoshub README.
+-- See "Open a pull request from the Rex palette" and "Questions in the
+-- Rex palette" in the chaoshub README.
 
 local M = {}
 
@@ -105,7 +108,33 @@ local function open(ctx, opts, pr)
   return w
 end
 
--- Registers the action. See the top of this file for `opts`.
+-- The run function of "chaoshub_ask". The chaoshub TUI runs
+--
+--   rex do chaoshub_ask --args - --json
+--
+-- with {"ask": {...}, "timeout": N} on stdin. `ask.kind` is "input" or
+-- "pick", and the other fields of `ask` are the ones of rex.ui. The
+-- result is {answer = "..."} with the text or the id of the picked
+-- item, or {reason = "..."} with the reason of rex.ui when no answer
+-- came: cancelled, timeout, no_client, unsupported, busy or failed.
+local function ask(_, args)
+  local q = args.ask
+  -- The action also shows in the palette. Started from there, it has no
+  -- question.
+  if type(q) ~= "table" then return { reason = "failed" } end
+  local fields = { title = q.title, placeholder = q.placeholder, timeout = args.timeout }
+  local answer, why
+  if q.kind == "pick" then
+    fields.items = q.items
+    answer, why = rex.ui.pick(fields)
+  else
+    answer, why = rex.ui.input(fields)
+  end
+  if type(answer) == "string" then return { answer = answer } end
+  return { reason = why or "failed" }
+end
+
+-- Registers the actions. See the top of this file for `opts`.
 function M.setup(opts)
   opts = opts or {}
   local o = { bin = opts.bin or "chaoshub", config = opts.config }
@@ -145,6 +174,14 @@ function M.setup(opts)
       local w = open(ctx, o, pr)
       return { opened = true, pr = id, window_id = w.window_id }
     end,
+  }
+  rex.action{
+    name = "chaoshub_ask",
+    title = "chaoshub: ask a question of the TUI",
+    description = "The chaoshub TUI runs this action to ask one question in the palette.",
+    category = "chaoshub",
+    args = { ask = "object?", timeout = "integer?" },
+    run = ask,
   }
 end
 

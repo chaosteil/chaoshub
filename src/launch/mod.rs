@@ -1,10 +1,12 @@
-//! Adapter for detached panes: the `Launcher` trait.
+//! Adapter for detached panes: the `Launcher` trait. The `palette`
+//! module asks questions in the command palette of Rex.
 #![allow(
     dead_code,
     reason = "the action runtime uses the launcher in a later phase"
 )]
 
 pub(crate) mod error;
+pub(crate) mod palette;
 pub(crate) mod rex;
 
 use futures::future::BoxFuture;
