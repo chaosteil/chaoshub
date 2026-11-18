@@ -251,7 +251,8 @@ chaoshub pr chaosteil/chaoshub-test 7
 
 `chaoshub list` prints the open pull requests of the cache that the
 tabs show: first the Mine tab, then the Review tab, then the Team tab,
-in the order of each tab. It is for scripts.
+in the order of each tab. It is for scripts, for example the Rex action
+of "Open a pull request from the Rex palette".
 
 - The command opens the cache read-only. It makes no GitHub call, so
   the list is as old as the last sync of the TUI. If the cache does not
@@ -1772,6 +1773,46 @@ Each list process has its own socket, so a PR view talks only to the
 list that started it. A PR view that you start yourself
 (`chaoshub pr OWNER/NAME N` in a shell) has no list socket. Its changes
 show in a list after the next sync.
+
+### Open a pull request from the Rex palette
+
+[`contrib/rex/chaoshub.lua`](contrib/rex/chaoshub.lua) adds the Rex
+action `chaoshub: open PR…` to the command palette. It works from any
+block, also when no chaoshub list runs.
+
+1. The action runs `chaoshub list --json` (see "List the pull
+   requests"). It reads only the cache, so the list is as old as the
+   last sync of the TUI.
+2. It shows the pull requests with `rex.ui.pick`. Each row has
+   `#N <title>`, the repo and the author, and the status. The icon shows
+   the tab: `branch` for Mine, `person` for Review and `code` for Team.
+3. When you pick a pull request, the action opens a new Rex window
+   with the label `<name>#N`. The window runs
+   `env CHAOSHUB_REX_LABEL=1 chaoshub [--config <path>] pr <owner/name> <N>`
+   in the `path` of the repo, or in the home directory for a repo
+   without a path. The block label is the PR overview, and the PR view
+   keeps it current.
+
+If you press `esc`, or nobody answers before the time limit, the action
+stops and opens nothing. If the cache has no pull requests, the list
+shows one row that opens nothing.
+
+To install the action, load the file from `~/.config/rex/init.lua`:
+
+```lua
+dofile("/path/to/chaoshub/contrib/rex/chaoshub.lua").setup()
+```
+
+`setup` takes a table with two optional fields:
+
+| Field | What it does |
+|---|---|
+| `bin` | The chaoshub program. The default is `chaoshub`. The Rex server runs `chaoshub list` without a shell, so the program must be on the `PATH` of the server, or `bin` must be a full path. |
+| `config` | The configuration file. The action gives it to `chaoshub list` and `chaoshub pr` as `--config`. |
+
+The action name is `chaoshub_open_pr`. To bind a key to it, add a line
+such as `rex.bind("cmd+shift+o", "chaoshub_open_pr")`. Then run
+`rex config check` and `rex config reload`.
 
 ### Terminal status: OSC 7501 and OSC 9;4
 
