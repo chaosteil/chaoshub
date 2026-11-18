@@ -134,6 +134,14 @@ impl App {
         self
     }
 
+    /// Sets whether chaoshub keeps the label of the Rex block at the PR
+    /// overview. Only for a PR view that a list started in a Rex pane.
+    pub(crate) fn with_rex_label(mut self, on: bool) -> Self {
+        self.state.data.rex_label = on;
+        self.state.bump();
+        self
+    }
+
     /// Turns the notification of new pull requests on with `Some`.
     pub(crate) fn with_notify(mut self, settings: Option<NotifySettings>) -> Self {
         self.state.data.notify.settings = settings;

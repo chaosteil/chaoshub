@@ -52,7 +52,7 @@ use crate::domain::repo::Repo;
 use crate::github::{GITHUB_API, GithubClient, TokenSource};
 use crate::ipc;
 use crate::launch::Launcher;
-use crate::launch::rex::RexLauncher;
+use crate::launch::rex::{self, RexLauncher};
 use crate::osc;
 use crate::store::handle::StoreHandle;
 use crate::store::{Snapshot, Store};
@@ -136,6 +136,10 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     .with_desktop(config.notify.desktop)
     .with_title(config.terminal.title.unwrap_or(detected));
     let launcher = launcher(&config, RexLauncher::from_env())?;
+    // The PR view renames its own block, so it uses the Rex of its env
+    // also with `launcher = "inline"`.
+    let label_rex = RexLauncher::from_env()
+        .filter(|_| rex_label(pinned.is_some(), std::env::var_os(rex::LABEL_ENV)));
     let detail = detail_pane(&DetailArgs {
         mode: config.detail.mode,
         launcher: launcher.is_some(),
@@ -201,6 +205,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     .with_selection_shift(theme.selected_row().shift)
     .with_animations(settings.config.theme.animations)
     .with_title_spinner(title_spinner)
+    .with_rex_label(label_rex.is_some())
     .with_notify(notify);
     // The pinned app comes before the first interest, so the workers
     // start with the pinned interest.
@@ -231,6 +236,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         transitions,
         theme,
         term,
+        label: label_rex.map(|rex| BlockLabel::new(spawn_renames(tokio.handle(), rex))),
         settings,
         drawn: None,
         was_active: false,
@@ -577,7 +583,7 @@ fn detail_pane(args: &DetailArgs) -> Option<DetailPane> {
     Some(DetailPane {
         argv: command,
         cwd: std::env::current_dir().unwrap_or_default(),
-        env: Vec::new(),
+        env: vec![(rex::LABEL_ENV.to_owned(), "1".to_owned())],
         split: Some(args.split.clone()),
         ratio: args.ratio,
     })
@@ -609,6 +615,58 @@ fn list_listener(dir: Option<PathBuf>, tx: mpsc::Sender<Msg>) -> Option<ipc::Lis
 fn list_socket(pinned: bool, env: Option<std::ffi::OsString>) -> Option<PathBuf> {
     env.filter(|path| pinned && !path.is_empty())
         .map(PathBuf::from)
+}
+
+/// True when the PR view keeps the label of its Rex block at the PR
+/// overview: only in the pinned mode, and only when the list started it
+/// (`env`, the value of `CHAOSHUB_REX_LABEL`, is `1`). A PR view that
+/// the user starts in a shell block does not rename that block.
+fn rex_label(pinned: bool, env: Option<std::ffi::OsString>) -> bool {
+    pinned && env.is_some_and(|value| value == "1")
+}
+
+/// Sends each new label of the frame to the rename task.
+#[derive(Debug)]
+struct BlockLabel {
+    /// The last label that went to the task.
+    last: Option<String>,
+    tx: watch::Sender<String>,
+}
+
+impl BlockLabel {
+    fn new(tx: watch::Sender<String>) -> Self {
+        Self { last: None, tx }
+    }
+
+    /// Sends `label` when it is not the last label. `None` keeps the
+    /// label of the block.
+    fn set(&mut self, label: Option<&str>) {
+        let Some(label) = label else {
+            return;
+        };
+        if self.last.as_deref() == Some(label) {
+            return;
+        }
+        self.last = Some(label.to_owned());
+        self.tx.send_replace(label.to_owned());
+    }
+}
+
+/// Starts the task that renames the Rex block of `rex` to each label of
+/// the channel. It runs one `rex block rename` at a time, always for the
+/// newest label, so an old label never comes after a new one. A failure
+/// is only logged.
+fn spawn_renames(handle: &Handle, rex: RexLauncher) -> watch::Sender<String> {
+    let (tx, mut rx) = watch::channel(String::new());
+    handle.spawn(async move {
+        while rx.changed().await.is_ok() {
+            let label = rx.borrow_and_update().clone();
+            if let Err(err) = rex.rename(&label).await {
+                tracing::warn!(%err, %label, "cannot rename the Rex block");
+            }
+        }
+    });
+    tx
 }
 
 /// The key of the pull request of `chaoshub pr OWNER/NAME NUMBER`.
@@ -698,6 +756,9 @@ struct EventLoop {
     transitions: Transitions,
     theme: Theme,
     term: TermWriter,
+    /// The label of the Rex block of the PR view. `None` when chaoshub
+    /// does not set it.
+    label: Option<BlockLabel>,
     settings: Settings,
     /// The generation of the last draw. `None` before the first draw.
     drawn: Option<u64>,
@@ -829,6 +890,9 @@ impl EventLoop {
             let frame = self.app.frame();
             let status = frame.term.clone();
             let title = frame.title.clone();
+            if let Some(label) = &mut self.label {
+                label.set(frame.label.as_deref());
+            }
             let notice = self.app.notice().cloned();
             if let Err(err) = self.term.write(
                 &mut io::stdout(),
@@ -1650,6 +1714,32 @@ mod tests {
     }
 
     #[test]
+    fn only_a_pinned_process_that_a_list_started_sets_the_rex_label() {
+        let on = Some(std::ffi::OsString::from("1"));
+        assert!(rex_label(true, on.clone()));
+        assert!(!rex_label(false, on), "the list mode");
+        assert!(!rex_label(true, None), "the user started it");
+        assert!(!rex_label(true, Some("0".into())));
+    }
+
+    #[test]
+    fn the_block_label_sends_only_a_new_label() {
+        let (tx, mut rx) = watch::channel(String::new());
+        let mut label = BlockLabel::new(tx);
+        label.set(None);
+        assert!(!rx.has_changed().unwrap(), "no label before the PR loads");
+        label.set(Some("#7 Fix the merge · ready"));
+        assert!(rx.has_changed().unwrap());
+        assert_eq!(*rx.borrow_and_update(), "#7 Fix the merge · ready");
+        label.set(Some("#7 Fix the merge · ready"));
+        assert!(!rx.has_changed().unwrap(), "the same label again");
+        label.set(None);
+        assert!(!rx.has_changed().unwrap());
+        label.set(Some("#7 Fix the merge · merged"));
+        assert_eq!(*rx.borrow_and_update(), "#7 Fix the merge · merged");
+    }
+
+    #[test]
     fn the_list_listener_sends_each_event_as_a_message() {
         assert!(list_listener(None, mpsc::channel(1).0).is_none());
         let dir = tempfile::tempdir().unwrap();
@@ -1907,6 +1997,11 @@ mod tests {
             ]
         );
         assert_eq!(detail.cwd, std::env::current_dir().unwrap());
+        assert_eq!(
+            detail.env,
+            [("CHAOSHUB_REX_LABEL".to_owned(), "1".to_owned())],
+            "the PR view keeps the label of its block"
+        );
         assert_eq!(detail.split.as_deref(), Some("below"));
         assert_eq!(detail.ratio, Some(40));
         assert_eq!(

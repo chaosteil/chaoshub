@@ -23,7 +23,7 @@ use crate::app::panes::{PANES, Pane, applicable};
 use crate::app::state::{AppData, AppState, OverlayState, PopupState};
 use crate::app::tabs::{KeyCx, TABS, Tab};
 use crate::app::target::{pr_target, row_target};
-use crate::app::term::{term_status, term_title};
+use crate::app::term::{block_label, term_status, term_title};
 use crate::bus::{
     KeyChord, KeyCode, KeyModifiers, PendingPart, Progress, ReviewKind, Scope, Selection, Size,
     Target, TermState, TermStatus,
@@ -126,6 +126,7 @@ pub(crate) fn frame_model_full<'s>(
             overlays: overlay_models(state, panes, &REGISTRY),
             term,
             title,
+            label: block_label(state),
             filter: filter_model(state),
             hints,
             column_headers: column_headers(state),
@@ -976,6 +977,7 @@ fn empty_frame() -> FrameModel {
             progress: Progress::Off,
         },
         title: "chaoshub".to_owned(),
+        label: None,
         filter: None,
         hints: None,
         column_headers: false,

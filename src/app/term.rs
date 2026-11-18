@@ -107,6 +107,15 @@ pub(crate) fn term_title(state: &AppState, status: &TermStatus) -> String {
     title
 }
 
+/// The label of the Rex block of the standalone PR view: the PR overview
+/// of the title, without the activity. Rex shows its own status for the
+/// activity. `None` when chaoshub does not set the label, and before the
+/// pull request loads: the label of the launch stays until then.
+pub(crate) fn block_label(state: &AppState) -> Option<String> {
+    let key = state.ui.pinned.as_ref().filter(|_| state.data.rex_label)?;
+    state.data.prs.get(key).map(pr_overview)
+}
+
 /// A short overview of a pull request for the title of the standalone PR
 /// view and for the label of its Rex block:
 /// `#7 <title> · <verdict> · <CI> · <reviews>`. The verdict is the
@@ -1030,5 +1039,30 @@ mod tests {
             term_title(&state, &error),
             "#7 Fix the merge · ready · CI passed · approved · error"
         );
+    }
+
+    #[test]
+    fn the_rex_label_of_a_pr_view_is_the_overview_without_the_activity() {
+        let mut view = pinned(ready_pr());
+        assert_eq!(block_label(&view), None, "the label is off");
+        view.data.rex_label = true;
+        assert_eq!(
+            block_label(&view).as_deref(),
+            Some("#7 Fix the merge · ready · CI passed · approved")
+        );
+        view.data.merge = Some(MergeState::new(
+            testdata::pr_key("chaoshub", 7),
+            test_time(),
+        ));
+        assert_eq!(
+            block_label(&view).as_deref(),
+            Some("#7 Fix the merge · ready · CI passed · approved"),
+            "Rex shows the activity itself"
+        );
+        view.data.prs.clear();
+        assert_eq!(block_label(&view), None, "the launch label stays");
+        let mut list = state();
+        list.data.rex_label = true;
+        assert_eq!(block_label(&list), None, "the list has no label");
     }
 }

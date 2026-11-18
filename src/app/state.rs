@@ -129,6 +129,9 @@ pub(crate) struct AppData {
     /// `working` record, as Rex does. The list title then has no
     /// spinner.
     pub title_spinner: bool,
+    /// True in a PR view that a list started in a Rex pane: chaoshub keeps
+    /// the label of the Rex block at the PR overview.
+    pub rex_label: bool,
     /// The notification of new pull requests.
     pub notify: NotifyState,
     /// The parts of pull requests that actions change on GitHub now. Each
@@ -938,6 +941,7 @@ impl AppState {
                 selection_shift: 0,
                 animations: true,
                 title_spinner: true,
+                rex_label: false,
                 notify: NotifyState::default(),
                 pending: PendingMap::default(),
                 computing: BTreeMap::new(),

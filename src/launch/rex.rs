@@ -17,6 +17,10 @@ use crate::bus::LaunchRequest;
 /// The default direction of a new pane.
 pub(crate) const DEFAULT_SPLIT: &str = "right";
 
+/// The env that the list gives to the PR view of its detail pane. With
+/// `1`, the PR view keeps the label of its Rex block at the PR overview.
+pub(crate) const LABEL_ENV: &str = "CHAOSHUB_REX_LABEL";
+
 /// Starts panes in Rex, next to the block of the TUI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RexLauncher {
@@ -94,6 +98,25 @@ impl RexLauncher {
         }
         args.extend(req.argv.iter().map(Into::into));
         args
+    }
+
+    /// `rex block rename` that sets the label of the block of the
+    /// launcher, the block of this process, to `label`. `--` comes before
+    /// the block and the label, so a label that starts with `-` is not an
+    /// option.
+    fn rename_args(&self, label: &str) -> Vec<OsString> {
+        let mut args: Vec<OsString> = vec!["block".into(), "rename".into()];
+        self.push_session(&mut args);
+        args.extend(["--".into(), (&self.block).into(), label.into()]);
+        args
+    }
+
+    /// Sets the label of the block of this process to `label`. Rex shows
+    /// the label in the header of the block.
+    pub(crate) async fn rename(&self, label: &str) -> Result<(), LaunchError> {
+        self.run("block rename", self.rename_args(label))
+            .await
+            .map(drop)
     }
 
     /// `rex zoom` that makes the block fill its window.
@@ -427,6 +450,30 @@ mod tests {
         assert_eq!(
             strings(&rex.close_args(&handle())),
             ["block", "close", "block:02", "-s", "session:01"]
+        );
+    }
+
+    #[test]
+    fn rename_argv_names_the_own_block() {
+        assert_eq!(
+            strings(&launcher().rename_args("#7 Fix the merge · ready")),
+            [
+                "block",
+                "rename",
+                "-s",
+                "session:01",
+                "--",
+                "block:01",
+                "#7 Fix the merge · ready"
+            ]
+        );
+        let rex = RexLauncher {
+            session: None,
+            ..launcher()
+        };
+        assert_eq!(
+            strings(&rex.rename_args("-x")),
+            ["block", "rename", "--", "block:01", "-x"]
         );
     }
 

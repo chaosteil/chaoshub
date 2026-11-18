@@ -694,9 +694,12 @@ The activity follows the overview, for example
 
 The title uses OSC 2. It updates only when its text changes. It clears
 when chaoshub exits or hands the terminal to another program, then
-updates again when chaoshub resumes. It does not rename Rex sessions,
-windows or pane labels. Set `title = false` in `[terminal]` to turn
-title updates off.
+updates again when chaoshub resumes. It does not rename Rex sessions or
+windows. Set `title = false` in `[terminal]` to turn title updates off.
+
+The PR view that the list opens in a Rex pane also keeps the label of
+its Rex block at the overview, without the activity (see "What `enter`
+runs inside Rex"). Rex shows this label in the header of the block.
 
 ### `[notify]`
 
@@ -1627,14 +1630,20 @@ list:
 ```sh
 rex split -b $REX_BLOCK --split=<[detail] split> [--ratio <[detail] ratio>] \
   -c <repo path> --label "<PR overview>" --json -- \
-  env CHAOSHUB_LIST_SOCKET=<socket path> \
+  env CHAOSHUB_REX_LABEL=1 CHAOSHUB_LIST_SOCKET=<socket path> \
   <chaoshub> --config <config path> --no-prefetch [--theme <style>] \
   [--palette <name>] [--repo <owner/name> ...] pr <owner/name> <N>
 ```
 
 The label is the PR overview of the terminal title of the PR view (see
 `[terminal]`), for example `#7 Fix the merge · ready · CI passed ·
-approved`. Rex shows it in the header of the block.
+approved`. Rex shows it in the header of the block. With
+`CHAOSHUB_REX_LABEL=1`, the PR view keeps the label current: when the
+overview changes, it runs `rex block rename [-s <session>] --
+$REX_BLOCK "<PR overview>"`. It runs one rename at a time, always with
+the newest overview. Before the pull request loads, the label of the
+launch stays. A PR view that you start yourself does not rename its
+block.
 
 The pane gets the configuration file and the `--theme`, `--palette` and
 `--repo` options of the list. It always gets `--no-prefetch`, because

@@ -16,6 +16,9 @@ pub(crate) struct FrameModel {
     pub term: TermStatus,
     /// The terminal title, separate from the text drawn in the grid.
     pub title: String,
+    /// The label of the Rex block of the standalone PR view. `None` when
+    /// chaoshub does not set the label (see `AppData::rex_label`).
+    pub label: Option<String>,
     /// The filter line of the active tab, while the user edits it or
     /// while it has text. It takes the last row of the list area.
     pub filter: Option<FilterModel>,
