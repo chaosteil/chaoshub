@@ -1,5 +1,6 @@
 //! Command line types (clap): `--repo`, `--config`, `--no-prefetch`,
-//! `--theme`, `--palette`, `cache clear` and `pr OWNER/NAME NUMBER`.
+//! `--theme`, `--palette`, `cache clear`, `list` and `pr OWNER/NAME
+//! NUMBER`.
 
 use std::path::PathBuf;
 
@@ -59,6 +60,17 @@ pub enum Command {
     /// Manages the SQLite cache.
     #[command(subcommand)]
     Cache(CacheAction),
+    /// Prints the pull requests of the tabs from the cache, and makes no
+    /// GitHub call. The Rex action `chaoshub: open PR…` runs it.
+    List {
+        /// Prints JSON for scripts, in place of lines of text.
+        #[arg(long)]
+        json: bool,
+        /// Prints every open pull request of the cache: no age limit and
+        /// no ready rule.
+        #[arg(long)]
+        all: bool,
+    },
     /// Shows one pull request. The detail pane of the list runs it.
     Pr {
         /// The repo of the pull request, in the `owner/name` form.
@@ -157,6 +169,39 @@ mod tests {
             Some(Command::Cache(CacheAction::Clear))
         );
         assert!(Cli::try_parse_from(["chaoshub", "cache"]).is_err());
+    }
+
+    #[test]
+    fn list_parses() {
+        assert_eq!(
+            parse(&["list"]).command,
+            Some(Command::List {
+                json: false,
+                all: false
+            })
+        );
+        assert_eq!(
+            parse(&["list", "--json", "--all"]).command,
+            Some(Command::List {
+                json: true,
+                all: true
+            })
+        );
+        assert_eq!(
+            parse(&["--config", "/tmp/c.toml", "list", "--json"]),
+            Cli {
+                repo: Vec::new(),
+                config: Some(PathBuf::from("/tmp/c.toml")),
+                no_prefetch: false,
+                theme: None,
+                palette: None,
+                command: Some(Command::List {
+                    json: true,
+                    all: false
+                }),
+            }
+        );
+        assert!(Cli::try_parse_from(["chaoshub", "list", "extra"]).is_err());
     }
 
     #[test]

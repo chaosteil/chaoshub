@@ -124,12 +124,21 @@ pub(crate) fn block_label(state: &AppState) -> Option<String> {
 /// confirm popup. They are not in the title when the pull request has no
 /// checks or needs no review.
 pub(crate) fn pr_overview(pr: &PullRequest) -> String {
+    format!(
+        "#{} {} · {}",
+        pr.key.number,
+        pr.head.value.short_title(),
+        pr_status(pr)
+    )
+}
+
+/// The status part of the PR overview: `<verdict> · <CI> · <reviews>`,
+/// for example `ready · CI passed · approved`. `chaoshub list` prints
+/// it for each pull request.
+pub(crate) fn pr_status(pr: &PullRequest) -> String {
     let head = &pr.head.value;
     let (badge, _) = description::badge(head, pr.ci_state.value);
-    let mut parts = vec![
-        format!("#{} {}", pr.key.number, head.short_title()),
-        badge.to_lowercase(),
-    ];
+    let mut parts = vec![badge.to_lowercase()];
     if head.state == PrState::Open {
         parts.extend(ci_text(pr.ci_state.value).map(str::to_owned));
         parts.extend(review_text(head).map(str::to_owned));

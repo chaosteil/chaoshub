@@ -237,6 +237,7 @@ Command line options:
 | `--theme STYLE` | Uses `punk`, `grunge` or `plain` for this session, in place of `[theme] style`. |
 | `--palette NAME` | Uses `pierre` or `ansi16` for this session, in place of `[theme] palette`. |
 | `cache clear` | Deletes the cache file. The next start syncs from GitHub again. |
+| `list [--json] [--all]` | Prints the pull requests of the tabs from the cache, and makes no GitHub call. See "List the pull requests". |
 | `pr OWNER/NAME NUMBER` | Shows one pull request and nothing else: the panes of the pull request detail. A pull request that is not in the cache loads from GitHub. `q` or `esc` quits. The detail pane inside Rex runs this command. |
 
 To show one pull request, for example #7 of `chaosteil/chaoshub-test`,
@@ -245,6 +246,65 @@ run:
 ```sh
 chaoshub pr chaosteil/chaoshub-test 7
 ```
+
+### List the pull requests
+
+`chaoshub list` prints the open pull requests of the cache that the
+tabs show: first the Mine tab, then the Review tab, then the Team tab,
+in the order of each tab. It is for scripts.
+
+- The command opens the cache read-only. It makes no GitHub call, so
+  the list is as old as the last sync of the TUI. If the cache does not
+  exist, the list is empty.
+- The rules of the normal view apply: the `[filters]` age limit for all
+  tabs, and the ready rule for the Review tab and the Team tab. With
+  `--all`, the command prints every open pull request of the cache, as
+  the `show_hidden` key (`T`) does.
+- The text filter and the author filter of the tabs do not apply.
+- The command reads the configuration file (or `--config`) for the age
+  limit and for the `path` of each repo.
+
+Without `--json`, each line has five fields, split by tab characters:
+the tab, `owner/name#N`, the author, the status and the title.
+
+With `--json`, the command prints one JSON object on one line:
+
+```json
+{
+  "version": 1,
+  "synced_at": "2026-11-18T12:00:00Z",
+  "prs": [
+    {
+      "repo": "chaosteil/chaoshub",
+      "number": 7,
+      "title": "Fix the merge",
+      "author": "chaosteil",
+      "url": "https://github.com/chaosteil/chaoshub/pull/7",
+      "tab": "mine",
+      "state": "open",
+      "draft": false,
+      "review_requested": false,
+      "status": "ready · CI passed · approved",
+      "label": "#7 Fix the merge · ready · CI passed · approved",
+      "path": "/home/me/code/chaoshub"
+    }
+  ]
+}
+```
+
+| Field | What it holds |
+|---|---|
+| `version` | The version of the format, now `1`. A change that removes or renames a field, or changes its meaning, increments it. A new field does not. |
+| `synced_at` | The newest sync time of the cached pull requests, or `null` when the cache holds none. |
+| `repo`, `number` | The pull request. `chaoshub pr <repo> <number>` shows it. |
+| `title`, `author`, `url` | The title, the login of the author and the GitHub URL. |
+| `tab` | `mine`, `review` or `team`. |
+| `state` | `open`. The list holds only open pull requests. |
+| `draft` | True for a draft. |
+| `review_requested` | True when GitHub requests the review of you or of one of your teams. |
+| `status` | The verdict, the CI and the reviews, as in the PR overview (see `[terminal]`). |
+| `label` | The PR overview, for example `#7 Fix the merge · ready · CI passed · approved`. The detail pane inside Rex uses it as the block label. |
+| `path` | The `path` of the `[[repo]]` entry of the repo, or `null`. |
 
 ## Files
 

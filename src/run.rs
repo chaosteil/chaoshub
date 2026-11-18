@@ -39,6 +39,7 @@ use crate::actions::REGISTRY;
 use crate::agent::store::Store as AgentStore;
 use crate::app::exec::{ActionEnv, AgentEnv, Runtime, Senders};
 use crate::app::keymap::Keymap;
+use crate::app::listing;
 use crate::app::{App, DetailPane, Notice, NotifySettings, SPINNER_FRAME};
 use crate::bus::{
     Cmd, DetailReq, HighlightReq, Hit, Interest, JjReq, LaunchRequest, MouseKind, Msg, Progress,
@@ -92,8 +93,8 @@ const SLOW_FRAME: Duration = Duration::from_millis(12);
 /// The crossterm terminal of the event loop.
 type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
 
-/// Runs the command of `cli`: `cache clear`, or the TUI until the user
-/// quits. `pr OWNER/NAME NUMBER` runs the TUI in the pinned mode.
+/// Runs the command of `cli`: `cache clear`, `list`, or the TUI until
+/// the user quits. `pr OWNER/NAME NUMBER` runs the TUI in the pinned mode.
 #[allow(
     clippy::too_many_lines,
     reason = "the composition root builds every part of the session in one place"
@@ -110,6 +111,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     } = cli;
     let pinned = match command {
         Some(Command::Cache(CacheAction::Clear)) => return clear_cache(),
+        Some(Command::List { json, all }) => return list_prs(config_path, json, all),
         Some(Command::Pr { repo, number }) => Some(pinned_key(&repo, number)?),
         None => None,
     };
@@ -736,6 +738,29 @@ fn clear_cache() -> anyhow::Result<()> {
     } else {
         println!("no cache at {}", path.display());
     }
+    Ok(())
+}
+
+/// Prints the pull requests of the tabs from the cache: JSON with `json`,
+/// else lines of text. With `all`, every open pull request of the cache.
+/// It reads the configuration for the age limit and the repo paths. It
+/// opens the cache read-only and makes no GitHub call.
+fn list_prs(config_path: Option<PathBuf>, json: bool, all: bool) -> anyhow::Result<()> {
+    let config_path = config_path
+        .or_else(paths::config_file)
+        .context("the config directory is unknown")?;
+    let config = config::load(&config_path)?;
+    let path = paths::cache_db().context("the cache directory is unknown")?;
+    let snapshot =
+        Store::read(&path).with_context(|| format!("cannot read the cache {}", path.display()))?;
+    let listing = listing::listing(&snapshot, &config, chrono::Utc::now(), all);
+    let mut out = io::stdout().lock();
+    if json {
+        writeln!(out, "{}", listing::json(&listing)?)?;
+    } else {
+        write!(out, "{}", listing::text(&listing))?;
+    }
+    out.flush()?;
     Ok(())
 }
 

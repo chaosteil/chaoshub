@@ -108,6 +108,26 @@ impl Store {
         thread::spawn(conn, path.to_path_buf(), rx)?;
         Ok((snapshot, StoreHandle::new(tx)))
     }
+
+    /// Reads the snapshot of the cache at `path` and changes nothing:
+    /// the connection is read-only, and no store thread starts. A
+    /// missing file and a cache of another schema version give an empty
+    /// snapshot. `chaoshub list` uses it.
+    pub(crate) fn read(path: &Path) -> Result<Snapshot, StoreError> {
+        if !path.exists() {
+            return Ok(Snapshot::default());
+        }
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version != SCHEMA_VERSION {
+            return Ok(Snapshot::default());
+        }
+        rows::load_snapshot(&conn)
+    }
 }
 
 /// Opens the database at `path` and brings the schema to
@@ -380,6 +400,45 @@ mod tests {
 
     fn reopen(path: &Path) -> Snapshot {
         Store::open(path).unwrap().0
+    }
+
+    #[test]
+    fn read_of_a_missing_file_is_empty_and_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache").join("chaoshub.db");
+        assert_eq!(Store::read(&path).unwrap(), Snapshot::default());
+        assert!(!path.exists());
+        assert!(!path.parent().unwrap().exists());
+    }
+
+    #[tokio::test]
+    async fn read_gives_the_open_prs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chaoshub.db");
+        let (_, handle) = Store::open(&path).unwrap();
+        let t = test_time();
+        let open = sample_pr(1, PrState::Open, t);
+        handle
+            .put_prs(Scope::Mine, vec![open.clone()])
+            .await
+            .unwrap();
+        let snapshot = Store::read(&path).unwrap();
+        assert_eq!(snapshot.prs, [(Scope::Mine, open)]);
+        assert_eq!(snapshot.synced_at, Some(t));
+    }
+
+    #[test]
+    fn read_of_another_schema_is_empty_and_keeps_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chaoshub.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE old_table(x); PRAGMA user_version = 99;")
+            .unwrap();
+        drop(conn);
+        assert_eq!(Store::read(&path).unwrap(), Snapshot::default());
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(version(&conn), 99);
+        assert!(tables(&conn).contains(&"old_table".to_owned()));
     }
 
     #[tokio::test]

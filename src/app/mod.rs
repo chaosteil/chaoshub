@@ -8,6 +8,7 @@ mod frame;
 mod help;
 pub(crate) mod keymap;
 pub(crate) mod layout;
+pub(crate) mod listing;
 pub(crate) mod measure;
 mod merge;
 pub(crate) mod models;
