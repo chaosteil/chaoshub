@@ -1562,7 +1562,7 @@ base commit yet, or when the data is longer than 100 KiB.
 Inside Rex, chaoshub opens a pane beside its own block with
 `rex split -b $REX_BLOCK --split=<split> [--ratio <ratio>] -c <repo path>
 --label <label> --json -- nvim ...`. With `zoom`, it runs
-`rex zoom -b <block> --on`. It waits for the pane with `rex wait`. The
+`rex zoom -b <block> --on`. It waits for the pane with `rex wait <block>`. The
 Rex binary is `$REX_BIN_DIR/rex` when that file exists, else `rex` on
 your `PATH`.
 
@@ -1635,7 +1635,7 @@ The pane gets the configuration file and the `--theme`, `--palette` and
 `--repo` options of the list. It always gets `--no-prefetch`, because
 the list already prefetches the pull request of its cursor row. A repo
 without a `path` runs in the directory of the list. chaoshub does not
-zoom the pane. It waits for the pane with `rex wait`. The
+zoom the pane. It waits for the pane with `rex wait <block>`. The
 `CHAOSHUB_LIST_SOCKET` env is there only when the list listens on its
 socket.
 

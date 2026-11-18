@@ -101,11 +101,10 @@ impl RexLauncher {
         vec!["zoom".into(), "-b".into(), block_id.into(), "--on".into()]
     }
 
-    /// `rex wait` for the command of the pane.
+    /// `rex wait` for the command of the pane. The target is the block
+    /// id, because more than one block can have the same label.
     fn wait_args(&self, handle: &LaunchHandle) -> Vec<OsString> {
-        let mut args: Vec<OsString> = vec!["wait".into(), (&handle.label).into()];
-        self.push_session(&mut args);
-        args
+        self.block_args(&["wait"], handle)
     }
 
     fn inspect_args(&self, handle: &LaunchHandle) -> Vec<OsString> {
@@ -326,10 +325,7 @@ mod tests {
                 "/home/me/code/my repo"
             ]
         );
-        assert_eq!(
-            strings(&rex.wait_args(&handle())),
-            ["wait", "chaoshub-review-chaosteil-chaoshub-7-a1b2"]
-        );
+        assert_eq!(strings(&rex.wait_args(&handle())), ["wait", "block:02"]);
         assert_eq!(
             strings(&rex.inspect_args(&handle())),
             ["block", "inspect", "block:02"]
@@ -418,12 +414,7 @@ mod tests {
         );
         assert_eq!(
             strings(&rex.wait_args(&handle())),
-            [
-                "wait",
-                "chaoshub-review-chaosteil-chaoshub-7-a1b2",
-                "-s",
-                "session:01"
-            ]
+            ["wait", "block:02", "-s", "session:01"]
         );
         assert_eq!(
             strings(&rex.inspect_args(&handle())),

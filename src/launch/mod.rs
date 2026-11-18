@@ -15,7 +15,7 @@ use crate::bus::LaunchRequest;
 /// A pane that a launcher started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LaunchHandle {
-    /// The label of the pane, unique per launch.
+    /// The label of the pane. Two panes can have the same label.
     pub label: String,
     /// The id of the pane. It is the label when the launcher did not
     /// report an id.
