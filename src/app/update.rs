@@ -898,10 +898,10 @@ fn open_pr(state: &mut AppState, panes: &[Box<dyn Pane>], key: Option<&PrKey>) -
     open_popup(state, panes, &target, None)
 }
 
-/// Opens `chaoshub pr OWNER/NAME NUMBER` for `target` in the detail
-/// pane. A second open of the same pull request focuses its pane. One
-/// detail pane is open at a time, so the pane of another pull request
-/// closes.
+/// Opens `chaoshub pr OWNER/NAME NUMBER` for `target` in a new detail
+/// pane. A second open of the same pull request focuses its pane. The
+/// detail panes of other pull requests stay open, so each pull request
+/// can have its own pane.
 fn open_pane(state: &mut AppState, target: &Target) -> Vec<Cmd> {
     let Some(detail) = state.data.detail.clone() else {
         return Vec::new();
@@ -911,16 +911,6 @@ fn open_pane(state: &mut AppState, target: &Target) -> Vec<Cmd> {
     if state.data.panes.contains_key(&(DETAIL_ID, key.clone())) {
         return vec![Cmd::FocusPane { id: DETAIL_ID, key }];
     }
-    let mut cmds: Vec<Cmd> = state
-        .data
-        .panes
-        .keys()
-        .filter(|(id, other)| *id == DETAIL_ID && *other != key)
-        .map(|(_, other)| Cmd::CancelAction {
-            id: DETAIL_ID,
-            key: other.clone(),
-        })
-        .collect();
     let PrKey {
         repo: RepoKey { owner, name },
         number,
@@ -941,8 +931,7 @@ fn open_pane(state: &mut AppState, target: &Target) -> Vec<Cmd> {
         split: detail.split,
         ratio: detail.ratio,
     };
-    cmds.push(start_pane(state, DETAIL_ID, key, request));
-    cmds
+    vec![start_pane(state, DETAIL_ID, key, request)]
 }
 
 /// Opens the pull request popup for `target`, on the pane with the id
@@ -8364,22 +8353,80 @@ mod tests {
     }
 
     #[test]
-    fn enter_on_another_pull_request_replaces_the_detail_pane() {
+    fn enter_on_another_pull_request_opens_a_new_pane_and_keeps_the_open_one() {
         let mut state = detail_state();
         enter(&mut state);
+        let first = TargetKey::Pr(testdata::pr_key("chaoshub", 99));
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::PaneStarted {
+                id: DETAIL_ID,
+                key: first.clone(),
+            },
+        );
         key(&mut state, 'j');
         assert_eq!(selected_number(&mut state), Some(103));
         let cmds = enter(&mut state);
-        assert_eq!(cmds.len(), 2, "{cmds:?}");
+        assert_eq!(cmds.len(), 1, "no close of the open pane: {cmds:?}");
+        let (second, _) = detail_run(&cmds[0]);
+        assert_eq!(second, TargetKey::Pr(testdata::pr_key("chaoshub", 103)));
         assert_eq!(
-            cmds[0],
-            Cmd::CancelAction {
-                id: DETAIL_ID,
-                key: TargetKey::Pr(testdata::pr_key("chaoshub", 99)),
-            }
+            state.data.panes.get(&(DETAIL_ID, first.clone())),
+            Some(&PaneHandleState::Running),
+            "the pane of #99 stays open"
         );
-        let (key, _) = detail_run(&cmds[1]);
-        assert_eq!(key, TargetKey::Pr(testdata::pr_key("chaoshub", 103)));
+        assert_eq!(
+            state.data.panes.get(&(DETAIL_ID, second.clone())),
+            Some(&PaneHandleState::Starting)
+        );
+        key(&mut state, 'k');
+        assert_eq!(selected_number(&mut state), Some(99));
+        assert_eq!(
+            enter(&mut state),
+            vec![Cmd::FocusPane {
+                id: DETAIL_ID,
+                key: first.clone(),
+            }],
+            "enter on #99 focuses its pane"
+        );
+    }
+
+    #[test]
+    fn the_end_of_one_detail_pane_keeps_the_other_panes() {
+        let mut state = detail_state();
+        enter(&mut state);
+        key(&mut state, 'j');
+        enter(&mut state);
+        let first = TargetKey::Pr(testdata::pr_key("chaoshub", 99));
+        let second = TargetKey::Pr(testdata::pr_key("chaoshub", 103));
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::PaneEnded {
+                id: DETAIL_ID,
+                key: first.clone(),
+            },
+        );
+        assert!(!state.data.panes.contains_key(&(DETAIL_ID, first)));
+        assert!(state.data.panes.contains_key(&(DETAIL_ID, second.clone())));
+        assert_eq!(
+            enter(&mut state),
+            vec![Cmd::FocusPane {
+                id: DETAIL_ID,
+                key: second,
+            }],
+            "the pane of #103 is still open"
+        );
+        key(&mut state, 'k');
+        let cmds = enter(&mut state);
+        assert_eq!(cmds.len(), 1, "{cmds:?}");
+        let (key, _) = detail_run(&cmds[0]);
+        assert_eq!(
+            key,
+            TargetKey::Pr(testdata::pr_key("chaoshub", 99)),
+            "a closed pane opens again"
+        );
     }
 
     #[test]

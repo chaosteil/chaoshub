@@ -936,9 +936,12 @@ Inside Rex, `enter` runs `chaoshub pr OWNER/NAME N` in a Rex pane beside
 the list, and the pane takes the focus. The pane shows the panes of the
 pull request and nothing else. `q` or `esc` in the pane closes the pane,
 and the list then syncs the pull request again and scans its repo.
-`enter` on another pull request replaces the pane. `enter` on the same
-pull request focuses the pane. A quit of the list closes the pane. A
-quit of the pane leaves a codeview review from `v` open.
+`enter` on another pull request opens a new pane for that pull
+request, and the panes that are open stay open. Each new pane splits
+the list block, with the `[detail] split` and `[detail] ratio`. `enter`
+on a pull request that has an open pane focuses that pane. A quit of
+the list closes all its panes. A quit of a pane leaves a codeview
+review from `v` open.
 
 Outside Rex, `enter` opens the sidebar. The sidebar slides in from the
 right and covers 80% of the width, over the list rows. The tab bar, the
