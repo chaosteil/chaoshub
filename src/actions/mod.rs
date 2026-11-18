@@ -167,6 +167,9 @@ fn own_part(sel: &Selection, part: PendingPart, expect: Expect) -> Vec<Pending> 
 }
 
 /// The ids and the default keys that occur more than once in `actions`.
+/// The key of the reply does not count. It works only in the
+/// conversation pane, and the actions menu never shows the reply as an
+/// action, so it can have the key of a menu action.
 fn duplicates(actions: &[Box<dyn Action>]) -> (Vec<&'static str>, Vec<KeyChord>) {
     let mut ids = Vec::new();
     let mut keys = Vec::new();
@@ -178,7 +181,7 @@ fn duplicates(actions: &[Box<dyn Action>]) -> (Vec<&'static str>, Vec<KeyChord>)
             dup_ids.push(id);
         }
         ids.push(id);
-        if let Some(key) = action.default_key() {
+        if let Some(key) = action.default_key().filter(|_| id != REPLY_ID) {
             if keys.contains(&key) {
                 dup_keys.push(key);
             }
@@ -350,6 +353,7 @@ mod tests {
             Box::new(FakeAction::new("b", 'x')),
             Box::new(no_key.clone()),
             Box::new(FakeAction { id: "d", ..no_key }),
+            Box::new(FakeAction::new(REPLY_ID, 'x')),
         ];
         let (ids, keys) = duplicates(&actions);
         assert_eq!(ids, ["a"]);

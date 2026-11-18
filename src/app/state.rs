@@ -855,7 +855,10 @@ impl ActionMenu {
     /// The rows of the menu: the key and the label of each action of
     /// `actions` in `ids`, then of each pane action, with an empty row
     /// for each gap. A disabled action also shows its reason in
-    /// parentheses. An action without a key shows only its label.
+    /// parentheses. An action without a key shows only its label. In the
+    /// menu, an action key wins over a pane key, so a pane action with
+    /// the key of an action in `ids` also shows only its label. `enter`
+    /// on it still runs it.
     pub(crate) fn items(
         &self,
         data: &AppData,
@@ -883,11 +886,13 @@ impl ActionMenu {
                     Applicability::Enabled | Applicability::Hidden => text,
                 }
             })
-            .chain(
-                self.pane
-                    .iter()
-                    .map(|action| format!("{}  {}", frame::key_text(action.key), action.label)),
-            )
+            .chain(self.pane.iter().map(|action| {
+                if self.ids.iter().any(|id| keymap.matches(id, action.key)) {
+                    action.label.clone()
+                } else {
+                    format!("{}  {}", frame::key_text(action.key), action.label)
+                }
+            }))
             .enumerate()
             .flat_map(|(item, text)| {
                 let gap = self.gaps.contains(&item).then(String::new);

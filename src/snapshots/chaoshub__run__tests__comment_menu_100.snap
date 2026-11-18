@@ -11,7 +11,7 @@ expression: "screen(&mut comment_menu_app(100, 30))"
 "▶ └ feat(app): Pane ▌ ▶   alice · commented 5m ago                                                 ┃"
 " ─ docs: describe th▌      Looks good, one question about layout.                                  ┃"
 "                    ▌      👍 ◢━ COMMENT OF ALICE ╱━━━━━━━━━━━━━━╱╱╱━◥                             ┃" Hidden by multi-width symbols: [(28, " ")]
-"                    ▌  ▾ src/u▌▶  R  reply                         ◤◤┃                             ┃"
+"                    ▌  ▾ src/u▌▶  r  reply                         ◤◤┃                             ┃"
 "                    ▌      bob▌                                      ┃                             ┃"
 "                    ▌        O▌  1  👍 thumbs up ✓                   ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
 "                    ▌         ▌  2  👎 thumbs down                   ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]

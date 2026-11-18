@@ -13,7 +13,7 @@
 //! already has shows a `✓`, and the menu removes it again, as GitHub
 //! does.
 //!
-//! The reply key (`R`) opens a text box for the comment of the cursor.
+//! The reply key (`r`) opens a text box for the comment of the cursor.
 //! On a thread or a comment in a thread, the reply goes into the thread.
 //! On an issue comment or a review, the reply is a new comment on the
 //! pull request that starts with a quote of the author and the first
@@ -870,7 +870,7 @@ mod tests {
             assert_eq!(
                 lines(&menu),
                 [
-                    "R  reply",
+                    "r  reply",
                     "1  👍 thumbs up ✓",
                     "2  👎 thumbs down",
                     "3  😄 laugh",
@@ -1175,7 +1175,7 @@ mod tests {
         );
     }
 
-    /// The reply of the `R` key with the cursor on the node `cursor`,
+    /// The reply of the `r` key with the cursor on the node `cursor`,
     /// after the keys `keys`.
     fn reply_at(state: &AppState, keys: &[KeyCode], cursor: usize) -> ReplySpec {
         let mut ps = Conversation.init_state();
@@ -1191,7 +1191,7 @@ mod tests {
             keys: &crate::app::keymap::DEFAULT,
         };
         let r = KeyChord {
-            code: KeyCode::Char('R'),
+            code: KeyCode::Char('r'),
             mods: KeyModifiers::NONE,
         };
         let handled = Conversation.handle_key(r, &cx, &mut ps).unwrap();
@@ -1263,7 +1263,7 @@ mod tests {
             keys: &crate::app::keymap::DEFAULT,
         };
         let r = KeyChord {
-            code: KeyCode::Char('R'),
+            code: KeyCode::Char('r'),
             mods: KeyModifiers::NONE,
         };
         for cursor in 3..=6 {
@@ -1324,7 +1324,7 @@ mod tests {
         };
         let mut ps = Conversation.init_state();
         let actions = Conversation.actions(&cx, &ps);
-        assert_eq!(actions, [PaneAction::char('R', "reply to the comment")]);
+        assert_eq!(actions, [PaneAction::char('r', "reply to the comment")]);
         let handled = Conversation.run_action(actions[0].key, &cx, &mut ps);
         assert_eq!(
             handled.and_then(|h| h.reply).map(|s| s.to),

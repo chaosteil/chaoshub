@@ -36,7 +36,7 @@ impl Action for Reply {
 
     fn default_key(&self) -> Option<KeyChord> {
         Some(KeyChord {
-            code: KeyCode::Char('R'),
+            code: KeyCode::Char('r'),
             mods: KeyModifiers::NONE,
         })
     }

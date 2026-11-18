@@ -3371,7 +3371,7 @@ mod tests {
     fn reply_text_app(width: u16, height: u16) -> App {
         let mut app = conversation_app(width, height);
         press(&mut app, 'g');
-        press(&mut app, 'R');
+        press(&mut app, 'r');
         type_keys(&mut app, "It keeps the gutter.");
         app
     }

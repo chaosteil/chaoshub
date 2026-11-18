@@ -21,7 +21,7 @@ expression: screen(&mut app)
 "                                                            ▌ a             pick an author         ┃"
 "                                                            ▌ t             show all open          ┃"
 "                                                            ▌ T             show the hidden rows   ┃"
-"                                                            ▌ r             refresh                ┃"
+"                                                            ▌ R             refresh                ┃"
 "                                                            ▌ H             show or hide the colu… ┃"
 "                                                            ▌ q esc ctrl-c  quit                   ┃"
 "                                                            ▌                                      ┃"

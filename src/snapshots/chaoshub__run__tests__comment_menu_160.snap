@@ -16,7 +16,7 @@ expression: "screen(&mut comment_menu_app(160, 40))"
 "                                ▌        Off by one?                                                                                                           ┃"
 "                                ▌        👀 1                                                                                                                  ┃" Hidden by multi-width symbols: [(42, " ")]
 "                                ▌      chaosteil · <1m ago  ◢━ COMMENT OF ALICE ╱━━━━━━━━━━━━━━╱╱╱━◥                                                           ┃"
-"                                ▌        Fixed.             ▌▶  R  reply                         ◤◤┃                                                           ┃"
+"                                ▌        Fixed.             ▌▶  r  reply                         ◤◤┃                                                           ┃"
 "                                ▌  ▸ src/ui/pane.rs:7 · 1 co▌                                      ┃                                                           ┃"
 "                                ▌    bob · requested changes▌  1  👍 thumbs up ✓                   ┃                                                           ┃" Hidden by multi-width symbols: [(67, " ")]
 "                                ▌      Please split the tran▌  2  👎 thumbs down                   ┃                                                           ┃" Hidden by multi-width symbols: [(67, " ")]

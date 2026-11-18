@@ -920,7 +920,7 @@ for `[keys]`.
 | `authors` | `a` | Opens the author picker of the Review or the Team tab. |
 | `toggle_all` | `t` | On the Review and the Team tab, shows every open pull request, not only the ready ones. |
 | `show_hidden` | `T` | Shows every open pull request of the active tab, also the rows that the age limit, the ready rule, the author picker and the filter text hide (see "Hidden rows"). Only the help overlay shows this key, not the key hint bar. |
-| `refresh` | `r` | Syncs both lists now. In the pull request detail, syncs the pull request and its stack, and scans its repo. |
+| `refresh` | `R` | Syncs both lists now. In the pull request detail, syncs the pull request and its stack, and scans its repo. |
 | `column_headers` | `H` | Shows or hides the header row with the column names. chaoshub saves the choice in the cache. |
 | `help` | `?` | Shows the help overlay with every binding. |
 | `quit` | `q`, `esc`, `ctrl-c` | Quits. When the sidebar or an overlay is open, `esc` and `q` close it first. While you type a filter, `esc` clears the filter. `ctrl-c` quits from everywhere. |
@@ -952,7 +952,7 @@ selects the next pane:
 |---|---|---|
 | `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the pull request has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments (1 on an older push) · space r to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
 | `2` | Checks | One row per check, with its state and its duration. |
-| `3` | Conversation | The comments, the reviews and the review threads, in time order, with the reactions of each comment. `R` replies to the comment of the cursor (see "Replies" below). `enter` on a thread expands or collapses it. `enter` on a comment opens the comment menu: reply, or react (see "Reactions" below). |
+| `3` | Conversation | The comments, the reviews and the review threads, in time order, with the reactions of each comment. `r` replies to the comment of the cursor (see "Replies" below). `enter` on a thread expands or collapses it. `enter` on a comment opens the comment menu: reply, or react (see "Reactions" below). |
 | `4` | Files | The changed files as a tree, with the diff of each file inline. See "Diff colors" below. |
 | `5` | Stack | The entries of the stack. Only for a stacked pull request. For a pull request without a stack, the tab shows dim, and `5`, `tab` and a click do not select it. The cursor starts on the pull request of the detail. Enter opens the detail of the entry under the cursor on top, and `esc` goes back. `o` opens the page of that entry. |
 | `6` | Agent | The pr-agent results: one section per tool. Only for a repo with a `path`. For a repo without a `path`, the tab shows dim, and `6`, `tab` and a click do not select it. |
@@ -968,8 +968,8 @@ more rows than it shows, a thin scrollbar shows at its right edge. The
 mouse does not use the scrollbar.
 
 In the detail, only the keys that change nothing on GitHub work
-directly: the navigation keys, `r` (refresh), `v` (codeview), `o`
-(browser), `y` and `i` (copy). In the conversation pane, `R` opens the
+directly: the navigation keys, `R` (refresh), `v` (codeview), `o`
+(browser), `y` and `i` (copy). In the conversation pane, `r` opens the
 text box of a reply. Only `ctrl-s` in the text box sends the reply to
 GitHub. `enter` on a comment opens the comment menu, and only a key of
 the menu sends a reaction. The other actions are in the actions
@@ -993,10 +993,12 @@ already. To bind a direct key for an action in the detail, see
 
 #### Replies
 
-In the conversation pane, `R` opens a text box for a reply to the
-comment of the cursor. The key hint bar shows `R reply`. `space` then
-`R` does the same. The place of the reply depends on the line of the
-cursor:
+In the conversation pane, `r` opens a text box for a reply to the
+comment of the cursor. The key hint bar shows `r reply`. In the
+actions menu, the action key wins: `space` then `r` opens the Review
+popup. The menu also shows the reply, without a key. Move the cursor to
+it and press `enter` to reply. The place of the reply depends on the
+line of the cursor:
 
 | Cursor on | The reply |
 |---|---|
@@ -1033,7 +1035,7 @@ expand/react`.
 
 | Key in the menu | What it does |
 |---|---|
-| `R` | Opens the text box of a reply, as `R` in the pane (see "Replies"). |
+| `r` | Opens the text box of a reply, as `r` in the pane (see "Replies"). |
 | `1` | 👍 thumbs up |
 | `2` | 👎 thumbs down |
 | `3` | 😄 laugh |
@@ -1279,7 +1281,7 @@ the selected row or of the detail. These bindings have no default.
 | `copy_change_id` | `i` | Copies the jj change id of the local change that matches the pull request. In a git repo, it copies the local branch name, and the actions menu shows "copy the branch name". Hidden when no local change matches. |
 | `agent` | `p` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
 | `codeview_send` | `r` | Opens the Review popup. There you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). |
-| `reply` | `R` | Only in the conversation pane of the pull request detail: replies to the comment of the cursor (see "Replies"). The actions menu shows it only as an action of the conversation pane. |
+| `reply` | `r` | Only in the conversation pane of the pull request detail: replies to the comment of the cursor (see "Replies"). The actions menu shows it only as an action of the conversation pane, without a key, because `r` there opens the Review popup. |
 | `react` | none | Only in the comment menu of the conversation pane: adds or removes your reaction on the comment (see "Reactions"). It has no key of its own, and the actions menu does not show it. |
 
 A merge of a stacked pull request includes every entry up to it. A
@@ -1315,7 +1317,7 @@ only while an item pulses.
 | Merge (`m`), stack merge (`s`) | The row of each entry that the merge merges, in the list and in the Stack pane, and the badge of the Description pane. |
 | Close (`c`), draft (`d`) | The row and the badge of the Description pane. |
 | Rerun the checks (`x`) | The row, `CHECKS` in the Description pane, and each failed check in the Checks pane. |
-| Reply (`R`) | The row, and the thread header in the Conversation pane, or a `sending your comment…` line at the end. |
+| Reply (`r`) | The row, and the thread header in the Conversation pane, or a `sending your comment…` line at the end. |
 | Reaction | The row, and the reaction in the Conversation pane. |
 
 The header of the pull request popup is plain text. It cannot pulse,
@@ -1714,7 +1716,7 @@ and OSC 9;4 is the progress bar. Every OSC 7501 record has
 | Situation | OSC 7501 | OSC 9;4 |
 |---|---|---|
 | Idle | `state=idle` | off |
-| First sync or `r` sync | `state=working`, `syncing <n> repos` (`syncing 1 repo`) | indeterminate |
+| First sync or `R` sync | `state=working`, `syncing <n> repos` (`syncing 1 repo`) | indeterminate |
 | Prefetch of more than one ref | `state=working`, `prefetching` | percent done |
 | Confirm or prompt popup open | `state=blocked`, `kind=question`, the popup title | unchanged |
 | Merge pending | `state=working`, `merging #N` | indeterminate |

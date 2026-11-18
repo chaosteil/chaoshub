@@ -4211,7 +4211,7 @@ mod tests {
         let mine = FakeTab::new("one");
         let tabs: Vec<Box<dyn Tab>> = vec![Box::new(mine)];
         let mut state = AppState::with_tabs(SIZE, &tabs);
-        let r = press(KeyCode::Char('r'), KeyModifiers::NONE);
+        let r = press(KeyCode::Char('R'), KeyModifiers::NONE);
         assert_eq!(
             run(&mut state, &tabs, r.clone()),
             vec![fake_interest()],
@@ -6040,8 +6040,6 @@ mod tests {
     fn the_state_keys_do_nothing_directly_in_the_list() {
         let actions = state_actions();
         let mut state = action_state(&pr_row(102));
-        // `r` is also the refresh key, so it can send commands, but no
-        // action.
         for c in ['r', 'd', 'x', 'm', 's', 'c', 'p'] {
             let cmds = act(&mut state, &actions, KeyCode::Char(c));
             assert!(
@@ -6465,8 +6463,6 @@ mod tests {
     fn the_state_keys_do_nothing_directly_in_the_sidebar() {
         let actions = state_actions();
         let mut state = sidebar_state(102, &actions);
-        // `r` is also the refresh key, so it can send commands, but no
-        // action.
         for c in ['r', 'd', 'x', 'm', 's', 'c', 'p'] {
             let cmds = act(&mut state, &actions, KeyCode::Char(c));
             assert!(
@@ -6545,7 +6541,7 @@ mod tests {
             press(KeyCode::Enter, KeyModifiers::NONE),
         );
         key(&mut state, '6');
-        assert_eq!(key(&mut state, 'r').len(), 4, "r refreshes");
+        assert_eq!(key(&mut state, 'R').len(), 4, "R refreshes");
         assert_eq!(key(&mut state, 'i'), vec![], "i is in the menu");
         key(&mut state, ' ');
         assert_eq!(
@@ -8120,9 +8116,9 @@ mod tests {
     }
 
     #[test]
-    fn r_in_the_pinned_popup_loads_then_refreshes() {
+    fn refresh_in_the_pinned_popup_loads_then_refreshes() {
         let mut state = pinned(not_cached());
-        assert_eq!(key(&mut state, 'r'), vec![Cmd::LoadPr(not_cached())]);
+        assert_eq!(key(&mut state, 'R'), vec![Cmd::LoadPr(not_cached())]);
         let pr = testdata::pr("chaoshub", 500, "Loaded");
         update(
             &mut state,
@@ -8130,7 +8126,7 @@ mod tests {
             Msg::PrRefreshed(Box::new(pr.clone())),
         );
         assert_eq!(
-            key(&mut state, 'r'),
+            key(&mut state, 'R'),
             vec![
                 Cmd::RefreshPr(vec![pr_ref(&pr)]),
                 Cmd::ReloadDetail(vec![pr_ref(&pr)]),
@@ -8179,7 +8175,7 @@ mod tests {
     }
 
     #[test]
-    fn r_in_the_sidebar_refreshes_the_stack_group() {
+    fn refresh_in_the_sidebar_refreshes_the_stack_group() {
         let mut state = mine_state(10);
         key(&mut state, 'j');
         update(
@@ -8191,7 +8187,7 @@ mod tests {
         assert_eq!(refs.len(), 3);
         let target = vec![pr_ref(&state.data.prs[&testdata::pr_key("chaoshub", 103)])];
         assert_eq!(
-            key(&mut state, 'r'),
+            key(&mut state, 'R'),
             vec![
                 Cmd::RefreshPr(refs),
                 Cmd::ReloadDetail(target),
@@ -8982,8 +8978,13 @@ mod tests {
         assert!(!ids.contains(&"approve"), "{ids:?}");
         assert!(!ids.contains(&"request_changes"), "{ids:?}");
         let (mut state, _) = codeview_state();
+        // `R` is the refresh key, so it can send commands, but no action.
         for c in ['A', 'R'] {
-            assert_eq!(key(&mut state, c), vec![], "{c} does nothing directly");
+            let cmds = key(&mut state, c);
+            assert!(
+                !cmds.iter().any(|cmd| matches!(cmd, Cmd::RunAction { .. })),
+                "{c} sends nothing directly: {cmds:?}"
+            );
             assert!(matches!(top(&state), OverlayState::Popup(_)), "{c}");
         }
     }
@@ -9567,9 +9568,32 @@ mod tests {
     }
 
     #[test]
+    fn r_replies_and_shift_r_refreshes_in_the_conversation_pane() {
+        let (mut state, pr) = reply_state();
+        let cmds = key(&mut state, 'R');
+        assert!(
+            cmds.contains(&Cmd::LoadCodeview(pr.clone())),
+            "R refreshes in the conversation pane: {cmds:?}"
+        );
+        assert!(matches!(top(&state), OverlayState::Popup(_)));
+        assert_eq!(key(&mut state, 'r'), vec![], "the pane key wins");
+        assert_eq!(reply_box(&state).0, "comment on #99");
+        esc(&mut state);
+        update(&mut state, &Keymap::default(), Msg::TransitionsDone);
+        assert!(matches!(top(&state), OverlayState::Popup(_)));
+        close_overlay(&mut state);
+        update(&mut state, &Keymap::default(), Msg::TransitionsDone);
+        let cmds = key(&mut state, 'R');
+        assert!(
+            cmds.iter().any(|cmd| matches!(cmd, Cmd::SyncNow(_))),
+            "R refreshes in the list: {cmds:?}"
+        );
+    }
+
+    #[test]
     fn r_on_a_comment_quotes_it_and_ctrl_s_sends_a_comment() {
         let (mut state, pr) = reply_state();
-        assert_eq!(key(&mut state, 'R'), vec![]);
+        assert_eq!(key(&mut state, 'r'), vec![]);
         let (title, text, reply) = reply_box(&state);
         assert_eq!(title, "comment on #99");
         assert_eq!(
@@ -9611,7 +9635,7 @@ mod tests {
         let (mut state, _) = reply_state();
         key(&mut state, 'j');
         key(&mut state, 'j');
-        key(&mut state, 'R');
+        key(&mut state, 'r');
         let (title, text, reply) = reply_box(&state);
         assert_eq!((title, text), ("reply on src/ui/list.rs:42", ""));
         let to = ReplyTo::Thread {
@@ -9636,7 +9660,7 @@ mod tests {
     #[test]
     fn an_empty_or_unchanged_reply_sends_nothing_and_esc_drops_it() {
         let (mut state, _) = reply_state();
-        key(&mut state, 'R');
+        key(&mut state, 'r');
         assert_eq!(ctrl(&mut state, 's'), vec![], "only the quote");
         assert_eq!(
             status_text(&state),
@@ -9645,21 +9669,21 @@ mod tests {
         assert!(sidebar(&state).is_some());
         key(&mut state, 'j');
         key(&mut state, 'j');
-        key(&mut state, 'R');
+        key(&mut state, 'r');
         type_text(&mut state, " \n ");
         assert_eq!(ctrl(&mut state, 's'), vec![], "only white space");
-        key(&mut state, 'R');
+        key(&mut state, 'r');
         type_text(&mut state, "never sent");
         assert_eq!(esc(&mut state), vec![]);
         assert!(sidebar(&state).is_some(), "esc closes only the text box");
-        key(&mut state, 'R');
+        key(&mut state, 'r');
         assert_eq!(reply_box(&state).1, "", "the dropped text is gone");
     }
 
     #[test]
     fn the_editor_fills_the_reply() {
         let (mut state, _) = reply_state();
-        key(&mut state, 'R');
+        key(&mut state, 'r');
         let quote = "> @alice: Looks good, one question about `layout`.\n\n";
         assert_eq!(ctrl(&mut state, 'e'), vec![Cmd::EditText(quote.into())]);
         update(
@@ -9685,11 +9709,28 @@ mod tests {
         assert!(!menu.ids.contains(&"reply"), "the action is hidden");
         assert_eq!(
             menu.pane,
-            [PaneAction::char('R', "reply to the comment")],
+            [PaneAction::char('r', "reply to the comment")],
             "the pane has the reply"
         );
-        assert_eq!(key(&mut state, 'R'), vec![]);
+        let items = menu.items(&state.data, &Keymap::default(), &REGISTRY);
+        assert_eq!(
+            items.last().map(String::as_str),
+            Some("reply to the comment"),
+            "the review action has the key r, so the reply shows no key"
+        );
+        let reply = menu.len() - 1;
+        for _ in 0..reply {
+            key(&mut state, 'j');
+        }
+        assert_eq!(enter(&mut state), vec![]);
         assert_eq!(reply_box(&state).0, "comment on #99");
+    }
+
+    #[test]
+    fn space_then_r_in_the_conversation_pane_opens_the_review_popup() {
+        let (mut state, pr) = reply_state();
+        assert_eq!(menu(&mut state, 'r'), vec![Cmd::LoadCodeview(pr.clone())]);
+        assert_eq!(&dialog(&state).pr().key, &pr);
     }
 
     #[test]
@@ -10535,7 +10576,7 @@ mod tests {
             panic!("no picker");
         };
         assert_eq!(title, "comment of alice");
-        assert_eq!(items[0], "R  reply");
+        assert_eq!(items[0], "r  reply");
         assert_eq!(items[1], "", "the gap row");
         assert_eq!(items[2], "1  👍 thumbs up ✓");
         assert_eq!(esc(&mut state), vec![]);
@@ -10627,7 +10668,7 @@ mod tests {
             reaction(ThumbsUp, 2, false)
         );
         enter(&mut state);
-        assert_eq!(key(&mut state, 'R'), vec![], "R in the menu is the reply");
+        assert_eq!(key(&mut state, 'r'), vec![], "r in the menu is the reply");
         assert!(matches!(
             top(&state),
             OverlayState::ReviewText { reply: Some(_), .. }
