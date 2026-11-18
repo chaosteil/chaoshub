@@ -12,7 +12,7 @@ use textwrap::core::display_width;
 use crate::actions::{Action, Applicability, REGISTRY};
 use crate::app::age::age;
 use crate::app::keymap::{self, Keymap};
-use crate::app::layout::{Areas, layout_full};
+use crate::app::layout::{Areas, layout_full, without_popup_title};
 use crate::app::models::{
     Cell, CellStyle, FilterModel, FrameModel, HINT_CUT, HINT_GAP, HINT_PREFIX, KeyHint,
     KeyHintsModel, ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, StatusModel,
@@ -272,7 +272,7 @@ fn popup_content(
             "this pull request is gone"
         };
         return OverlayContent::Popup {
-            title: format!("#{}", popup.key.number),
+            title: popup_title(data, pinned, || format!("#{}", popup.key.number)),
             subtitle: subtitle.into(),
             tabs: Vec::new(),
             active: 0,
@@ -329,7 +329,9 @@ fn popup_content(
         ),
     };
     OverlayContent::Popup {
-        title: format!("#{} {}", pr.key.number, head.title),
+        title: popup_title(data, pinned, || {
+            format!("#{} {}", pr.key.number, head.title)
+        }),
         subtitle: format!(
             "{} · {} -> {} · {state}{tag}",
             head.author, head.head_ref, head.base_ref
@@ -339,6 +341,18 @@ fn popup_content(
         pane,
         cursor,
         scroll,
+    }
+}
+
+/// The title row of the pull request popup. It is empty in a PR view
+/// whose Rex block shows the PR overview as its label
+/// (`AppData::rex_label`): the popup then has no title row, and the
+/// pane gets the row.
+fn popup_title(data: &AppData, pinned: bool, title: impl FnOnce() -> String) -> String {
+    if pinned && data.rex_label {
+        String::new()
+    } else {
+        title()
     }
 }
 
@@ -698,11 +712,13 @@ fn fit(hints: Vec<KeyHint>, width: usize) -> Vec<KeyHint> {
 /// The areas of the terminal size, with the key hint bar when the key
 /// hints are on, for the list mode or the pinned mode.
 pub(crate) fn areas(state: &AppState) -> Areas {
-    layout_full(
-        state.data.size,
-        state.cache.key_hints,
-        state.ui.pinned.is_some(),
-    )
+    let pinned = state.ui.pinned.is_some();
+    let areas = layout_full(state.data.size, state.cache.key_hints, pinned);
+    if pinned && state.data.rex_label {
+        without_popup_title(areas)
+    } else {
+        areas
+    }
 }
 
 /// The size of the list area that the tab models fill: the list area

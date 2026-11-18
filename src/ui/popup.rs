@@ -16,7 +16,8 @@ use crate::ui::hits::HitMap;
 use crate::ui::{pane, text};
 
 /// The rows above the pane with one row of pane tabs: title, subtitle,
-/// pane tabs and a rule. Each more row of pane tabs adds one.
+/// pane tabs and a rule. Each more row of pane tabs adds one. An empty
+/// title has no row.
 const HEADER_ROWS: u16 = 4;
 
 /// The content of the popup, borrowed from the overlay model.
@@ -94,25 +95,28 @@ pub(crate) fn render(
     );
     let rows = pane_tab_rows(popup.tabs, inner.width);
     let tab_rows = u16::try_from(rows.len()).unwrap_or(u16::MAX);
-    let header = HEADER_ROWS.saturating_add(tab_rows - 1);
+    let title_rows = u16::from(!popup.title.is_empty());
+    let header = (HEADER_ROWS - 1 + title_rows).saturating_add(tab_rows - 1);
     if inner.height < header || inner.width == 0 {
         return;
     }
     let width = usize::from(inner.width);
+    if title_rows > 0 {
+        buf.set_string(
+            inner.x,
+            inner.y,
+            text::truncate(popup.title, width),
+            Style::new().fg(p.fg).add_modifier(Modifier::BOLD),
+        );
+    }
     buf.set_string(
         inner.x,
-        inner.y,
-        text::truncate(popup.title, width),
-        Style::new().fg(p.fg).add_modifier(Modifier::BOLD),
-    );
-    buf.set_string(
-        inner.x,
-        inner.y + 1,
+        inner.y + title_rows,
         text::truncate(popup.subtitle, width),
         Style::new().fg(p.fg_mute),
     );
     for (row, range) in (0..).zip(rows) {
-        let tabs_area = Rect::new(inner.x, inner.y + 2 + row, inner.width, 1);
+        let tabs_area = Rect::new(inner.x, inner.y + title_rows + 1 + row, inner.width, 1);
         let first = range.start;
         tabs_line(
             &popup.tabs[range],

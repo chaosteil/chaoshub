@@ -1645,6 +1645,13 @@ the newest overview. Before the pull request loads, the label of the
 launch stays. A PR view that you start yourself does not rename its
 block.
 
+Because the header of the block shows the overview, the PR view with
+`CHAOSHUB_REX_LABEL=1` has no title row. Its first row is the author
+and the branches, and the panes get the row. The label cuts a title of
+more than 30 chars. For such a title, the Description pane starts with
+the full title. A PR view outside Rex, or one that you start yourself,
+keeps its title row.
+
 The pane gets the configuration file and the `--theme`, `--palette` and
 `--repo` options of the list. It always gets `--no-prefetch`, because
 the list already prefetches the pull request of its cursor row. A repo

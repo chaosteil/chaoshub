@@ -89,7 +89,15 @@ impl Pane for DescriptionPane {
         } else {
             vec![cell(body, CellStyle::Markdown)]
         };
-        let mut lines = readiness(cx, pr);
+        let mut lines = Vec::new();
+        // The Rex label of the PR view replaces the title row of the
+        // popup, but it cuts a long title. The full title then starts
+        // the pane.
+        if cx.data.rex_label && head.title_is_cut() {
+            lines.push(vec![cell(head.title.trim(), CellStyle::Normal)]);
+            lines.push(Vec::new());
+        }
+        lines.extend(readiness(cx, pr));
         if let Some(unsent) = codeview_line(cx, pr) {
             lines.push(Vec::new());
             lines.push(unsent);
@@ -626,6 +634,49 @@ mod tests {
         };
         assert!(wrap);
         lines
+    }
+
+    /// The texts of the first two lines of the pane for a pull request
+    /// with `title`, with the `rex_label` switch.
+    fn first_lines(title: &str, rex_label: bool) -> [String; 2] {
+        let mut state = AppState::new(Size {
+            width: 100,
+            height: 30,
+        });
+        state.data.rex_label = rex_label;
+        let pr = testdata::pr("chaoshub", 7, title);
+        state.data.prs.insert(pr.key.clone(), pr.clone());
+        let target = pr_target(&state.data, &pr.key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let size = Size {
+            width: 80,
+            height: 20,
+        };
+        let PaneModel::Lines { lines, .. } =
+            DescriptionPane.model(&cx, &PaneState::default(), size)
+        else {
+            panic!("not lines");
+        };
+        [text(&lines[0]), text(&lines[1])]
+    }
+
+    #[test]
+    fn under_a_rex_label_a_cut_title_starts_the_pane() {
+        let long = "Add the terminal title overview to the PR view";
+        assert_eq!(first_lines(long, true), [long.to_owned(), String::new()]);
+        let verdict = first_lines(long, false)[0].clone();
+        assert_ne!(verdict, long, "the popup has its title row");
+        assert_eq!(
+            first_lines("Fix the merge", true)[0],
+            first_lines("Fix the merge", false)[0],
+            "the label shows the whole title"
+        );
     }
 
     /// The text of a line.

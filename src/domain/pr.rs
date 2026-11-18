@@ -97,6 +97,11 @@ impl PrHead {
         out.push('…');
         out
     }
+
+    /// True when `short_title` cuts the title.
+    pub(crate) fn title_is_cut(&self) -> bool {
+        self.title.trim().chars().count() > SHORT_TITLE_MAX
+    }
 }
 
 /// The state of a pull request.

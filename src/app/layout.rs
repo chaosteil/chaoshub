@@ -50,6 +50,27 @@ const POPUP_PADDING: u16 = 1;
 /// `frame::pane_size`).
 const POPUP_HEADER_ROWS: u16 = 4;
 
+/// The body of the popup in `popup`, below `header` rows.
+fn popup_body(popup: Rect, header: u16) -> Rect {
+    Rect {
+        x: popup.x.saturating_add(POPUP_BORDER + POPUP_PADDING),
+        y: popup.y.saturating_add(POPUP_BORDER + header),
+        width: popup
+            .width
+            .saturating_sub(2 * (POPUP_BORDER + POPUP_PADDING)),
+        height: popup.height.saturating_sub(2 * POPUP_BORDER + header),
+    }
+}
+
+/// `areas` for a popup without the title row, as the PR view draws it
+/// when its Rex block shows the PR overview. The body takes the row.
+pub(crate) fn without_popup_title(areas: Areas) -> Areas {
+    Areas {
+        popup_body: popup_body(areas.popup, POPUP_HEADER_ROWS - 1),
+        ..areas
+    }
+}
+
 /// `pct` percent of `value`, rounded down.
 fn percent(value: u16, pct: u16) -> u16 {
     u16::try_from(u32::from(value) * u32::from(pct) / 100).unwrap_or(value)
@@ -112,16 +133,7 @@ pub(crate) fn layout_full(size: Size, key_hints: bool, pinned: bool) -> Areas {
             height: list.height,
         }
     };
-    let popup_body = Rect {
-        x: popup.x.saturating_add(POPUP_BORDER + POPUP_PADDING),
-        y: popup.y.saturating_add(POPUP_BORDER + POPUP_HEADER_ROWS),
-        width: popup
-            .width
-            .saturating_sub(2 * (POPUP_BORDER + POPUP_PADDING)),
-        height: popup
-            .height
-            .saturating_sub(2 * POPUP_BORDER + POPUP_HEADER_ROWS),
-    };
+    let popup_body = popup_body(popup, POPUP_HEADER_ROWS);
     let help_width = percent(width, HELP_PERCENT).max(HELP_MIN_WIDTH).min(width);
     let help = Rect {
         x: width - help_width,
@@ -234,6 +246,13 @@ mod tests {
         assert_eq!(areas.status, rect(0, 29, 100, 1));
         assert_eq!(areas.popup, rect(0, 0, 100, 28));
         assert_eq!(areas.popup_body, rect(2, 5, 96, 22));
+        let areas = without_popup_title(areas);
+        assert_eq!(areas.popup, rect(0, 0, 100, 28));
+        assert_eq!(
+            areas.popup_body,
+            rect(2, 4, 96, 23),
+            "the body takes the title row"
+        );
     }
 
     #[test]

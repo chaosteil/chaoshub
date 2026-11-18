@@ -3554,6 +3554,14 @@ mod tests {
         insta::assert_snapshot!(screen(&mut detail_pane_app(160, 40)));
     }
 
+    /// The PR view under a Rex label: no title row, and the Description
+    /// pane starts with the full title, because the label cuts it.
+    #[test]
+    fn detail_pane_with_a_rex_label_100() {
+        let mut app = detail_pane_app(100, 30).with_rex_label(true);
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
     #[test]
     fn tab_slide_with_two_tabs() {
         let mut app = seeded_app(100, 12, crate::app::testdata::team_snapshot());
