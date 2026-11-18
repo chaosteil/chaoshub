@@ -12,6 +12,10 @@ pub(crate) const WAITING: &str = "waiting for an answer in Rex";
 pub(crate) fn ask(overlay: &OverlayState) -> Option<PaletteAsk> {
     match overlay {
         OverlayState::Authors(picker) => Some(authors(picker)),
+        OverlayState::Prompt { spec, .. } => Some(PaletteAsk::Input {
+            title: spec.title.clone(),
+            placeholder: spec.placeholder.clone(),
+        }),
         _ => None,
     }
 }

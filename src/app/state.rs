@@ -133,7 +133,8 @@ pub(crate) struct AppData {
     /// the label of the Rex block at the PR overview.
     pub rex_label: bool,
     /// True when the command palette of Rex can ask questions (see
-    /// `Msg::PaletteReady`). The author picker then asks there.
+    /// `Msg::PaletteReady`). The author picker and the one-line prompts
+    /// then ask there.
     pub palette: bool,
     /// The notification of new pull requests.
     pub notify: NotifyState,

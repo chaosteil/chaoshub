@@ -772,8 +772,7 @@ fn run_action(
                 spec,
                 text: String::new(),
             };
-            open_overlay(state, OverlayKind::Prompt, prompt);
-            Vec::new()
+            open_or_ask(state, OverlayKind::Prompt, prompt)
         }
         Prepare::Terminal(request) => {
             let key = selection.target.key();
@@ -797,18 +796,13 @@ fn prompt_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
     let OverlayState::Prompt { action, text, .. } = &mut overlay.state else {
         return None;
     };
-    let cmd = match chord.code {
-        KeyCode::Esc => None,
-        KeyCode::Enter if action.id == AGENT_ID => {
-            let (selection, question) = (action.selection.clone(), text.trim().to_owned());
+    match chord.code {
+        KeyCode::Esc => {}
+        KeyCode::Enter => {
+            let (id, selection, text) = (action.id, action.selection.clone(), text.clone());
             close_overlay(state);
-            return Some(ask(state, &selection, question));
+            return Some(submit_prompt(state, id, selection, text));
         }
-        KeyCode::Enter => Some(Cmd::RunAction {
-            id: action.id,
-            selection: action.selection.clone(),
-            input: ActionInput::Text(text.clone()),
-        }),
         KeyCode::Backspace => {
             text.pop();
             state.bump();
@@ -824,9 +818,27 @@ fn prompt_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
             return Some(Vec::new());
         }
         _ => return Some(Vec::new()),
-    };
+    }
     close_overlay(state);
-    Some(cmd.into_iter().collect())
+    Some(Vec::new())
+}
+
+/// The text of a prompt of the action `id` on `selection`: the question
+/// of an ask run of pr-agent, else the text input of the action.
+fn submit_prompt(
+    state: &mut AppState,
+    id: &'static str,
+    selection: Box<Selection>,
+    text: String,
+) -> Vec<Cmd> {
+    if id == AGENT_ID {
+        return ask(state, &selection, text.trim().to_owned());
+    }
+    vec![Cmd::RunAction {
+        id,
+        selection,
+        input: ActionInput::Text(text),
+    }]
 }
 
 /// Opens the author picker of the active tab, with the cursor on the
@@ -938,6 +950,9 @@ fn palette_answered(
         }
     };
     match wait.overlay {
+        OverlayState::Prompt { action, .. } => {
+            submit_prompt(state, action.id, action.selection, answer)
+        }
         OverlayState::Authors(mut picker) => match palette::author_cursor(&picker, &answer) {
             Some(cursor) => {
                 picker.cursor = cursor;
@@ -1677,8 +1692,7 @@ fn start_agent(state: &mut AppState, job: AgentJob) -> Vec<Cmd> {
     if let Tool::Ask(question) = &job.tool
         && question.trim().is_empty()
     {
-        open_ask(state, &job.key);
-        return Vec::new();
+        return open_ask(state, &job.key);
     }
     let kind = job.tool.kind();
     if !state.data.agent_jobs.insert((job.key.clone(), kind)) {
@@ -1693,10 +1707,11 @@ fn start_agent(state: &mut AppState, job: AgentJob) -> Vec<Cmd> {
     vec![Cmd::RunAgent(job)]
 }
 
-/// Opens the prompt for a question to pr-agent about `key`.
-fn open_ask(state: &mut AppState, key: &PrKey) {
+/// Opens the prompt for a question to pr-agent about `key`, or asks the
+/// question in the command palette of Rex (see `open_or_ask`).
+fn open_ask(state: &mut AppState, key: &PrKey) -> Vec<Cmd> {
     let Some(target) = pr_target(&state.data, key) else {
-        return;
+        return Vec::new();
     };
     let selection = Selection {
         target,
@@ -1714,7 +1729,7 @@ fn open_ask(state: &mut AppState, key: &PrKey) {
         },
         text: String::new(),
     };
-    open_overlay(state, OverlayKind::Prompt, prompt);
+    open_or_ask(state, OverlayKind::Prompt, prompt)
 }
 
 /// Starts an ask run with `question` on the pull request of
@@ -6958,6 +6973,54 @@ mod tests {
     }
 
     #[test]
+    fn in_rex_a_prompt_asks_in_the_palette() {
+        let mut state = action_state(&pr_row(102));
+        run_msg(&mut state, &[], Msg::PaletteReady);
+        let spec = crate::bus::PromptSpec {
+            title: "request changes".into(),
+            placeholder: "why".into(),
+        };
+        let mut request = FakeAction::new("request_changes", 'R');
+        request.prepare = Prepare::Prompt(spec);
+        let actions = fake(request);
+        let (serial, ask) = asked(&act_menu(&mut state, &actions, KeyCode::Char('R')));
+        assert_eq!(
+            ask,
+            PaletteAsk::Input {
+                title: "request changes".into(),
+                placeholder: "why".into(),
+            }
+        );
+        assert!(
+            !state.ui.overlays.iter().any(|o| !o.closing),
+            "only the closing menu"
+        );
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('R')), vec![]);
+        assert_eq!(
+            run_msg(
+                &mut state,
+                &actions,
+                answered(serial, PaletteReply::Answer("fix q".into()))
+            ),
+            vec![Cmd::RunAction {
+                id: "request_changes",
+                selection: pr_selection(&state, 102),
+                input: ActionInput::Text("fix q".into()),
+            }]
+        );
+        // A fallback opens the prompt, with the keys of the prompt.
+        let (serial, _) = asked(&act_menu(&mut state, &actions, KeyCode::Char('R')));
+        let fallback = answered(serial, PaletteReply::Fallback("unsupported".into()));
+        assert_eq!(run_msg(&mut state, &actions, fallback), vec![]);
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('n')), vec![]);
+        let overlays = &frame::frame_model(&mut state).overlays;
+        assert!(matches!(
+            overlays.last().map(|o| &o.content),
+            Some(OverlayContent::Prompt { text, .. }) if text == "n"
+        ));
+    }
+
+    #[test]
     fn keys_override_the_default_key_of_an_action() {
         let mut state = action_state(&pr_row(102));
         let actions = fake(FakeAction::new("approve", 'A'));
@@ -8891,6 +8954,43 @@ mod tests {
             vec![Cmd::RunAgent(ask)]
         );
         assert!(state.data.agent_jobs.contains(&(pr, ToolKind::Ask)));
+    }
+
+    #[test]
+    fn in_rex_ask_asks_the_question_in_the_palette() {
+        let (mut state, pr) = agent_state();
+        update(&mut state, &Keymap::default(), Msg::PaletteReady);
+        key(&mut state, ' ');
+        key(&mut state, 'p');
+        let (serial, ask) = asked(&menu(&mut state, 'a'));
+        assert_eq!(
+            ask,
+            PaletteAsk::Input {
+                title: format!("ask pr-agent about #{}", pr.number),
+                placeholder: "a question about the pull request".into(),
+            }
+        );
+        let job = agent_job(&state, &pr, Tool::Ask("why?".into()));
+        assert_eq!(
+            update(
+                &mut state,
+                &Keymap::default(),
+                answered(serial, PaletteReply::Answer("  why? ".into()))
+            ),
+            vec![Cmd::RunAgent(job)]
+        );
+        assert!(state.data.agent_jobs.contains(&(pr.clone(), ToolKind::Ask)));
+        // An empty answer runs nothing, and a cancel opens nothing.
+        let (serial, _) = asked(&menu(&mut state, 'a'));
+        let empty = answered(serial, PaletteReply::Answer("  ".into()));
+        assert_eq!(update(&mut state, &Keymap::default(), empty), vec![]);
+        let (serial, _) = asked(&menu(&mut state, 'a'));
+        let cancel = answered(serial, PaletteReply::Cancelled);
+        assert_eq!(update(&mut state, &Keymap::default(), cancel), vec![]);
+        assert!(!matches!(
+            state.ui.overlays.last().map(|o| &o.state),
+            Some(OverlayState::Prompt { .. })
+        ));
     }
 
     #[test]

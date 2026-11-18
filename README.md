@@ -1499,7 +1499,7 @@ The pane has no direct keys. Its tools are in the actions menu: press
 | `R` | review | The fields of the review and the key issues, with file and lines. |
 | `I` | improve | One line per suggestion: `label · file:line · summary`. |
 | `D` | describe | The new title and the new body. |
-| `a` | ask | Asks for a question first. Shows the questions and the answers, newest first. |
+| `a` | ask | Asks for a question first. Inside Rex, the question can open in the Rex palette (see "Questions in the Rex palette"). Shows the questions and the answers, newest first. |
 | `p` | | Opens a confirm popup with the line diff of the old and the new title and body. `y` sets the title and the body of the pull request on GitHub. |
 
 One run per tool per pull request runs at a time. A second `space`
@@ -1738,6 +1738,10 @@ in place of its own popup. It does this for these popups:
 - The author picker (`a`). Each author has the `person` icon, and
   `all authors` comes first. The current choice shows `current` at the
   end of its row.
+- The one-line prompts: the question to pr-agent (`a` in the Agent
+  pane), and the text prompt of an action. The palette shows a text
+  field with the title and the placeholder of the prompt. Your text
+  goes to the same place as the text of the prompt popup.
 
 Rex shows the question in each Rex app that is connected to the Rex
 server, also on other devices. The first answer counts.
