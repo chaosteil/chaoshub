@@ -43,6 +43,7 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("cancel", &["n"]),
     ("filter", &["/"]),
     ("authors", &["a"]),
+    ("jump", &["f"]),
     ("toggle_all", &["t"]),
     ("show_hidden", &["T"]),
     ("refresh", &["R"]),

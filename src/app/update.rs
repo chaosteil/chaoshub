@@ -28,8 +28,8 @@ use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
     AUTHOR_KEY, ActionDialog, ActionMenu, AppData, AppState, AuthorPicker, COLUMN_HEADERS_KEY,
-    Condition, FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaletteWait,
-    PaneHandleState, PopupState, ReplyDialog, ReviewPopup, error_text, ui_key,
+    Condition, FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaletteQuestion,
+    PaletteWait, PaneHandleState, PopupState, ReplyDialog, ReviewPopup, error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, cells, pr_ref};
 use crate::app::target::{pr_target, row_target};
@@ -399,19 +399,8 @@ fn key(
         navigate(state, tabs, motion);
         return after_change(state, tabs);
     }
-    if keymap.matches("filter", chord) {
-        state.ui.filter_edit = true;
-        state.bump();
-        return Vec::new();
-    }
-    if keymap.matches("authors", chord) {
-        return open_authors(state, tabs);
-    }
-    if keymap.matches("show_hidden", chord) {
-        return toggle_show_hidden(state, tabs);
-    }
-    if keymap.matches("column_headers", chord) {
-        return toggle_column_headers(state, tabs);
+    if let Some(cmds) = list_key(state, keymap, tabs, chord) {
+        return cmds;
     }
     if keymap.matches("open", chord) {
         return open_selected(state, tabs, panes);
@@ -452,6 +441,34 @@ fn key(
     let mut cmds = handled.cmds;
     cmds.extend(after_change(state, tabs));
     cmds
+}
+
+/// A key of the list that opens or toggles a part of the list: the
+/// filter, the author picker, the jump, the hidden rows and the column
+/// names. `None` for another key.
+fn list_key(
+    state: &mut AppState,
+    keymap: &Keymap,
+    tabs: &[Box<dyn Tab>],
+    chord: KeyChord,
+) -> Option<Vec<Cmd>> {
+    if keymap.matches("filter", chord) {
+        open_filter(state);
+        return Some(Vec::new());
+    }
+    if keymap.matches("authors", chord) {
+        return Some(open_authors(state, tabs));
+    }
+    if keymap.matches("jump", chord) {
+        return Some(jump(state, tabs));
+    }
+    if keymap.matches("show_hidden", chord) {
+        return Some(toggle_show_hidden(state, tabs));
+    }
+    if keymap.matches("column_headers", chord) {
+        return Some(toggle_column_headers(state, tabs));
+    }
+    None
 }
 
 /// A direct action key on the cursor row of the list: a chord of
@@ -922,18 +939,93 @@ fn ask_or_open(
         open_overlay(state, kind, overlay);
         return Vec::new();
     };
+    ask_palette(state, PaletteQuestion::Overlay { kind, overlay }, ask)
+}
+
+/// Asks `ask` in the command palette of Rex. `question` waits in
+/// `palette_wait` for the answer.
+fn ask_palette(state: &mut AppState, question: PaletteQuestion, ask: PaletteAsk) -> Vec<Cmd> {
     state.ui.palette_serial += 1;
     let serial = state.ui.palette_serial;
-    state.ui.palette_wait = Some(PaletteWait {
-        serial,
-        kind,
-        overlay,
-    });
+    state.ui.palette_wait = Some(PaletteWait { serial, question });
     state.bump();
     vec![Cmd::AskPalette {
         serial,
         ask: Box::new(ask),
     }]
+}
+
+/// The `jump` key: asks for a pull request of the rows of all tabs in
+/// the command palette of Rex (see `palette::jump`). Without the
+/// palette, the `/` filter of the active tab opens. Without a row, the
+/// status line says so.
+fn jump(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
+    if !state.data.palette {
+        open_filter(state);
+        return Vec::new();
+    }
+    let rows: Vec<(&str, PrKey)> = tabs
+        .iter()
+        .enumerate()
+        .flat_map(|(index, tab)| {
+            frame::tab_list(state, tabs, index)
+                .rows
+                .into_iter()
+                .filter_map(move |row| match row.item {
+                    RowItem::Pr(pr) => Some((tab.id(), pr.key)),
+                    RowItem::StackHeader { .. } | RowItem::Separator => None,
+                })
+        })
+        .collect();
+    let Some(ask) = palette::jump(&state.data, &rows) else {
+        state.message("no pull requests to jump to", CellStyle::Dim, INFO_TTL);
+        return Vec::new();
+    };
+    ask_palette(state, PaletteQuestion::Jump, ask)
+}
+
+/// Opens the `/` filter of the active tab.
+fn open_filter(state: &mut AppState) {
+    state.ui.filter_edit = true;
+    state.bump();
+}
+
+/// The answer `id` of the jump: the first tab with the pull request
+/// `id` in its rows becomes the active tab, the cursor moves to the row,
+/// and the pull request opens as with `enter`. When no tab shows the
+/// pull request now, the status line says so.
+fn jump_to(
+    state: &mut AppState,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    id: &str,
+) -> Vec<Cmd> {
+    let found = (0..tabs.len()).find_map(|index| {
+        let model = frame::tab_list(state, tabs, index);
+        let row = model.rows.iter().position(
+            |row| matches!(&row.item, RowItem::Pr(pr) if palette::pr_id(&pr.key) == id),
+        )?;
+        Some((index, row, model))
+    });
+    let Some((index, row, model)) = found else {
+        state.message(
+            format!("{id} is not in the list now"),
+            CellStyle::Dim,
+            INFO_TTL,
+        );
+        return Vec::new();
+    };
+    switch_tab(state, index);
+    let height = usize::from(frame::list_size(state).height);
+    if let Some(ts) = state.ui.tabs.get_mut(index) {
+        ts.cursor = row;
+        ts.scroll = nav::keep_visible(model.rows.len(), row, model.scroll, height);
+        ts.selected = Some(model.rows[row].item.clone());
+    }
+    state.bump();
+    let mut cmds = after_change(state, tabs);
+    cmds.extend(open_selected(state, tabs, panes));
+    cmds
 }
 
 /// A key while a question waits in the command palette of Rex. The
@@ -958,8 +1050,9 @@ fn palette_wait_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) -> V
 }
 
 /// The reply of the command palette of Rex to the question with the
-/// serial `serial`. An answer does what the overlay does with it. A
-/// cancel does nothing. A fallback opens the overlay. A reply to an
+/// serial `serial`. An answer does what the overlay does with it, or
+/// jumps to the pull request. A cancel does nothing. A fallback opens
+/// the overlay, or the `/` filter for the jump. A reply to an
 /// older question, for example one whose wait the user stopped, does
 /// nothing.
 fn palette_answered(
@@ -977,12 +1070,19 @@ fn palette_answered(
         // No question of chaoshub sets `allow_other` yet.
         PaletteReply::Other(_) | PaletteReply::Cancelled => return Vec::new(),
         PaletteReply::Fallback(reason) => {
-            tracing::debug!(reason, "the Rex palette cannot ask, the overlay opens");
-            open_overlay(state, wait.kind, wait.overlay);
+            tracing::debug!(reason, "the Rex palette cannot ask, chaoshub falls back");
+            match wait.question {
+                PaletteQuestion::Overlay { kind, overlay } => open_overlay(state, kind, overlay),
+                PaletteQuestion::Jump => open_filter(state),
+            }
             return Vec::new();
         }
     };
-    match wait.overlay {
+    let overlay = match wait.question {
+        PaletteQuestion::Overlay { overlay, .. } => overlay,
+        PaletteQuestion::Jump => return jump_to(state, ui.tabs, ui.panes, &answer),
+    };
+    match overlay {
         OverlayState::Prompt { action, .. } => {
             submit_prompt(state, action.id, action.selection, answer)
         }
@@ -5575,6 +5675,85 @@ mod tests {
         assert_eq!(
             update(&mut state, &Keymap::default(), ctrl_c),
             vec![Cmd::Quit]
+        );
+    }
+
+    #[test]
+    fn f_jumps_to_a_pull_request_of_any_tab_from_the_palette() {
+        let mut state = palette_state();
+        let (serial, ask) = asked(&key(&mut state, 'f'));
+        let PaletteAsk::Pick {
+            title,
+            confirm,
+            items,
+            ..
+        } = &ask
+        else {
+            panic!("not a pick: {ask:?}");
+        };
+        assert_eq!(title, "jump to a pull request");
+        assert_eq!(*confirm, Some("Open"));
+        let Some(review) = items.iter().find(|item| item.id == "chaosteil/chaoshub#88") else {
+            panic!("no review request #88: {items:?}");
+        };
+        assert_eq!(review.title, "#88 docs(readme): keymap table");
+        assert_eq!(
+            review.subtitle.as_deref(),
+            Some("chaosteil/chaoshub · alice")
+        );
+        assert_eq!(review.icon, Some("person"));
+        assert!(review.detail.is_some(), "the status");
+        assert_eq!(items[0].icon, Some("branch"), "the Mine tab comes first");
+        assert!(items.iter().any(|item| item.icon == Some("code")));
+        let mut ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), items.len(), "each id once");
+        assert!(state.ui.palette_wait.is_some());
+        // The answer selects the row in its tab and opens the pull request.
+        update(
+            &mut state,
+            &Keymap::default(),
+            answered(serial, PaletteReply::Answer("chaosteil/chaoshub#88".into())),
+        );
+        assert_eq!(state.ui.active, 1, "the Review tab");
+        assert_eq!(selected_number(&mut state), Some(88));
+        let Some(popup) = sidebar(&state) else {
+            panic!("the pull request does not open");
+        };
+        assert_eq!(popup.key, testdata::pr_key("chaoshub", 88));
+        assert!(state.ui.palette_wait.is_none());
+    }
+
+    #[test]
+    fn the_jump_falls_back_to_the_filter() {
+        // Without the palette, `f` opens the filter.
+        let mut state = team_state();
+        assert_eq!(key(&mut state, 'f'), vec![]);
+        assert!(state.ui.filter_edit);
+        // A fallback opens the filter too.
+        let mut state = palette_state();
+        let (serial, _) = asked(&key(&mut state, 'f'));
+        let fallback = answered(serial, PaletteReply::Fallback("busy".into()));
+        assert_eq!(update(&mut state, &Keymap::default(), fallback), vec![]);
+        assert!(state.ui.filter_edit);
+        // A cancel does nothing, and an id that no tab shows only says so.
+        let mut state = palette_state();
+        let (serial, _) = asked(&key(&mut state, 'f'));
+        let cancel = answered(serial, PaletteReply::Cancelled);
+        assert_eq!(update(&mut state, &Keymap::default(), cancel), vec![]);
+        assert!(!state.ui.filter_edit);
+        let (serial, _) = asked(&key(&mut state, 'f'));
+        let gone = answered(
+            serial,
+            PaletteReply::Answer("chaosteil/chaoshub#9999".into()),
+        );
+        assert_eq!(update(&mut state, &Keymap::default(), gone), vec![]);
+        assert_eq!(state.ui.active, 2);
+        assert!(state.ui.overlays.is_empty());
+        assert_eq!(
+            status_text(&state),
+            Some("chaosteil/chaoshub#9999 is not in the list now")
         );
     }
 

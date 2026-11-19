@@ -396,14 +396,26 @@ pub(crate) struct UiState {
 }
 
 /// A question in the command palette of Rex that waits for its answer,
-/// with the overlay of the same question. chaoshub opens the overlay
-/// when Rex cannot ask.
+/// with what the question is for (see `PaletteQuestion`).
 #[derive(Debug)]
 pub(crate) struct PaletteWait {
     /// The serial of the `Cmd::AskPalette` of the question.
     pub serial: u64,
-    pub kind: OverlayKind,
-    pub overlay: OverlayState,
+    pub question: PaletteQuestion,
+}
+
+/// What a question in the command palette of Rex is for.
+#[derive(Debug)]
+pub(crate) enum PaletteQuestion {
+    /// The palette form of an overlay. The overlay opens when Rex cannot
+    /// ask.
+    Overlay {
+        kind: OverlayKind,
+        overlay: OverlayState,
+    },
+    /// The jump to a pull request (`jump`). The `/` filter opens when Rex
+    /// cannot ask.
+    Jump,
 }
 
 /// The state of the syncs, for the status bar and the terminal status.

@@ -1,11 +1,15 @@
 //! The questions that the command palette of Rex asks in place of an
 //! overlay of chaoshub (see `rex.ui` and `launch::palette`).
 
+use std::collections::HashSet;
+
 use crate::actions::{Action, Applicability};
 use crate::app::frame;
 use crate::app::keymap::Keymap;
 use crate::app::state::{ActionMenu, AppData, AuthorPicker, OverlayState};
+use crate::app::term::pr_status;
 use crate::bus::{PaletteAsk, PaletteItem, Target};
+use crate::domain::keys::PrKey;
 
 /// The text of the status bar while a question waits for its answer.
 pub(crate) const WAITING: &str = "waiting for an answer in Rex";
@@ -33,6 +37,17 @@ const ICONS: &[(&str, &str)] = &[
     ("draft", "document"),
     ("agent", "terminal"),
 ];
+
+/// The label of the submit row of the jump to a pull request.
+const OPEN: &str = "Open";
+
+/// The most items of the jump to a pull request. `rex.ui.pick` takes at
+/// most 2,000 items.
+pub(crate) const MAX_ITEMS: usize = 2000;
+
+/// The icon of each tab in the jump to a pull request, as in
+/// `contrib/rex/chaoshub.lua`.
+const TAB_ICONS: &[(&str, &str)] = &[("mine", "branch"), ("review", "person"), ("team", "code")];
 
 /// The question of `overlay` for the palette. `None` when the overlay
 /// has no palette form. A prompt starts with the text of the overlay.
@@ -169,6 +184,56 @@ pub(crate) fn menu(
     }
 }
 
+/// The id of the pull request `key` in the jump: `owner/name#N`, as in
+/// `chaoshub_open_pr`.
+pub(crate) fn pr_id(key: &PrKey) -> String {
+    format!("{}/{}#{}", key.repo.owner, key.repo.name, key.number)
+}
+
+/// The jump to a pull request as a pick: one item for each pull request
+/// of `rows`, in the order of `rows`. `rows` holds the tab id and the
+/// pull request of each row of the tabs, in tab order. A pull request in
+/// two tabs shows once, with its first tab. The item has the title, the
+/// repo and the author, the status and the icon of its tab, as in
+/// `chaoshub_open_pr`. The pick holds at most `MAX_ITEMS` items. `None`
+/// when no row is a loaded pull request.
+pub(crate) fn jump(data: &AppData, rows: &[(&str, PrKey)]) -> Option<PaletteAsk> {
+    let mut seen = HashSet::new();
+    let items: Vec<PaletteItem> = rows
+        .iter()
+        .filter(|(_, key)| seen.insert(key))
+        .filter_map(|(tab, key)| {
+            let pr = data.prs.get(key)?;
+            let head = &pr.head.value;
+            Some(PaletteItem {
+                id: pr_id(key),
+                title: format!("#{} {}", key.number, head.title),
+                subtitle: Some(format!(
+                    "{}/{} · {}",
+                    key.repo.owner, key.repo.name, head.author
+                )),
+                detail: Some(pr_status(pr)),
+                icon: TAB_ICONS
+                    .iter()
+                    .find(|(id, _)| id == tab)
+                    .map(|&(_, icon)| icon),
+            })
+        })
+        .take(MAX_ITEMS)
+        .collect();
+    if items.is_empty() {
+        return None;
+    }
+    Some(PaletteAsk::Pick {
+        title: "jump to a pull request".to_owned(),
+        placeholder: "filter the pull requests".to_owned(),
+        value: String::new(),
+        confirm: Some(OPEN),
+        allow_other: false,
+        items,
+    })
+}
+
 /// The index of the item with the id `id` in the actions menu: the
 /// actions first, then the pane actions. `None` when `id` is not an
 /// item of the menu.
@@ -288,6 +353,33 @@ mod tests {
         };
         assert_eq!(confirm("agent"), ("draft".into(), Some("Ask")));
         assert_eq!(confirm("request_changes"), ("draft".into(), Some("Send")));
+    }
+
+    #[test]
+    fn the_jump_shows_each_pull_request_once_and_at_most_2000() {
+        use crate::app::testdata;
+
+        let mut data = crate::app::state::AppState::new(crate::bus::Size {
+            width: 80,
+            height: 20,
+        })
+        .data;
+        let count = MAX_ITEMS as u64 + 5;
+        for number in 1..=count {
+            let pr = testdata::pr("chaoshub", number, "t");
+            data.prs.insert(pr.key.clone(), pr);
+        }
+        let key = |number| testdata::pr_key("chaoshub", number);
+        let mut rows = vec![("mine", key(1)), ("team", key(1)), ("review", key(404_404))];
+        rows.extend((2..=count).map(|number| ("team", key(number))));
+        let Some(PaletteAsk::Pick { items, .. }) = jump(&data, &rows) else {
+            panic!("no pick");
+        };
+        assert_eq!(items.len(), MAX_ITEMS);
+        assert_eq!(items[0].id, "chaosteil/chaoshub#1");
+        assert_eq!(items[0].icon, Some("branch"), "the first tab wins");
+        assert_eq!(items[1].id, "chaosteil/chaoshub#2", "no item without data");
+        assert_eq!(jump(&data, &[]), None);
     }
 
     #[test]

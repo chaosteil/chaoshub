@@ -26,6 +26,7 @@ const APP_KEYS: &[(&[&str], &str)] = &[
     (&["close_overlay"], "close the popup"),
     (&["filter"], "filter"),
     (&["authors"], "pick an author"),
+    (&["jump"], "jump to a pull request"),
     (&["toggle_all"], "show all open"),
     (&["show_hidden"], "show the hidden rows"),
     (&["refresh"], "refresh"),

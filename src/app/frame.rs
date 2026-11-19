@@ -752,11 +752,18 @@ fn filter_model(state: &AppState) -> Option<FilterModel> {
 /// The list model of the active tab for the current generation. The
 /// pinned mode has no list.
 pub(crate) fn active_list(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> ListModel {
+    tab_list(state, tabs, state.ui.active)
+}
+
+/// The list model of the tab at `index` for the current generation, as
+/// `active_list` gives it for the active tab. The pinned mode has no
+/// list.
+pub(crate) fn tab_list(state: &mut AppState, tabs: &[Box<dyn Tab>], index: usize) -> ListModel {
     if state.ui.pinned.is_some() {
         return empty_list();
     }
     let size = list_size(state);
-    list_model(state, tabs, state.ui.active, size)
+    list_model(state, tabs, index, size)
 }
 
 /// The list model of the tab at `index` for the list area `size`, from the

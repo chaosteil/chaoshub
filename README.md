@@ -792,7 +792,7 @@ palette_menu = false
 
 | Key | Default | Meaning |
 |---|---|---|
-| `palette_menu` | `false` | `true` opens the actions menu (`space`) and the comment menu (`enter` on a comment) in the Rex palette, in place of the menus of chaoshub. Without the palette, the menus of chaoshub open. The author picker and the one-line prompts use the palette without this key. |
+| `palette_menu` | `false` | `true` opens the actions menu (`space`) and the comment menu (`enter` on a comment) in the Rex palette, in place of the menus of chaoshub. Without the palette, the menus of chaoshub open. The author picker, the one-line prompts and the jump to a pull request (`f`) use the palette without this key. |
 
 ### `[workspaces]`
 
@@ -993,6 +993,7 @@ for `[keys]`.
 | `cancel` | `n` | Cancels a confirm popup. |
 | `filter` | `/` | Types a fuzzy filter for the active tab. |
 | `authors` | `a` | Opens the author picker of the Review or the Team tab. Inside Rex, the picker can open in the Rex palette (see "Questions in the Rex palette"). |
+| `jump` | `f` | Inside Rex, asks for a pull request of the rows of all tabs in the Rex palette. The pick selects the tab and the row, and opens the pull request as `enter` does. Without the Rex palette, `f` opens the filter, as `/` does (see "Questions in the Rex palette"). |
 | `toggle_all` | `t` | On the Review and the Team tab, shows every open pull request, not only the ready ones. |
 | `show_hidden` | `T` | Shows every open pull request of the active tab, also the rows that the age limit, the ready rule, the author picker and the filter text hide (see "Hidden rows"). Only the help overlay shows this key, not the key hint bar. |
 | `refresh` | `R` | Syncs both lists now. In the pull request detail, syncs the pull request and its stack, and scans its repo. |
@@ -1753,7 +1754,7 @@ socket.
 ### Questions in the Rex palette
 
 Inside Rex, chaoshub can ask a question in the command palette of Rex
-in place of its own popup. It does this for these popups:
+in place of its own popup. It does this for these questions:
 
 - The author picker (`a`). Each author has the `person` icon, and
   `all authors` comes first. The current choice shows `current` at the
@@ -1780,6 +1781,17 @@ in place of its own popup. It does this for these popups:
   | `rerun_checks` | `gear` |
   | `draft` | `document` |
   | `agent` | `terminal` |
+- The jump to a pull request (`f` in the list). The palette lists the
+  pull requests that the tabs show now, in tab order: the filter, the
+  author picker and the ready rule of each tab apply. A pull request in
+  two tabs shows once, with its first tab. Each row has `#N <title>`,
+  the repo and the author, and the status, as in `chaoshub: open PR…`.
+  The icon shows the tab: `branch` for Mine, `person` for Review and
+  `code` for Team. The list holds at most 2,000 pull requests, the
+  limit of `rex.ui.pick`. The submit row says `Open`. When you pick a
+  pull request, chaoshub selects its tab and its row, and opens it as
+  `enter` does: inside Rex, in the detail pane. When Rex cannot ask,
+  chaoshub opens the filter of the active tab (`/`).
 - The comment menu (`enter` on a comment or a review in the
   conversation pane), only with `[rex] palette_menu = true`. Each
   reaction that you already gave shows `yours` at the end of its row,
