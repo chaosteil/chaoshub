@@ -12,6 +12,8 @@ src/ui/list.rs:42 · 2 comments · resolved
   chaosteil · 2h ago
     Fixed.
 «src/ui/pane.rs:7 · 1 comment»
+  bob · 2h ago
+    The gutter eats one column.
 bob · requested changes 1h ago
   Please split the **transition** module.
   «❤️ 3»

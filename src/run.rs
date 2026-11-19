@@ -3333,7 +3333,8 @@ mod tests {
     }
 
     /// The popup on #101 with a conversation, on the conversation pane,
-    /// with the open thread expanded.
+    /// with the resolved thread collapsed and the cursor on the open
+    /// thread. The open thread stays expanded, as every thread starts.
     fn conversation_app(width: u16, height: u16) -> App {
         let mut app = popup_app(width, height);
         let key = crate::app::testdata::pr_key("chaoshub", 101);
@@ -3345,7 +3346,7 @@ mod tests {
         };
         app.update(Msg::DetailLoaded(key, Ok(observed)));
         press(&mut app, '3');
-        for _ in 0..3 {
+        for _ in 0..2 {
             press(&mut app, 'j');
         }
         let enter = crossterm::event::KeyEvent::new(
@@ -3353,6 +3354,7 @@ mod tests {
             crossterm::event::KeyModifiers::NONE,
         );
         app.update(Msg::Key(enter));
+        press(&mut app, 'j');
         app
     }
 
@@ -3367,8 +3369,9 @@ mod tests {
     }
 
     /// The conversation popup on #101 with the reactions of
-    /// `testdata::detail_with_reactions`, and the thread on
-    /// `src/ui/list.rs:42` expanded.
+    /// `testdata::detail_with_reactions`, with the cursor on the thread
+    /// on `src/ui/list.rs:42`. Both threads are expanded, as every
+    /// thread starts.
     fn reactions_app(width: u16, height: u16) -> App {
         let mut app = popup_app(width, height);
         let key = crate::app::testdata::pr_key("chaoshub", 101);
@@ -3383,11 +3386,6 @@ mod tests {
         for _ in 0..3 {
             press(&mut app, 'j');
         }
-        let enter = crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Enter,
-            crossterm::event::KeyModifiers::NONE,
-        );
-        app.update(Msg::Key(enter));
         app
     }
 

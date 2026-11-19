@@ -17,12 +17,12 @@ expression: "screen(&mut comment_menu_app(100, 30))"
 "                    ▌         ▌  2  👎 thumbs down                   ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
 "                    ▌      cha▌  3  😄 laugh                         ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
 "                    ▌        F▌  4  🎉 hooray                        ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
-"                    ▌  ▸ src/u▌  5  😕 confused                      ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
-"                    ▌    bob ·▌  6  ❤️ heart                         ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
-"                    ▌      Ple▌  7  🚀 rocket                        ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
-"                    ▌      ❤️ ▌  8  👀 eyes                          ┃                             ┃" Hidden by multi-width symbols: [(28, " "), (37, " ")]
-"                    ▌         ◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◣                             ┃"
-"                    ▌                                                                              ┃"
+"                    ▌  ▾ src/u▌  5  😕 confused                      ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
+"                    ▌      bob▌  6  ❤️ heart                         ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
+"                    ▌        T▌  7  🚀 rocket                        ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
+"                    ▌    bob ·▌  8  👀 eyes                          ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
+"                    ▌      Ple◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◣                             ┃"
+"                    ▌      ❤️ 2                                                                    ┃" Hidden by multi-width symbols: [(28, " ")]
 "                    ▌                                                                              ┃"
 "                    ▌                                                                              ┃"
 "                    ▌                                                                              ┃"

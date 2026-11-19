@@ -1,7 +1,7 @@
 //! The conversation pane of the pull request popup: issue comments,
 //! reviews and review threads in time order. A thread header shows
-//! `path:line · 3 comments · resolved`. Enter on a thread header expands
-//! and collapses the thread.
+//! `path:line · 3 comments · resolved`. The threads start expanded.
+//! Enter on a thread header collapses and expands the thread.
 //! Comment bodies are markdown cells, which `ui` renders and wraps.
 //! The reactions of a comment or a review show on one row under its
 //! body: `👍 3  🎉 1`. The reactions of the viewer have the primary
@@ -42,11 +42,12 @@ use crate::domain::pr::PullRequest;
 /// The conversation pane.
 pub(crate) struct Conversation;
 
-/// The own state of the pane: the expanded threads, by their index in
-/// `PrDetail.threads`.
+/// The own state of the pane: the collapsed threads, by their index in
+/// `PrDetail.threads`. A thread that is not in the set is expanded, so
+/// every thread starts expanded.
 #[derive(Debug, Default)]
 pub(crate) struct ConversationState {
-    pub expanded: HashSet<usize>,
+    pub collapsed: HashSet<usize>,
 }
 
 impl Pane for Conversation {
@@ -78,9 +79,9 @@ impl Pane for Conversation {
     }
 
     fn model(&self, cx: &KeyCx<'_>, ps: &PaneState, _size: Size) -> PaneModel {
-        let expanded = expanded(ps);
+        let collapsed = collapsed(ps);
         PaneModel::Tree {
-            nodes: nodes(cx, &expanded)
+            nodes: nodes(cx, &collapsed)
                 .into_iter()
                 .map(|(node, _)| node)
                 .collect(),
@@ -88,7 +89,7 @@ impl Pane for Conversation {
     }
 
     /// The reply key opens the text box of a reply. Enter on a thread
-    /// header expands or collapses the thread. Enter on a comment or a
+    /// header collapses or expands the thread. Enter on a comment or a
     /// review opens the comment menu.
     fn handle_key(&self, key: KeyChord, cx: &KeyCx<'_>, ps: &mut PaneState) -> Option<Handled> {
         if cx.keys.matches(REPLY_ID, key) {
@@ -164,28 +165,28 @@ fn char_key(c: char) -> KeyChord {
 
 /// The item of the cursor node. `None` on a status line.
 fn cursor_item(cx: &KeyCx<'_>, ps: &PaneState) -> Option<Item> {
-    nodes(cx, &expanded(ps)).get(ps.cursor)?.1
+    nodes(cx, &collapsed(ps)).get(ps.cursor)?.1
 }
 
-/// Expands or collapses the thread at `thread`.
+/// Collapses or expands the thread at `thread`.
 fn toggle(cx: &KeyCx<'_>, ps: &mut PaneState, thread: usize) -> Option<Handled> {
-    let before = nodes(cx, &expanded(ps)).len();
+    let before = nodes(cx, &collapsed(ps)).len();
     let state = ps.ext.downcast_mut::<ConversationState>()?;
-    if !state.expanded.remove(&thread) {
-        state.expanded.insert(thread);
+    if !state.collapsed.remove(&thread) {
+        state.collapsed.insert(thread);
     }
-    let after = nodes(cx, &expanded(ps)).len();
+    let after = nodes(cx, &collapsed(ps)).len();
     Some(tree_toggled(ps.cursor, before, after))
 }
 
 /// Collapses the expanded thread at `thread` from one of its comments.
 /// The cursor moves to the thread header.
 fn collapse(cx: &KeyCx<'_>, ps: &mut PaneState, thread: usize) -> Option<Handled> {
-    let header = nodes(cx, &expanded(ps))
+    let header = nodes(cx, &collapsed(ps))
         .iter()
         .position(|(_, item)| *item == Some(Item::Thread(thread)))?;
     let state = ps.ext.downcast_mut::<ConversationState>()?;
-    state.expanded.remove(&thread);
+    state.collapsed.insert(thread);
     ps.cursor = header;
     Some(tree_toggled(header, 1, 0))
 }
@@ -300,7 +301,7 @@ fn reply(cx: &KeyCx<'_>, ps: &PaneState) -> Option<Handled> {
     let Some(Target::Pr { pr, .. }) = cx.target else {
         return None;
     };
-    let item = nodes(cx, &expanded(ps)).get(ps.cursor).and_then(|n| n.1);
+    let item = nodes(cx, &collapsed(ps)).get(ps.cursor).and_then(|n| n.1);
     let detail = cx.data.details.get(&pr.key).map(|d| &d.value);
     let spec = reply_spec(detail, item, pr.key.number);
     Some(Handled {
@@ -361,11 +362,11 @@ fn quote(author: &str, body: &str) -> String {
     }
 }
 
-/// The expanded threads of a pane state.
-fn expanded(ps: &PaneState) -> HashSet<usize> {
+/// The collapsed threads of a pane state.
+fn collapsed(ps: &PaneState) -> HashSet<usize> {
     ps.ext
         .downcast_ref::<ConversationState>()
-        .map(|state| state.expanded.clone())
+        .map(|state| state.collapsed.clone())
         .unwrap_or_default()
 }
 
@@ -510,8 +511,9 @@ fn reaction_node(cx: &KeyCx<'_>, depth: u8, id: &str, raw: &[Reaction]) -> Optio
 
 /// The nodes of the pane, each with its entry. A status line has none.
 /// The header of a thread has the item of the thread, and the nodes of
-/// a comment in the thread have the item of the comment.
-fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<Item>)> {
+/// a comment in the thread have the item of the comment. A thread in
+/// `collapsed` shows only its header.
+fn nodes(cx: &KeyCx<'_>, collapsed: &HashSet<usize>) -> Vec<(TreeNode, Option<Item>)> {
     let Some(Target::Pr { pr, .. }) = cx.target else {
         return Vec::new();
     };
@@ -571,7 +573,7 @@ fn nodes(cx: &KeyCx<'_>, expanded: &HashSet<usize>) -> Vec<(TreeNode, Option<Ite
                 out.extend(reaction_node(cx, 1, &review.id, &review.reactions).map(|n| (n, item)));
             }
             Entry::Thread(index, thread) => {
-                let open = expanded.contains(&index);
+                let open = !collapsed.contains(&index);
                 let pulse = cx
                     .data
                     .pending_pulse(&pr.key, &PendingPart::Thread(thread.id.clone()));
@@ -769,35 +771,49 @@ mod tests {
             [
                 "alice · commented 3h ago",
                 "  Looks good, one question about `layout`.",
-                "▸ src/ui/list.rs:42 · 2 comments · resolved",
-                "▸ src/ui/pane.rs:7 · 1 comment",
+                "▾ src/ui/list.rs:42 · 2 comments · resolved",
+                "  bob · 2h ago",
+                "    Off by one?",
+                "  chaosteil · 2h ago",
+                "    Fixed.",
+                "▾ src/ui/pane.rs:7 · 1 comment",
+                "  bob · 2h ago",
+                "    The gutter eats one column.",
                 "bob · requested changes 1h ago",
                 "  Please split the **transition** module.",
-            ]
+            ],
+            "the threads start expanded"
         );
         let PaneModel::Tree { nodes } = &model else {
             unreachable!()
         };
         assert_eq!(nodes[1].cells[0].style, CellStyle::Markdown);
-        assert_eq!(nodes[4].cells[1].style, CellStyle::Danger);
+        assert_eq!(nodes[10].cells[1].style, CellStyle::Danger);
     }
 
     #[test]
-    fn enter_expands_and_collapses_a_thread() {
+    fn enter_collapses_and_expands_a_thread() {
         let state = state_with(Some(testdata::detail()), None);
         let mut ps = Conversation.init_state();
-        ps.cursor = 3;
+        ps.cursor = 7;
         let model = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
         assert_eq!(
-            outline(&model)[3..6],
+            outline(&model)[7..],
+            [
+                "▸ src/ui/pane.rs:7 · 1 comment",
+                "bob · requested changes 1h ago",
+                "  Please split the **transition** module.",
+            ]
+        );
+        let model = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        assert_eq!(
+            outline(&model)[7..10],
             [
                 "▾ src/ui/pane.rs:7 · 1 comment",
                 "  bob · 2h ago",
                 "    The gutter eats one column.",
             ]
         );
-        let model = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
-        assert_eq!(outline(&model)[3], "▸ src/ui/pane.rs:7 · 1 comment");
         ps.cursor = 0;
         let key = testdata::pr_key("chaoshub", 7);
         let target = pr_target(&state.data, &key).unwrap();
@@ -884,9 +900,9 @@ mod tests {
             );
             assert_eq!(menu.gaps, [1], "a gap after the reply");
         }
-        // The nodes after alice: two threads, then bob and his body and
-        // his reactions.
-        let review = menu_at(&state, &[], 5).unwrap();
+        // The nodes after alice: two expanded threads in 9 nodes, then
+        // bob and his body and his reactions.
+        let review = menu_at(&state, &[], 12).unwrap();
         assert_eq!(review.title, "review of bob");
         assert_eq!(review.items.len(), 9, "no collapse for a review");
         assert!(lines(&review).iter().all(|line| !line.ends_with('✓')));
@@ -895,12 +911,10 @@ mod tests {
     #[test]
     fn enter_on_a_comment_in_a_thread_can_collapse_the_thread() {
         let state = state_with(Some(testdata::detail_with_reactions()), None);
-        assert_eq!(menu_at(&state, &[], 3), None, "a thread header expands");
-        // Node 3 is the thread on `src/ui/list.rs:42`. After the expand,
-        // node 6 is the reactions of its first comment.
+        assert_eq!(menu_at(&state, &[], 3), None, "a thread header collapses");
+        // Node 3 is the expanded thread on `src/ui/list.rs:42`. Node 6 is
+        // the reactions of its first comment.
         let mut ps = Conversation.init_state();
-        ps.cursor = 3;
-        model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
         let key = testdata::pr_key("chaoshub", 7);
         let target = pr_target(&state.data, &key).unwrap();
         let areas = layout(state.data.size);
@@ -929,13 +943,45 @@ mod tests {
             },
         );
         assert_eq!(
-            outline(&model)[3],
-            "▸ src/ui/list.rs:42 · 2 comments · resolved"
+            outline(&model)[3..5],
+            [
+                "▸ src/ui/list.rs:42 · 2 comments · resolved",
+                "▾ src/ui/pane.rs:7 · 1 comment",
+            ]
         );
         assert_eq!(
             Conversation.run_action(chord(KeyCode::Char('c')), &cx, &mut ps),
             None,
             "collapse needs a comment in a thread"
+        );
+    }
+
+    #[test]
+    fn a_collapsed_thread_stays_collapsed_after_a_new_load() {
+        let mut state = state_with(Some(testdata::detail()), None);
+        let mut ps = Conversation.init_state();
+        ps.cursor = 2;
+        let model = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        assert_eq!(
+            outline(&model)[2],
+            "▸ src/ui/list.rs:42 · 2 comments · resolved"
+        );
+        // A new load of the conversation with one more comment in the
+        // thread keeps the thread collapsed.
+        let key = testdata::pr_key("chaoshub", 7);
+        let mut fresh = testdata::detail();
+        let mut reply = fresh.threads[0].comments[1].clone();
+        reply.id = "IC_30".into();
+        reply.body = "Thanks.".into();
+        fresh.threads[0].comments.push(reply);
+        state.data.details.insert(key, testdata::observed(fresh));
+        let model = model_and_keys(&state, &mut ps, &[]);
+        assert_eq!(
+            outline(&model)[2..4],
+            [
+                "▸ src/ui/list.rs:42 · 3 comments · resolved",
+                "▾ src/ui/pane.rs:7 · 1 comment",
+            ]
         );
     }
 
@@ -979,7 +1025,7 @@ mod tests {
             spec("IC_0", ReactionKind::Hooray, true),
             "🎉 of another person: the key adds the one of the viewer"
         );
-        ps.cursor = 5;
+        ps.cursor = 12;
         assert_eq!(
             react(&mut ps, '6'),
             spec("PRR_bob", ReactionKind::Heart, true)
@@ -1006,18 +1052,18 @@ mod tests {
             mods: KeyModifiers::NONE,
         };
         let mut ps = Conversation.init_state();
-        ps.cursor = 3;
+        ps.cursor = 7;
+        let handled = Conversation.handle_key(enter, &cx, &mut ps).unwrap();
+        assert!(handled.changed);
+        assert_eq!(handled.events, [], "a collapse is instant");
         let handled = Conversation.handle_key(enter, &cx, &mut ps).unwrap();
         assert_eq!(
             handled.events,
             [UiEvent::TreeExpanded {
-                first_row: 4,
+                first_row: 8,
                 rows: 2
             }]
         );
-        let handled = Conversation.handle_key(enter, &cx, &mut ps).unwrap();
-        assert!(handled.changed);
-        assert_eq!(handled.events, [], "a collapse is instant");
     }
 
     /// The outline of `model`, with each pulsing cell in `«»`.
@@ -1068,8 +1114,7 @@ mod tests {
             ],
         );
         let mut ps = Conversation.init_state();
-        ps.cursor = 3;
-        let model = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        let model = model_and_keys(&state, &mut ps, &[]);
         insta::assert_snapshot!(pulses(&model));
     }
 
@@ -1090,8 +1135,7 @@ mod tests {
             )],
         );
         let mut ps = Conversation.init_state();
-        ps.cursor = 3;
-        let model = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        let model = model_and_keys(&state, &mut ps, &[]);
         let text = pulses(&model);
         assert!(text.contains("    «👀 0»"), "{text}");
     }
@@ -1100,8 +1144,7 @@ mod tests {
     fn the_reactions_show_under_the_body() {
         let state = state_with(Some(testdata::detail_with_reactions()), None);
         let mut ps = Conversation.init_state();
-        ps.cursor = 3;
-        let model = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        let model = model_and_keys(&state, &mut ps, &[]);
         assert_eq!(
             outline(&model),
             [
@@ -1114,7 +1157,9 @@ mod tests {
                 "    👀 1",
                 "  chaosteil · 2h ago",
                 "    Fixed.",
-                "▸ src/ui/pane.rs:7 · 1 comment",
+                "▾ src/ui/pane.rs:7 · 1 comment",
+                "  bob · 2h ago",
+                "    The gutter eats one column.",
                 "bob · requested changes 1h ago",
                 "  Please split the **transition** module.",
                 "  ❤️ 2",
@@ -1129,7 +1174,7 @@ mod tests {
             [CellStyle::Primary, CellStyle::Normal, CellStyle::Dim],
             "the reaction of the viewer has the primary color"
         );
-        assert_eq!(nodes[12].cells[0].style, CellStyle::Dim);
+        assert_eq!(nodes[14].cells[0].style, CellStyle::Dim);
     }
 
     #[test]
@@ -1211,7 +1256,8 @@ mod tests {
         let state = state_with(Some(testdata::detail()), None);
         let alice = "> @alice: Looks good, one question about `layout`.\n\n";
         let bob = "> @bob: Please split the **transition** module.\n\n";
-        // The nodes: alice, her body, two threads, bob, his body.
+        // The nodes: alice, her body, the two expanded threads at 2 and
+        // 7, bob, his body.
         for (cursor, to, title, text) in [
             (0, ReplyTo::Pr, "comment on #7", alice),
             (1, ReplyTo::Pr, "comment on #7", alice),
@@ -1222,13 +1268,13 @@ mod tests {
                 "",
             ),
             (
-                3,
+                7,
                 thread("PRRT_7", "src/ui/pane.rs:7"),
                 "reply on src/ui/pane.rs:7",
                 "",
             ),
-            (4, ReplyTo::Pr, "comment on #7", bob),
-            (5, ReplyTo::Pr, "comment on #7", bob),
+            (10, ReplyTo::Pr, "comment on #7", bob),
+            (11, ReplyTo::Pr, "comment on #7", bob),
         ] {
             let spec = reply_at(&state, &[], cursor);
             assert_eq!(
@@ -1247,10 +1293,8 @@ mod tests {
     fn a_comment_in_an_expanded_thread_replies_in_the_thread() {
         let state = state_with(Some(testdata::detail()), None);
         let mut ps = Conversation.init_state();
-        ps.cursor = 2;
-        model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
-        let expanded = ps.ext.downcast_ref::<ConversationState>().unwrap();
-        assert!(expanded.expanded.contains(&0));
+        let conversation = ps.ext.downcast_ref::<ConversationState>().unwrap();
+        assert!(conversation.collapsed.is_empty(), "no thread is collapsed");
         // The nodes 3 to 6: the two comments of the thread and their
         // bodies.
         let key = testdata::pr_key("chaoshub", 7);

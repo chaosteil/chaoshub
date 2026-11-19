@@ -11219,8 +11219,8 @@ mod tests {
 
     /// The reply state with the reactions of
     /// `testdata::detail_with_reactions`. The nodes: the comment of
-    /// alice, its body and its reactions, the two threads, the review of
-    /// bob, its body and its reactions.
+    /// alice, its body and its reactions, the two expanded threads, the
+    /// review of bob, its body and its reactions.
     fn react_state() -> (AppState, PrKey) {
         let mut state = mine_state(20);
         let pr = testdata::pr_key("chaoshub", 99);
@@ -11289,7 +11289,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_on_a_thread_header_still_expands_it() {
+    fn enter_on_a_thread_header_still_collapses_it() {
         let (mut state, _) = react_state();
         for _ in 0..3 {
             key(&mut state, 'j');
@@ -11298,12 +11298,12 @@ mod tests {
         assert!(action_menu(&state).is_none(), "no menu on a thread header");
         let popup = sidebar(&state).unwrap();
         let ps = &popup.panes[popup.active];
-        let expanded = &ps
+        let collapsed = &ps
             .ext
             .downcast_ref::<crate::app::panes::conversation::ConversationState>()
             .unwrap()
-            .expanded;
-        assert!(expanded.contains(&0));
+            .collapsed;
+        assert!(collapsed.contains(&0));
     }
 
     #[test]
