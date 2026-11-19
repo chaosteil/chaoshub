@@ -115,8 +115,16 @@ impl Pane for Conversation {
         &[(REPLY_ID, "reply")]
     }
 
-    fn open_hint(&self) -> &'static str {
-        "expand/react"
+    /// The label of Enter on the item of the cursor: `collapse` on an
+    /// expanded thread header, `expand` on a collapsed one, and `react`
+    /// on a comment or a review, where Enter opens the comment menu. On
+    /// a status line, Enter does nothing, so the hint does not show.
+    fn open_hint(&self, cx: &KeyCx<'_>, ps: &PaneState) -> Option<&'static str> {
+        Some(match cursor_item(cx, ps)? {
+            Item::Thread(thread) if collapsed(ps).contains(&thread) => "expand",
+            Item::Thread(_) => "collapse",
+            Item::Comment(_) | Item::Review(_) | Item::ThreadComment(..) => "react",
+        })
     }
 
     /// The reply, on the first chord of the reply key.
@@ -1144,6 +1152,55 @@ mod tests {
         stale.head_oid = "an older head".into();
         let stale = state_with(Some(stale), None);
         assert_eq!(menu_at(&stale, &[], 0), None);
+    }
+
+    /// The `open` hint of the pane with the cursor on the node `cursor`.
+    fn open_hint_at(state: &AppState, ps: &mut PaneState, cursor: usize) -> Option<&'static str> {
+        let key = testdata::pr_key("chaoshub", 7);
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = cx_of(state, &target, &areas);
+        ps.cursor = cursor;
+        Conversation.open_hint(&cx, ps)
+    }
+
+    #[test]
+    fn the_open_hint_follows_the_item_of_the_cursor() {
+        let state = state_with(Some(testdata::detail()), None);
+        let mut ps = Conversation.init_state();
+        // Node 0 is the comment of alice, node 3 is a comment in the
+        // thread on `src/ui/list.rs:42`, node 10 is the review of bob.
+        for cursor in [0, 1, 3, 4, 10] {
+            assert_eq!(
+                open_hint_at(&state, &mut ps, cursor),
+                Some("react"),
+                "{cursor}"
+            );
+        }
+        assert_eq!(
+            open_hint_at(&state, &mut ps, 2),
+            Some("collapse"),
+            "an expanded thread header"
+        );
+        model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        assert_eq!(
+            open_hint_at(&state, &mut ps, 2),
+            Some("expand"),
+            "a collapsed thread header"
+        );
+    }
+
+    #[test]
+    fn a_status_line_has_no_open_hint() {
+        let mut ps = Conversation.init_state();
+        let loading = state_with(None, None);
+        assert_eq!(open_hint_at(&loading, &mut ps, 0), None);
+        let mut empty = testdata::detail();
+        empty.comments.clear();
+        empty.reviews.clear();
+        empty.threads.clear();
+        let empty = state_with(Some(empty), None);
+        assert_eq!(open_hint_at(&empty, &mut ps, 0), None, "no comments yet");
     }
 
     #[test]

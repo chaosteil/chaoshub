@@ -378,7 +378,7 @@ fn hints_model(
     }
     let keymap = &state.cache.keymap;
     let hints = match state.ui.overlays.iter().rev().find(|o| !o.closing) {
-        Some(overlay) => overlay_hints(&state.data, keymap, panes, &overlay.state),
+        Some(overlay) => overlay_hints(&state.data, &areas(state), keymap, panes, &overlay.state),
         None if state.ui.filter_edit => filter_hints(),
         None => list_hints(state, keymap, tabs, &REGISTRY, list),
     };
@@ -513,8 +513,11 @@ fn ctrl_key(c: char) -> KeyChord {
 
 /// The hints of an overlay. They are all primary. The pull request
 /// popup has no action hints: the `actions` hint opens the actions menu.
+/// The `open` hint of the popup is the label of the active pane for the
+/// item at its cursor.
 fn overlay_hints(
     data: &AppData,
+    areas: &Areas,
     keymap: &Keymap,
     panes: &[Box<dyn Pane>],
     overlay: &OverlayState,
@@ -539,12 +542,25 @@ fn overlay_hints(
                 .iter()
                 .filter(|_| target.is_some())
                 .map(|&(name, label)| app_hint(keymap, &[name], label, true));
-            let open = panes
-                .get(popup.active)
-                .map_or("expand", |pane| pane.open_hint());
+            let open = match (
+                &target,
+                panes.get(popup.active),
+                popup.panes.get(popup.active),
+            ) {
+                (Some(target), Some(pane), Some(ps)) => {
+                    let cx = KeyCx {
+                        data,
+                        target: Some(target),
+                        areas,
+                        keys: keymap,
+                    };
+                    pane.open_hint(&cx, ps)
+                }
+                _ => Some("expand"),
+            };
             let mut hints = vec![
                 hint(&keys, "pane tabs"),
-                app_hint(keymap, &["open"], open, true),
+                open.and_then(|open| app_hint(keymap, &["open"], open, true)),
             ];
             hints.extend(own);
             hints.extend([

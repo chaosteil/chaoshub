@@ -1113,8 +1113,15 @@ without reactions has no such row.
 `enter` on an issue comment, a review or a comment in an expanded
 thread opens the comment menu. `enter` on a thread header still
 collapses or expands the thread. A click on the selected comment also
-opens the menu. The key hint bar of the pane shows `Enter
-expand/react`.
+opens the menu. The `Enter` hint in the key hint bar of the pane
+shows what `enter` does on the line of the cursor:
+
+| Line of the cursor | Hint |
+|---|---|
+| An expanded thread header | `Enter collapse` |
+| A collapsed thread header | `Enter expand` |
+| An issue comment, a review or a comment in a thread | `Enter react` |
+| A status line, for example `loading the conversation…` or `no comments yet` | No `Enter` hint, because `enter` does nothing there |
 
 | Key in the menu | What it does |
 |---|---|

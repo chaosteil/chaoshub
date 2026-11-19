@@ -78,10 +78,11 @@ pub(crate) trait Pane: Send + Sync {
     fn hints(&self) -> &'static [(&'static str, &'static str)] {
         &[]
     }
-    /// The label of the `open` key in the key hints of the popup. The
-    /// default is `expand`.
-    fn open_hint(&self) -> &'static str {
-        "expand"
+    /// The label of the `open` key in the key hints of the popup, for
+    /// the item at the cursor of `ps`. `None` hides the hint. The
+    /// default is `expand` for every item.
+    fn open_hint(&self, _cx: &KeyCx<'_>, _ps: &PaneState) -> Option<&'static str> {
+        Some("expand")
     }
     /// The own actions of the pane, in display order. The actions menu
     /// of the popup shows them after the actions of the pull request.
