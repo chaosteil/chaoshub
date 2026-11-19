@@ -346,8 +346,9 @@ impl Default for TerminalConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub(crate) struct RexConfig {
-    /// True when `space` opens the actions menu in the command palette
-    /// of Rex, in place of the menu of chaoshub. Off by default.
+    /// True when `space` opens the actions menu, and `enter` on a
+    /// comment opens the comment menu, in the command palette of Rex, in
+    /// place of the menus of chaoshub. Off by default.
     pub palette_menu: bool,
 }
 

@@ -660,7 +660,7 @@ fn run_pane_action(
     )
     .flatten();
     match handled {
-        Some(handled) => popup_handled(state, panes, &pr, handled),
+        Some(handled) => popup_handled(state, keymap, panes, &pr, handled),
         None => Vec::new(),
     }
 }
@@ -670,6 +670,7 @@ fn run_pane_action(
 /// reaction, the commands and a popup on top.
 fn popup_handled(
     state: &mut AppState,
+    keymap: &Keymap,
     panes: &[Box<dyn Pane>],
     key: &PrKey,
     handled: Handled,
@@ -684,10 +685,11 @@ fn popup_handled(
     if let Some(spec) = handled.reply {
         open_reply(state, key, spec);
     }
-    if let Some(menu) = handled.menu {
-        open_pane_menu(state, key, menu);
-    }
-    let mut cmds = pane_cmds(state, handled.cmds);
+    let mut cmds = handled
+        .menu
+        .map(|menu| open_pane_menu(state, keymap, key, menu))
+        .unwrap_or_default();
+    cmds.extend(pane_cmds(state, handled.cmds));
     if let Some(spec) = handled.react {
         cmds.extend(send_reaction(state, key, spec));
     }
@@ -1207,24 +1209,27 @@ fn open_confirm(state: &mut AppState, key: &PrKey, id: &'static str, spec: Confi
     );
 }
 
-/// Opens the menu of a pane over the popup of the pull request `key`.
-/// The menu is an actions menu with only pane items.
-fn open_pane_menu(state: &mut AppState, key: &PrKey, menu: PaneMenu) {
+/// Opens the menu of a pane over the popup of the pull request `key`,
+/// for example the comment menu. The menu is an actions menu with only
+/// pane items. As the actions menu, it asks in the command palette of
+/// Rex with `[rex] palette_menu` (see `ask_or_open`).
+fn open_pane_menu(state: &mut AppState, keymap: &Keymap, key: &PrKey, menu: PaneMenu) -> Vec<Cmd> {
     let Some(target) = pr_target(&state.data, key) else {
-        return;
+        return Vec::new();
     };
-    open_overlay(
-        state,
-        OverlayKind::Picker,
-        OverlayState::Actions(ActionMenu {
-            target: Box::new(target),
-            title: Some(menu.title),
-            ids: Vec::new(),
-            pane: menu.items,
-            gaps: menu.gaps,
-            cursor: 0,
-        }),
-    );
+    let menu = ActionMenu {
+        target: Box::new(target),
+        title: Some(menu.title),
+        ids: Vec::new(),
+        pane: menu.items,
+        gaps: menu.gaps,
+        cursor: 0,
+    };
+    let ask = state
+        .data
+        .palette_menu
+        .then(|| palette::menu(&state.data, keymap, &[], &menu));
+    ask_or_open(state, OverlayKind::Picker, OverlayState::Actions(menu), ask)
 }
 
 /// Runs the react action with `spec` on the pull request `key`. The
@@ -2181,7 +2186,7 @@ fn overlay_key(
                     .unwrap_or_default();
             };
             let key = popup.key.clone();
-            popup_handled(state, panes, &key, handled)
+            popup_handled(state, keymap, panes, &key, handled)
         }
         OverlayState::Authors(picker) => {
             if let Some(motion) = motion(keymap, chord) {
@@ -2528,7 +2533,7 @@ fn click_pane_row(
     )
     .flatten();
     match handled {
-        Some(handled) => popup_handled(state, panes, &pr, handled),
+        Some(handled) => popup_handled(state, keymap, panes, &pr, handled),
         None => Vec::new(),
     }
 }
@@ -11220,6 +11225,63 @@ mod tests {
         assert_eq!(esc(&mut state), vec![]);
         assert!(action_menu(&state).is_none());
         assert!(sidebar(&state).is_some(), "esc closes only the menu");
+    }
+
+    #[test]
+    fn with_palette_menu_the_comment_menu_asks_in_the_palette() {
+        use crate::domain::detail::ReactionKind::Hooray;
+        let (mut state, _) = react_state();
+        update(&mut state, &Keymap::default(), Msg::PaletteReady);
+        state.data.palette_menu = true;
+        let (serial, ask) = asked(&enter(&mut state));
+        let PaletteAsk::Pick { title, items, .. } = &ask else {
+            panic!("not a pick: {ask:?}");
+        };
+        assert_eq!(title, "comment of alice");
+        let rows: Vec<_> = items
+            .iter()
+            .take(3)
+            .map(|item| {
+                (
+                    item.id.as_str(),
+                    item.title.as_str(),
+                    item.detail.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("pane:0", "reply", Some("r")),
+                ("pane:1", "👍 thumbs up", Some("yours")),
+                ("pane:2", "👎 thumbs down", Some("2")),
+            ]
+        );
+        assert_eq!(items.len(), 9, "reply and the eight reactions");
+        assert!(action_menu(&state).is_none(), "no menu of chaoshub opens");
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            answered(serial, PaletteReply::Answer("pane:4".into())),
+        );
+        let [Cmd::RunAction { id, input, .. }] = cmds.as_slice() else {
+            panic!("no action: {cmds:?}");
+        };
+        assert_eq!(*id, "react");
+        assert_eq!(
+            input,
+            &ActionInput::React(ReactSpec {
+                subject: "IC_0".into(),
+                kind: Hooray,
+                add: true,
+            })
+        );
+        // A fallback opens the menu of chaoshub.
+        let (serial, _) = asked(&enter(&mut state));
+        let fallback = answered(serial, PaletteReply::Fallback("busy".into()));
+        assert_eq!(update(&mut state, &Keymap::default(), fallback), vec![]);
+        let menu = action_menu(&state).unwrap();
+        assert_eq!(menu.title.as_deref(), Some("comment of alice"));
     }
 
     #[test]

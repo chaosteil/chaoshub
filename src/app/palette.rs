@@ -51,11 +51,17 @@ fn authors(picker: &AuthorPicker) -> PaletteAsk {
 /// an action has no `:`.
 const PANE_PREFIX: &str = "pane:";
 
+/// The detail of a pane action with `mine`: a reaction that you gave.
+const MINE: &str = "yours";
+
 /// The actions menu as a pick, in the order of the menu. The id of an
 /// action item is the action id, and its detail is its first key. A
 /// disabled action has its reason as the subtitle. The id of a pane
 /// action is `pane:<index>`. As in the menu of chaoshub, a pane action
-/// with the key of an action shows no key.
+/// with the key of an action shows no key. A pane action with `mine`,
+/// for example a reaction that you gave, has `yours` as its detail in
+/// place of its key. The comment menu is an actions menu with only pane
+/// actions.
 pub(crate) fn menu(
     data: &AppData,
     keymap: &Keymap,
@@ -94,11 +100,16 @@ pub(crate) fn menu(
     });
     let pane_items = menu.pane.iter().enumerate().map(|(index, action)| {
         let shadowed = menu.ids.iter().any(|id| keymap.matches(id, action.key));
+        let detail = if action.mine {
+            Some(MINE.to_owned())
+        } else {
+            (!shadowed).then(|| frame::key_text(action.key))
+        };
         PaletteItem {
             id: format!("{PANE_PREFIX}{index}"),
             title: action.label.clone(),
             subtitle: None,
-            detail: (!shadowed).then(|| frame::key_text(action.key)),
+            detail,
             icon: None,
         }
     });

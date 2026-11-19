@@ -792,7 +792,7 @@ palette_menu = false
 
 | Key | Default | Meaning |
 |---|---|---|
-| `palette_menu` | `false` | `true` opens the actions menu (`space`) in the Rex palette, in place of the menu of chaoshub. Without the palette, the menu of chaoshub opens. The author picker and the one-line prompts use the palette without this key. |
+| `palette_menu` | `false` | `true` opens the actions menu (`space`) and the comment menu (`enter` on a comment) in the Rex palette, in place of the menus of chaoshub. Without the palette, the menus of chaoshub open. The author picker and the one-line prompts use the palette without this key. |
 
 ### `[workspaces]`
 
@@ -1127,6 +1127,9 @@ expand/react`.
 | `c` | Collapses the thread. Only for a comment in a thread. The cursor goes to the thread header. |
 | `j`, `k`, `enter` | Move the cursor, and run the item of the cursor. |
 | `esc` | Closes the menu. |
+
+With `[rex] palette_menu = true`, the comment menu opens in the Rex
+palette (see "Questions in the Rex palette").
 
 A reaction that you already have shows a `✓` in the menu. Its key
 removes your reaction again, as on GitHub. Else the key adds your
@@ -1764,6 +1767,11 @@ in place of its own popup. It does this for these popups:
   shows its reason below its label. In the pull request detail, the
   actions of the active pane come after the other actions. The keys of
   the actions do not work in the palette: type to filter, then pick.
+- The comment menu (`enter` on a comment or a review in the
+  conversation pane), only with `[rex] palette_menu = true`. Each
+  reaction that you already gave shows `yours` at the end of its row,
+  in place of its key. A pick of that reaction removes it. You pick one
+  item: the palette gives no way to pick more reactions at once.
 
 Rex shows the question in each Rex app that is connected to the Rex
 server, also on other devices. The first answer counts.

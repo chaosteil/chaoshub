@@ -122,6 +122,7 @@ impl Pane for Conversation {
             .map(|&key| PaneAction {
                 key,
                 label: "reply to the comment".to_owned(),
+                mine: false,
             })
             .into_iter()
             .collect()
@@ -234,8 +235,8 @@ fn detail<'a>(cx: &KeyCx<'a>) -> Option<&'a PrDetail> {
     cx.data.details.get(&pr.key).map(|d| &d.value)
 }
 
-/// The comment menu of `item`: reply, a gap, the eight reactions with a
-/// `✓` on the reactions of the viewer, and in a thread a gap and
+/// The comment menu of `item`: reply, a gap, the eight reactions with
+/// `mine` on the reactions of the viewer, and in a thread a gap and
 /// collapse. `None` without a comment or a review.
 fn menu(cx: &KeyCx<'_>, item: Item) -> Option<PaneMenu> {
     let detail = detail(cx)?;
@@ -252,6 +253,7 @@ fn menu(cx: &KeyCx<'_>, item: Item) -> Option<PaneMenu> {
         .map(|&key| PaneAction {
             key,
             label: "reply".to_owned(),
+            mine: false,
         })
         .into_iter()
         .collect();
@@ -263,13 +265,9 @@ fn menu(cx: &KeyCx<'_>, item: Item) -> Option<PaneMenu> {
         ReactionKind::ALL
             .iter()
             .zip(REACTION_KEYS)
-            .map(|(&kind, key)| {
-                let mine = if has_mine(&reactions, kind) {
-                    " ✓"
-                } else {
-                    ""
-                };
-                PaneAction::char(key, format!("{} {}{mine}", kind.emoji(), kind.name()))
+            .map(|(&kind, key)| PaneAction {
+                mine: has_mine(&reactions, kind),
+                ..PaneAction::char(key, format!("{} {}", kind.emoji(), kind.name()))
             }),
     );
     if matches!(item, Item::ThreadComment(..)) {
@@ -853,11 +851,18 @@ mod tests {
             .and_then(|h| h.menu)
     }
 
-    /// The items of `menu` as `key  label` lines.
+    /// The items of `menu` as `key  label` lines, with a `✓` on `mine`.
     fn lines(menu: &PaneMenu) -> Vec<String> {
         menu.items
             .iter()
-            .map(|item| format!("{}  {}", crate::app::frame::key_text(item.key), item.label))
+            .map(|item| {
+                let mine = if item.mine { " ✓" } else { "" };
+                format!(
+                    "{}  {}{mine}",
+                    crate::app::frame::key_text(item.key),
+                    item.label
+                )
+            })
             .collect()
     }
 
