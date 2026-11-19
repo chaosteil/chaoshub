@@ -37,7 +37,7 @@ pub(crate) use crate::app::notify::{Notice, NotifySettings};
 use crate::app::state::AppState;
 pub(crate) use crate::app::state::DetailPane;
 use crate::bus::{Cmd, Interest, Msg, Size, UiEvent};
-use crate::config::schema::FiltersConfig;
+use crate::config::schema::{ConversationOrder, FiltersConfig};
 use crate::domain::keys::PrKey;
 use crate::domain::repo::Repo;
 use crate::store::Snapshot;
@@ -123,6 +123,14 @@ impl App {
     /// does not pulse.
     pub(crate) fn with_animations(mut self, on: bool) -> Self {
         self.state.data.animations = on;
+        self.state.bump();
+        self
+    }
+
+    /// Sets the `[conversation] order`: the order of the entries in the
+    /// conversation pane, and of the comments in a thread.
+    pub(crate) fn with_conversation_order(mut self, order: ConversationOrder) -> Self {
+        self.state.data.conversation_order = order;
         self.state.bump();
         self
     }

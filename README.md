@@ -452,6 +452,20 @@ ratio = 50
 | `split` | `"right"` | The direction of the pane: `right`, `left`, `above` or `below`. |
 | `ratio` | none | The percent of the split that the pane gets. Without it, Rex uses its default. |
 
+### `[conversation]`
+
+The conversation pane of the pull request detail (see "Pull request
+detail").
+
+```toml
+[conversation]
+order = "newest_first"
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `order` | `"oldest_first"` | The order of the comments, the reviews and the threads, and of the comments in each thread. `oldest_first` shows them in time order, with the oldest at the top. `newest_first` shows the newest at the top. A thread header stays above its comments. Any other value is an error. |
+
 ### `[merge]`
 
 The settings of the merge action (`m`). The `merge_stack` action (`s`)
@@ -1017,7 +1031,7 @@ selects the next pane:
 |---|---|---|
 | `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the pull request has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments (1 on an older push) · r to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
 | `2` | Checks | One row per check, with its state and its duration. |
-| `3` | Conversation | The comments, the reviews and the review threads, in time order, with the reactions of each comment. `r` replies to the comment of the cursor (see "Replies" below). The threads start expanded. `enter` on a thread collapses or expands it. A collapsed thread stays collapsed while the detail is open, also when chaoshub reads the conversation again. `enter` on a comment opens the comment menu: reply, or react (see "Reactions" below). |
+| `3` | Conversation | The comments, the reviews and the review threads, in time order, with the reactions of each comment. `[conversation] order` can put the newest at the top. `r` replies to the comment of the cursor (see "Replies" below). The threads start expanded. `enter` on a thread collapses or expands it. A collapsed thread stays collapsed while the detail is open, also when chaoshub reads the conversation again. `enter` on a comment opens the comment menu: reply, or react (see "Reactions" below). |
 | `4` | Files | The changed files as a tree, with the diff of each file inline. See "Diff colors" below. |
 | `5` | Stack | The entries of the stack. Only for a stacked pull request. For a pull request without a stack, the tab shows dim, and `5`, `tab` and a click do not select it. The cursor starts on the pull request of the detail. Enter opens the detail of the entry under the cursor on top, and `esc` goes back. `o` opens the page of that entry. |
 | `6` | Agent | The pr-agent results: one section per tool. Only for a repo with a `path`. For a repo without a `path`, the tab shows dim, and `6`, `tab` and a click do not select it. |
@@ -1391,7 +1405,7 @@ only while an item pulses.
 | Merge (`m`), stack merge (`s`) | The row of each entry that the merge merges, in the list and in the Stack pane, and the badge of the Description pane. |
 | Close (`c`), draft (`d`) | The row and the badge of the Description pane. |
 | Rerun the checks (`x`) | The row, `CHECKS` in the Description pane, and each failed check in the Checks pane. |
-| Reply (`r`) | The row, and the thread header in the Conversation pane, or a `sending your comment…` line at the end. |
+| Reply (`r`) | The row, and the thread header in the Conversation pane, or a `sending your comment…` line at the end. With `[conversation] order = "newest_first"`, the line is at the top. |
 | Reaction | The row, and the reaction in the Conversation pane. |
 
 The header of the pull request popup is plain text. It cannot pulse,

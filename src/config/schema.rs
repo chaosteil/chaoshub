@@ -180,6 +180,26 @@ pub(crate) enum DetailMode {
     Sidebar,
 }
 
+/// The `[conversation]` section: the conversation pane of the pull
+/// request detail.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub(crate) struct ConversationConfig {
+    /// The order of the entries, and of the comments in a thread.
+    pub order: ConversationOrder,
+}
+
+/// A `[conversation] order` in the configuration file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ConversationOrder {
+    /// The time order: the oldest entry at the top.
+    #[default]
+    OldestFirst,
+    /// The reverse of the time order: the newest entry at the top.
+    NewestFirst,
+}
+
 /// The `[merge]` section. `Config::parse` also copies its keys into
 /// `[actions.merge]`, the table that the merge action reads, unless
 /// `[actions.merge]` sets the key. So `[merge.repos."owner/name"]` and
@@ -652,6 +672,23 @@ mod tests {
     #[test]
     fn an_unknown_detail_mode_fails() {
         assert!(toml::from_str::<DetailConfig>("mode = \"window\"").is_err());
+    }
+
+    #[test]
+    fn conversation_order_parses() {
+        let conversation: ConversationConfig = toml::from_str("").unwrap();
+        assert_eq!(conversation.order, ConversationOrder::OldestFirst);
+        let conversation: ConversationConfig = toml::from_str("order = \"oldest_first\"").unwrap();
+        assert_eq!(conversation.order, ConversationOrder::OldestFirst);
+        let conversation: ConversationConfig = toml::from_str("order = \"newest_first\"").unwrap();
+        assert_eq!(conversation.order, ConversationOrder::NewestFirst);
+        for bad in ["newest", "NewestFirst", "newest-first", ""] {
+            let text = format!("order = {bad:?}");
+            assert!(
+                toml::from_str::<ConversationConfig>(&text).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

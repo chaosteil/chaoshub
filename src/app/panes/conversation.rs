@@ -2,6 +2,9 @@
 //! reviews and review threads in time order. A thread header shows
 //! `path:line · 3 comments · resolved`. The threads start expanded.
 //! Enter on a thread header collapses and expands the thread.
+//! With `[conversation] order = "newest_first"`, the pane shows the
+//! entries and the comments of each thread in the reverse order: the
+//! newest at the top. A thread header stays above its comments.
 //! Comment bodies are markdown cells, which `ui` renders and wraps.
 //! The reactions of a comment or a review show on one row under its
 //! body: `👍 3  🎉 1`. The reactions of the viewer have the primary
@@ -33,6 +36,7 @@ use crate::app::tabs::{Handled, KeyCx, tree_toggled};
 use crate::bus::{
     KeyChord, KeyCode, KeyModifiers, PendingPart, ReactSpec, ReplySpec, ReplyTo, Size, Target,
 };
+use crate::config::schema::ConversationOrder;
 use crate::domain::detail::{
     Comment, PrDetail, Reaction, ReactionKind, Review, ReviewState, Thread, has_mine, set_mine,
 };
@@ -403,10 +407,10 @@ impl Entry<'_> {
     }
 }
 
-/// The entries of a conversation in time order. Pending reviews and
-/// comment-only reviews without a body are left out: their comments
-/// show in the threads.
-fn entries(detail: &PrDetail) -> Vec<Entry<'_>> {
+/// The entries of a conversation in time order, or in the reverse
+/// order for `NewestFirst`. Pending reviews and comment-only reviews
+/// without a body are left out: their comments show in the threads.
+fn entries(detail: &PrDetail, order: ConversationOrder) -> Vec<Entry<'_>> {
     let mut entries: Vec<Entry<'_>> = detail
         .comments
         .iter()
@@ -430,7 +434,20 @@ fn entries(detail: &PrDetail) -> Vec<Entry<'_>> {
             .map(|(i, t)| Entry::Thread(i, t)),
     );
     entries.sort_by_key(Entry::time);
+    if order == ConversationOrder::NewestFirst {
+        entries.reverse();
+    }
     entries
+}
+
+/// The comments of `thread` with their index in the thread, in time
+/// order, or in the reverse order for `NewestFirst`.
+fn thread_comments(thread: &Thread, order: ConversationOrder) -> Vec<(usize, &Comment)> {
+    let mut comments: Vec<(usize, &Comment)> = thread.comments.iter().enumerate().collect();
+    if order == ConversationOrder::NewestFirst {
+        comments.reverse();
+    }
+    comments
 }
 
 /// A node at `depth` with `cells`.
@@ -512,12 +529,14 @@ fn reaction_node(cx: &KeyCx<'_>, depth: u8, id: &str, raw: &[Reaction]) -> Optio
 /// The nodes of the pane, each with its entry. A status line has none.
 /// The header of a thread has the item of the thread, and the nodes of
 /// a comment in the thread have the item of the comment. A thread in
-/// `collapsed` shows only its header.
+/// `collapsed` shows only its header. `[conversation] order` sets the
+/// order of the entries and of the comments in a thread.
 fn nodes(cx: &KeyCx<'_>, collapsed: &HashSet<usize>) -> Vec<(TreeNode, Option<Item>)> {
     let Some(Target::Pr { pr, .. }) = cx.target else {
         return Vec::new();
     };
     let now = cx.data.now;
+    let order = cx.data.conversation_order;
     let mut out: Vec<(TreeNode, Option<Item>)> = Vec::new();
     let mut push = |node: TreeNode| out.push((node, None));
     let error = cx.data.detail_errors.get(&pr.key);
@@ -552,10 +571,28 @@ fn nodes(cx: &KeyCx<'_>, collapsed: &HashSet<usize>) -> Vec<(TreeNode, Option<It
             )],
         ));
     }
-    let entries = entries(&detail.value);
+    let entries = entries(&detail.value, order);
     if entries.is_empty() {
         push(node(0, None, vec![cell("no comments yet", CellStyle::Dim)]));
     }
+    // A new comment or a review on its way has no place in the data yet.
+    // A pulsing line at the place of the newest entry stands for it: at
+    // the end, or at the top of the entries for `NewestFirst`.
+    let sending: Vec<(TreeNode, Option<Item>)> = [
+        (PendingPart::Review, "sending your review…"),
+        (PendingPart::Comment, "sending your comment…"),
+    ]
+    .into_iter()
+    .filter_map(|(part, text)| {
+        let mix = cx.data.pending_pulse(&pr.key, &part)?;
+        Some((node(0, None, vec![cell(text, CellStyle::Pulse(mix))]), None))
+    })
+    .collect();
+    let (top, end) = match order {
+        ConversationOrder::OldestFirst => (Vec::new(), sending),
+        ConversationOrder::NewestFirst => (sending, Vec::new()),
+    };
+    out.extend(top);
     for entry in entries {
         match entry {
             Entry::Comment(index, comment) => {
@@ -580,7 +617,7 @@ fn nodes(cx: &KeyCx<'_>, collapsed: &HashSet<usize>) -> Vec<(TreeNode, Option<It
                 let header = thread_header(thread, open, pulse);
                 out.push((header, Some(Item::Thread(index))));
                 if open {
-                    for (at, comment) in thread.comments.iter().enumerate() {
+                    for (at, comment) in thread_comments(thread, order) {
                         let item = Some(Item::ThreadComment(index, at));
                         out.push((comment_header(1, comment, "", now), item));
                         out.extend(body(2, &comment.body, &comment.body_html).map(|n| (n, item)));
@@ -591,16 +628,7 @@ fn nodes(cx: &KeyCx<'_>, collapsed: &HashSet<usize>) -> Vec<(TreeNode, Option<It
             }
         }
     }
-    // A new comment or a review on its way has no place in the data yet.
-    // A pulsing line at the end stands for it.
-    for (part, text) in [
-        (PendingPart::Review, "sending your review…"),
-        (PendingPart::Comment, "sending your comment…"),
-    ] {
-        if let Some(mix) = cx.data.pending_pulse(&pr.key, &part) {
-            out.push((node(0, None, vec![cell(text, CellStyle::Pulse(mix))]), None));
-        }
-    }
+    out.extend(end);
     out
 }
 
@@ -764,6 +792,11 @@ mod tests {
     #[test]
     fn comments_reviews_and_threads_in_time_order() {
         let state = state_with(Some(testdata::detail()), None);
+        assert_eq!(
+            state.data.conversation_order,
+            ConversationOrder::OldestFirst,
+            "the default order"
+        );
         let mut ps = Conversation.init_state();
         let model = model_and_keys(&state, &mut ps, &[]);
         assert_eq!(
@@ -982,6 +1015,124 @@ mod tests {
                 "▸ src/ui/list.rs:42 · 3 comments · resolved",
                 "▾ src/ui/pane.rs:7 · 1 comment",
             ]
+        );
+    }
+
+    /// `state_with` with `[conversation] order = "newest_first"`.
+    fn newest_first(detail: PrDetail) -> AppState {
+        let mut state = state_with(Some(detail), None);
+        state.data.conversation_order = ConversationOrder::NewestFirst;
+        state
+    }
+
+    #[test]
+    fn newest_first_reverses_the_entries_and_the_thread_comments() {
+        let state = newest_first(testdata::detail());
+        let mut ps = Conversation.init_state();
+        let model = model_and_keys(&state, &mut ps, &[]);
+        assert_eq!(
+            outline(&model),
+            [
+                "bob · requested changes 1h ago",
+                "  Please split the **transition** module.",
+                "▾ src/ui/pane.rs:7 · 1 comment",
+                "  bob · 2h ago",
+                "    The gutter eats one column.",
+                "▾ src/ui/list.rs:42 · 2 comments · resolved",
+                "  chaosteil · 2h ago",
+                "    Fixed.",
+                "  bob · 2h ago",
+                "    Off by one?",
+                "alice · commented 3h ago",
+                "  Looks good, one question about `layout`.",
+            ]
+        );
+    }
+
+    #[test]
+    fn newest_first_keeps_the_item_of_each_node() {
+        let state = newest_first(testdata::detail_with_reactions());
+        // The nodes: bob (0 to 2), the thread on `src/ui/pane.rs:7` (3 to
+        // 5), the thread on `src/ui/list.rs:42` (6 to 11) with the comment
+        // of chaosteil first, then alice (12 to 14).
+        let reply = |cursor| reply_at(&state, &[], cursor);
+        assert_eq!(
+            reply(0).text,
+            "> @bob: Please split the **transition** module.\n\n"
+        );
+        assert_eq!(reply(3).to, thread("PRRT_7", "src/ui/pane.rs:7"));
+        assert_eq!(reply(8).to, thread("PRRT_42", "src/ui/list.rs:42"));
+        assert_eq!(
+            reply(14).text,
+            "> @alice: Looks good, one question about `layout`.\n\n"
+        );
+        assert_eq!(
+            menu_at(&state, &[], 7).unwrap().title,
+            "comment of chaosteil"
+        );
+        let bob = menu_at(&state, &[], 11).unwrap();
+        assert_eq!(bob.title, "comment of bob");
+        assert_eq!(lines(&bob)[8], "8  👀 eyes ✓", "the reactions of bob");
+        let key = testdata::pr_key("chaoshub", 7);
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = cx_of(&state, &target, &areas);
+        let mut ps = Conversation.init_state();
+        ps.cursor = 11;
+        let react = Conversation
+            .run_action(chord(KeyCode::Char('8')), &cx, &mut ps)
+            .and_then(|h| h.react)
+            .unwrap();
+        assert_eq!(react.subject, "IC_10", "the first comment of the thread");
+        assert!(!react.add);
+        // The collapse from the comment of bob moves the cursor to the
+        // header of its thread.
+        Conversation
+            .run_action(chord(KeyCode::Char('c')), &cx, &mut ps)
+            .unwrap();
+        assert_eq!(ps.cursor, 6);
+        let size = Size {
+            width: 80,
+            height: 20,
+        };
+        let model = Conversation.model(&cx, &ps, size);
+        assert_eq!(
+            outline(&model)[5..8],
+            [
+                "    The gutter eats one column.",
+                "▸ src/ui/list.rs:42 · 2 comments · resolved",
+                "alice · commented 3h ago",
+            ]
+        );
+        // Enter on the header of the other thread collapses it.
+        ps.cursor = 3;
+        Conversation.handle_key(chord(KeyCode::Enter), &cx, &mut ps);
+        let model = Conversation.model(&cx, &ps, size);
+        assert_eq!(
+            outline(&model)[3..5],
+            [
+                "▸ src/ui/pane.rs:7 · 1 comment",
+                "▸ src/ui/list.rs:42 · 2 comments · resolved"
+            ]
+        );
+    }
+
+    #[test]
+    fn newest_first_shows_a_comment_on_its_way_at_the_top() {
+        use crate::bus::Expect;
+        let mut state = newest_first(testdata::detail());
+        let key = testdata::pr_key("chaoshub", 7);
+        testdata::pend(
+            &mut state,
+            &key,
+            vec![(PendingPart::Comment, Expect::NewComment)],
+        );
+        let mut ps = Conversation.init_state();
+        let model = model_and_keys(&state, &mut ps, &[]);
+        let text = pulses(&model);
+        assert!(
+            text.starts_with("«sending your comment…»\nbob · requested changes 1h ago"),
+            "{text}"
         );
     }
 

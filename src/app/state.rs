@@ -28,7 +28,7 @@ use crate::bus::{
     TargetKey, UiEvent,
 };
 use crate::bus::{MergeProgress, MergeStep};
-use crate::config::schema::FiltersConfig;
+use crate::config::schema::{ConversationOrder, FiltersConfig};
 use crate::domain::agent::{AgentResults, ToolKind};
 use crate::domain::codeview::{Comment, Comments};
 use crate::domain::detail::PrDetail;
@@ -125,6 +125,8 @@ pub(crate) struct AppData {
     /// False when `[theme] animations = false`. The merge badge then does
     /// not pulse.
     pub animations: bool,
+    /// The order of the conversation pane, from `[conversation] order`.
+    pub conversation_order: ConversationOrder,
     /// False when the terminal shows its own spinner for the OSC 7501
     /// `working` record, as Rex does. The list title then has no
     /// spinner.
@@ -977,6 +979,7 @@ impl AppState {
                 reviews: BTreeMap::new(),
                 selection_shift: 0,
                 animations: true,
+                conversation_order: ConversationOrder::OldestFirst,
                 title_spinner: true,
                 rex_label: false,
                 palette: false,

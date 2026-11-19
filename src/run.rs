@@ -207,6 +207,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     .with_detail_pane(detail)
     .with_selection_shift(theme.selected_row().shift)
     .with_animations(settings.config.theme.animations)
+    .with_conversation_order(settings.config.conversation.order)
     .with_title_spinner(title_spinner)
     .with_rex_label(label_rex.is_some())
     .with_notify(notify);

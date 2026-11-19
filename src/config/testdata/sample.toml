@@ -23,6 +23,9 @@ enabled = false
 zoom = false
 ratio = 70
 
+[conversation]
+order = "newest_first"
+
 [merge.repos."acme/deploy"]
 method = "rebase"
 bypass_rules = true

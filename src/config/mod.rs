@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::config::schema::{
-    AgentConfig, CodeviewConfig, DetailConfig, FiltersConfig, MergeConfig, NotifyConfig,
-    PrefetchConfig, RefreshConfig, RepoEntry, RepoMerge, TerminalConfig, ThemeConfig,
+    AgentConfig, CodeviewConfig, ConversationConfig, DetailConfig, FiltersConfig, MergeConfig,
+    NotifyConfig, PrefetchConfig, RefreshConfig, RepoEntry, RepoMerge, TerminalConfig, ThemeConfig,
     WorkspacesConfig,
 };
 use crate::domain::keys::RepoKey;
@@ -41,6 +41,8 @@ pub(crate) struct Config {
     pub codeview: CodeviewConfig,
     /// Where `enter` opens the detail of a pull request.
     pub detail: DetailConfig,
+    /// The conversation pane of the pull request detail.
+    pub conversation: ConversationConfig,
     pub merge: MergeConfig,
     /// The pr-agent runs.
     pub agent: AgentConfig,
@@ -176,7 +178,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::config::schema::{EnvValue, MergeMethodSetting, StackSetting};
+    use crate::config::schema::{ConversationOrder, EnvValue, MergeMethodSetting, StackSetting};
 
     const SAMPLE: &str = include_str!("testdata/sample.toml");
 
@@ -203,6 +205,7 @@ mod tests {
         assert!(config.codeview.zoom);
         assert_eq!(config.codeview.split, "right");
         assert_eq!(config.codeview.ratio, None);
+        assert_eq!(config.conversation.order, ConversationOrder::OldestFirst);
         assert_eq!(config.agent, AgentConfig::default());
         assert!(config.theme.grunge);
         assert!(config.theme.textures);
@@ -257,6 +260,7 @@ mod tests {
         assert!(!config.prefetch.enabled);
         assert!(!config.codeview.zoom);
         assert_eq!(config.codeview.ratio, Some(70));
+        assert_eq!(config.conversation.order, ConversationOrder::NewestFirst);
         assert!(config.theme.grunge);
         assert!(!config.theme.textures);
         assert_eq!(config.theme.animation_ms, 120);
@@ -421,6 +425,12 @@ mod tests {
         for text in cases {
             assert!(Config::parse(text, None).is_err(), "{text}");
         }
+    }
+
+    #[test]
+    fn bad_conversation_order_is_an_error() {
+        let err = Config::parse("[conversation]\norder = \"newest\"\n", None).unwrap_err();
+        assert!(err.to_string().contains("newest_first"), "{err}");
     }
 
     #[test]
