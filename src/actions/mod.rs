@@ -150,6 +150,7 @@ pub(crate) static REGISTRY: LazyLock<Vec<Box<dyn Action>>> = LazyLock::new(|| {
         Box::new(react::React),
         Box::new(browser::Browser),
         Box::new(copy::CopyUrl),
+        Box::new(copy::CopyStackUrls),
         Box::new(copy::CopyChangeId),
         Box::new(agent::Agent),
         Box::new(merge::MergeAction),
@@ -343,7 +344,14 @@ mod tests {
             parts("react", react),
             [PendingPart::Reaction("C_1".into(), ReactionKind::Heart)]
         );
-        for id in ["review", "browser", "copy_url", "copy_change_id", "agent"] {
+        for id in [
+            "review",
+            "browser",
+            "copy_url",
+            "copy_stack_urls",
+            "copy_change_id",
+            "agent",
+        ] {
             assert_eq!(parts(id, ActionInput::None), [], "{id} changes nothing");
         }
     }

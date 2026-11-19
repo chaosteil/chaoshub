@@ -11106,7 +11106,13 @@ mod tests {
             );
             assert_eq!(told(&cmds), [], "{id} failed");
         }
-        for id in ["copy_url", "copy_change_id", "browser", "agent"] {
+        for id in [
+            "copy_url",
+            "copy_stack_urls",
+            "copy_change_id",
+            "browser",
+            "agent",
+        ] {
             let cmds = update(&mut state, &Keymap::default(), action_done(id, &pr, Ok("")));
             assert_eq!(told(&cmds), [], "{id} changes nothing on GitHub");
         }
