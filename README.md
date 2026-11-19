@@ -687,7 +687,7 @@ different keys. A chord that does not parse stops chaoshub with an
 error.
 
 The binding names are the app keys and the action ids in the keymap
-below. A `detail_<id>` binding, for example `detail_merge = "m"`,
+below. A `detail_<id>` binding, for example `detail_close = "c"`,
 runs the action `<id>` directly in the list and in the pull request
 detail (see "Actions").
 
@@ -1034,15 +1034,17 @@ mouse does not use the scrollbar.
 
 In the detail, only the keys that change nothing on GitHub work
 directly: the navigation keys, `R` (refresh), `v` (codeview), `r`
-(the Review popup), `o` (browser), `y` and `i` (copy). `r` only opens
-the Review popup. Only a key in the popup sends the review. In the
+(the Review popup), `m` (the merge confirm popup), `o` (browser), `y`
+and `i` (copy). `r` only opens the Review popup. Only a key in the
+popup sends the review. `m` only opens the merge confirm popup. Only
+the confirm key (`y` or `enter`) in the popup merges. In the
 conversation pane, `r` opens the text box of a reply instead. Only
 `ctrl-s` in the text box sends the reply to GitHub. `enter` on a
 comment opens the comment menu, and only a key of the menu sends a
 reaction. The other actions are in the actions menu. Press `space` to
 open it on top of the detail, then the key of the action. For example,
 `space` then `r` opens the Review popup, also in the conversation pane,
-and `space` then `m` opens the merge confirm popup. `esc` closes the
+and `space` then `m` opens the merge confirm popup, as `m` does. `esc` closes the
 menu, and the detail shows again. The pane keys, the motion keys and
 the keys of the active pane come first: in the checks pane, `o` opens
 the selected check, not the pull request. The key hint bar shows
@@ -1314,9 +1316,11 @@ says why.
 
 In the list, only the action keys that change nothing on GitHub work
 directly on the selected row: `v` (codeview), `r` (the Review popup),
-`o` (browser), `y` and `i` (copy). `r` only opens the Review popup, and
-only a key in the popup sends the review. The other action keys do
-nothing in the list. Thus a wrong key cannot send a review. A row without a pull request, for example a
+`m` (the merge confirm popup), `o` (browser), `y` and `i` (copy). `r`
+only opens the Review popup, and only a key in the popup sends the
+review. `m` only opens the merge confirm popup, and only the confirm
+key in the popup merges. The other action keys do nothing in the list.
+Thus a wrong key cannot send a review or merge. A row without a pull request, for example a
 stack header, runs no action. The key hint bar shows the direct keys
 that the row can run. The `actions` key (`space`) opens the actions
 menu of the selected row. The menu shows each action for the row, with
@@ -1331,16 +1335,16 @@ menu:
 
 The action keys work in the actions menu. In the pull request detail
 (the sidebar and the Rex pane), `space` opens the same menu for the
-pull request of the detail. There, as in the list, only `v`, `r`, `o`,
-`y` and `i` also work directly. To run another action directly in the list
+pull request of the detail. There, as in the list, only `v`, `r`, `m`,
+`o`, `y` and `i` also work directly. To run another action directly in the list
 and in the detail, bind a key to `detail_<id>` in `[keys]`. For
-example, `detail_merge = "m"` makes `m` open the merge confirm popup of
+example, `detail_close = "c"` makes `c` open the close confirm popup of
 the selected row or of the detail. These bindings have no default.
 
 | Binding | Key | What it does |
 |---|---|---|
 | `review` | `v` | Reviews the pull request in codeview. Needs a repo with a `path`. A second press focuses the open pane. |
-| `merge` | `m` | Merges the pull request after a confirm popup. For a stacked pull request, see the stack merge paragraph below. |
+| `merge` | `m` | Merges the pull request after a confirm popup. `m` opens the popup also directly in the list and in the detail, and only the confirm key in the popup merges. For a stacked pull request, see the stack merge paragraph below. |
 | `merge_stack` | `s` | Merges the whole stack of the pull request after a confirm popup, from any entry of the stack. It is the same merge as `merge` on the top entry. Hidden for a pull request without a stack. |
 | `rerun_checks` | `x` | Runs the failed checks again. |
 | `draft` | `d` | Changes the pull request from draft to ready, or from ready to draft. |

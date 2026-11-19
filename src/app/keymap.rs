@@ -55,18 +55,20 @@ const DEFAULTS: &[(&str, &[&str])] = &[
 /// The actions whose own keys also work directly in the list and in the
 /// pull request detail. Their key changes nothing on GitHub:
 /// `codeview_send` only opens the Review popup, and only a key in the
-/// popup sends the review. There, the other actions run from the
-/// actions menu, or from a `detail_<id>` binding.
+/// popup sends the review. `merge` only opens the merge confirm popup,
+/// and only the confirm key in the popup merges. There, the other
+/// actions run from the actions menu, or from a `detail_<id>` binding.
 pub(crate) const DETAIL_ACTIONS: &[&str] = &[
     "review",
     "browser",
     "copy_url",
     "copy_change_id",
     "codeview_send",
+    "merge",
 ];
 
 /// The prefix of the binding names that run an action directly in the
-/// list and in the pull request detail, for example `detail_merge`. They
+/// list and in the pull request detail, for example `detail_close`. They
 /// have no default chord.
 const DETAIL_PREFIX: &str = "detail_";
 

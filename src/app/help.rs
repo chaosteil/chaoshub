@@ -252,7 +252,7 @@ mod tests {
     fn sections_are_keys_then_actions() {
         let tabs: Vec<Box<dyn Tab>> = vec![Box::new(FakeTab::new("one"))];
         let actions: Vec<Box<dyn Action>> = vec![
-            Box::new(FakeAction::new("merge", 'm')),
+            Box::new(FakeAction::new("close", 'c')),
             Box::new(FakeAction::new("review", 'v')),
         ];
         let overrides = BTreeMap::from([
@@ -292,19 +292,19 @@ mod tests {
         assert_eq!(model.sections[1].entries.len(), FILTER_SYNTAX.len() + 1);
         assert_eq!(
             model.sections[3].entries,
-            [entry("m", "merge"), entry("v", "review")]
+            [entry("c", "close"), entry("v", "review")]
         );
         assert_eq!(
             model.sections[4].entries,
             [entry("v", "review")],
             "only review works directly in the list and the detail"
         );
-        let overrides = BTreeMap::from([("detail_merge".to_owned(), "m".to_owned())]);
+        let overrides = BTreeMap::from([("detail_close".to_owned(), "c".to_owned())]);
         let keymap = Keymap::with_actions(&actions, &overrides).unwrap();
         let model = help_model(&keymap, &tabs, &actions);
         assert_eq!(
             model.sections[4].entries,
-            [entry("m", "merge"), entry("v", "review")],
+            [entry("c", "close"), entry("v", "review")],
             "a detail binding adds a direct key"
         );
     }

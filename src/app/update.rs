@@ -6509,7 +6509,7 @@ mod tests {
     fn the_state_keys_do_nothing_directly_in_the_list() {
         let actions = state_actions();
         let mut state = action_state(&pr_row(102));
-        for c in ['d', 'x', 'm', 's', 'c', 'p'] {
+        for c in ['d', 'x', 's', 'c', 'p'] {
             let cmds = act(&mut state, &actions, KeyCode::Char(c));
             assert!(
                 !cmds.iter().any(|cmd| matches!(cmd, Cmd::RunAction { .. })),
@@ -6901,6 +6901,32 @@ mod tests {
     }
 
     #[test]
+    fn m_opens_the_merge_confirm_directly_in_the_sidebar() {
+        let actions = confirm_merge();
+        let mut state = sidebar_state(102, &actions);
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('m')), vec![]);
+        let kinds: Vec<OverlayKind> = state.ui.overlays.iter().map(|o| o.kind).collect();
+        assert_eq!(
+            kinds,
+            [OverlayKind::Popup, OverlayKind::Confirm],
+            "no actions menu"
+        );
+        assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
+        run_msg(&mut state, &actions, Msg::TransitionsDone);
+        assert!(sidebar(&state).is_some(), "esc merges nothing");
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('m')), vec![]);
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Char('y')),
+            vec![Cmd::RunAction {
+                id: "merge",
+                selection: pr_selection(&state, 102),
+                input: ActionInput::Confirmed,
+            }],
+            "only the confirm merges"
+        );
+    }
+
+    #[test]
     fn a_key_without_an_action_does_nothing_in_the_sidebar() {
         let actions = fake(FakeAction::new("approve", 'A'));
         let mut state = sidebar_state(102, &actions);
@@ -6917,7 +6943,6 @@ mod tests {
         [
             ("draft", 'd'),
             ("rerun_checks", 'x'),
-            ("merge", 'm'),
             ("merge_stack", 's'),
             ("close", 'c'),
             ("agent", 'p'),
@@ -6931,7 +6956,7 @@ mod tests {
     fn the_state_keys_do_nothing_directly_in_the_sidebar() {
         let actions = state_actions();
         let mut state = sidebar_state(102, &actions);
-        for c in ['d', 'x', 'm', 's', 'c', 'p'] {
+        for c in ['d', 'x', 's', 'c', 'p'] {
             let cmds = act(&mut state, &actions, KeyCode::Char(c));
             assert!(
                 !cmds.iter().any(|cmd| matches!(cmd, Cmd::RunAction { .. })),
@@ -8494,6 +8519,36 @@ mod tests {
         let mut state = pinned_on_102(after_bottom_merge(&[1]));
         assert_eq!(press_merge(&mut state), vec![]);
         assert_eq!(confirm_lines(&state), Some(merge_102_lines()));
+    }
+
+    #[test]
+    fn m_opens_the_merge_confirm_directly_from_the_list_and_the_detail_pane() {
+        for pinned in [false, true] {
+            let snapshot = after_bottom_merge(&[1]);
+            let mut state = if pinned {
+                pinned_on_102(snapshot)
+            } else {
+                list_on_102(snapshot)
+            };
+            let before = state.ui.overlays.len();
+            assert_eq!(
+                update(
+                    &mut state,
+                    &Keymap::default(),
+                    press(KeyCode::Char('m'), KeyModifiers::NONE),
+                ),
+                vec![],
+                "pinned {pinned}: the key merges nothing"
+            );
+            assert_eq!(confirm_lines(&state), Some(merge_102_lines()));
+            let kinds: Vec<OverlayKind> = state.ui.overlays.iter().map(|o| o.kind).collect();
+            assert_eq!(kinds.len(), before + 1, "pinned {pinned}: {kinds:?}");
+            assert_eq!(kinds.last(), Some(&OverlayKind::Confirm));
+            assert!(
+                !kinds.contains(&OverlayKind::Picker),
+                "pinned {pinned}: no actions menu"
+            );
+        }
     }
 
     #[test]

@@ -51,7 +51,9 @@ pub(crate) const STACK_ID: &str = "merge_stack";
 /// loaded. The app then refreshes the stack, so the next try can work.
 pub(crate) const STACK_NOT_LOADED: &str = "stack not loaded yet, refreshing the stack";
 
-/// The merge action.
+/// The merge action. Its key (`m`) works directly in the list and in the
+/// pull request detail, and in the actions menu. The key only opens the
+/// confirm popup. Only the confirm key in the popup merges.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MergeAction;
 
