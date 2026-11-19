@@ -1757,16 +1757,29 @@ in place of its own popup. It does this for these popups:
 
 - The author picker (`a`). Each author has the `person` icon, and
   `all authors` comes first. The current choice shows `current` at the
-  end of its row.
+  end of its row. The submit row says `Filter`.
 - The one-line prompts: the question to pr-agent (`a` in the Agent
   pane), and the text prompt of an action. The palette shows a text
   field with the title and the placeholder of the prompt. Your text
-  goes to the same place as the text of the prompt popup.
+  goes to the same place as the text of the prompt popup. The submit
+  row says `Ask` for pr-agent, and `Send` for an action.
 - The actions menu (`space`), only with `[rex] palette_menu = true`.
   Each action shows its key at the end of its row. A disabled action
   shows its reason below its label. In the pull request detail, the
   actions of the active pane come after the other actions. The keys of
   the actions do not work in the palette: type to filter, then pick.
+  The submit row says `Run`. These actions have an icon:
+
+  | Action | Icon |
+  |---|---|
+  | `browser` | `globe` |
+  | `copy_url` | `link` |
+  | `copy_change_id` | `tag` |
+  | `review` | `code` |
+  | `merge`, `merge_stack` | `branch` |
+  | `rerun_checks` | `gear` |
+  | `draft` | `document` |
+  | `agent` | `terminal` |
 - The comment menu (`enter` on a comment or a review in the
   conversation pane), only with `[rex] palette_menu = true`. Each
   reaction that you already gave shows `yours` at the end of its row,
@@ -1799,9 +1812,13 @@ rex --timeout 330s do chaoshub_ask --args - --json
 ```
 
 The question goes to the action as JSON on stdin, for example
-`{"ask": {"kind": "pick", "title": "author", "items": [...]},
-"timeout": 300}`. The action gives `{"answer": "..."}` or
-`{"reason": "..."}`. Rex shows the question for 5 minutes. The rex
+`{"ask": {"kind": "pick", "title": "author", "confirm": "Filter",
+"items": [...]}, "timeout": 300}`. The fields of `ask` are the fields
+of `rex.ui.input` and `rex.ui.pick`: `title`, `placeholder`, `value`
+and `confirm`, and for a pick `items` and `allow_other`. The action
+gives `{"answer": "..."}`, `{"other": "..."}` (a typed text of a pick
+with `allow_other`) or `{"reason": "..."}`. No question of chaoshub
+sets `allow_other` now. Rex shows the question for 5 minutes. The rex
 binary is the same one as for the panes. After a change of `init.lua`,
 restart chaoshub, because it checks only at start.
 

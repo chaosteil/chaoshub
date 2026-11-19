@@ -212,7 +212,8 @@ fn has_app_client(stdout: &str) -> bool {
         })
 }
 
-/// The reply of the JSON result of the action: `{"answer": "..."}` or
+/// The reply of the JSON result of the action: `{"answer": "..."}`,
+/// `{"other": "..."}` (a typed text of a pick with `allow_other`) or
 /// `{"reason": "..."}`. `cancelled` and `timeout` are a cancel. Every
 /// other reason, and a result that does not parse, is a fallback.
 fn parse_reply(stdout: &str) -> PaletteReply {
@@ -221,6 +222,9 @@ fn parse_reply(stdout: &str) -> PaletteReply {
     };
     if let Some(answer) = value.get("answer").and_then(Value::as_str) {
         return PaletteReply::Answer(answer.to_owned());
+    }
+    if let Some(other) = value.get("other").and_then(Value::as_str) {
+        return PaletteReply::Other(other.to_owned());
     }
     match value.get("reason").and_then(Value::as_str) {
         Some("cancelled" | "timeout") => PaletteReply::Cancelled,
@@ -243,6 +247,9 @@ mod tests {
         PaletteAsk::Pick {
             title: "author".into(),
             placeholder: String::new(),
+            value: String::new(),
+            confirm: None,
+            allow_other: false,
             items: vec![PaletteItem {
                 id: "alice".into(),
                 title: "alice".into(),
@@ -275,10 +282,41 @@ mod tests {
         let ask = PaletteAsk::Input {
             title: "ask pr-agent about #7".into(),
             placeholder: "a question".into(),
+            value: String::new(),
+            confirm: None,
         };
         assert_eq!(
             serde_json::to_value(ask).unwrap(),
             json!({ "kind": "input", "title": "ask pr-agent about #7", "placeholder": "a question" })
+        );
+        let ask = PaletteAsk::Input {
+            title: "ask pr-agent about #7".into(),
+            placeholder: String::new(),
+            value: "why".into(),
+            confirm: Some("Ask"),
+        };
+        assert_eq!(
+            serde_json::to_value(ask).unwrap(),
+            json!({ "kind": "input", "title": "ask pr-agent about #7", "value": "why", "confirm": "Ask" })
+        );
+        let ask = PaletteAsk::Pick {
+            title: "jump".into(),
+            placeholder: String::new(),
+            value: "fix".into(),
+            confirm: Some("Open"),
+            allow_other: true,
+            items: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(ask).unwrap(),
+            json!({
+                "kind": "pick",
+                "title": "jump",
+                "value": "fix",
+                "confirm": "Open",
+                "allow_other": true,
+                "items": [],
+            })
         );
     }
 
@@ -309,6 +347,10 @@ mod tests {
                 PaletteReply::Answer("alice".into()),
             ),
             ("{\"answer\": \"\"}", PaletteReply::Answer(String::new())),
+            (
+                "{\"other\": \"fix q\"}",
+                PaletteReply::Other("fix q".into()),
+            ),
             ("{\"reason\": \"cancelled\"}", PaletteReply::Cancelled),
             ("{\"reason\": \"timeout\"}", PaletteReply::Cancelled),
             (

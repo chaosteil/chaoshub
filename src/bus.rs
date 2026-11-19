@@ -310,6 +310,13 @@ pub(crate) enum PaletteAsk {
         title: String,
         #[serde(skip_serializing_if = "String::is_empty")]
         placeholder: String,
+        /// The start text, that the user can edit.
+        #[serde(skip_serializing_if = "String::is_empty")]
+        value: String,
+        /// The label of the submit row. Without it, Rex shows
+        /// `Use "<text>"`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        confirm: Option<&'static str>,
     },
     /// One item of a list: `rex.ui.pick`. The answer is the id of the
     /// item.
@@ -317,6 +324,16 @@ pub(crate) enum PaletteAsk {
         title: String,
         #[serde(skip_serializing_if = "String::is_empty")]
         placeholder: String,
+        /// The start text of the filter field.
+        #[serde(skip_serializing_if = "String::is_empty")]
+        value: String,
+        /// The label of the submit row.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        confirm: Option<&'static str>,
+        /// True when the user can also type a text that is not an item.
+        /// The reply is then `PaletteReply::Other`.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        allow_other: bool,
         items: Vec<PaletteItem>,
     },
 }
@@ -343,6 +360,8 @@ pub(crate) struct PaletteItem {
 pub(crate) enum PaletteReply {
     /// The text of an input, or the id of the picked item.
     Answer(String),
+    /// The typed text of a pick with `allow_other`, that is not an item.
+    Other(String),
     /// The user closed the question, or did not answer in time. chaoshub
     /// then does nothing.
     Cancelled,

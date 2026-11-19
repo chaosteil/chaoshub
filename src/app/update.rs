@@ -974,7 +974,8 @@ fn palette_answered(
     state.bump();
     let answer = match reply {
         PaletteReply::Answer(answer) => answer,
-        PaletteReply::Cancelled => return Vec::new(),
+        // No question of chaoshub sets `allow_other` yet.
+        PaletteReply::Other(_) | PaletteReply::Cancelled => return Vec::new(),
         PaletteReply::Fallback(reason) => {
             tracing::debug!(reason, "the Rex palette cannot ask, the overlay opens");
             open_overlay(state, wait.kind, wait.overlay);
@@ -7064,6 +7065,8 @@ mod tests {
             PaletteAsk::Input {
                 title: "request changes".into(),
                 placeholder: "why".into(),
+                value: String::new(),
+                confirm: Some("Send"),
             }
         );
         assert!(
@@ -7116,13 +7119,16 @@ mod tests {
         let PaletteAsk::Pick {
             title,
             placeholder,
+            confirm,
             items,
+            ..
         } = &ask
         else {
             panic!("not a pick: {ask:?}");
         };
         assert_eq!(title, "actions for #102");
         assert_eq!(placeholder, "filter the actions");
+        assert_eq!(*confirm, Some("Run"));
         let rows: Vec<_> = items
             .iter()
             .map(|item| {
@@ -9120,6 +9126,8 @@ mod tests {
             PaletteAsk::Input {
                 title: format!("ask pr-agent about #{}", pr.number),
                 placeholder: "a question about the pull request".into(),
+                value: String::new(),
+                confirm: Some("Ask"),
             }
         );
         let job = agent_job(&state, &pr, Tool::Ask("why?".into()));

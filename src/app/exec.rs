@@ -1362,6 +1362,8 @@ mod tests {
             ask: Box::new(PaletteAsk::Input {
                 title: "ask".into(),
                 placeholder: String::new(),
+                value: String::new(),
+                confirm: None,
             }),
         }
     }

@@ -113,24 +113,37 @@ end
 --   rex do chaoshub_ask --args - --json
 --
 -- with {"ask": {...}, "timeout": N} on stdin. `ask.kind` is "input" or
--- "pick", and the other fields of `ask` are the ones of rex.ui. The
--- result is {answer = "..."} with the text or the id of the picked
--- item, or {reason = "..."} with the reason of rex.ui when no answer
--- came: cancelled, timeout, no_client, unsupported, busy or failed.
+-- "pick", and the other fields of `ask` are the ones of rex.ui: title,
+-- placeholder, value and confirm, and for a pick items and allow_other.
+-- The result is {answer = "..."} with the text or the id of the picked
+-- item, {other = "..."} with the typed text of a pick with allow_other,
+-- or {reason = "..."} with the reason of rex.ui when no answer came:
+-- cancelled, timeout, no_client, unsupported, busy or failed.
 local function ask(_, args)
   local q = args.ask
   -- The action also shows in the palette. Started from there, it has no
   -- question.
   if type(q) ~= "table" then return { reason = "failed" } end
-  local fields = { title = q.title, placeholder = q.placeholder, timeout = args.timeout }
+  local fields = {
+    title = q.title,
+    placeholder = q.placeholder,
+    value = q.value,
+    confirm = q.confirm,
+    timeout = args.timeout,
+  }
   local answer, why
   if q.kind == "pick" then
     fields.items = q.items
+    fields.allow_other = q.allow_other
     answer, why = rex.ui.pick(fields)
   else
     answer, why = rex.ui.input(fields)
   end
   if type(answer) == "string" then return { answer = answer } end
+  -- With allow_other, a typed text comes as { text = "..." }.
+  if type(answer) == "table" and type(answer.text) == "string" then
+    return { other = answer.text }
+  end
   return { reason = why or "failed" }
 end
 

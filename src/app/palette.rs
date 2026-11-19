@@ -10,17 +10,55 @@ use crate::bus::{PaletteAsk, PaletteItem, Target};
 /// The text of the status bar while a question waits for its answer.
 pub(crate) const WAITING: &str = "waiting for an answer in Rex";
 
+/// The label of the submit row of the question to pr-agent.
+const ASK: &str = "Ask";
+/// The label of the submit row of the text prompt of an action.
+const SEND: &str = "Send";
+/// The label of the submit row of the author picker.
+const FILTER: &str = "Filter";
+/// The label of the submit row of the actions menu and of the comment
+/// menu.
+const RUN: &str = "Run";
+
+/// The icon of each action in the actions menu, from the icon names of
+/// `rex.ui`. An action that is not in the list has no icon.
+const ICONS: &[(&str, &str)] = &[
+    ("browser", "globe"),
+    ("copy_url", "link"),
+    ("copy_change_id", "tag"),
+    ("review", "code"),
+    ("merge", "branch"),
+    ("merge_stack", "branch"),
+    ("rerun_checks", "gear"),
+    ("draft", "document"),
+    ("agent", "terminal"),
+];
+
 /// The question of `overlay` for the palette. `None` when the overlay
-/// has no palette form.
+/// has no palette form. A prompt starts with the text of the overlay.
 pub(crate) fn ask(overlay: &OverlayState) -> Option<PaletteAsk> {
     match overlay {
         OverlayState::Authors(picker) => Some(authors(picker)),
-        OverlayState::Prompt { spec, .. } => Some(PaletteAsk::Input {
+        OverlayState::Prompt { action, spec, text } => Some(PaletteAsk::Input {
             title: spec.title.clone(),
             placeholder: spec.placeholder.clone(),
+            value: text.clone(),
+            confirm: Some(if action.id == crate::agent::ID {
+                ASK
+            } else {
+                SEND
+            }),
         }),
         _ => None,
     }
+}
+
+/// The icon of the action `id` in the actions menu.
+fn icon(id: &str) -> Option<&'static str> {
+    ICONS
+        .iter()
+        .find(|(action, _)| *action == id)
+        .map(|&(_, icon)| icon)
 }
 
 /// The author picker as a pick: `all authors`, then the authors, each
@@ -43,6 +81,9 @@ fn authors(picker: &AuthorPicker) -> PaletteAsk {
     PaletteAsk::Pick {
         title: "author".to_owned(),
         placeholder: "filter the authors".to_owned(),
+        value: String::new(),
+        confirm: Some(FILTER),
+        allow_other: false,
         items,
     }
 }
@@ -55,7 +96,8 @@ const PANE_PREFIX: &str = "pane:";
 const MINE: &str = "yours";
 
 /// The actions menu as a pick, in the order of the menu. The id of an
-/// action item is the action id, and its detail is its first key. A
+/// action item is the action id, its detail is its first key, and its
+/// icon comes from `ICONS`. A
 /// disabled action has its reason as the subtitle. The id of a pane
 /// action is `pane:<index>`. As in the menu of chaoshub, a pane action
 /// with the key of an action shows no key. A pane action with `mine`,
@@ -95,7 +137,7 @@ pub(crate) fn menu(
             title,
             subtitle,
             detail: key(id),
-            icon: None,
+            icon: icon(id),
         }
     });
     let pane_items = menu.pane.iter().enumerate().map(|(index, action)| {
@@ -120,6 +162,9 @@ pub(crate) fn menu(
             .clone()
             .unwrap_or_else(|| format!("actions for #{}", pr.key.number)),
         placeholder: "filter the actions".to_owned(),
+        value: String::new(),
+        confirm: Some(RUN),
+        allow_other: false,
         items: action_items.chain(pane_items).collect(),
     }
 }
@@ -173,6 +218,9 @@ mod tests {
             Some(PaletteAsk::Pick {
                 title: "author".into(),
                 placeholder: "filter the authors".into(),
+                value: String::new(),
+                confirm: Some("Filter"),
+                allow_other: false,
                 items: vec![
                     item("all authors", false),
                     item("alice", false),
@@ -184,6 +232,62 @@ mod tests {
             panic!("not a pick");
         };
         assert_eq!(items[0], item("all authors", true));
+    }
+
+    /// The icon names of `rex.ui.pick`, from
+    /// <https://www.superlogical.com/rex/docs/customize/custom-ui.md>.
+    const REX_ICONS: &[&str] = &[
+        "document", "folder", "branch", "terminal", "code", "server", "database", "package",
+        "globe", "link", "person", "tag", "clock", "star", "gear", "plus",
+    ];
+
+    #[test]
+    fn each_menu_icon_is_a_rex_icon_of_an_action() {
+        use crate::actions::REGISTRY;
+        for (id, name) in ICONS {
+            assert!(REX_ICONS.contains(name), "{id}: {name} is not a Rex icon");
+            assert!(
+                REGISTRY.iter().any(|action| action.id() == *id),
+                "{id} is not an action"
+            );
+        }
+        assert_eq!(icon("merge_stack"), Some("branch"));
+        assert_eq!(icon("close"), None);
+    }
+
+    #[test]
+    fn a_prompt_asks_with_its_text_and_a_confirm_label() {
+        use crate::app::state::ActionDialog;
+        use crate::app::testdata;
+        use crate::bus::PromptSpec;
+
+        let mut state = crate::app::state::AppState::new(crate::bus::Size {
+            width: 80,
+            height: 20,
+        });
+        state.load(testdata::mine_snapshot(), Vec::new());
+        let key = &testdata::mine_prs()[0].key;
+        let prompt = |id: &'static str| OverlayState::Prompt {
+            action: ActionDialog {
+                id,
+                selection: Box::new(crate::bus::Selection {
+                    target: crate::app::target::pr_target(&state.data, key).unwrap(),
+                    me: String::new(),
+                    action_config: None,
+                }),
+            },
+            spec: PromptSpec {
+                title: "t".into(),
+                placeholder: String::new(),
+            },
+            text: "draft".into(),
+        };
+        let confirm = |id| match ask(&prompt(id)) {
+            Some(PaletteAsk::Input { value, confirm, .. }) => (value, confirm),
+            other => panic!("not an input: {other:?}"),
+        };
+        assert_eq!(confirm("agent"), ("draft".into(), Some("Ask")));
+        assert_eq!(confirm("request_changes"), ("draft".into(), Some("Send")));
     }
 
     #[test]
