@@ -144,9 +144,8 @@ impl App {
         self
     }
 
-    /// Sets `[rex] palette_menu`. With `true`, the actions menu and the
-    /// comment menu ask in the command palette of Rex, when the palette
-    /// can ask.
+    /// Sets `[rex] palette_menu`. With `true`, `space` asks for the action
+    /// in the command palette of Rex, when the palette can ask.
     pub(crate) fn with_palette_menu(mut self, on: bool) -> Self {
         self.state.data.palette_menu = on;
         self

@@ -113,9 +113,6 @@ pub(crate) trait Pane: Send + Sync {
 pub(crate) struct PaneAction {
     pub key: KeyChord,
     pub label: String,
-    /// True for a reaction that you gave. The menu of chaoshub shows a
-    /// `✓` after the label, and the Rex palette shows `yours`.
-    pub mine: bool,
 }
 
 impl PaneAction {
@@ -127,7 +124,6 @@ impl PaneAction {
                 mods: crate::bus::KeyModifiers::NONE,
             },
             label: label.into(),
-            mine: false,
         }
     }
 }

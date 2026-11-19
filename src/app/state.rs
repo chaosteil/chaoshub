@@ -136,9 +136,8 @@ pub(crate) struct AppData {
     /// `Msg::PaletteReady`). The author picker and the one-line prompts
     /// then ask there.
     pub palette: bool,
-    /// True with `[rex] palette_menu`: the actions menu and the comment
-    /// menu also ask in the command palette of Rex, when the palette can
-    /// ask.
+    /// True with `[rex] palette_menu`: the actions menu also asks in the
+    /// command palette of Rex, when the palette can ask.
     pub palette_menu: bool,
     /// The notification of new pull requests.
     pub notify: NotifyState,
@@ -891,7 +890,7 @@ impl ActionMenu {
     /// The rows of the menu: the key and the label of each action of
     /// `actions` in `ids`, then of each pane action, with an empty row
     /// for each gap. A disabled action also shows its reason in
-    /// parentheses. A pane action with `mine` ends with `✓`. An action without a key shows only its label. In the
+    /// parentheses. An action without a key shows only its label. In the
     /// menu, an action key wins over a pane key, so a pane action with
     /// the key of an action in `ids` also shows only its label. `enter`
     /// on it still runs it.
@@ -923,11 +922,10 @@ impl ActionMenu {
                 }
             })
             .chain(self.pane.iter().map(|action| {
-                let mine = if action.mine { " ✓" } else { "" };
                 if self.ids.iter().any(|id| keymap.matches(id, action.key)) {
-                    format!("{}{mine}", action.label)
+                    action.label.clone()
                 } else {
-                    format!("{}  {}{mine}", frame::key_text(action.key), action.label)
+                    format!("{}  {}", frame::key_text(action.key), action.label)
                 }
             }))
             .enumerate()
