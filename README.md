@@ -780,20 +780,6 @@ tabs = ["review"]
 debounce = "1m"
 ```
 
-### `[rex]`
-
-What chaoshub asks in the command palette of Rex (see "Questions in
-the Rex palette").
-
-```toml
-[rex]
-palette_menu = false
-```
-
-| Key | Default | Meaning |
-|---|---|---|
-| `palette_menu` | `false` | `true` opens the actions menu (`space`) in the Rex palette, in place of the menu of chaoshub. Without the palette, the menu of chaoshub opens. The author picker, the one-line prompts and the jump to a pull request (`f`) use the palette without this key. |
-
 ### `[workspaces]`
 
 | Key | Default | Meaning |
@@ -1343,9 +1329,6 @@ menu:
   opens the Review popup.
 - `esc` or `q` closes the menu.
 
-Inside Rex, with `[rex] palette_menu = true`, `space` opens the menu
-in the Rex palette (see "Questions in the Rex palette").
-
 The action keys work in the actions menu. In the pull request detail
 (the sidebar and the Rex pane), `space` opens the same menu for the
 pull request of the detail. There, as in the list, only `v`, `r`, `o`,
@@ -1761,23 +1744,6 @@ in place of its own popup. It does this for these questions:
   field with the title and the placeholder of the prompt. Your text
   goes to the same place as the text of the prompt popup. The submit
   row says `Ask` for pr-agent, and `Send` for an action.
-- The actions menu (`space`), only with `[rex] palette_menu = true`.
-  Each action shows its key at the end of its row. A disabled action
-  shows its reason below its label. In the pull request detail, the
-  actions of the active pane come after the other actions. The keys of
-  the actions do not work in the palette: type to filter, then pick.
-  The submit row says `Run`. These actions have an icon:
-
-  | Action | Icon |
-  |---|---|
-  | `browser` | `globe` |
-  | `copy_url` | `link` |
-  | `copy_change_id` | `tag` |
-  | `review` | `code` |
-  | `merge`, `merge_stack` | `branch` |
-  | `rerun_checks` | `gear` |
-  | `draft` | `document` |
-  | `agent` | `terminal` |
 - The jump to a pull request (`f` in the list). The palette lists the
   pull requests that the tabs show now, in tab order: the filter, the
   author picker and the ready rule of each tab apply. A pull request in

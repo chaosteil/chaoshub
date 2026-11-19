@@ -319,12 +319,7 @@ fn dispatch(
             Vec::new()
         }
         Msg::PaletteAnswered { serial, reply } => {
-            let ui = PaletteUi {
-                keymap,
-                tabs,
-                panes,
-                actions,
-            };
+            let ui = PaletteUi { tabs, panes };
             palette_answered(state, &ui, serial, reply)
         }
     }
@@ -415,7 +410,8 @@ fn key(
         return Vec::new();
     }
     if keymap.matches("actions", chord) {
-        return open_actions(state, keymap, tabs, actions);
+        open_actions(state, tabs, actions);
+        return Vec::new();
     }
     if let Some(cmds) = list_action_key(state, keymap, tabs, panes, actions, chord) {
         return cmds;
@@ -497,26 +493,19 @@ fn list_action_key(
 
 /// Opens the actions menu of the cursor row. A row without a target
 /// opens nothing.
-fn open_actions(
-    state: &mut AppState,
-    keymap: &Keymap,
-    tabs: &[Box<dyn Tab>],
-    actions: &[Box<dyn Action>],
-) -> Vec<Cmd> {
+fn open_actions(state: &mut AppState, tabs: &[Box<dyn Tab>], actions: &[Box<dyn Action>]) {
     let model = frame::active_list(state, tabs);
     let Some(target) = model
         .rows
         .get(model.cursor)
         .and_then(|row| row_target(&state.data, &row.item))
     else {
-        return Vec::new();
+        return;
     };
-    open_menu(state, keymap, actions, target, Vec::new(), None)
+    open_menu(state, actions, target, Vec::new(), None);
 }
 
-/// Opens the actions menu of `target`, or asks for the action in the
-/// command palette of Rex with `[rex] palette_menu` (see `ask_or_open`):
-/// one item for each action that is
+/// Opens the actions menu of `target`: one item for each action that is
 /// not hidden for it, in registry order, then one item for each pane
 /// action of `pane`. `active` is the id of the active pane of the popup
 /// under the menu. An action that opens that pane is not in the menu,
@@ -525,12 +514,11 @@ fn open_actions(
 /// first item.
 fn open_menu(
     state: &mut AppState,
-    keymap: &Keymap,
     actions: &[Box<dyn Action>],
     target: Target,
     pane: Vec<PaneAction>,
     active: Option<&str>,
-) -> Vec<Cmd> {
+) {
     let shown: Vec<&dyn Action> = actions
         .iter()
         .zip(frame::applicability(&state.data, actions, target.clone()))
@@ -549,20 +537,18 @@ fn open_menu(
     if !shown.is_empty() && !pane.is_empty() {
         gaps.push(shown.len());
     }
-    let menu = ActionMenu {
-        target: Box::new(target),
-        title: None,
-        ids: shown.iter().map(|action| action.id()).collect(),
-        pane,
-        gaps,
-        cursor: 0,
-    };
-    // The menu asks in the palette only with `[rex] palette_menu`.
-    let ask = state
-        .data
-        .palette_menu
-        .then(|| palette::menu(&state.data, keymap, actions, &menu));
-    ask_or_open(state, OverlayKind::Picker, OverlayState::Actions(menu), ask)
+    open_overlay(
+        state,
+        OverlayKind::Picker,
+        OverlayState::Actions(ActionMenu {
+            target: Box::new(target),
+            title: None,
+            ids: shown.iter().map(|action| action.id()).collect(),
+            pane,
+            gaps,
+            cursor: 0,
+        }),
+    );
 }
 
 /// True when `action` opens the pull request popup of `target` on the
@@ -916,24 +902,11 @@ fn open_authors(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
 /// answer, and opens when Rex cannot ask after all. While a question
 /// waits, a second question asks nothing.
 fn open_or_ask(state: &mut AppState, kind: OverlayKind, overlay: OverlayState) -> Vec<Cmd> {
-    let ask = palette::ask(&overlay);
-    ask_or_open(state, kind, overlay, ask)
-}
-
-/// Asks `ask`, the palette form of `overlay`, in the command palette of
-/// Rex when Rex can ask, as `open_or_ask` does. Without `ask`, or when
-/// Rex cannot ask, it opens `overlay`.
-fn ask_or_open(
-    state: &mut AppState,
-    kind: OverlayKind,
-    overlay: OverlayState,
-    ask: Option<PaletteAsk>,
-) -> Vec<Cmd> {
     if state.ui.palette_wait.is_some() {
         state.message(palette::WAITING, CellStyle::Dim, INFO_TTL);
         return Vec::new();
     }
-    let Some(ask) = ask.filter(|_| state.data.palette) else {
+    let Some(ask) = palette::ask(&overlay).filter(|_| state.data.palette) else {
         open_overlay(state, kind, overlay);
         return Vec::new();
     };
@@ -1091,49 +1064,15 @@ fn palette_answered(
             }
             None => Vec::new(),
         },
-        OverlayState::Actions(menu) => match palette::menu_item(&menu, &answer) {
-            Some(index) => run_picked(state, ui, &menu, index),
-            None => Vec::new(),
-        },
         _ => Vec::new(),
     }
 }
 
-/// What the answer of the command palette of Rex needs: the keys, the
-/// tabs, the panes and the actions.
+/// What the answer of the command palette of Rex needs: the tabs and
+/// the panes.
 struct PaletteUi<'a> {
-    keymap: &'a Keymap,
     tabs: &'a [Box<dyn Tab>],
     panes: &'a [Box<dyn Pane>],
-    actions: &'a [Box<dyn Action>],
-}
-
-/// Runs the item at `index` of `menu`, an actions menu that the command
-/// palette of Rex showed: an action on the target of the menu, or a pane
-/// action in the popup under the menu. As `run_menu_item`, but no menu
-/// overlay is open.
-fn run_picked(
-    state: &mut AppState,
-    ui: &PaletteUi<'_>,
-    menu: &ActionMenu,
-    index: usize,
-) -> Vec<Cmd> {
-    if let Some(&id) = menu.ids.get(index) {
-        return ui
-            .actions
-            .iter()
-            .find(|action| action.id() == id)
-            .and_then(|action| run_action(state, ui.panes, action.as_ref(), (*menu.target).clone()))
-            .unwrap_or_default();
-    }
-    let Some(key) = index
-        .checked_sub(menu.ids.len())
-        .and_then(|i| menu.pane.get(i))
-        .map(|action| action.key)
-    else {
-        return Vec::new();
-    };
-    run_pane_action(state, ui.keymap, ui.panes, key)
 }
 
 /// The pane bookkeeping of a terminal command: the pane of `(id, key)`
@@ -2276,7 +2215,8 @@ fn overlay_key(
                         |pane, cx, ps, _| pane.actions(cx, ps),
                     )
                     .unwrap_or_default();
-                    return open_menu(state, keymap, actions, target, pane, active);
+                    open_menu(state, actions, target, pane, active);
+                    return Vec::new();
                 }
                 return run_detail_key(state, keymap, panes, actions, target, chord)
                     .unwrap_or_default();
@@ -7273,86 +7213,6 @@ mod tests {
     }
 
     #[test]
-    fn with_palette_menu_space_asks_for_the_action_in_the_palette() {
-        let mut state = action_state(&pr_row(102));
-        run_msg(&mut state, &[], Msg::PaletteReady);
-        let mut close = FakeAction::new("close", 'X');
-        close.applies = Applicability::Disabled("not yours");
-        let actions: Vec<Box<dyn Action>> =
-            vec![Box::new(FakeAction::new("approve", 'A')), Box::new(close)];
-        // Without the setting, the menu of chaoshub opens.
-        assert_eq!(act(&mut state, &actions, KeyCode::Char(' ')), vec![]);
-        assert!(matches!(
-            state.ui.overlays.last().map(|o| &o.state),
-            Some(OverlayState::Actions(_))
-        ));
-        act(&mut state, &actions, KeyCode::Esc);
-        run_msg(&mut state, &actions, Msg::TransitionsDone);
-        state.data.palette_menu = true;
-        let (serial, ask) = asked(&act(&mut state, &actions, KeyCode::Char(' ')));
-        let PaletteAsk::Pick {
-            title,
-            placeholder,
-            confirm,
-            items,
-            ..
-        } = &ask
-        else {
-            panic!("not a pick: {ask:?}");
-        };
-        assert_eq!(title, "actions for #102");
-        assert_eq!(placeholder, "filter the actions");
-        assert_eq!(*confirm, Some("Run"));
-        let rows: Vec<_> = items
-            .iter()
-            .map(|item| {
-                (
-                    item.id.as_str(),
-                    item.subtitle.as_deref(),
-                    item.detail.as_deref(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            rows,
-            [
-                ("approve", None, Some("A")),
-                ("close", Some("not yours"), Some("X")),
-            ]
-        );
-        assert!(state.ui.overlays.is_empty());
-        assert_eq!(
-            run_msg(
-                &mut state,
-                &actions,
-                answered(serial, PaletteReply::Answer("approve".into()))
-            ),
-            vec![Cmd::RunAction {
-                id: "approve",
-                selection: pr_selection(&state, 102),
-                input: ActionInput::None,
-            }]
-        );
-        // A disabled action shows its reason, as in the menu.
-        let (serial, _) = asked(&act(&mut state, &actions, KeyCode::Char(' ')));
-        let close = answered(serial, PaletteReply::Answer("close".into()));
-        assert_eq!(run_msg(&mut state, &actions, close), vec![]);
-        assert_eq!(status_text(&state), Some("not yours"));
-        // A fallback opens the menu of chaoshub, and its keys work.
-        let (serial, _) = asked(&act(&mut state, &actions, KeyCode::Char(' ')));
-        let busy = answered(serial, PaletteReply::Fallback("busy".into()));
-        assert_eq!(run_msg(&mut state, &actions, busy), vec![]);
-        assert_eq!(
-            act(&mut state, &actions, KeyCode::Char('A')),
-            vec![Cmd::RunAction {
-                id: "approve",
-                selection: pr_selection(&state, 102),
-                input: ActionInput::None,
-            }]
-        );
-    }
-
-    #[test]
     fn keys_override_the_default_key_of_an_action() {
         let mut state = action_state(&pr_row(102));
         let actions = fake(FakeAction::new("approve", 'A'));
@@ -9325,48 +9185,6 @@ mod tests {
             state.ui.overlays.last().map(|o| &o.state),
             Some(OverlayState::Prompt { .. })
         ));
-    }
-
-    #[test]
-    fn a_pane_action_of_the_palette_menu_runs_in_the_popup() {
-        let (mut state, pr) = agent_state();
-        update(&mut state, &Keymap::default(), Msg::PaletteReady);
-        key(&mut state, ' ');
-        key(&mut state, 'p');
-        state.data.palette_menu = true;
-        let (serial, ask) = asked(&key(&mut state, ' '));
-        let PaletteAsk::Pick { items, .. } = &ask else {
-            panic!("not a pick: {ask:?}");
-        };
-        let Some(ask_item) = items
-            .iter()
-            .find(|item| item.id.starts_with("pane:") && item.detail.as_deref() == Some("a"))
-        else {
-            panic!("no ask item of the Agent pane: {items:?}");
-        };
-        // The pane action `a` asks for the question, again in the palette.
-        let cmds = update(
-            &mut state,
-            &Keymap::default(),
-            answered(serial, PaletteReply::Answer(ask_item.id.clone())),
-        );
-        let (serial, ask) = asked(&cmds);
-        assert!(matches!(ask, PaletteAsk::Input { .. }), "{ask:?}");
-        let job = agent_job(&state, &pr, Tool::Ask("why?".into()));
-        assert_eq!(
-            update(
-                &mut state,
-                &Keymap::default(),
-                answered(serial, PaletteReply::Answer("why?".into()))
-            ),
-            vec![Cmd::RunAgent(job)]
-        );
-        // An id that is not an item runs nothing.
-        let (serial, _) = asked(&key(&mut state, ' '));
-        for id in ["pane:99", "pane:x", "nope"] {
-            let msg = answered(serial, PaletteReply::Answer(id.into()));
-            assert_eq!(update(&mut state, &Keymap::default(), msg), vec![]);
-        }
     }
 
     #[test]

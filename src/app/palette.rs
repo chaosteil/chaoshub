@@ -3,12 +3,9 @@
 
 use std::collections::HashSet;
 
-use crate::actions::{Action, Applicability};
-use crate::app::frame;
-use crate::app::keymap::Keymap;
-use crate::app::state::{ActionMenu, AppData, AuthorPicker, OverlayState};
+use crate::app::state::{AppData, AuthorPicker, OverlayState};
 use crate::app::term::pr_status;
-use crate::bus::{PaletteAsk, PaletteItem, Target};
+use crate::bus::{PaletteAsk, PaletteItem};
 use crate::domain::keys::PrKey;
 
 /// The text of the status bar while a question waits for its answer.
@@ -20,24 +17,6 @@ const ASK: &str = "Ask";
 const SEND: &str = "Send";
 /// The label of the submit row of the author picker.
 const FILTER: &str = "Filter";
-/// The label of the submit row of the actions menu and of the comment
-/// menu.
-const RUN: &str = "Run";
-
-/// The icon of each action in the actions menu, from the icon names of
-/// `rex.ui`. An action that is not in the list has no icon.
-const ICONS: &[(&str, &str)] = &[
-    ("browser", "globe"),
-    ("copy_url", "link"),
-    ("copy_change_id", "tag"),
-    ("review", "code"),
-    ("merge", "branch"),
-    ("merge_stack", "branch"),
-    ("rerun_checks", "gear"),
-    ("draft", "document"),
-    ("agent", "terminal"),
-];
-
 /// The label of the submit row of the jump to a pull request.
 const OPEN: &str = "Open";
 
@@ -68,14 +47,6 @@ pub(crate) fn ask(overlay: &OverlayState) -> Option<PaletteAsk> {
     }
 }
 
-/// The icon of the action `id` in the actions menu.
-fn icon(id: &str) -> Option<&'static str> {
-    ICONS
-        .iter()
-        .find(|(action, _)| *action == id)
-        .map(|&(_, icon)| icon)
-}
-
 /// The author picker as a pick: `all authors`, then the authors, each
 /// with the `person` icon. The item of the current filter says
 /// `current`. The id of an item is its text: a GitHub login has no
@@ -100,76 +71,6 @@ fn authors(picker: &AuthorPicker) -> PaletteAsk {
         confirm: Some(FILTER),
         allow_other: false,
         items,
-    }
-}
-
-/// The prefix of the id of a pane action in the actions menu. The id of
-/// an action has no `:`.
-const PANE_PREFIX: &str = "pane:";
-
-/// The actions menu as a pick, in the order of the menu. The id of an
-/// action item is the action id, its detail is its first key, and its
-/// icon comes from `ICONS`. A
-/// disabled action has its reason as the subtitle. The id of a pane
-/// action is `pane:<index>`. As in the menu of chaoshub, a pane action
-/// with the key of an action shows no key.
-pub(crate) fn menu(
-    data: &AppData,
-    keymap: &Keymap,
-    actions: &[Box<dyn Action>],
-    menu: &ActionMenu,
-) -> PaletteAsk {
-    let states = frame::applicability(data, actions, (*menu.target).clone());
-    let key = |name: &str| {
-        keymap
-            .chords(name)
-            .first()
-            .map(|&chord| frame::key_text(chord))
-    };
-    let action_items = menu.ids.iter().map(|&id| {
-        let found = actions
-            .iter()
-            .zip(&states)
-            .find(|(action, _)| action.id() == id);
-        let (title, subtitle) = match found {
-            Some((action, state)) => (
-                action.target_label(&menu.target).to_owned(),
-                match state {
-                    Applicability::Disabled(reason) => Some((*reason).to_owned()),
-                    Applicability::Enabled | Applicability::Hidden => None,
-                },
-            ),
-            None => (id.replace('_', " "), None),
-        };
-        PaletteItem {
-            id: id.to_owned(),
-            title,
-            subtitle,
-            detail: key(id),
-            icon: icon(id),
-        }
-    });
-    let pane_items = menu.pane.iter().enumerate().map(|(index, action)| {
-        let shadowed = menu.ids.iter().any(|id| keymap.matches(id, action.key));
-        PaletteItem {
-            id: format!("{PANE_PREFIX}{index}"),
-            title: action.label.clone(),
-            subtitle: None,
-            detail: (!shadowed).then(|| frame::key_text(action.key)),
-            icon: None,
-        }
-    });
-    let Target::Pr { pr, .. } = &*menu.target;
-    PaletteAsk::Pick {
-        title: menu
-            .title
-            .clone()
-            .unwrap_or_else(|| format!("actions for #{}", pr.key.number)),
-        placeholder: "filter the actions".to_owned(),
-        value: String::new(),
-        confirm: Some(RUN),
-        allow_other: false,
-        items: action_items.chain(pane_items).collect(),
     }
 }
 
@@ -221,17 +122,6 @@ pub(crate) fn jump(data: &AppData, rows: &[(&str, PrKey)]) -> Option<PaletteAsk>
         allow_other: false,
         items,
     })
-}
-
-/// The index of the item with the id `id` in the actions menu: the
-/// actions first, then the pane actions. `None` when `id` is not an
-/// item of the menu.
-pub(crate) fn menu_item(menu: &ActionMenu, id: &str) -> Option<usize> {
-    if let Some(index) = id.strip_prefix(PANE_PREFIX) {
-        let index: usize = index.parse().ok()?;
-        return (index < menu.pane.len()).then(|| menu.ids.len() + index);
-    }
-    menu.ids.iter().position(|action| *action == id)
 }
 
 /// The cursor of the item with the id `id` in the author picker: 0 for
@@ -286,27 +176,6 @@ mod tests {
             panic!("not a pick");
         };
         assert_eq!(items[0], item("all authors", true));
-    }
-
-    /// The icon names of `rex.ui.pick`, from
-    /// <https://www.superlogical.com/rex/docs/customize/custom-ui.md>.
-    const REX_ICONS: &[&str] = &[
-        "document", "folder", "branch", "terminal", "code", "server", "database", "package",
-        "globe", "link", "person", "tag", "clock", "star", "gear", "plus",
-    ];
-
-    #[test]
-    fn each_menu_icon_is_a_rex_icon_of_an_action() {
-        use crate::actions::REGISTRY;
-        for (id, name) in ICONS {
-            assert!(REX_ICONS.contains(name), "{id}: {name} is not a Rex icon");
-            assert!(
-                REGISTRY.iter().any(|action| action.id() == *id),
-                "{id} is not an action"
-            );
-        }
-        assert_eq!(icon("merge_stack"), Some("branch"));
-        assert_eq!(icon("close"), None);
     }
 
     #[test]

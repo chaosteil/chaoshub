@@ -209,7 +209,6 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     .with_animations(settings.config.theme.animations)
     .with_title_spinner(title_spinner)
     .with_rex_label(label_rex.is_some())
-    .with_palette_menu(settings.config.rex.palette_menu)
     .with_notify(notify);
     // The pinned app comes before the first interest, so the workers
     // start with the pinned interest.

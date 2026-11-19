@@ -20,7 +20,7 @@ use serde::Deserialize;
 
 use crate::config::schema::{
     AgentConfig, CodeviewConfig, DetailConfig, FiltersConfig, MergeConfig, NotifyConfig,
-    PrefetchConfig, RefreshConfig, RepoEntry, RepoMerge, RexConfig, TerminalConfig, ThemeConfig,
+    PrefetchConfig, RefreshConfig, RepoEntry, RepoMerge, TerminalConfig, ThemeConfig,
     WorkspacesConfig,
 };
 use crate::domain::keys::RepoKey;
@@ -46,8 +46,6 @@ pub(crate) struct Config {
     pub agent: AgentConfig,
     pub theme: ThemeConfig,
     pub terminal: TerminalConfig,
-    /// What chaoshub asks in the command palette of Rex.
-    pub rex: RexConfig,
     /// The terminal notification of new pull requests.
     pub notify: NotifyConfig,
     /// Key binding overrides: an action id or app key name to a key.
@@ -212,7 +210,6 @@ mod tests {
         assert_eq!(config.theme.animation_ms, 120);
         assert!(config.theme.column_headers);
         assert_eq!(config.terminal, TerminalConfig::default());
-        assert!(!config.rex.palette_menu);
         assert_eq!(config.notify.enabled, None);
         assert_eq!(config.notify.tabs, ["team", "review"]);
         assert_eq!(config.notify.debounce, chrono::TimeDelta::seconds(15));
@@ -266,7 +263,6 @@ mod tests {
         assert_eq!(config.terminal.title, None);
         assert_eq!(config.terminal.program_status, None);
         assert_eq!(config.terminal.progress, Some(true));
-        assert!(config.rex.palette_menu);
         assert_eq!(config.keys.get("merge").map(String::as_str), Some("M"));
         assert_eq!(
             config.keys.get("refresh").map(String::as_str),

@@ -144,13 +144,6 @@ impl App {
         self
     }
 
-    /// Sets `[rex] palette_menu`. With `true`, `space` asks for the action
-    /// in the command palette of Rex, when the palette can ask.
-    pub(crate) fn with_palette_menu(mut self, on: bool) -> Self {
-        self.state.data.palette_menu = on;
-        self
-    }
-
     /// Turns the notification of new pull requests on with `Some`.
     pub(crate) fn with_notify(mut self, settings: Option<NotifySettings>) -> Self {
         self.state.data.notify.settings = settings;
