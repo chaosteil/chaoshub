@@ -38,6 +38,7 @@ use crate::app::state::AppState;
 pub(crate) use crate::app::state::DetailPane;
 use crate::bus::{Cmd, Interest, Msg, Size, UiEvent};
 use crate::config::schema::{ConversationOrder, FiltersConfig};
+use crate::domain::agent::Backend;
 use crate::domain::keys::PrKey;
 use crate::domain::repo::Repo;
 use crate::store::Snapshot;
@@ -123,6 +124,13 @@ impl App {
     /// does not pulse.
     pub(crate) fn with_animations(mut self, on: bool) -> Self {
         self.state.data.animations = on;
+        self.state.bump();
+        self
+    }
+
+    /// Sets the `[agent] backend`: the program that the agent runs start.
+    pub(crate) fn with_agent_backend(mut self, backend: Backend) -> Self {
+        self.state.data.agent_backend = backend;
         self.state.bump();
         self
     }

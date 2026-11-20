@@ -970,7 +970,8 @@ fn activity(data: &AppData) -> Option<String> {
         n => parts.push(format!("loading {}", plural::count(n, "diff", "diffs"))),
     }
     for (key, kind) in &data.agent_jobs {
-        parts.push(format!("pr-agent {} #{}", kind.name(), key.number));
+        let backend = data.agent_backend.name();
+        parts.push(format!("{backend} {} #{}", kind.name(), key.number));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
@@ -1210,8 +1211,9 @@ mod tests {
             .data
             .agent_jobs
             .insert((key(7), crate::domain::agent::ToolKind::Review));
-        assert_eq!(right(&state)[1], " pr-agent review #7   ");
+        assert_eq!(right(&state)[1], " ocr review #7   ");
         assert!(state.data.busy());
+        state.data.agent_backend = crate::domain::agent::Backend::PrAgent;
         state
             .data
             .agent_jobs

@@ -135,6 +135,7 @@ impl Pane for Conversation {
             .map(|&key| PaneAction {
                 key,
                 label: "reply".to_owned(),
+                disabled: None,
             })
             .into_iter()
             .collect()
@@ -265,6 +266,7 @@ fn menu(cx: &KeyCx<'_>, item: Item) -> Option<PaneMenu> {
         .map(|&key| PaneAction {
             key,
             label: "reply".to_owned(),
+            disabled: None,
         })
         .into_iter()
         .collect();

@@ -61,6 +61,24 @@ pub(crate) async fn prefetch_head(
         .map(drop)
 }
 
+/// The local ref of `prefetch_base`: `refs/chaoshub/base/<base_ref>`.
+pub(crate) fn base_ref_name(base_ref: &str) -> String {
+    format!("refs/chaoshub/base/{base_ref}")
+}
+
+/// The local ref of `prefetch_head`: `refs/chaoshub/pr/<number>/head`.
+pub(crate) fn head_ref_name(number: u64) -> String {
+    format!("refs/chaoshub/pr/{number}/head")
+}
+
+/// The commit id of `rev` in the repo at `repo_path`.
+pub(crate) async fn commit_of(repo_path: &Path, rev: &str) -> Result<String, VcsError> {
+    let mut cmd = git(repo_path);
+    cmd.args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
+        .arg(format!("{rev}^{{commit}}"));
+    Ok(run(cmd).await?.trim().to_owned())
+}
+
 /// Runs `git fetch origin` in the repo at `repo_path`, under the lock of
 /// the repo.
 pub(crate) async fn fetch_origin(locks: &RepoLocks, repo_path: &Path) -> Result<(), VcsError> {
@@ -142,14 +160,14 @@ fn read_branches_command(repo_path: &Path) -> Command {
 fn prefetch_base_command(repo_path: &Path, base_ref: &str) -> Command {
     fetch_command(
         repo_path,
-        format!("+refs/heads/{base_ref}:refs/chaoshub/base/{base_ref}"),
+        format!("+refs/heads/{base_ref}:{}", base_ref_name(base_ref)),
     )
 }
 
 fn prefetch_head_command(repo_path: &Path, number: u64) -> Command {
     fetch_command(
         repo_path,
-        format!("+refs/pull/{number}/head:refs/chaoshub/pr/{number}/head"),
+        format!("+refs/pull/{number}/head:{}", head_ref_name(number)),
     )
 }
 

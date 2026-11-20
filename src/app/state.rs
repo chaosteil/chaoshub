@@ -29,7 +29,7 @@ use crate::bus::{
 };
 use crate::bus::{MergeProgress, MergeStep};
 use crate::config::schema::{ConversationOrder, FiltersConfig};
-use crate::domain::agent::{AgentResults, ToolKind};
+use crate::domain::agent::{AgentResults, Backend, ToolKind};
 use crate::domain::codeview::{Comment, Comments};
 use crate::domain::detail::PrDetail;
 use crate::domain::files::PrFiles;
@@ -108,10 +108,12 @@ pub(crate) struct AppData {
     pub prefetch: Option<PrefetchBatch>,
     /// The command of the detail pane. `None` opens the sidebar.
     pub detail: Option<DetailPane>,
-    /// The pr-agent results of each pull request, from the result files.
+    /// The agent results of each pull request, from the result files.
     pub agent: BTreeMap<PrKey, AgentResults>,
-    /// The pr-agent runs that run now. One run per tool per pull request.
+    /// The agent runs that run now. One run per tool per pull request.
     pub agent_jobs: BTreeSet<(PrKey, ToolKind)>,
+    /// The `[agent] backend`: the program that a new run starts.
+    pub agent_backend: Backend,
     /// The unsent codeview comments of each pull request, from the
     /// comment files, or the error of a file.
     pub codeview: BTreeMap<PrKey, Result<Comments, String>>,
@@ -888,8 +890,8 @@ impl ActionMenu {
 
     /// The rows of the menu: the key and the label of each action of
     /// `actions` in `ids`, then of each pane action, with an empty row
-    /// for each gap. A disabled action also shows its reason in
-    /// parentheses. An action without a key shows only its label. In the
+    /// for each gap. A disabled action or pane action also shows its
+    /// reason in parentheses. An action without a key shows only its label. In the
     /// menu, an action key wins over a pane key, so a pane action with
     /// the key of an action in `ids` also shows only its label. `enter`
     /// on it still runs it.
@@ -921,10 +923,14 @@ impl ActionMenu {
                 }
             })
             .chain(self.pane.iter().map(|action| {
-                if self.ids.iter().any(|id| keymap.matches(id, action.key)) {
+                let text = if self.ids.iter().any(|id| keymap.matches(id, action.key)) {
                     action.label.clone()
                 } else {
                     format!("{}  {}", frame::key_text(action.key), action.label)
+                };
+                match &action.disabled {
+                    Some(reason) => format!("{text} ({reason})"),
+                    None => text,
                 }
             }))
             .enumerate()
@@ -975,6 +981,7 @@ impl AppState {
                 detail: None,
                 agent: BTreeMap::new(),
                 agent_jobs: BTreeSet::new(),
+                agent_backend: Backend::default(),
                 codeview: BTreeMap::new(),
                 reviews: BTreeMap::new(),
                 selection_shift: 0,

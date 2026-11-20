@@ -208,6 +208,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     .with_selection_shift(theme.selected_row().shift)
     .with_animations(settings.config.theme.animations)
     .with_conversation_order(settings.config.conversation.order)
+    .with_agent_backend(settings.config.agent.backend)
     .with_title_spinner(title_spinner)
     .with_rex_label(label_rex.is_some())
     .with_notify(notify);
@@ -2976,11 +2977,22 @@ mod tests {
         insta::assert_snapshot!(screen(&mut app));
     }
 
-    /// The mine app with `chaoshub` at a path, the popup of #101 on the
-    /// Agent pane, and results of review (for an old head), improve and
-    /// describe. Ask runs.
+    /// The mine app with `chaoshub` at a path and pr-agent as the
+    /// backend, the popup of #101 on the Agent pane, and pr-agent results
+    /// of review (for an old head), improve and describe. Ask runs.
     fn agent_app(width: u16, height: u16) -> App {
-        use crate::domain::agent::{AgentResults, Record, ToolKind, VERSION};
+        agent_app_of(width, height, crate::domain::agent::Backend::PrAgent)
+    }
+
+    /// `agent_app` with ocr as the backend: the review is a result of
+    /// ocr. The pr-agent results of improve and describe stay from an
+    /// earlier run.
+    fn ocr_agent_app(width: u16, height: u16) -> App {
+        agent_app_of(width, height, crate::domain::agent::Backend::OpenCodeReview)
+    }
+
+    fn agent_app_of(width: u16, height: u16, backend: crate::domain::agent::Backend) -> App {
+        use crate::domain::agent::{AgentResults, Backend, Record, ToolKind, VERSION};
         let repos = vec![crate::domain::repo::Repo {
             key: crate::app::testdata::repo_key("chaoshub"),
             path: Some("/code/chaoshub".into()),
@@ -2993,7 +3005,8 @@ mod tests {
             crate::app::testdata::mine_snapshot(),
             repos,
             crate::domain::test_time() + chrono::TimeDelta::minutes(5),
-        );
+        )
+        .with_agent_backend(backend);
         for _ in 0..3 {
             press(&mut app, 'j');
         }
@@ -3003,6 +3016,7 @@ mod tests {
         let key = crate::app::testdata::pr_key("chaoshub", 101);
         let record = |kind: ToolKind, head: &str, data: serde_json::Value| Record {
             version: VERSION,
+            backend: Backend::PrAgent,
             tool: kind.name().into(),
             pr: 101,
             head_sha: head.into(),
@@ -3024,12 +3038,33 @@ mod tests {
         ]});
         let describe = serde_json::json!({"title": "feat(ui): the list",
             "description": "- Draw the list", "pr_files": []});
+        let review = match backend {
+            Backend::PrAgent => record(ToolKind::Review, "3a1f2c0e", review),
+            Backend::OpenCodeReview => Record {
+                backend,
+                model: "anthropic/claude-opus-4-6".into(),
+                usage: serde_json::json!({"total_tokens": 21344}),
+                ..record(
+                    ToolKind::Review,
+                    "oid101",
+                    crate::domain::agent::ocr_review(&serde_json::json!({
+                        "status": "success",
+                        "summary": {"files_reviewed": 3},
+                        "comments": [
+                            {"path": "src/ui/list.rs", "content": "The cursor can pass the end.",
+                             "start_line": 40, "end_line": 44, "category": "bug",
+                             "severity": "high"},
+                            {"path": "src/ui/list.rs", "content": "The name `n` is short.",
+                             "start_line": 12, "end_line": 12, "category": "style",
+                             "severity": "low"}
+                        ]
+                    })),
+                )
+            },
+        };
         let results = AgentResults {
             records: [
-                (
-                    ToolKind::Review,
-                    record(ToolKind::Review, "3a1f2c0e", review),
-                ),
+                (ToolKind::Review, review),
                 (
                     ToolKind::Improve,
                     record(ToolKind::Improve, "oid101", improve),
@@ -3046,10 +3081,12 @@ mod tests {
             key: key.clone(),
             results,
         });
-        app.update(Msg::AgentStarted {
-            key,
-            kind: ToolKind::Ask,
-        });
+        if backend == Backend::PrAgent {
+            app.update(Msg::AgentStarted {
+                key,
+                kind: ToolKind::Ask,
+            });
+        }
         app
     }
 
@@ -3066,6 +3103,19 @@ mod tests {
     #[test]
     fn actions_menu_agent_pane_100() {
         let mut app = agent_app(100, 40);
+        press(&mut app, ' ');
+        app.update(Msg::TransitionsDone);
+        insta::assert_snapshot!(screen(&mut app));
+    }
+
+    #[test]
+    fn agent_pane_ocr_100() {
+        insta::assert_snapshot!(screen(&mut ocr_agent_app(100, 40)));
+    }
+
+    #[test]
+    fn actions_menu_agent_pane_ocr_100() {
+        let mut app = ocr_agent_app(100, 40);
         press(&mut app, ' ');
         app.update(Msg::TransitionsDone);
         insta::assert_snapshot!(screen(&mut app));

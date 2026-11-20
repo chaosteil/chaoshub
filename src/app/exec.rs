@@ -73,7 +73,7 @@ pub(crate) struct ActionEnv {
     /// The launcher of detached panes. `None` when the event loop runs
     /// terminal commands in the foreground.
     pub launcher: Option<Arc<dyn Launcher>>,
-    /// What the pr-agent runs need. `None` without a state directory.
+    /// What the agent runs need. `None` without a state directory.
     pub agent: Option<Arc<AgentEnv>>,
     /// The directory of the codeview comment files. `None` when the home
     /// directory is unknown.
@@ -83,8 +83,8 @@ pub(crate) struct ActionEnv {
     pub palette: Option<Arc<dyn Palette>>,
 }
 
-/// What the pr-agent runs need: the `[agent]` section, the result files
-/// and the GitHub token.
+/// What the agent runs need: the `[agent]` section, the result files
+/// and the GitHub token of pr-agent.
 #[derive(Debug)]
 pub(crate) struct AgentEnv {
     pub config: AgentConfig,
@@ -262,7 +262,7 @@ impl Runtime {
         });
     }
 
-    /// Spawns a pr-agent run with a child token of the root token. The
+    /// Spawns an agent run with a child token of the root token. The
     /// task sends `AgentStarted`, then `AgentFinished` with the record or
     /// the error. A cancel kills the process.
     fn run_agent(&mut self, job: AgentJob) {
@@ -271,6 +271,7 @@ impl Runtime {
         let target = TargetKey::Pr(job.key.clone());
         let (serial, cancel) = self.track(id, target.clone());
         let agent = self.env.agent.clone();
+        let locks = self.env.locks.clone();
         let tx = self.env.tx.clone();
         self.tasks.spawn_on(
             async move {
@@ -290,11 +291,13 @@ impl Runtime {
                             key: job.key,
                             head_sha: job.head_sha,
                             repo_path: job.repo_path,
+                            base_ref: job.base_ref,
+                            context: job.context,
                             tool: job.tool,
                         };
                         tokio::select! {
                             result = crate::agent::run::run(
-                                &job, &agent.config.pr_agent, &agent.store, &agent.token, &tx,
+                                &job, &agent.config, &agent.store, &agent.token, &locks, &tx,
                             ) => result,
                             () = cancel.cancelled() => Err("cancelled".to_owned()),
                         }

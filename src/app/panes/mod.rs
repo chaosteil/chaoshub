@@ -109,11 +109,16 @@ pub(crate) trait Pane: Send + Sync {
     }
 }
 
-/// An own action of a pane: its key in the actions menu and its label.
+/// An own action of a pane: its key in the actions menu, its label and
+/// the reason when it is disabled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PaneAction {
     pub key: KeyChord,
     pub label: String,
+    /// `Some` for an action that cannot run now, with the reason. The
+    /// actions menu shows the reason after the label. A run of the item
+    /// shows the reason in the status line and does not call the pane.
+    pub disabled: Option<String>,
 }
 
 impl PaneAction {
@@ -125,6 +130,15 @@ impl PaneAction {
                 mods: crate::bus::KeyModifiers::NONE,
             },
             label: label.into(),
+            disabled: None,
+        }
+    }
+
+    /// The action of `char`, disabled for `reason`.
+    pub(crate) fn disabled(c: char, label: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            disabled: Some(reason.into()),
+            ..Self::char(c, label)
         }
     }
 }

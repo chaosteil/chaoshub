@@ -211,7 +211,7 @@ mod tests {
         ("store", &["domain", "bus"]),
         ("launch", &["domain", "bus"]),
         ("ipc", &["domain", "bus"]),
-        ("agent", &["domain", "bus", "github", "config"]),
+        ("agent", &["domain", "bus", "github", "vcs", "config"]),
         ("codeview", &["domain", "config"]),
         ("highlight", &["domain"]),
         (

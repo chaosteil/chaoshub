@@ -1,7 +1,8 @@
-//! The pr-agent tools and the content of their result files.
+//! The agent backends, their tools and the content of their result
+//! files.
 //!
 //! The types are plain data, so `bus` can carry them between `app` and
-//! the runtime. `agent` runs pr-agent and reads and writes the files.
+//! the runtime. `agent` runs the backend and reads and writes the files.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -12,7 +13,41 @@ use serde::{Deserialize, Serialize};
 /// The version of the file format. A reader refuses other versions.
 pub(crate) const VERSION: u32 = 1;
 
-/// A pr-agent tool, with its input.
+/// The program that runs the agent tools: the `[agent] backend` key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Backend {
+    /// Alibaba Open Code Review, the `ocr` CLI. It has only `review`.
+    #[default]
+    OpenCodeReview,
+    /// qodo pr-agent. It has every tool.
+    PrAgent,
+}
+
+impl Backend {
+    /// The short name in the UI texts: `ocr` or `pr-agent`.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Backend::OpenCodeReview => "ocr",
+            Backend::PrAgent => "pr-agent",
+        }
+    }
+
+    /// True when the backend has the tool `kind`.
+    pub(crate) fn supports(self, kind: ToolKind) -> bool {
+        match self {
+            Backend::OpenCodeReview => kind == ToolKind::Review,
+            Backend::PrAgent => true,
+        }
+    }
+
+    /// The backend of a file from before the `backend` field.
+    fn of_old_files() -> Self {
+        Backend::PrAgent
+    }
+}
+
+/// A tool of an agent backend, with its input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Tool {
     Review,
@@ -22,7 +57,7 @@ pub(crate) enum Tool {
     Ask(String),
 }
 
-/// A pr-agent tool without its input.
+/// A tool of an agent backend, without its input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum ToolKind {
     Review,
@@ -77,20 +112,26 @@ impl Tool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Record {
     pub version: u32,
+    /// The backend that made the result. A file from before the field
+    /// has `pr_agent`.
+    #[serde(default = "Backend::of_old_files")]
+    pub backend: Backend,
     /// The tool name, for example `review`.
     pub tool: String,
     /// The number of the pull request.
     pub pr: u64,
     /// The head commit of the pull request when the run started.
     pub head_sha: String,
-    /// The `LiteLLM` name of the model.
+    /// The name of the model. pr-agent gives the `LiteLLM` name. ocr
+    /// gives `<provider>/<model>`, or only the model.
     pub model: String,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
-    /// The token counts that pr-agent gives, or an empty object.
+    /// The token counts that the backend gives, or an empty object.
     pub usage: serde_json::Value,
     /// The JSON of pr-agent. For `ask`, a list of `AskEntry`, newest
-    /// first.
+    /// first. For ocr, the review in the form of pr-agent (see
+    /// `ocr_review`).
     pub data: serde_json::Value,
 }
 
@@ -104,7 +145,8 @@ pub(crate) struct AskEntry {
 }
 
 impl Record {
-    /// The `total_tokens` of `usage`. `None` when pr-agent gave no count.
+    /// The `total_tokens` of `usage`. `None` when the backend gave no
+    /// count.
     pub(crate) fn total_tokens(&self) -> Option<u64> {
         self.usage.get("total_tokens")?.as_u64()
     }
@@ -224,6 +266,103 @@ pub(crate) fn review_markdown(data: &serde_json::Value) -> String {
     text.trim().to_owned()
 }
 
+/// The rank of an ocr severity: `critical` first. An unknown severity
+/// comes last.
+fn severity_rank(severity: &str) -> u8 {
+    match severity {
+        "critical" => 0,
+        "high" => 1,
+        "medium" => 2,
+        "low" => 3,
+        _ => 4,
+    }
+}
+
+/// The review of the JSON output of `ocr review --format json`, in the
+/// form of pr-agent, so that the Agent pane and codeview read it as a
+/// pr-agent review. Each comment of ocr becomes a key issue, the most
+/// severe first:
+///
+/// - `issue_header`: the severity and the category, for example
+///   `High bug`.
+/// - `relevant_file`, `issue_content`: the `path` and the `content`.
+/// - `start_line`, `end_line`: only when ocr found the lines. ocr gives
+///   0 and 0 when it did not.
+/// - `severity`, `category`, `existing_code`, `suggestion_code`: as ocr
+///   gives them.
+///
+/// The review also gets `files_reviewed`, the `message` of ocr as
+/// `summary`, the `status` when it is not a success, and the number of
+/// `warnings`.
+pub(crate) fn ocr_review(output: &serde_json::Value) -> serde_json::Value {
+    use serde_json::{Map, Value};
+    let text = |value: &Value, name: &str| {
+        value
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let mut comments: Vec<&Value> = output
+        .get("comments")
+        .and_then(Value::as_array)
+        .map(|comments| comments.iter().filter(|c| c.is_object()).collect())
+        .unwrap_or_default();
+    comments.sort_by_key(|comment| severity_rank(&text(comment, "severity")));
+    let issues: Vec<Value> = comments
+        .into_iter()
+        .map(|comment| {
+            let severity = text(comment, "severity");
+            let category = text(comment, "category");
+            let header = match (severity.as_str(), category.as_str()) {
+                ("", "") => "Issue".to_owned(),
+                ("", category) => field_label(category),
+                (severity, "") => field_label(severity),
+                (severity, category) => format!("{} {category}", field_label(severity)),
+            };
+            let mut issue = Map::new();
+            issue.insert("relevant_file".into(), text(comment, "path").into());
+            issue.insert("issue_header".into(), header.into());
+            issue.insert("issue_content".into(), text(comment, "content").into());
+            let line = |name: &str| comment.get(name).and_then(Value::as_u64).unwrap_or(0);
+            let (start, end) = (line("start_line"), line("end_line"));
+            if start > 0 {
+                issue.insert("start_line".into(), start.into());
+                issue.insert("end_line".into(), end.max(start).into());
+            }
+            for name in ["severity", "category", "existing_code", "suggestion_code"] {
+                let value = text(comment, name);
+                if !value.is_empty() {
+                    issue.insert(name.into(), value.into());
+                }
+            }
+            Value::Object(issue)
+        })
+        .collect();
+    let mut review = Map::new();
+    if let Some(files) = output.pointer("/summary/files_reviewed") {
+        review.insert("files_reviewed".into(), files.clone());
+    }
+    let message = text(output, "message");
+    if !message.is_empty() {
+        review.insert("summary".into(), message.into());
+    }
+    let status = text(output, "status");
+    if !matches!(status.as_str(), "" | "success" | "complete") {
+        review.insert("status".into(), status.into());
+    }
+    let warnings = output
+        .get("warnings")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    if warnings > 0 {
+        review.insert("warnings".into(), warnings.into());
+    }
+    review.insert("key_issues_to_review".into(), issues.into());
+    serde_json::json!({ "review": review })
+}
+
 /// The new title of a describe result. `None` when it has none.
 pub(crate) fn describe_title(data: &serde_json::Value) -> Option<String> {
     data.get("title")
@@ -320,6 +459,7 @@ mod tests {
     fn record_round_trips() {
         let record = Record {
             version: VERSION,
+            backend: Backend::PrAgent,
             tool: "ask".into(),
             pr: 7,
             head_sha: "3a1f2c0".into(),
@@ -337,6 +477,98 @@ mod tests {
         crate::domain::assert_round_trip(&record);
         assert_eq!(record.total_tokens(), None);
         assert_eq!(record.ask_entries()[0].answer, "Because.");
+    }
+
+    #[test]
+    fn a_file_without_a_backend_is_from_pr_agent() {
+        let text = r#"{"version": 1, "tool": "review", "pr": 7, "head_sha": "3a1f2c0",
+            "model": "m", "started_at": "2026-09-21T14:13:20Z",
+            "finished_at": "2026-09-21T14:13:20Z", "usage": {}, "data": {}}"#;
+        let record: Record = serde_json::from_str(text).unwrap();
+        assert_eq!(record.backend, Backend::PrAgent);
+        let json = serde_json::to_value(Record {
+            backend: Backend::OpenCodeReview,
+            ..record
+        })
+        .unwrap();
+        assert_eq!(json["backend"], "open_code_review");
+    }
+
+    #[test]
+    fn backend_names_and_tools() {
+        assert_eq!(Backend::default(), Backend::OpenCodeReview);
+        assert_eq!(Backend::OpenCodeReview.name(), "ocr");
+        assert_eq!(Backend::PrAgent.name(), "pr-agent");
+        let ocr: Vec<_> = ToolKind::ALL
+            .into_iter()
+            .filter(|&kind| Backend::OpenCodeReview.supports(kind))
+            .collect();
+        assert_eq!(ocr, [ToolKind::Review]);
+        assert!(
+            ToolKind::ALL
+                .into_iter()
+                .all(|kind| Backend::PrAgent.supports(kind))
+        );
+    }
+
+    #[test]
+    fn ocr_review_gives_key_issues_the_most_severe_first() {
+        let output = serde_json::json!({
+            "status": "completed_with_warnings",
+            "message": "Two findings.",
+            "summary": {"files_reviewed": 9, "comments": 3, "total_tokens": 21344},
+            "warnings": ["src/big.rs: timeout"],
+            "comments": [
+                {"path": "src/a.rs", "content": "Name is long.", "start_line": 9, "end_line": 9,
+                 "category": "style", "severity": "low"},
+                {"path": "src/foo.go", "content": "Concurrent map access without a lock.",
+                 "start_line": 42, "end_line": 47, "category": "bug", "severity": "critical",
+                 "existing_code": "m[k] = v", "suggestion_code": "mu.Lock(); m[k] = v",
+                 "thinking": "Looking at line 42"},
+                {"path": "src/b.rs", "content": "No line.", "start_line": 0, "end_line": 0},
+                "not an object"
+            ]
+        });
+        let data = ocr_review(&output);
+        assert_eq!(
+            data,
+            serde_json::json!({"review": {
+                "files_reviewed": 9,
+                "summary": "Two findings.",
+                "status": "completed_with_warnings",
+                "warnings": 1,
+                "key_issues_to_review": [
+                    {"relevant_file": "src/foo.go", "issue_header": "Critical bug",
+                     "issue_content": "Concurrent map access without a lock.",
+                     "start_line": 42, "end_line": 47, "severity": "critical", "category": "bug",
+                     "existing_code": "m[k] = v", "suggestion_code": "mu.Lock(); m[k] = v"},
+                    {"relevant_file": "src/a.rs", "issue_header": "Low style",
+                     "issue_content": "Name is long.", "start_line": 9, "end_line": 9,
+                     "severity": "low", "category": "style"},
+                    {"relevant_file": "src/b.rs", "issue_header": "Issue",
+                     "issue_content": "No line."}
+                ]
+            }})
+        );
+        assert_eq!(
+            review_markdown(&data),
+            "- **Files reviewed:** 9\n\
+             - **Status:** completed_with_warnings\n\
+             - **Summary:** Two findings.\n\
+             - **Warnings:** 1\n\
+             \n\
+             **Key issues**\n\
+             \n\
+             - **Critical bug** `src/foo.go:42-47`: Concurrent map access without a lock.\n\
+             - **Low style** `src/a.rs:9`: Name is long.\n\
+             - **Issue** `src/b.rs`: No line."
+        );
+        let skipped = serde_json::json!({"status": "skipped",
+            "message": "No supported files changed.", "comments": []});
+        assert_eq!(
+            review_markdown(&ocr_review(&skipped)),
+            "- **Status:** skipped\n- **Summary:** No supported files changed."
+        );
     }
 
     #[test]

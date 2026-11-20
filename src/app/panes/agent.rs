@@ -1,16 +1,21 @@
-//! The Agent pane of the pull request popup: one section per pr-agent
+//! The Agent pane of the pull request popup: one section per agent
 //! tool, with its state, the age of the last run, the model and the head
-//! commit.
+//! commit. A result of the backend that is not `[agent] backend` also
+//! names its backend.
 //!
 //! The pane has no direct keys. Its own actions are in the actions menu
 //! (`space`): `R`, `I`, `D` and `a` start review, improve, describe and
-//! ask. `a` asks for the question first. `p` opens a confirm popup with
+//! ask. `a` asks for the question first. A tool that the backend does not
+//! have stays in the menu, disabled: ocr has only review, so improve,
+//! describe and ask show `needs pr-agent`. `p` opens a confirm popup with
 //! the line diff of the describe result, and `y` there sets the title and
 //! the body of the pull request. In the menu, the action keys win over the
 //! pane keys, so the pane keys are uppercase where an action key uses the
 //! lowercase letter: `r` there opens the Review popup, and `R` starts the
-//! pr-agent review. The menu of this pane does not show the agent action,
+//! agent review. The menu of this pane does not show the agent action,
 //! so `p` is free for apply.
+
+use std::path::PathBuf;
 
 use crate::app::age::age;
 use crate::app::frame::spinner;
@@ -42,7 +47,7 @@ impl Pane for AgentPane {
         '6'
     }
 
-    /// A pull request of a repo with a local path: pr-agent runs in it.
+    /// A pull request of a repo with a local path: the agent runs in it.
     fn applies(&self, target: &Target) -> bool {
         matches!(target, Target::Pr { repo, .. } if repo.path.is_some())
     }
@@ -83,12 +88,18 @@ impl Pane for AgentPane {
     }
 
     /// The tools, and the apply of the describe result when there is one.
+    /// A tool that the backend does not have is disabled.
     fn actions(&self, cx: &KeyCx<'_>, _ps: &PaneState) -> Vec<PaneAction> {
+        let backend = cx.data.agent_backend;
         let mut out: Vec<PaneAction> = ToolKind::ALL
             .into_iter()
             .map(|kind| {
                 let (_, key) = title(kind);
-                PaneAction::char(key, label(kind))
+                if backend.supports(kind) {
+                    PaneAction::char(key, format!("{} {}", backend.name(), kind.name()))
+                } else {
+                    PaneAction::disabled(key, kind.name(), MISSING)
+                }
             })
             .collect();
         if apply_confirm(cx).is_some() {
@@ -114,12 +125,7 @@ impl Pane for AgentPane {
         let Some(Target::Pr { pr, repo, .. }) = cx.target else {
             return None;
         };
-        let job = AgentJob {
-            key: pr.key.clone(),
-            head_sha: head(cx.data, pr),
-            repo_path: repo.path.clone()?,
-            tool,
-        };
+        let job = job(cx.data, pr, repo.path.clone()?, tool);
         Some(Handled {
             cmds: vec![Cmd::RunAgent(job)],
             ..Handled::default()
@@ -161,6 +167,24 @@ fn apply_confirm(cx: &KeyCx<'_>) -> Option<Handled> {
 /// The id of the agent action. Its confirm applies the describe result.
 const AGENT_ACTION: &str = "agent";
 
+/// The job of `tool` on `pr` in the checkout at `repo_path`, at the head
+/// of the pull request.
+pub(crate) fn job(data: &AppData, pr: &PullRequest, repo_path: PathBuf, tool: Tool) -> AgentJob {
+    let value = &pr.head.value;
+    AgentJob {
+        key: pr.key.clone(),
+        head_sha: head(data, pr),
+        repo_path,
+        base_ref: value.base_ref.clone(),
+        context: format!("# {}\n\n{}", value.title, value.body.replace("\r\n", "\n")),
+        tool,
+    }
+}
+
+/// The reason of a tool that the backend does not have. Only pr-agent
+/// has every tool (see `Backend::supports`).
+pub(crate) const MISSING: &str = "needs pr-agent";
+
 /// The head commit of the pull request: from the loaded conversation
 /// (`PrDetail.head_oid`), else from the pull request.
 pub(crate) fn head(data: &AppData, pr: &PullRequest) -> String {
@@ -173,16 +197,6 @@ pub(crate) fn head(data: &AppData, pr: &PullRequest) -> String {
 /// The first 7 characters of a commit id.
 fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
-}
-
-/// The label of a tool in the actions menu.
-fn label(kind: ToolKind) -> &'static str {
-    match kind {
-        ToolKind::Review => "pr-agent review",
-        ToolKind::Improve => "pr-agent improve",
-        ToolKind::Describe => "pr-agent describe",
-        ToolKind::Ask => "pr-agent ask",
-    }
 }
 
 /// The title and the key of a tool.
@@ -207,6 +221,7 @@ fn section(
     let (name, key) = title(kind);
     let record = results.records.get(&kind);
     let error = results.errors.get(&kind);
+    let backend = cx.data.agent_backend;
     let mut header = vec![
         cell(name, CellStyle::Primary),
         cell(format!(" [space {key}] · "), CellStyle::Dim),
@@ -220,12 +235,23 @@ fn section(
             format!("done {} ago", age(record.finished_at, cx.data.now)),
             CellStyle::Success,
         )
+    } else if !backend.supports(kind) {
+        cell(MISSING, CellStyle::Dim)
     } else {
         cell("not run", CellStyle::Dim)
     });
     if let Some(record) = record {
+        let made_by = if record.backend == backend {
+            String::new()
+        } else {
+            format!(" · {}", record.backend.name())
+        };
         header.push(cell(
-            format!(" · {} · head {}", record.model, short(&record.head_sha)),
+            format!(
+                "{made_by} · {} · head {}",
+                record.model,
+                short(&record.head_sha)
+            ),
             CellStyle::Dim,
         ));
     }
@@ -316,7 +342,7 @@ mod tests {
     use crate::app::target::pr_target;
     use crate::app::testdata;
     use crate::bus::KeyModifiers;
-    use crate::domain::agent::VERSION;
+    use crate::domain::agent::{Backend, VERSION};
     use crate::domain::repo::Repo;
     use crate::domain::test_time;
 
@@ -324,6 +350,7 @@ mod tests {
     fn record(kind: ToolKind, head: &str, data: serde_json::Value) -> Record {
         Record {
             version: VERSION,
+            backend: Backend::PrAgent,
             tool: kind.name().into(),
             pr: 7,
             head_sha: head.into(),
@@ -384,6 +411,21 @@ mod tests {
             [
                 "Review [space R] · not run",
                 "",
+                "Improve [space I] · needs pr-agent",
+                "",
+                "Describe [space D] · needs pr-agent",
+                "",
+                "Ask [space a] · needs pr-agent",
+            ],
+            "ocr has only review"
+        );
+        let mut state = state();
+        state.data.agent_backend = Backend::PrAgent;
+        assert_eq!(
+            texts(&state),
+            [
+                "Review [space R] · not run",
+                "",
                 "Improve [space I] · not run",
                 "",
                 "Describe [space D] · not run",
@@ -396,6 +438,7 @@ mod tests {
     #[test]
     fn the_sections_show_the_results_the_states_and_outdated_heads() {
         let mut state = state();
+        state.data.agent_backend = Backend::PrAgent;
         let key = testdata::pr_key("chaoshub", 7);
         let review = serde_json::json!({"review": {"key_issues_to_review": [
             {"relevant_file": "src/lib.rs", "issue_header": "Possible Bug",
@@ -443,8 +486,83 @@ mod tests {
     }
 
     #[test]
-    fn the_tool_keys_start_runs_at_the_head() {
+    fn a_result_of_the_other_backend_names_it() {
+        let mut state = state();
+        let key = testdata::pr_key("chaoshub", 7);
+        let review = Record {
+            backend: Backend::OpenCodeReview,
+            model: "anthropic/claude-opus-4-6".into(),
+            ..record(
+                ToolKind::Review,
+                "oid7",
+                crate::domain::agent::ocr_review(&serde_json::json!({
+                    "summary": {"files_reviewed": 2},
+                    "comments": [{"path": "src/lib.rs", "content": "It breaks.",
+                        "start_line": 3, "end_line": 5, "category": "bug", "severity": "high"}]
+                })),
+            )
+        };
+        let improve = serde_json::json!({"code_suggestions": []});
+        let results = AgentResults {
+            records: [
+                (ToolKind::Review, review),
+                (
+                    ToolKind::Improve,
+                    record(ToolKind::Improve, "oid7", improve),
+                ),
+            ]
+            .into(),
+            errors: std::collections::BTreeMap::new(),
+        };
+        state.data.agent.insert(key, results);
+        let lines = texts(&state);
+        assert_eq!(
+            lines[..6],
+            [
+                "Review [space R] · done 5m ago · anthropic/claude-opus-4-6 · head oid7",
+                "- **Files reviewed:** 2\n\n**Key issues**\n\n- **High bug** `src/lib.rs:3-5`: It breaks.",
+                "",
+                "Improve [space I] · done 5m ago · pr-agent · anthropic/claude-sonnet-5-5 · head oid7",
+                "(no suggestions)",
+                "",
+            ]
+        );
+        state.data.agent_backend = Backend::PrAgent;
+        assert_eq!(
+            texts(&state)[0],
+            "Review [space R] · done 5m ago · ocr · anthropic/claude-opus-4-6 · head oid7"
+        );
+    }
+
+    #[test]
+    fn under_ocr_only_review_runs_and_the_other_tools_are_disabled() {
         let state = state();
+        let target = pr_target(&state.data, &testdata::pr_key("chaoshub", 7)).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let actions = AgentPane.actions(&cx, &PaneState::default());
+        assert_eq!(
+            actions,
+            [
+                PaneAction::char('R', "ocr review"),
+                PaneAction::disabled('I', "improve", "needs pr-agent"),
+                PaneAction::disabled('D', "describe", "needs pr-agent"),
+                PaneAction::disabled('a', "ask", "needs pr-agent"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_tool_keys_start_runs_at_the_head() {
+        let mut state = state();
+        state.data.agent_backend = Backend::PrAgent;
+        let key = testdata::pr_key("chaoshub", 7);
+        state.data.prs.get_mut(&key).unwrap().head.value.body = "Line one\r\nLine two".into();
         let target = pr_target(&state.data, &testdata::pr_key("chaoshub", 7)).unwrap();
         assert!(AgentPane.applies(&target));
         let areas = layout(state.data.size);
@@ -468,6 +586,8 @@ mod tests {
                 key: testdata::pr_key("chaoshub", 7),
                 head_sha: "oid7".into(),
                 repo_path: "/code/chaoshub".into(),
+                base_ref: "main".into(),
+                context: "# Seven\n\nLine one\nLine two".into(),
                 tool,
             })]
         };

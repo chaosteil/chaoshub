@@ -1,6 +1,6 @@
 //! The agent action: opens the pull request popup on the Agent pane.
 //!
-//! The Agent pane starts the pr-agent runs. pr-agent runs in the local
+//! The Agent pane starts the agent runs. The agent runs in the local
 //! checkout, so the action needs a repo with a path. The confirm popup of
 //! the `p` key in the Agent pane runs this action: `execute` sets the
 //! title and the body of the pull request from `describe.json`.
@@ -158,6 +158,7 @@ mod tests {
         assert_eq!(err, "no describe result");
         let record = Record {
             version: VERSION,
+            backend: crate::domain::agent::Backend::PrAgent,
             tool: "describe".into(),
             pr: pr.key.number,
             head_sha: "abc".into(),

@@ -606,7 +606,8 @@ fn action_menu_key(
 
 /// Runs the item at `index` of the actions menu on top of the overlay
 /// stack: an action on the target of the menu, or a pane action in the
-/// popup under the menu. The menu closes first.
+/// popup under the menu. The menu closes first. A disabled pane action
+/// shows its reason in the status line and runs nothing.
 fn run_menu_item(
     state: &mut AppState,
     keymap: &Keymap,
@@ -625,15 +626,21 @@ fn run_menu_item(
         let target = (*menu.target).clone();
         return run_menu_action(state, panes, actions, id, target);
     }
-    let Some(key) = index
+    let Some(action) = index
         .checked_sub(menu.ids.len())
         .and_then(|i| menu.pane.get(i))
-        .map(|action| action.key)
+        .cloned()
     else {
         return Vec::new();
     };
+    let Target::Pr { pr, .. } = &*menu.target;
+    let number = pr.key.number;
     close_overlay(state);
-    run_pane_action(state, keymap, panes, key)
+    if let Some(reason) = action.disabled {
+        state.message(format!("#{number}: {reason}"), CellStyle::Warn, INFO_TTL);
+        return Vec::new();
+    }
+    run_pane_action(state, keymap, panes, action.key)
 }
 
 /// Runs the pane action of `key` in the active pane of the pull request
@@ -1803,20 +1810,27 @@ fn text_edited(state: &mut AppState, result: Result<String, String>) {
     state.bump();
 }
 
-/// Starts a pr-agent run, unless the same tool runs for the same pull
-/// request: then the status line says so. An `Ask` without a question
-/// opens the question prompt first.
+/// Starts an agent run, unless the backend does not have the tool, or
+/// the same tool runs for the same pull request: then the status line
+/// says so. An `Ask` without a question opens the question prompt first.
 fn start_agent(state: &mut AppState, job: AgentJob) -> Vec<Cmd> {
+    let kind = job.tool.kind();
+    let backend = state.data.agent_backend;
+    if !backend.supports(kind) {
+        let text = format!("#{}: {}", job.key.number, crate::app::panes::agent::MISSING);
+        state.message(text, CellStyle::Warn, INFO_TTL);
+        return Vec::new();
+    }
     if let Tool::Ask(question) = &job.tool
         && question.trim().is_empty()
     {
         return open_ask(state, &job.key);
     }
-    let kind = job.tool.kind();
     if !state.data.agent_jobs.insert((job.key.clone(), kind)) {
         state.message(
             format!(
-                "pr-agent {} #{} already running",
+                "{} {} #{} already running",
+                backend.name(),
                 kind.name(),
                 job.key.number
             ),
@@ -1864,16 +1878,11 @@ fn ask(state: &mut AppState, selection: &Selection, question: String) -> Vec<Cmd
     if question.is_empty() {
         return Vec::new();
     }
-    let job = AgentJob {
-        key: pr.key.clone(),
-        head_sha: crate::app::panes::agent::head(&state.data, pr),
-        repo_path,
-        tool: Tool::Ask(question),
-    };
+    let job = crate::app::panes::agent::job(&state.data, pr, repo_path, Tool::Ask(question));
     start_agent(state, job)
 }
 
-/// A message of the pr-agent runs.
+/// A message of the agent runs.
 fn agent_msg(state: &mut AppState, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::AgentStarted { key, kind } => {
@@ -1890,9 +1899,9 @@ fn agent_msg(state: &mut AppState, msg: Msg) -> Vec<Cmd> {
     }
 }
 
-/// The end of a pr-agent run: the job leaves the job set, the record or
+/// The end of an agent run: the job leaves the job set, the record or
 /// the error goes to the results, and the status line says
-/// `pr-agent review #7 done (12k tokens)` or the error. The files load again.
+/// `ocr review #7 done (12k tokens)` or the error. The files load again.
 fn agent_finished(
     state: &mut AppState,
     key: PrKey,
@@ -1904,9 +1913,10 @@ fn agent_finished(
     let name = format!("{} #{}", kind.name(), key.number);
     let (text, style, ttl) = match result {
         Ok(record) => {
+            let name = format!("{} {name}", record.backend.name());
             let text = match record.total_tokens() {
-                Some(tokens) => format!("pr-agent {name} done ({} tokens)", short_tokens(tokens)),
-                None => format!("pr-agent {name} done"),
+                Some(tokens) => format!("{name} done ({} tokens)", short_tokens(tokens)),
+                None => format!("{name} done"),
             };
             results.errors.remove(&kind);
             results.records.insert(kind, record);
@@ -1915,7 +1925,7 @@ fn agent_finished(
         Err(err) => {
             results.errors.insert(kind, err.clone());
             (
-                format!("pr-agent {name} failed: {err}"),
+                format!("{} {name} failed: {err}", state.data.agent_backend.name()),
                 CellStyle::Danger,
                 ERROR_TTL,
             )
@@ -7107,6 +7117,82 @@ mod tests {
     }
 
     #[test]
+    fn under_ocr_the_menu_disables_the_tools_that_ocr_does_not_have() {
+        let (mut state, pr) = agent_state();
+        state.data.agent_backend = crate::domain::agent::Backend::OpenCodeReview;
+        update(
+            &mut state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        key(&mut state, '6');
+        key(&mut state, ' ');
+        assert_eq!(
+            pane_labels(&state),
+            ["ocr review", "improve", "describe", "ask"]
+        );
+        let items = action_menu(&state)
+            .unwrap()
+            .items(&state.data, &Keymap::default(), &REGISTRY);
+        assert_eq!(
+            items[items.len() - 4..],
+            [
+                "R  ocr review",
+                "I  improve (needs pr-agent)",
+                "D  describe (needs pr-agent)",
+                "a  ask (needs pr-agent)",
+            ]
+        );
+        // A disabled tool closes the menu and only says why.
+        assert_eq!(key(&mut state, 'I'), vec![]);
+        assert!(action_menu(&state).is_none(), "the menu closes");
+        assert_eq!(
+            status_text(&state),
+            Some(format!("#{}: needs pr-agent", pr.number).as_str())
+        );
+        assert!(state.data.agent_jobs.is_empty());
+        let review = agent_job(&state, &pr, Tool::Review);
+        assert_eq!(menu(&mut state, 'R'), vec![Cmd::RunAgent(review)]);
+        assert_eq!(menu(&mut state, 'R'), Vec::new());
+        assert_eq!(
+            status_text(&state),
+            Some(format!("ocr review #{} already running", pr.number).as_str())
+        );
+        let done = Msg::AgentFinished {
+            key: pr.clone(),
+            kind: ToolKind::Review,
+            result: Ok(Record {
+                backend: crate::domain::agent::Backend::OpenCodeReview,
+                usage: serde_json::json!({"total_tokens": 21344}),
+                ..review_record()
+            }),
+        };
+        update(&mut state, &Keymap::default(), done);
+        assert_eq!(
+            status_text(&state),
+            Some(format!("ocr review #{} done (21k tokens)", pr.number).as_str())
+        );
+        let failed = Msg::AgentFinished {
+            key: pr.clone(),
+            kind: ToolKind::Review,
+            result: Err("ocr wrote no result".into()),
+        };
+        update(&mut state, &Keymap::default(), failed);
+        assert_eq!(
+            status_text(&state),
+            Some(format!("ocr review #{} failed: ocr wrote no result", pr.number).as_str())
+        );
+        // An ask from another path, for example the Rex palette, does not
+        // start either.
+        let ask = agent_job(&state, &pr, Tool::Ask("why?".into()));
+        assert_eq!(start_agent(&mut state, ask), Vec::new());
+        assert_eq!(
+            status_text(&state),
+            Some(format!("#{}: needs pr-agent", pr.number).as_str())
+        );
+    }
+
+    #[test]
     fn in_the_agent_pane_menu_an_action_key_wins_over_a_pane_key() {
         let (mut state, pr) = agent_state();
         update(
@@ -9091,8 +9177,11 @@ mod tests {
 
     /// The mine state with a path for the repo of the cursor row, and the
     /// key of the cursor row.
+    /// A state with a repo path for the cursor pull request, and
+    /// pr-agent as the backend: it has every tool.
     fn agent_state() -> (AppState, PrKey) {
         let mut state = mine_state(10);
+        state.data.agent_backend = crate::domain::agent::Backend::PrAgent;
         let model = frame::active_list(&mut state, &TABS);
         let crate::app::models::RowItem::Pr(pr) = &model.rows[model.cursor].item else {
             panic!("the cursor row is no pull request");
@@ -9111,10 +9200,13 @@ mod tests {
 
     /// The job of `tool` on `key` at the head of the pull request.
     fn agent_job(state: &AppState, key: &PrKey, tool: Tool) -> AgentJob {
+        let value = &state.data.prs[key].head.value;
         AgentJob {
             key: key.clone(),
-            head_sha: state.data.prs[key].head.value.head_oid.clone(),
+            head_sha: value.head_oid.clone(),
             repo_path: "/code/chaoshub".into(),
+            base_ref: value.base_ref.clone(),
+            context: format!("# {}\n\n{}", value.title, value.body),
             tool,
         }
     }
@@ -9123,6 +9215,7 @@ mod tests {
     fn review_record() -> Record {
         Record {
             version: crate::domain::agent::VERSION,
+            backend: crate::domain::agent::Backend::PrAgent,
             tool: "review".into(),
             pr: 7,
             head_sha: "oid7".into(),

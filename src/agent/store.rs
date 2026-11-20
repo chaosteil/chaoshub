@@ -1,4 +1,4 @@
-//! The result files of pr-agent.
+//! The result files of the agent runs.
 //!
 //! Each pull request has a directory
 //! `<state_dir>/agent/<owner>/<repo>/<number>/` with one file per tool:
@@ -51,13 +51,25 @@ impl Store {
         self.pr_dir(key).join(format!("{}.json", kind.name()))
     }
 
-    /// A new temporary path for the JSON output of pr-agent, in the
+    /// A new temporary path for the JSON output of the backend, in the
     /// directory of the pull request. It makes the directory.
     pub(crate) fn output_path(&self, key: &PrKey, kind: ToolKind) -> io::Result<PathBuf> {
+        self.temp_path(key, kind, "out", "json")
+    }
+
+    /// A new temporary path for the background text of an ocr run, in
+    /// the directory of the pull request. It makes the directory.
+    pub(crate) fn context_path(&self, key: &PrKey, kind: ToolKind) -> io::Result<PathBuf> {
+        self.temp_path(key, kind, "context", "md")
+    }
+
+    /// `.<tool>.<part>-<pid>-<random>.<ext>` in the directory of the pull
+    /// request.
+    fn temp_path(&self, key: &PrKey, kind: ToolKind, part: &str, ext: &str) -> io::Result<PathBuf> {
         let dir = self.pr_dir(key);
         std::fs::create_dir_all(&dir)?;
         Ok(dir.join(format!(
-            ".{}.out-{}-{:08x}.json",
+            ".{}.{part}-{}-{:08x}.{ext}",
             kind.name(),
             std::process::id(),
             rand::random::<u32>()
@@ -167,6 +179,7 @@ mod tests {
     fn record(head: &str) -> Record {
         Record {
             version: VERSION,
+            backend: crate::domain::agent::Backend::PrAgent,
             tool: "review".into(),
             pr: 7,
             head_sha: head.into(),

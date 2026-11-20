@@ -1,6 +1,8 @@
-//! One run of pr-agent.
+//! One run of an agent backend: `run` starts the backend of
+//! `[agent] backend`. This file runs pr-agent, and `ocr` runs Open Code
+//! Review.
 //!
-//! The run starts the `command` of `[agent.pr_agent]` in the repo
+//! The pr-agent run starts the `command` of `[agent.pr_agent]` in the repo
 //! directory:
 //!
 //! ```text
@@ -38,10 +40,11 @@ use tokio::task::JoinHandle;
 use crate::agent::ID;
 use crate::agent::store::Store;
 use crate::bus::{ActionEvent, Msg, TargetKey};
-use crate::config::schema::{PrAgentConfig, resolve_env};
-use crate::domain::agent::{AskEntry, Record, Tool, ToolKind, VERSION};
+use crate::config::schema::{AgentConfig, PrAgentConfig, resolve_env};
+use crate::domain::agent::{AskEntry, Backend, Record, Tool, ToolKind, VERSION};
 use crate::domain::keys::PrKey;
 use crate::github::TokenSource;
+use crate::vcs::lock::RepoLocks;
 
 /// The text of the ask script.
 pub(crate) const SHIM_TEXT: &str = include_str!("chaoshub-agent-ask.py");
@@ -52,8 +55,13 @@ pub(crate) struct Job {
     pub key: PrKey,
     /// The head commit of the pull request when the run starts.
     pub head_sha: String,
-    /// The local checkout of the repo. pr-agent runs in it.
+    /// The local checkout of the repo. The backend runs in it.
     pub repo_path: PathBuf,
+    /// The base branch of the pull request, for example `main`.
+    pub base_ref: String,
+    /// The title and the body of the pull request, as markdown. ocr gets
+    /// it as the background of the review.
+    pub context: String,
     pub tool: Tool,
 }
 
@@ -61,18 +69,51 @@ pub(crate) struct Job {
 type Reader = JoinHandle<(Option<String>, String)>;
 
 /// What a finished process gave.
-struct Finished {
-    status: ExitStatus,
+pub(super) struct Finished {
+    pub status: ExitStatus,
     /// The last line on stdout or stderr.
-    last_line: Option<String>,
+    pub last_line: Option<String>,
     /// All of stdout, for `ask` only.
-    stdout: String,
+    pub stdout: String,
 }
 
-/// Runs pr-agent for `job` and writes the result to `store`. It sends
-/// the progress lines to `tx`. On an error, it writes nothing and returns
-/// the text for the status line.
+/// What `spawn` starts.
+pub(super) struct Process<'a> {
+    pub argv: &'a [String],
+    pub env: &'a [(String, String)],
+    /// The directory of the process: the repo.
+    pub cwd: &'a Path,
+    pub timeout_secs: u64,
+    /// The backend, for the name in the timeout error.
+    pub backend: Backend,
+    /// True when the lines of stdout are progress. False for `ask`: its
+    /// stdout holds the answer.
+    pub stdout_progress: bool,
+    /// Makes the progress text of an output line.
+    pub progress: fn(&str) -> String,
+}
+
+/// Runs the backend of `config` for `job` and writes the result to
+/// `store`. It sends the progress lines to `tx`. On an error, it writes
+/// nothing and returns the text for the status line.
 pub(crate) async fn run(
+    job: &Job,
+    config: &AgentConfig,
+    store: &Store,
+    token: &TokenSource,
+    locks: &RepoLocks,
+    tx: &Sender<Msg>,
+) -> Result<Record, String> {
+    match config.backend {
+        Backend::OpenCodeReview => {
+            crate::agent::ocr::run(job, &config.open_code_review, store, locks, tx).await
+        }
+        Backend::PrAgent => run_pr_agent(job, &config.pr_agent, store, token, tx).await,
+    }
+}
+
+/// Runs pr-agent for `job`, like `run`.
+async fn run_pr_agent(
     job: &Job,
     config: &PrAgentConfig,
     store: &Store,
@@ -93,10 +134,21 @@ pub(crate) async fn run(
         .output_path(&job.key, kind)
         .map_err(|err| format!("cannot write the result: {err}"))?;
     let result = match argv(config, store, job, &output) {
-        Ok(argv) => spawn(&argv, &env, job, config.timeout_secs, tx).await,
+        Ok(argv) => {
+            let process = Process {
+                argv: &argv,
+                env: &env,
+                cwd: &job.repo_path,
+                timeout_secs: config.timeout_secs,
+                backend: Backend::PrAgent,
+                stdout_progress: !matches!(job.tool, Tool::Ask(_)),
+                progress: progress_text,
+            };
+            spawn(&process, &job.key, tx).await
+        }
         Err(err) => Err(err),
     };
-    let data = result.and_then(|finished| read_output(job, &output, finished));
+    let data = result.and_then(|finished| read_output(job, &output, &finished));
     let _ = std::fs::remove_file(&output);
     let (data, usage) = data?;
     let data = match &job.tool {
@@ -105,6 +157,7 @@ pub(crate) async fn run(
     };
     let record = Record {
         version: VERSION,
+        backend: Backend::PrAgent,
         tool: kind.name().to_owned(),
         pr: job.key.number,
         head_sha: job.head_sha.clone(),
@@ -287,38 +340,36 @@ fn lookup_path(program: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// Starts `argv` in the repo directory, sends its output lines as
-/// progress, and waits for it until `timeout_secs`.
-async fn spawn(
-    argv: &[String],
-    env: &[(String, String)],
-    job: &Job,
-    timeout_secs: u64,
+/// Starts `process`, sends its output lines as progress of `key`, and
+/// waits for it until its timeout.
+pub(super) async fn spawn(
+    process: &Process<'_>,
+    key: &PrKey,
     tx: &Sender<Msg>,
 ) -> Result<Finished, String> {
-    let program = &argv[0];
+    let program = &process.argv[0];
     let mut child = Command::new(program)
-        .args(&argv[1..])
-        .envs(env.iter().map(|(name, value)| (name, value)))
-        .current_dir(&job.repo_path)
+        .args(&process.argv[1..])
+        .envs(process.env.iter().map(|(name, value)| (name, value)))
+        .current_dir(process.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|err| format!("cannot start {program}: {err}"))?;
-    let key = TargetKey::Pr(job.key.clone());
-    let is_ask = matches!(job.tool, Tool::Ask(_));
+    let key = TargetKey::Pr(key.clone());
+    let progress = process.progress;
     let stdout = child.stdout.take().map(|out| {
-        // The answer of ask comes on stdout, so it is no progress.
-        let tx = (!is_ask).then(|| tx.clone());
-        tokio::spawn(read_lines(out, tx, key.clone()))
+        let tx = process.stdout_progress.then(|| tx.clone());
+        tokio::spawn(read_lines(out, tx, key.clone(), progress))
     });
     let stderr = child
         .stderr
         .take()
-        .map(|err| tokio::spawn(read_lines(err, Some(tx.clone()), key.clone())));
+        .map(|err| tokio::spawn(read_lines(err, Some(tx.clone()), key.clone(), progress)));
     let readers = [stdout, stderr];
+    let timeout_secs = process.timeout_secs;
     let waited = tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait()).await;
     let status = match waited {
         Ok(Ok(status)) => status,
@@ -329,7 +380,8 @@ async fn spawn(
         Err(_) => {
             let _ = child.kill().await;
             abort(&readers);
-            return Err(format!("pr-agent timed out after {timeout_secs}s"));
+            let name = process.backend.name();
+            return Err(format!("{name} timed out after {timeout_secs}s"));
         }
     };
     let [stdout, stderr] = readers;
@@ -358,12 +410,14 @@ async fn join(reader: Option<Reader>) -> (Option<String>, String) {
     }
 }
 
-/// Reads `stream` line by line. With `tx`, it sends each line as
-/// progress. It returns the last line and all the text.
+/// Reads `stream` line by line. With `tx`, it sends the `progress` text
+/// of each line as progress. It returns the last progress text and all
+/// the text.
 async fn read_lines<R: AsyncRead + Unpin>(
     stream: R,
     tx: Option<Sender<Msg>>,
     key: TargetKey,
+    progress: fn(&str) -> String,
 ) -> (Option<String>, String) {
     let mut lines = BufReader::new(stream).lines();
     let mut last = None;
@@ -371,7 +425,7 @@ async fn read_lines<R: AsyncRead + Unpin>(
     while let Ok(Some(line)) = lines.next_line().await {
         text.push_str(&line);
         text.push('\n');
-        let line = progress_text(&line);
+        let line = progress(&line);
         if line.is_empty() {
             continue;
         }
@@ -390,10 +444,24 @@ async fn read_lines<R: AsyncRead + Unpin>(
     (last, text)
 }
 
-/// The text of a log line: without the color codes, and without the
+/// The text of a log line of pr-agent: the `plain_text`, without the
 /// time, level and source of the log format of pr-agent
 /// (`<time> | <level> | <source> - <message>`).
 fn progress_text(line: &str) -> String {
+    let plain = plain_text(line);
+    match plain.split_once(" | ") {
+        Some((_, rest)) => rest
+            .split_once(" - ")
+            .map_or(plain.as_str(), |(_, message)| message)
+            .trim()
+            .to_owned(),
+        None => plain,
+    }
+}
+
+/// `line` without the color codes and without the spaces at the two
+/// ends.
+pub(super) fn plain_text(line: &str) -> String {
     let mut plain = String::with_capacity(line.len());
     let mut chars = line.chars();
     while let Some(c) = chars.next() {
@@ -408,15 +476,21 @@ fn progress_text(line: &str) -> String {
             plain.push(c);
         }
     }
-    let plain = plain.trim();
-    match plain.split_once(" | ") {
-        Some((_, rest)) => rest
-            .split_once(" - ")
-            .map_or(plain, |(_, message)| message)
-            .trim()
-            .to_owned(),
-        None => plain.to_owned(),
+    plain.trim().to_owned()
+}
+
+/// The error of a process that did not exit with 0: the exit status and
+/// the last output line. `None` for an exit with 0.
+pub(super) fn exit_error(finished: &Finished) -> Option<String> {
+    if finished.status.success() {
+        return None;
     }
+    let last = finished.last_line.clone().unwrap_or_default();
+    let status = finished.status.code().map_or_else(
+        || finished.status.to_string(),
+        |code| format!("exit status {code}"),
+    );
+    Some(format!("{status}: {last}"))
 }
 
 /// The data and the usage of a finished process. An exit code other than
@@ -424,15 +498,10 @@ fn progress_text(line: &str) -> String {
 fn read_output(
     job: &Job,
     output: &Path,
-    finished: Finished,
+    finished: &Finished,
 ) -> Result<(serde_json::Value, serde_json::Value), String> {
-    if !finished.status.success() {
-        let last = finished.last_line.unwrap_or_default();
-        let status = finished.status.code().map_or_else(
-            || finished.status.to_string(),
-            |code| format!("exit status {code}"),
-        );
-        return Err(format!("{status}: {last}"));
+    if let Some(err) = exit_error(finished) {
+        return Err(err);
     }
     if matches!(job.tool, Tool::Ask(_)) {
         let answer = finished.stdout.trim();
@@ -558,6 +627,8 @@ mod tests {
                 key: key(),
                 head_sha: "3a1f2c0".into(),
                 repo_path: self.repo.clone(),
+                base_ref: "main".into(),
+                context: String::new(),
                 tool,
             }
         }
@@ -617,7 +688,7 @@ mod tests {
         let setup = setup();
         let config = setup.config("ok");
         let (tx, mut rx) = mpsc::channel(256);
-        let record = run(
+        let record = run_pr_agent(
             &setup.job(Tool::Review),
             &config,
             &setup.store,
@@ -685,7 +756,7 @@ mod tests {
         let config = setup.config("ok");
         let (tx, _rx) = mpsc::channel(256);
         for tool in [Tool::Improve, Tool::Describe] {
-            run(&setup.job(tool), &config, &setup.store, &token(), &tx)
+            run_pr_agent(&setup.job(tool), &config, &setup.store, &token(), &tx)
                 .await
                 .unwrap();
         }
@@ -712,10 +783,10 @@ mod tests {
         let setup = setup();
         let (tx, _rx) = mpsc::channel(256);
         let job = setup.job(Tool::Review);
-        let old = run(&job, &setup.config("ok"), &setup.store, &token(), &tx)
+        let old = run_pr_agent(&job, &setup.config("ok"), &setup.store, &token(), &tx)
             .await
             .unwrap();
-        let err = run(&job, &setup.config("fail"), &setup.store, &token(), &tx)
+        let err = run_pr_agent(&job, &setup.config("fail"), &setup.store, &token(), &tx)
             .await
             .unwrap_err();
         assert!(err.starts_with("exit status "), "{err}");
@@ -731,7 +802,7 @@ mod tests {
     async fn a_run_without_json_fails() {
         let setup = setup();
         let (tx, _rx) = mpsc::channel(256);
-        let err = run(
+        let err = run_pr_agent(
             &setup.job(Tool::Review),
             &setup.config("nojson"),
             &setup.store,
@@ -753,7 +824,7 @@ mod tests {
         };
         let (tx, _rx) = mpsc::channel(256);
         let started = std::time::Instant::now();
-        let err = run(
+        let err = run_pr_agent(
             &setup.job(Tool::Review),
             &config,
             &setup.store,
@@ -778,7 +849,7 @@ mod tests {
             },
         );
         let (tx, _rx) = mpsc::channel(256);
-        let err = run(
+        let err = run_pr_agent(
             &setup.job(Tool::Review),
             &config,
             &setup.store,
@@ -810,7 +881,7 @@ mod tests {
         };
         let (tx, mut rx) = mpsc::channel(256);
         for question in ["Why?", "How?"] {
-            run(
+            run_pr_agent(
                 &setup.job(Tool::Ask(question.into())),
                 &config,
                 &setup.store,
@@ -854,14 +925,14 @@ mod tests {
         };
         let (tx, _rx) = mpsc::channel(256);
         let job = setup.job(Tool::Ask("Why?".into()));
-        run(&job, &config, &setup.store, &token(), &tx)
+        run_pr_agent(&job, &config, &setup.store, &token(), &tx)
             .await
             .unwrap();
         let failing = PrAgentConfig {
             command: config.command.clone(),
             ..setup.config("fail")
         };
-        let err = run(&job, &failing, &setup.store, &token(), &tx)
+        let err = run_pr_agent(&job, &failing, &setup.store, &token(), &tx)
             .await
             .unwrap_err();
         assert!(err.ends_with("no answer"), "{err}");

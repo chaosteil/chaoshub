@@ -457,14 +457,18 @@ pub(crate) struct Pending {
     pub expect: Expect,
 }
 
-/// A run of pr-agent: one tool on one pull request.
+/// A run of the agent backend: one tool on one pull request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentJob {
     pub key: PrKey,
     /// The head commit of the pull request when the run starts.
     pub head_sha: String,
-    /// The local checkout of the repo. pr-agent runs in it.
+    /// The local checkout of the repo. The backend runs in it.
     pub repo_path: PathBuf,
+    /// The base branch of the pull request, for example `main`.
+    pub base_ref: String,
+    /// The title and the body of the pull request, as markdown.
+    pub context: String,
     pub tool: Tool,
 }
 
@@ -826,12 +830,12 @@ pub(crate) enum Msg {
         id: &'static str,
         key: TargetKey,
     },
-    /// The runtime started the pr-agent run of `kind` on `key`.
+    /// The runtime started the agent run of `kind` on `key`.
     AgentStarted {
         key: PrKey,
         kind: ToolKind,
     },
-    /// The pr-agent run of `kind` on `key` ended: the new record, or the
+    /// The agent run of `kind` on `key` ended: the new record, or the
     /// error.
     AgentFinished {
         key: PrKey,
@@ -907,7 +911,7 @@ pub(crate) enum Cmd {
         id: &'static str,
         key: TargetKey,
     },
-    /// Runs pr-agent. An `Ask` with an empty question never leaves `app`:
+    /// Runs the agent. An `Ask` with an empty question never leaves `app`:
     /// a pane sends it to open the question prompt.
     RunAgent(AgentJob),
     /// Reads the result files of a pull request.

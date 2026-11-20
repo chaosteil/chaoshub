@@ -296,6 +296,12 @@ mod tests {
             config.keys.get("refresh").map(String::as_str),
             Some("ctrl-r")
         );
+        // The sample has the old pr-agent keys at the top of `[agent]`:
+        // they go to pr-agent, and the backend stays the default.
+        assert_eq!(
+            config.agent.backend,
+            crate::domain::agent::Backend::OpenCodeReview
+        );
         assert_eq!(
             config.agent.pr_agent.command,
             ["uvx", "--from", "pr-agent", "pr-agent"]

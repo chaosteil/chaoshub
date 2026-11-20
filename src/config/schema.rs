@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Deserializer};
 
+use crate::domain::agent::Backend;
 use crate::domain::keys::RepoKey;
 use crate::domain::merge::{MergeMethod, StackOverride};
 use crate::domain::pr::PullRequest;
@@ -458,10 +459,11 @@ impl Default for WorkspacesConfig {
     }
 }
 
-/// The `[agent]` section: the agent runs. `env` and `timeout_secs` at
-/// the top apply to each backend. The `[agent.pr_agent]` table holds the
-/// settings of pr-agent. Its `env` adds to the top `env`, and its
-/// `timeout_secs` replaces the top value.
+/// The `[agent]` section: the agent runs. `backend` selects the program
+/// that runs the tools. `env` and `timeout_secs` at the top apply to each
+/// backend. The `[agent.open_code_review]` and `[agent.pr_agent]` tables
+/// hold the settings of each backend. The `env` of a table adds to the
+/// top `env`, and its `timeout_secs` replaces the top value.
 ///
 /// The pr-agent keys `command`, `model`, `fallback_models` and
 /// `extra_instructions` were at the top of `[agent]` before the
@@ -470,7 +472,46 @@ impl Default for WorkspacesConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "AgentFile")]
 pub(crate) struct AgentConfig {
+    pub backend: Backend,
+    pub open_code_review: OcrConfig,
     pub pr_agent: PrAgentConfig,
+}
+
+/// The settings of Open Code Review, with the shared keys of `[agent]`
+/// merged in. An empty `provider` or `model` lets `ocr` use its own
+/// config (`~/.opencodereview/config.json`) or its env variables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OcrConfig {
+    /// The program and its first arguments. A string is one program
+    /// name.
+    pub command: Vec<String>,
+    /// The `--provider` of `ocr review`.
+    pub provider: String,
+    /// The `--model` of `ocr review`.
+    pub model: String,
+    /// More arguments of `ocr review`, for example `["--effort", "high"]`.
+    pub args: Vec<String>,
+    /// The env of the ocr process: a variable name to a value.
+    pub env: BTreeMap<String, EnvValue>,
+    /// The time after which chaoshub stops a run.
+    pub timeout_secs: u64,
+    /// Extra instructions for the review, after the title and the body of
+    /// the pull request in the background of ocr.
+    pub extra_instructions: String,
+}
+
+impl Default for OcrConfig {
+    fn default() -> Self {
+        Self {
+            command: vec!["ocr".to_owned()],
+            provider: String::new(),
+            model: String::new(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            timeout_secs: AGENT_TIMEOUT_SECS,
+            extra_instructions: String::new(),
+        }
+    }
 }
 
 /// The settings of pr-agent, with the shared keys of `[agent]` merged
@@ -514,12 +555,28 @@ impl Default for PrAgentConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct AgentFile {
+    backend: Backend,
     env: BTreeMap<String, EnvValue>,
     timeout_secs: Option<u64>,
     /// The old place of the pr-agent keys.
     #[serde(flatten)]
     legacy: PrAgentKeys,
+    open_code_review: OcrFile,
     pr_agent: PrAgentFile,
+}
+
+/// The `[agent.open_code_review]` table as it is in the file.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct OcrFile {
+    #[serde(deserialize_with = "some_command_words")]
+    command: Option<Vec<String>>,
+    provider: String,
+    model: String,
+    args: Vec<String>,
+    env: BTreeMap<String, EnvValue>,
+    timeout_secs: Option<u64>,
+    extra_instructions: String,
 }
 
 /// The `[agent.pr_agent]` table as it is in the file.
@@ -558,7 +615,21 @@ impl TryFrom<AgentFile> for AgentConfig {
             timeout_secs: file.pr_agent.timeout_secs.unwrap_or(timeout_secs),
             extra_instructions: keys.extra_instructions.unwrap_or_default(),
         };
-        Ok(Self { pr_agent })
+        let ocr = file.open_code_review;
+        let open_code_review = OcrConfig {
+            command: ocr.command.unwrap_or_else(|| OcrConfig::default().command),
+            provider: ocr.provider,
+            model: ocr.model,
+            args: ocr.args,
+            env: merge_env(&file.env, ocr.env),
+            timeout_secs: ocr.timeout_secs.unwrap_or(timeout_secs),
+            extra_instructions: ocr.extra_instructions,
+        };
+        Ok(Self {
+            backend: file.backend,
+            open_code_review,
+            pr_agent,
+        })
     }
 }
 
@@ -625,7 +696,7 @@ pub(crate) struct ExtraInstructions {
     pub ask: String,
 }
 
-/// An error that stops a run before pr-agent starts. The text holds the
+/// An error that stops a run before the backend starts. The text holds the
 /// names of the variables, but never their values.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum EnvError {
@@ -864,6 +935,13 @@ mod tests {
     fn agent_defaults() {
         let agent: AgentConfig = toml::from_str("").unwrap();
         assert_eq!(agent, AgentConfig::default());
+        assert_eq!(agent.backend, Backend::OpenCodeReview);
+        let ocr = agent.open_code_review;
+        assert_eq!(ocr.command, ["ocr"]);
+        assert_eq!((ocr.provider.as_str(), ocr.model.as_str()), ("", ""));
+        assert!(ocr.args.is_empty() && ocr.env.is_empty());
+        assert_eq!(ocr.timeout_secs, 900);
+        assert_eq!(ocr.extra_instructions, "");
         let pr_agent = agent.pr_agent;
         assert_eq!(pr_agent.command, ["pr-agent"]);
         assert_eq!(pr_agent.model, "anthropic/claude-sonnet-5-5");
@@ -908,6 +986,66 @@ mod tests {
         assert_eq!(new.pr_agent.model, "openai/gpt-6.1-sol");
         assert_eq!(new.pr_agent.fallback_models, ["openai/gpt-6-luna"]);
         assert_eq!(new.pr_agent.extra_instructions.review, "Focus");
+    }
+
+    #[test]
+    fn the_backend_selects_ocr_or_pr_agent_and_refuses_other_names() {
+        let agent: AgentConfig = toml::from_str("backend = \"pr_agent\"").unwrap();
+        assert_eq!(agent.backend, Backend::PrAgent);
+        let agent: AgentConfig = toml::from_str("backend = \"open_code_review\"").unwrap();
+        assert_eq!(agent.backend, Backend::OpenCodeReview);
+        let err = toml::from_str::<AgentConfig>("backend = \"codex\"")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown variant `codex`"), "{err}");
+        // The old pr-agent keys do not select pr-agent.
+        let agent: AgentConfig = toml::from_str("model = \"openai/gpt-6.1-sol\"").unwrap();
+        assert_eq!(agent.backend, Backend::OpenCodeReview);
+    }
+
+    #[test]
+    fn the_ocr_table_parses_and_merges_the_shared_keys() {
+        let text = concat!(
+            "timeout_secs = 600\n",
+            "[env]\n",
+            "ANTHROPIC_API_KEY = \"shared\"\n",
+            "[open_code_review]\n",
+            "command = [\"npx\", \"-y\", \"@alibaba-group/open-code-review\"]\n",
+            "provider = \"anthropic\"\n",
+            "model = \"claude-opus-4-6\"\n",
+            "args = [\"--effort\", \"high\"]\n",
+            "timeout_secs = 1800\n",
+            "extra_instructions = \"Focus on bugs.\"\n",
+            "[open_code_review.env]\n",
+            "OCR_LLM_TIMEOUT = \"600\"\n",
+        );
+        let agent: AgentConfig = toml::from_str(text).unwrap();
+        let literal = |text: &str| EnvValue::Literal(text.into());
+        assert_eq!(
+            agent.open_code_review,
+            OcrConfig {
+                command: vec![
+                    "npx".into(),
+                    "-y".into(),
+                    "@alibaba-group/open-code-review".into()
+                ],
+                provider: "anthropic".into(),
+                model: "claude-opus-4-6".into(),
+                args: vec!["--effort".into(), "high".into()],
+                env: BTreeMap::from([
+                    ("ANTHROPIC_API_KEY".to_owned(), literal("shared")),
+                    ("OCR_LLM_TIMEOUT".to_owned(), literal("600")),
+                ]),
+                timeout_secs: 1800,
+                extra_instructions: "Focus on bugs.".into(),
+            }
+        );
+        // The pr-agent table gets the shared keys only.
+        assert_eq!(agent.pr_agent.timeout_secs, 600);
+        assert_eq!(
+            agent.pr_agent.env,
+            BTreeMap::from([("ANTHROPIC_API_KEY".to_owned(), literal("shared"))])
+        );
     }
 
     #[test]
