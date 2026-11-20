@@ -409,7 +409,6 @@ pub(crate) fn popup_overlay() -> OverlayModel {
         closing: false,
         content: OverlayContent::Popup {
             title: "#101 feat(app): Pane trait, registry and overlay stack".to_owned(),
-            reactions: Vec::new(),
             subtitle: "chaosteil · chaosteil/push-trptoqkq -> main · open".to_owned(),
             tabs: vec![
                 PaneTab {
@@ -443,22 +442,6 @@ pub(crate) fn popup_overlay() -> OverlayModel {
             scroll: 0,
         },
     }
-}
-
-/// The PR popup overlay of `popup_overlay` with the reactions of the pull
-/// request: two of the viewer, and one of another user.
-pub(crate) fn popup_overlay_with_reactions() -> OverlayModel {
-    let mut overlay = popup_overlay();
-    if let OverlayContent::Popup { reactions, .. } = &mut overlay.content {
-        *reactions = vec![
-            cell("👍 2", CellStyle::Primary),
-            cell("  ", CellStyle::Normal),
-            cell("🎉 1", CellStyle::Dim),
-            cell("  ", CellStyle::Normal),
-            cell("❤️ 5", CellStyle::Primary),
-        ];
-    }
-    overlay
 }
 
 /// A frame model with one overlay over the mine list.

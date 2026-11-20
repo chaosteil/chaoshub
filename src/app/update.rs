@@ -2021,8 +2021,7 @@ fn in_pane<R>(
     let pane = panes.get(popup.active)?;
     let ps = popup.panes.get_mut(popup.active)?;
     let tabs = frame::pane_tabs(panes, &target, areas.popup_body.width);
-    let reactions = !frame::pr_reactions(data, &popup.key).is_empty();
-    let size = frame::pane_size(areas, &tabs, reactions);
+    let size = frame::pane_size(areas, &tabs);
     let cx = KeyCx {
         data,
         target: Some(&target),
@@ -7875,55 +7874,6 @@ mod tests {
         assert_eq!(pane_view(&mut state), (0, 0));
         key(&mut state, 'G');
         assert_eq!(pane_view(&mut state), (11, 21));
-    }
-
-    #[test]
-    fn the_reactions_of_the_pull_request_show_under_the_title() {
-        use crate::domain::detail::{Reaction, ReactionKind};
-        let reactions = |state: &mut AppState| match popup_content(state, &PANES) {
-            OverlayContent::Popup { reactions, .. } => reactions
-                .iter()
-                .map(|cell| (cell.text.clone(), cell.style))
-                .collect::<Vec<_>>(),
-            other => panic!("not a popup: {other:?}"),
-        };
-        // Six comments of 1 + 5 rows: 36 rows in a pane of 15.
-        let mut state = conversation_sidebar(&vec![paragraphs(3); 6]);
-        assert_eq!(reactions(&mut state), [], "no row without reactions");
-        key(&mut state, 'G');
-        assert_eq!(pane_view(&mut state), (11, 21), "a pane of 15 rows");
-        let pr = testdata::pr_key("chaoshub", 99);
-        state.data.details.get_mut(&pr).unwrap().value.reactions = vec![
-            Reaction {
-                kind: ReactionKind::ThumbsUp,
-                count: 3,
-                mine: true,
-            },
-            Reaction {
-                kind: ReactionKind::Eyes,
-                count: 1,
-                mine: false,
-            },
-        ];
-        state.bump();
-        assert_eq!(
-            reactions(&mut state),
-            [
-                ("👍 3".to_owned(), CellStyle::Primary),
-                ("  ".to_owned(), CellStyle::Normal),
-                ("👀 1".to_owned(), CellStyle::Dim),
-            ]
-        );
-        key(&mut state, 'g');
-        key(&mut state, 'G');
-        assert_eq!(
-            pane_view(&mut state),
-            (11, 22),
-            "the row of the reactions takes one row from the pane"
-        );
-        state.data.details.remove(&pr);
-        state.bump();
-        assert_eq!(reactions(&mut state), [], "no row before the detail loads");
     }
 
     #[test]

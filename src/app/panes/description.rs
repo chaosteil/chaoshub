@@ -14,6 +14,12 @@
 //! list. The threads and the activity come from the conversation detail,
 //! which loads in the background. The pane does not start a load.
 //!
+//! When the pull request has reactions, one line at the top of the pane
+//! shows them, for example `👍 3  🎉 1`, with a blank line after it. When
+//! the full title starts the pane, the line comes directly under the
+//! title. The reactions of the viewer have the primary color. Without
+//! reactions, and before the detail loads, the pane shows no line.
+//!
 //! When the pull request has codeview comments that went to GitHub not
 //! yet, one dim line between the block and the body counts them, for
 //! example `3 unsent codeview comments (1 on an older push) · r to
@@ -95,6 +101,19 @@ impl Pane for DescriptionPane {
         // the pane.
         if cx.data.rex_label && head.title_is_cut() {
             lines.push(vec![cell(head.title.trim(), CellStyle::Normal)]);
+        }
+        // The reactions of the pull request come directly under the
+        // title. They come when the detail loads.
+        let reactions = cx
+            .data
+            .details
+            .get(&pr.key)
+            .map(|detail| cells::reactions(&detail.value.reactions, &[]))
+            .unwrap_or_default();
+        if !reactions.is_empty() {
+            lines.push(reactions);
+        }
+        if !lines.is_empty() {
             lines.push(Vec::new());
         }
         lines.extend(readiness(cx, pr));
@@ -581,7 +600,7 @@ mod tests {
     use crate::app::target::pr_target;
     use crate::app::testdata;
     use crate::domain::check::CheckKind;
-    use crate::domain::detail::{Comment, Review, Thread};
+    use crate::domain::detail::{Comment, Reaction, ReactionKind, Review, Thread};
     use crate::domain::test_time;
 
     /// The lines of the pane for a pull request with `body`.
@@ -676,6 +695,97 @@ mod tests {
             first_lines("Fix the merge", false)[0],
             "the label shows the whole title"
         );
+    }
+
+    /// The reactions of the tests: one of the viewer, and one of
+    /// another user.
+    fn some_reactions() -> Vec<Reaction> {
+        vec![
+            Reaction {
+                kind: ReactionKind::ThumbsUp,
+                count: 3,
+                mine: true,
+            },
+            Reaction {
+                kind: ReactionKind::Hooray,
+                count: 1,
+                mine: false,
+            },
+        ]
+    }
+
+    /// The lines of the pane for a pull request with `title` and the
+    /// detail `detail`, with the `rex_label` switch.
+    fn lines_of(title: &str, rex_label: bool, detail: Option<PrDetail>) -> Vec<Vec<Cell>> {
+        let mut state = AppState::new(Size {
+            width: 100,
+            height: 30,
+        });
+        state.data.rex_label = rex_label;
+        let pr = testdata::pr("chaoshub", 7, title);
+        if let Some(detail) = detail {
+            state
+                .data
+                .details
+                .insert(pr.key.clone(), testdata::observed(detail));
+        }
+        state.data.prs.insert(pr.key.clone(), pr.clone());
+        let target = pr_target(&state.data, &pr.key).unwrap();
+        let areas = layout(state.data.size);
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &crate::app::keymap::DEFAULT,
+        };
+        let size = Size {
+            width: 80,
+            height: 20,
+        };
+        let PaneModel::Lines { lines, .. } =
+            DescriptionPane.model(&cx, &PaneState::default(), size)
+        else {
+            panic!("not lines");
+        };
+        lines
+    }
+
+    #[test]
+    fn the_reactions_start_the_pane() {
+        let mut detail = empty_detail();
+        detail.reactions = some_reactions();
+        let lines = lines_of("Seven", false, Some(detail));
+        assert_eq!(
+            lines[0],
+            [
+                cell("👍 3", CellStyle::Primary),
+                cell("  ", CellStyle::Normal),
+                cell("🎉 1", CellStyle::Dim),
+            ]
+        );
+        assert_eq!(lines[1], [], "a blank line comes after the reactions");
+        assert_eq!(text(&lines[2]), " CHECKING ");
+    }
+
+    #[test]
+    fn under_a_rex_label_the_reactions_come_under_a_cut_title() {
+        let long = "Add the terminal title overview to the PR view";
+        let mut detail = empty_detail();
+        detail.reactions = some_reactions();
+        let lines = lines_of(long, true, Some(detail));
+        assert_eq!(text(&lines[0]), long);
+        assert_eq!(text(&lines[1]), "👍 3  🎉 1");
+        assert_eq!(lines[2], [], "a blank line comes after the reactions");
+        assert_eq!(text(&lines[3]), " CHECKING ");
+    }
+
+    #[test]
+    fn without_reactions_the_pane_shows_no_line() {
+        for detail in [None, Some(empty_detail())] {
+            let loaded = detail.is_some();
+            let lines = lines_of("Seven", false, detail);
+            assert_eq!(text(&lines[0]), " CHECKING ", "loaded: {loaded}");
+        }
     }
 
     /// The text of a line.

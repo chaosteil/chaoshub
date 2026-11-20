@@ -1,7 +1,6 @@
-//! The popup frame with pane tabs: the header with the title, the
-//! reactions of the pull request and the subtitle, the pane tabs, and
-//! the active pane below. The transitions slide it in from the right
-//! and out again.
+//! The popup frame with pane tabs: the header with the title and the
+//! subtitle, the pane tabs, and the active pane below. The transitions
+//! slide it in from the right and out again.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -9,24 +8,21 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, ScrollbarState, StatefulWidget, Widget};
 
-use crate::app::models::{Cell, PANE_TAB_GAP, PaneModel, PaneTab, pane_tab_rows};
+use crate::app::models::{PANE_TAB_GAP, PaneModel, PaneTab, pane_tab_rows};
 use crate::bus::Hit;
 use crate::theme::Theme;
 use crate::theme::ThemeBlock;
 use crate::ui::hits::HitMap;
-use crate::ui::{pane, style, text};
+use crate::ui::{pane, text};
 
 /// The rows above the pane with one row of pane tabs: title, subtitle,
-/// pane tabs and a rule. Each more row of pane tabs adds one, and the
-/// row of the reactions adds one. An empty title has no row.
+/// pane tabs and a rule. Each more row of pane tabs adds one. An empty
+/// title has no row.
 const HEADER_ROWS: u16 = 4;
 
 /// The content of the popup, borrowed from the overlay model.
 pub(crate) struct Popup<'a> {
     pub title: &'a str,
-    /// The reactions of the pull request, on the row under the title.
-    /// Empty: no row.
-    pub reactions: &'a [Cell],
     pub subtitle: &'a str,
     pub tabs: &'a [PaneTab],
     pub active: usize,
@@ -99,34 +95,28 @@ pub(crate) fn render(
     );
     let rows = pane_tab_rows(popup.tabs, inner.width);
     let tab_rows = u16::try_from(rows.len()).unwrap_or(u16::MAX);
-    // The title row and the row of the reactions.
-    let top_rows = u16::from(!popup.title.is_empty()) + u16::from(!popup.reactions.is_empty());
-    let header = (HEADER_ROWS - 1 + top_rows).saturating_add(tab_rows - 1);
+    let title_rows = u16::from(!popup.title.is_empty());
+    let header = (HEADER_ROWS - 1 + title_rows).saturating_add(tab_rows - 1);
     if inner.height < header || inner.width == 0 {
         return;
     }
     let width = usize::from(inner.width);
-    let mut y = inner.y;
-    if !popup.title.is_empty() {
+    if title_rows > 0 {
         buf.set_string(
             inner.x,
-            y,
+            inner.y,
             text::truncate(popup.title, width),
             Style::new().fg(p.fg).add_modifier(Modifier::BOLD),
         );
-        y += 1;
-    }
-    if !popup.reactions.is_empty() {
-        buf.set_line(inner.x, y, &style::line(popup.reactions, p), inner.width);
     }
     buf.set_string(
         inner.x,
-        inner.y + top_rows,
+        inner.y + title_rows,
         text::truncate(popup.subtitle, width),
         Style::new().fg(p.fg_mute),
     );
     for (row, range) in (0..).zip(rows) {
-        let tabs_area = Rect::new(inner.x, inner.y + top_rows + 1 + row, inner.width, 1);
+        let tabs_area = Rect::new(inner.x, inner.y + title_rows + 1 + row, inner.width, 1);
         let first = range.start;
         tabs_line(
             &popup.tabs[range],
@@ -181,7 +171,6 @@ fn render_scrollbar(view: &pane::ScrollView, x: u16, buf: &mut Buffer, theme: &T
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::models::CellStyle;
     use crate::ui::testdata;
 
     /// The text of row `y` of a buffer.
@@ -247,7 +236,6 @@ mod tests {
         };
         let popup = Popup {
             title: "#7 title",
-            reactions: &[],
             subtitle: "subtitle",
             tabs: &tabs,
             active: 5,
@@ -269,57 +257,6 @@ mod tests {
         assert_eq!(hits.at(agent, 4), Some(Hit::PaneTab(5)));
         assert!(row(&buf, 5).contains('─'), "the rule is under the tabs");
         assert!(row(&buf, 6).contains("first line"));
-    }
-
-    #[test]
-    fn the_reactions_show_under_the_title_and_move_the_pane_down() {
-        let reactions = [
-            testdata::cell("👍 3", CellStyle::Primary),
-            testdata::cell("  ", CellStyle::Normal),
-            testdata::cell("🚀 1", CellStyle::Dim),
-        ];
-        let tabs = [PaneTab {
-            key: '1',
-            title: "Description",
-            pane: 0,
-            dim: false,
-        }];
-        let pane = PaneModel::Lines {
-            lines: vec![vec![testdata::cell("first line", CellStyle::Normal)]],
-            wrap: false,
-        };
-        let theme = testdata::pierre();
-        // A PR view with the Rex label has no title row: the reactions
-        // take the first row.
-        for (title, first) in [("#7 title", 2), ("", 1)] {
-            let popup = Popup {
-                title,
-                reactions: &reactions,
-                subtitle: "subtitle",
-                tabs: &tabs,
-                active: 0,
-                pane: &pane,
-                cursor: 0,
-                scroll: 0,
-            };
-            let area = Rect::new(0, 0, 60, 12);
-            let mut buf = Buffer::empty(area);
-            let mut hits = HitMap::default();
-            render(&popup, area, &mut buf, &theme, &mut hits);
-            if !title.is_empty() {
-                assert!(row(&buf, 1).contains("#7 title"));
-            }
-            // An emoji takes two cells: the second cell reads as a space.
-            assert!(row(&buf, first).contains("👍  3  🚀  1"), "{title:?}");
-            let mine = &buf[(find(&buf, first, "👍"), first)];
-            assert_eq!(mine.fg, theme.palette.primary, "the reaction of the viewer");
-            let other = &buf[(find(&buf, first, "🚀"), first)];
-            assert_eq!(other.fg, theme.palette.fg_mute);
-            assert!(row(&buf, first + 1).contains("subtitle"), "{title:?}");
-            assert!(row(&buf, first + 2).contains("1 Description"), "{title:?}");
-            assert!(row(&buf, first + 3).contains('─'), "{title:?}");
-            assert!(row(&buf, first + 4).contains("first line"), "{title:?}");
-        }
     }
 
     #[test]
@@ -361,7 +298,6 @@ mod tests {
         for theme in themes {
             let popup = Popup {
                 title: "#7 title",
-                reactions: &[],
                 subtitle: "subtitle",
                 tabs: &tabs,
                 active: 0,
@@ -409,7 +345,6 @@ mod tests {
         }];
         let popup = Popup {
             title: "#7 title",
-            reactions: &[],
             subtitle: "subtitle",
             tabs: &tabs,
             active: 0,
@@ -530,7 +465,6 @@ mod tests {
         let mut hits = HitMap::default();
         let crate::app::models::OverlayContent::Popup {
             title,
-            reactions,
             subtitle,
             tabs,
             active,
@@ -543,7 +477,6 @@ mod tests {
         };
         let popup = Popup {
             title: &title,
-            reactions: &reactions,
             subtitle: &subtitle,
             tabs: &tabs,
             active,

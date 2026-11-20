@@ -171,7 +171,6 @@ pub(crate) fn render_overlay(
     match &overlay.content {
         OverlayContent::Popup {
             title,
-            reactions,
             subtitle,
             tabs,
             active,
@@ -181,7 +180,6 @@ pub(crate) fn render_overlay(
         } => {
             let content = popup::Popup {
                 title,
-                reactions,
                 subtitle,
                 tabs,
                 active: *active,
@@ -427,12 +425,6 @@ mod tests {
     #[test]
     fn popup_160_ansi16() {
         insta::assert_snapshot!(draw(&popup(), 160, 40, &testdata::ansi16()));
-    }
-
-    #[test]
-    fn popup_with_reactions_100_pierre() {
-        let model = testdata::with_overlay(testdata::popup_overlay_with_reactions());
-        insta::assert_snapshot!(draw(&model, 100, 30, &testdata::pierre()));
     }
 
     /// Draws frames through `view` and the transitions, one per elapsed

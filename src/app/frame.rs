@@ -21,7 +21,7 @@ use crate::app::models::{
 use crate::app::panes::conversation::is_stale;
 use crate::app::panes::{PANES, Pane, applicable};
 use crate::app::state::{AppData, AppState, OverlayState, PopupState};
-use crate::app::tabs::{KeyCx, TABS, Tab, cells};
+use crate::app::tabs::{KeyCx, TABS, Tab};
 use crate::app::target::{pr_target, row_target};
 use crate::app::term::{block_label, term_status, term_title};
 use crate::bus::{
@@ -242,11 +242,10 @@ pub(crate) fn pane_tabs(panes: &[Box<dyn Pane>], target: &Target, width: u16) ->
 }
 
 /// The size of the pane body of the popup with `tabs`. Each row of pane
-/// tabs after the first takes one row from the body. The row of the
-/// reactions takes one row when `reactions` is true.
-pub(crate) fn pane_size(areas: &Areas, tabs: &[PaneTab], reactions: bool) -> Size {
+/// tabs after the first takes one row from the body.
+pub(crate) fn pane_size(areas: &Areas, tabs: &[PaneTab]) -> Size {
     let body = areas.popup_body;
-    let more = pane_tab_rows(tabs, body.width).len().saturating_sub(1) + usize::from(reactions);
+    let more = pane_tab_rows(tabs, body.width).len().saturating_sub(1);
     Size {
         width: body.width,
         height: body
@@ -274,7 +273,6 @@ fn popup_content(
         };
         return OverlayContent::Popup {
             title: popup_title(data, pinned, || format!("#{}", popup.key.number)),
-            reactions: Vec::new(),
             subtitle: subtitle.into(),
             tabs: Vec::new(),
             active: 0,
@@ -312,8 +310,7 @@ fn popup_content(
         areas,
         keys: &keymap::DEFAULT,
     };
-    let reactions = pr_reactions(data, &pr.key);
-    let size = pane_size(areas, &tabs, !reactions.is_empty());
+    let size = pane_size(areas, &tabs);
     let active = tabs
         .iter()
         .position(|tab| tab.pane == popup.active && !tab.dim)
@@ -335,7 +332,6 @@ fn popup_content(
         title: popup_title(data, pinned, || {
             format!("#{} {}", pr.key.number, head.title)
         }),
-        reactions,
         subtitle: format!(
             "{} · {} -> {} · {state}{tag}",
             head.author, head.head_ref, head.base_ref
@@ -346,17 +342,6 @@ fn popup_content(
         cursor,
         scroll,
     }
-}
-
-/// The cells of the reactions of the pull request `key` for the row
-/// under the popup title: `👍 3  🎉 1`, as the conversation pane shows
-/// the reactions of a comment. Empty without reactions, and before the
-/// detail loads.
-pub(crate) fn pr_reactions(data: &AppData, key: &PrKey) -> Vec<Cell> {
-    data.details
-        .get(key)
-        .map(|detail| cells::reactions(&detail.value.reactions, &[]))
-        .unwrap_or_default()
 }
 
 /// The title row of the pull request popup. It is empty in a PR view
