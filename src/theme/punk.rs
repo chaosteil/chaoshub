@@ -19,13 +19,13 @@ use ratatui::widgets::Widget;
 const TOP_LEFT: &str = "◢";
 /// The top right corner: a cut, the mirror of `TOP_LEFT`. The glyph
 /// fills the lower left half of the cell.
-const TOP_RIGHT: &str = "◣";
+pub(super) const TOP_RIGHT: &str = "◣";
 /// The bottom left corner: a cut. The glyph fills the upper right half
 /// of the cell.
-const BOTTOM_LEFT: &str = "◥";
+pub(super) const BOTTOM_LEFT: &str = "◥";
 /// The bottom right corner: a cut, the mirror of `BOTTOM_LEFT`. The
 /// glyph fills the upper left half of the cell.
-const BOTTOM_RIGHT: &str = "◤";
+pub(super) const BOTTOM_RIGHT: &str = "◤";
 /// The heavy top and bottom edges.
 const HORIZONTAL: &str = "━";
 /// The thick left edge: the left half of the cell.

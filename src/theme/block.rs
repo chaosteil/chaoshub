@@ -7,7 +7,7 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::Widget;
 
 use super::grunge::GrungeBlock;
-use super::punk::PunkBlock;
+use super::punk::{BOTTOM_LEFT, BOTTOM_RIGHT, PunkBlock, TOP_RIGHT};
 use super::{Skin, Theme};
 
 /// A block with the frame and the header of the theme skin. The header
@@ -90,16 +90,41 @@ impl Widget for ThemeBlock<'_> {
 
 /// Draws a drop shadow in `color` under a block: the column just right of
 /// `area` and the row just below it, one cell away from the top and the
-/// left. The shadow is clipped to the buffer.
+/// left. The shadow is the shape of the frame moved one cell right and
+/// one cell down, so its three ends are cut like the frame corners above
+/// them: `◣` at the top of the column, `◤` at the bottom right and `◥`
+/// at the left end of the row. The cut half of an end cell keeps the
+/// background of the cell below the shadow. The shadow is clipped to the
+/// buffer.
 fn shadow(area: Rect, buf: &mut Buffer, color: Color) {
     if area.is_empty() {
         return;
     }
-    let column = (area.y.saturating_add(1)..=area.bottom()).map(|y| (area.right(), y));
-    let row = (area.x.saturating_add(1)..=area.right()).map(|x| (x, area.bottom()));
-    for position in column.chain(row) {
-        if let Some(cell) = buf.cell_mut(position) {
-            cell.set_symbol(" ").set_style(Style::new().bg(color));
+    let (right, bottom) = (area.right(), area.bottom());
+    let top = area.y.saturating_add(1);
+    let left = area.x.saturating_add(1);
+    let column = (top..=bottom).map(|y| (right, y));
+    let row = (left..right).map(|x| (x, bottom));
+    for (x, y) in column.chain(row) {
+        let Some(cell) = buf.cell_mut((x, y)) else {
+            continue;
+        };
+        let end = match (x, y) {
+            (x, y) if x == right && y == bottom => Some(BOTTOM_RIGHT),
+            (x, y) if x == right && y == top => Some(TOP_RIGHT),
+            (x, y) if x == left && y == bottom => Some(BOTTOM_LEFT),
+            _ => None,
+        };
+        match end {
+            Some(glyph) => {
+                let below = cell.bg;
+                cell.reset();
+                cell.set_symbol(glyph)
+                    .set_style(Style::new().fg(color).bg(below));
+            }
+            None => {
+                cell.set_symbol(" ").set_style(Style::new().bg(color));
+            }
         }
     }
 }
@@ -140,15 +165,26 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 10));
         theme.block("help").accent(p.danger).render(area, &mut buf);
         // The column right of the block, from one row down to the row
-        // below the block.
-        for y in 2..=5 {
+        // below the block. Its top end is cut like the top right corner.
+        assert_eq!(buf[(12, 2)].symbol(), "◣");
+        for y in 3..=4 {
             assert_eq!(buf[(12, y)].symbol(), " ", "y {y}");
             assert_eq!(buf[(12, y)].bg, p.primary, "y {y}");
         }
-        // The row below the block, from one column in.
-        for x in 3..=12 {
+        // The row below the block, from one column in. Its left end is
+        // cut like the bottom left corner.
+        assert_eq!(buf[(3, 5)].symbol(), "◥");
+        for x in 4..=11 {
             assert_eq!(buf[(x, 5)].symbol(), " ", "x {x}");
             assert_eq!(buf[(x, 5)].bg, p.primary, "x {x}");
+        }
+        // The corner of the shadow is cut like the bottom right corner.
+        assert_eq!(buf[(12, 5)].symbol(), "◤");
+        // The ends are in the shadow color, and their cut half keeps the
+        // background below the shadow.
+        for end in [(12, 2), (3, 5), (12, 5)] {
+            assert_eq!(buf[end].fg, p.primary, "{end:?}");
+            assert_eq!(buf[end].bg, Color::Reset, "{end:?}");
         }
         // The top-right and the bottom-left cells next to the block stay
         // empty.

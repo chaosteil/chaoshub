@@ -1731,8 +1731,9 @@ mod tests {
         let areas = testdata::areas(WIDTH, HEIGHT);
         let model = testdata::with_overlay(testdata::confirm_overlay(false));
         let area = overlay_area(&model.overlays[0], &areas);
-        // A shadow cell of the right column and one of the row below.
-        let cells = [(area.right(), area.y + 1), (area.x + 1, area.bottom())];
+        // A shadow cell of the right column and one of the row below,
+        // next to the cut ends.
+        let cells = [(area.right(), area.y + 2), (area.x + 2, area.bottom())];
         let shadow = |buf: &Buffer| cells.map(|at| buf[at].bg == theme.palette.primary);
         let mut terminal = testdata::terminal(WIDTH, HEIGHT);
         let mut fx = Transitions::new(true, 160).with_theme(theme);
@@ -1747,6 +1748,14 @@ mod tests {
             shadow(&end),
             [true, true],
             "the shadow is in place at the end"
+        );
+        assert_eq!(
+            [
+                end[(area.right(), area.y + 1)].symbol(),
+                end[(area.x + 1, area.bottom())].symbol(),
+            ],
+            ["◣", "◥"],
+            "the cut ends of the shadow are in place at the end"
         );
         assert_eq!(
             effect_area(area, &areas, &theme),

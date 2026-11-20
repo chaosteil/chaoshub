@@ -3,7 +3,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::widgets::Widget;
+use ratatui::widgets::{Clear, Widget};
 
 use crate::app::models::{CellStyle, StatusModel};
 use crate::theme::Theme;
@@ -94,10 +94,13 @@ pub(crate) fn message_place(
 }
 
 /// Draws the status bar. The theme picks the bar style, an optional band
-/// behind the left part with a diagonal end, and the message color.
+/// behind the left part with a diagonal end, and the message color. The
+/// bar first clears its row, so no glyph of a drop shadow below it
+/// stays.
 pub(crate) fn render(model: &StatusModel, area: Rect, buf: &mut Buffer, theme: &Theme) {
     let palette = &theme.palette;
     let band = theme.status_band();
+    Clear.render(area, buf);
     buf.set_style(area, band.bar);
     let Some(parts) = parts(model, area, theme) else {
         return;

@@ -726,6 +726,7 @@ mod tests {
         let y = areas.hints.y;
         let row: String = (0..100).map(|x| buf[(x, y)].symbol()).collect();
         assert!(row.contains("j/k move"), "{row}");
+        assert!(!row.contains(['◣', '◤', '◥']), "no shadow end: {row}");
         for x in 0..100 {
             assert_eq!(buf[(x, y)].bg, theme.palette.bg, "x = {x}");
             assert_ne!(buf[(x, y)].bg, theme.palette.primary, "x = {x}");

@@ -16,7 +16,7 @@ expression: "screen(&mut comment_menu_app(160, 40))"
 "                                ▌        Off by one?                                                                                                           ▐"
 "                                ▌        👀 1                                                                                                                  ▐" Hidden by multi-width symbols: [(42, " ")]
 "                                ▌      chaosteil · <1m ago  ◢━ ALICE'S COMMENT ╱━━━━━━━━━━━━━━━╱╱╱━◣                                                           ▐"
-"                                ▌        Fixed.             ▌▶  r  reply                         ◤◤▐                                                           ▐"
+"                                ▌        Fixed.             ▌▶  r  reply                         ◤◤▐◣                                                          ▐"
 "                                ▌  ▾ src/ui/pane.rs:7 · 1 co▌                                      ▐                                                           ▐"
 "                                ▌      bob · <1m ago        ▌  1  👍 thumbs up ✓                   ▐                                                           ▐" Hidden by multi-width symbols: [(67, " ")]
 "                                ▌        The gutter eats one▌  2  👎 thumbs down                   ▐                                                           ▐" Hidden by multi-width symbols: [(67, " ")]
@@ -27,7 +27,7 @@ expression: "screen(&mut comment_menu_app(160, 40))"
 "                                ▌                           ▌  7  🚀 rocket                        ▐                                                           ▐" Hidden by multi-width symbols: [(67, " ")]
 "                                ▌                           ▌  8  👀 eyes                          ▐                                                           ▐" Hidden by multi-width symbols: [(67, " ")]
 "                                ▌                           ◥━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◤                                                           ▐"
-"                                ▌                                                                                                                              ▐"
+"                                ▌                            ◥                                      ◤                                                          ▐"
 "                                ▌                                                                                                                              ▐"
 "                                ▌                                                                                                                              ▐"
 "                                ▌                                                                                                                              ▐"

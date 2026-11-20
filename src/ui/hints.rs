@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
+use ratatui::widgets::{Clear, Widget};
 
 use crate::app::models::{HINT_GAP, HINT_PREFIX, KeyHintsModel};
 use crate::bus::Hit;
@@ -15,7 +15,8 @@ use crate::ui::hits::HitMap;
 /// Draws the key hint bar: the stencil prefix of the headers, then each
 /// hint with its key in the primary color (bold) and its label in the
 /// dim text color. The bar has no texture. Each hint with a chord is a
-/// `Hit::Key`.
+/// `Hit::Key`. The bar first clears its row, so no glyph of a drop
+/// shadow below it stays.
 pub(crate) fn render(
     model: &KeyHintsModel,
     area: Rect,
@@ -25,6 +26,7 @@ pub(crate) fn render(
 ) {
     let p = &theme.palette;
     let base = Style::new().bg(p.bg).fg(p.fg_dim);
+    Clear.render(area, buf);
     buf.set_style(area, base);
     if area.is_empty() {
         return;
