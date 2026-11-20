@@ -21,6 +21,17 @@ impl Action for Draft {
         "toggle draft / ready"
     }
 
+    /// "mark ready" for a draft, "convert to draft" for a ready pull
+    /// request.
+    fn target_label(&self, target: &Target) -> &'static str {
+        let Target::Pr { pr, .. } = target;
+        if pr.head.value.is_draft {
+            "mark ready"
+        } else {
+            "convert to draft"
+        }
+    }
+
     fn default_key(&self) -> Option<KeyChord> {
         Some(KeyChord {
             code: KeyCode::Char('d'),
@@ -151,6 +162,15 @@ mod tests {
                 (body["operationName"].clone(), body["variables"].clone())
             })
             .collect()
+    }
+
+    #[test]
+    fn the_menu_label_says_what_the_key_does() {
+        assert_eq!(Draft.target_label(&selection(true).target), "mark ready");
+        assert_eq!(
+            Draft.target_label(&selection(false).target),
+            "convert to draft"
+        );
     }
 
     #[test]

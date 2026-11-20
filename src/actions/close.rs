@@ -19,7 +19,7 @@ impl Action for Close {
     }
 
     fn label(&self) -> &'static str {
-        "close"
+        "close PR"
     }
 
     fn default_key(&self) -> Option<KeyChord> {

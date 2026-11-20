@@ -26,7 +26,7 @@ impl Action for Agent {
     }
 
     fn label(&self) -> &'static str {
-        "pr-agent"
+        "open Agent pane"
     }
 
     fn default_key(&self) -> Option<KeyChord> {

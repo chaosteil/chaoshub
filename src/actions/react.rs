@@ -29,7 +29,7 @@ impl Action for React {
     }
 
     fn label(&self) -> &'static str {
-        "react to a comment"
+        "react"
     }
 
     /// No key: the comment menu of the conversation pane has the keys of

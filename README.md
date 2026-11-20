@@ -1380,12 +1380,12 @@ the selected row or of the detail. These bindings have no default.
 | `merge` | `m` | Merges the pull request after a confirm popup. `m` opens the popup also directly in the list and in the detail, and only the confirm key in the popup merges. For a stacked pull request, see the stack merge paragraph below. |
 | `merge_stack` | `s` | Merges the whole stack of the pull request after a confirm popup, from any entry of the stack. It is the same merge as `merge` on the top entry. Hidden for a pull request without a stack. |
 | `rerun_checks` | `x` | Runs the failed checks again. |
-| `draft` | `d` | Changes the pull request from draft to ready, or from ready to draft. |
+| `draft` | `d` | Changes the pull request from draft to ready, or from ready to draft. The actions menu shows "mark ready" for a draft and "convert to draft" for a ready pull request. |
 | `close` | `c` | Closes the pull request after a confirm popup. |
 | `browser` | `o` | Opens the pull request in the browser. |
 | `copy_url` | `y` | Copies the pull request URL. |
 | `copy_stack_urls` | `Y` | Copies the URLs of the open pull requests of the stack, one URL on each line. The order is the order of the Stack pane: position 1, the bottom of the stack, first. `[actions.copy_stack_urls] order = "top_first"` puts the top of the stack first, as the list does (see `[actions.<id>]`). It works only in the actions menu (`space` then `Y`). Hidden for a pull request without a stack. When an open entry of the stack is not loaded, the status line shows "stack not loaded yet, refreshing the stack". Try again after the refresh. |
-| `copy_change_id` | `i` | Copies the jj change id of the local change that matches the pull request. In a git repo, it copies the local branch name, and the actions menu shows "copy the branch name". Hidden when no local change matches. |
+| `copy_change_id` | `i` | Copies the jj change id of the local change that matches the pull request. In a git repo, it copies the local branch name, the actions menu shows "copy branch name", and the key hint bar shows "copy branch". Hidden when no local change matches. |
 | `agent` | `p` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
 | `codeview_send` | `r` | Opens the Review popup, also directly in the list and in the detail. In the conversation pane, `r` is the reply, so use `space` then `r` there. In the popup, you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). The hint bar, the help and the actions menu show it as "send review". |
 | `reply` | `r` | Only in the conversation pane of the pull request detail: replies to the comment of the cursor (see "Replies"). The actions menu shows it only as an action of the conversation pane, without a key, because `r` there opens the Review popup. |

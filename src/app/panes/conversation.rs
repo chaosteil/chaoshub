@@ -134,7 +134,7 @@ impl Pane for Conversation {
             .first()
             .map(|&key| PaneAction {
                 key,
-                label: "reply to the comment".to_owned(),
+                label: "reply".to_owned(),
             })
             .into_iter()
             .collect()
@@ -255,8 +255,8 @@ fn menu(cx: &KeyCx<'_>, item: Item) -> Option<PaneMenu> {
     let (id, author, reactions) = subject(detail, item)?;
     let reactions = shown(cx, id, reactions);
     let title = match item {
-        Item::Review(_) => format!("review of {author}"),
-        _ => format!("comment of {author}"),
+        Item::Review(_) => format!("{author}'s review"),
+        _ => format!("{author}'s comment"),
     };
     let mut items: Vec<PaneAction> = cx
         .keys
@@ -287,7 +287,7 @@ fn menu(cx: &KeyCx<'_>, item: Item) -> Option<PaneMenu> {
     );
     if matches!(item, Item::ThreadComment(..)) {
         gaps.push(items.len());
-        items.push(PaneAction::char(COLLAPSE_KEY, "collapse the thread"));
+        items.push(PaneAction::char(COLLAPSE_KEY, "collapse thread"));
     }
     Some(PaneMenu { title, items, gaps })
 }
@@ -923,7 +923,7 @@ mod tests {
         let state = state_with(Some(testdata::detail_with_reactions()), None);
         for cursor in 0..=2 {
             let menu = menu_at(&state, &[], cursor).unwrap();
-            assert_eq!(menu.title, "comment of alice", "node {cursor}");
+            assert_eq!(menu.title, "alice's comment", "node {cursor}");
             assert_eq!(
                 lines(&menu),
                 [
@@ -944,7 +944,7 @@ mod tests {
         // The nodes after alice: two expanded threads in 9 nodes, then
         // bob and his body and his reactions.
         let review = menu_at(&state, &[], 12).unwrap();
-        assert_eq!(review.title, "review of bob");
+        assert_eq!(review.title, "bob's review");
         assert_eq!(review.items.len(), 9, "no collapse for a review");
         assert!(lines(&review).iter().all(|line| !line.ends_with('✓')));
     }
@@ -965,10 +965,10 @@ mod tests {
             .handle_key(chord(KeyCode::Enter), &cx, &mut ps)
             .and_then(|h| h.menu)
             .unwrap();
-        assert_eq!(menu.title, "comment of bob");
+        assert_eq!(menu.title, "bob's comment");
         let lines = lines(&menu);
         assert_eq!(lines[8], "8  👀 eyes ✓");
-        assert_eq!(lines[9], "c  collapse the thread");
+        assert_eq!(lines[9], "c  collapse thread");
         assert_eq!(menu.gaps, [1, 9]);
         let handled = Conversation
             .run_action(chord(KeyCode::Char('c')), &cx, &mut ps)
@@ -1076,10 +1076,10 @@ mod tests {
         );
         assert_eq!(
             menu_at(&state, &[], 7).unwrap().title,
-            "comment of chaosteil"
+            "chaosteil's comment"
         );
         let bob = menu_at(&state, &[], 11).unwrap();
-        assert_eq!(bob.title, "comment of bob");
+        assert_eq!(bob.title, "bob's comment");
         assert_eq!(lines(&bob)[8], "8  👀 eyes ✓", "the reactions of bob");
         let key = testdata::pr_key("chaoshub", 7);
         let target = pr_target(&state.data, &key).unwrap();
@@ -1576,7 +1576,7 @@ mod tests {
         };
         let mut ps = Conversation.init_state();
         let actions = Conversation.actions(&cx, &ps);
-        assert_eq!(actions, [PaneAction::char('r', "reply to the comment")]);
+        assert_eq!(actions, [PaneAction::char('r', "reply")]);
         let handled = Conversation.run_action(actions[0].key, &cx, &mut ps);
         assert_eq!(
             handled.and_then(|h| h.reply).map(|s| s.to),

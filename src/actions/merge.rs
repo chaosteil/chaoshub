@@ -98,7 +98,7 @@ impl Action for MergeAction {
     }
 
     fn label(&self) -> &'static str {
-        "Merge"
+        "merge"
     }
 
     fn default_key(&self) -> Option<KeyChord> {
@@ -176,7 +176,7 @@ impl Action for MergeStackAction {
     }
 
     fn label(&self) -> &'static str {
-        "Merge stack"
+        "merge stack"
     }
 
     fn default_key(&self) -> Option<KeyChord> {

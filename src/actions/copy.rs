@@ -112,7 +112,7 @@ impl Action for CopyUrl {
     }
 
     fn label(&self) -> &'static str {
-        "copy the url"
+        "copy URL"
     }
 
     fn hint(&self) -> String {
@@ -155,7 +155,7 @@ impl Action for CopyStackUrls {
     }
 
     fn label(&self) -> &'static str {
-        "copy the stack urls"
+        "copy stack URLs"
     }
 
     fn hint(&self) -> String {
@@ -208,15 +208,15 @@ impl Action for CopyChangeId {
     }
 
     fn label(&self) -> &'static str {
-        "copy the change id"
+        "copy change id"
     }
 
-    /// "copy the branch name" for a git branch.
+    /// "copy branch name" for a git branch.
     fn target_label(&self, target: &Target) -> &'static str {
         let Target::Pr { local, .. } = target;
         match local {
             LocalMatch::Synced { vcs: Vcs::Git, .. }
-            | LocalMatch::Diverged { vcs: Vcs::Git, .. } => "copy the branch name",
+            | LocalMatch::Diverged { vcs: Vcs::Git, .. } => "copy branch name",
             _ => self.label(),
         }
     }
@@ -342,10 +342,7 @@ mod tests {
             CopyChangeId.prepare(&git),
             Prepare::Command(Cmd::Copy("chaosteil/export".into()))
         );
-        assert_eq!(
-            CopyChangeId.target_label(&git.target),
-            "copy the branch name"
-        );
+        assert_eq!(CopyChangeId.target_label(&git.target), "copy branch name");
         let jj = selection(LocalMatch::Synced {
             workspace: "default".into(),
             change_id: "kpqvxwyz".into(),
@@ -353,11 +350,11 @@ mod tests {
             vcs: Vcs::Jj,
         });
         assert_eq!(CopyChangeId.target_hint(&git.target), "copy branch");
-        assert_eq!(CopyChangeId.target_label(&jj.target), "copy the change id");
+        assert_eq!(CopyChangeId.target_label(&jj.target), "copy change id");
         assert_eq!(CopyChangeId.target_hint(&jj.target), "copy change id");
         assert_eq!(
             CopyChangeId.target_label(&selection(LocalMatch::None).target),
-            "copy the change id"
+            "copy change id"
         );
     }
 

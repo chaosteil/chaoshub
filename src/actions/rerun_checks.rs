@@ -72,7 +72,7 @@ impl Action for RerunChecks {
     }
 
     fn label(&self) -> &'static str {
-        "re-run failed checks"
+        "rerun failed checks"
     }
 
     fn default_key(&self) -> Option<KeyChord> {

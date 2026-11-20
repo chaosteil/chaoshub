@@ -14,7 +14,7 @@ impl Action for Browser {
     }
 
     fn label(&self) -> &'static str {
-        "open in the browser"
+        "open in browser"
     }
 
     fn default_key(&self) -> Option<KeyChord> {

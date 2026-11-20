@@ -92,7 +92,7 @@ impl Pane for AgentPane {
             })
             .collect();
         if apply_confirm(cx).is_some() {
-            out.push(PaneAction::char('p', "apply the pr-agent description"));
+            out.push(PaneAction::char('p', "apply pr-agent description"));
         }
         out
     }

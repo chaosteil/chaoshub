@@ -10407,13 +10407,13 @@ mod tests {
         assert!(!menu.ids.contains(&"reply"), "the action is hidden");
         assert_eq!(
             menu.pane,
-            [PaneAction::char('r', "reply to the comment")],
+            [PaneAction::char('r', "reply")],
             "the pane has the reply"
         );
         let items = menu.items(&state.data, &Keymap::default(), &REGISTRY);
         assert_eq!(
             items.last().map(String::as_str),
-            Some("reply to the comment"),
+            Some("reply"),
             "the review action has the key r, so the reply shows no key"
         );
         let reply = menu.len() - 1;
@@ -10444,10 +10444,7 @@ mod tests {
         assert!(cmds.contains(&reload), "{cmds:?}");
         assert_eq!(status_text(&state), Some("commented on #99"));
         update(&mut state, &Keymap::default(), done(Err("offline")));
-        assert_eq!(
-            status_text(&state),
-            Some("reply to a comment failed: offline")
-        );
+        assert_eq!(status_text(&state), Some("reply failed: offline"));
     }
 
     /// A state on the Review tab with three ready pull requests that
@@ -11271,7 +11268,7 @@ mod tests {
         let (mut state, _) = react_state();
         assert_eq!(enter(&mut state), vec![]);
         let menu = action_menu(&state).unwrap();
-        assert_eq!(menu.title.as_deref(), Some("comment of alice"));
+        assert_eq!(menu.title.as_deref(), Some("alice's comment"));
         assert_eq!(menu.ids, Vec::<&str>::new(), "only pane items");
         assert_eq!(menu.len(), 9);
         assert_eq!(menu.gaps, [1]);
@@ -11279,7 +11276,7 @@ mod tests {
         let OverlayContent::Picker { title, items, .. } = &model.overlays[1].content else {
             panic!("no picker");
         };
-        assert_eq!(title, "comment of alice");
+        assert_eq!(title, "alice's comment");
         assert_eq!(items[0], "r  reply");
         assert_eq!(items[1], "", "the gap row");
         assert_eq!(items[2], "1  👍 thumbs up ✓");
@@ -11396,10 +11393,7 @@ mod tests {
             react_done(&pr, Err("offline")),
         );
         assert_eq!(alice_reactions(&state, &pr), before, "the rollback");
-        assert_eq!(
-            status_text(&state),
-            Some("react to a comment failed: offline")
-        );
+        assert_eq!(status_text(&state), Some("react failed: offline"));
         let reload = Cmd::ReloadDetail(vec![pr_ref(&state.data.prs[&pr])]);
         assert!(cmds.contains(&reload), "a reload also after a failure");
         enter(&mut state);
@@ -11545,7 +11539,7 @@ mod tests {
         let (mut state, _) = react_state();
         update(&mut state, &Keymap::default(), click_on(Hit::PaneRow(0)));
         let menu = action_menu(&state).unwrap();
-        assert_eq!(menu.title.as_deref(), Some("comment of alice"));
+        assert_eq!(menu.title.as_deref(), Some("alice's comment"));
         let cmds = update(&mut state, &Keymap::default(), click_on(Hit::Item(2)));
         assert!(
             matches!(&cmds[..], [Cmd::RunAction { id: "react", .. }]),

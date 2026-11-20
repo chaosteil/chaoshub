@@ -335,7 +335,7 @@ mod tests {
             .find(|s| s.title == ACTIONS_TITLE)
             .unwrap();
         assert!(
-            section.entries.contains(&entry("r", "reply to a comment")),
+            section.entries.contains(&entry("r", "reply")),
             "{:?}",
             section.entries
         );
@@ -357,7 +357,7 @@ mod tests {
             .find(|s| s.title == ACTIONS_TITLE)
             .unwrap();
         assert!(
-            section.entries.contains(&entry("", "react to a comment")),
+            section.entries.contains(&entry("", "react")),
             "the comment menu has the keys of the reactions: {:?}",
             section.entries
         );

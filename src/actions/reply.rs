@@ -31,7 +31,7 @@ impl Action for Reply {
     }
 
     fn label(&self) -> &'static str {
-        "reply to a comment"
+        "reply"
     }
 
     fn default_key(&self) -> Option<KeyChord> {
