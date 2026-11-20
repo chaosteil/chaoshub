@@ -631,6 +631,7 @@ mod tests {
                 }],
                 reviews: Vec::new(),
                 threads: Vec::new(),
+                reactions: Vec::new(),
                 head_oid: "oid1".into(),
             },
             observed_at: test_time(),

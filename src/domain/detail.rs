@@ -9,6 +9,10 @@ pub(crate) struct PrDetail {
     pub comments: Vec<Comment>,
     pub reviews: Vec<Review>,
     pub threads: Vec<Thread>,
+    /// The reactions on the pull request itself, in the order of GitHub.
+    /// A cached detail without them has none until the next load.
+    #[serde(default)]
+    pub reactions: Vec<Reaction>,
     /// The head commit when the detail was read. A different head of the
     /// pull request makes the detail stale.
     pub head_oid: String,
@@ -113,7 +117,7 @@ impl ReactionKind {
     }
 }
 
-/// The reactions of one kind on a comment or a review.
+/// The reactions of one kind on a pull request, a comment or a review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Reaction {
     pub kind: ReactionKind,
@@ -219,8 +223,20 @@ mod tests {
                 is_resolved: false,
                 comments: vec![comment()],
             }],
+            reactions: vec![Reaction {
+                kind: ReactionKind::Rocket,
+                count: 1,
+                mine: false,
+            }],
             head_oid: "abc123".into(),
         });
+    }
+
+    #[test]
+    fn a_detail_without_reactions_parses() {
+        let old = r#"{"comments":[],"reviews":[],"threads":[],"head_oid":"abc123"}"#;
+        let detail: PrDetail = serde_json::from_str(old).unwrap();
+        assert_eq!(detail.reactions, []);
     }
 
     #[test]

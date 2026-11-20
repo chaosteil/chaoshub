@@ -1413,6 +1413,7 @@ mod tests {
             comments: Vec::new(),
             reviews: Vec::new(),
             threads: Vec::new(),
+            reactions: Vec::new(),
             head_oid: "oid7".into(),
         };
         let empty = state_with(Some(empty), Some("offline"));
@@ -1536,6 +1537,7 @@ mod tests {
             comments: Vec::new(),
             reviews: Vec::new(),
             threads: Vec::new(),
+            reactions: Vec::new(),
             head_oid: "oid7".into(),
         };
         let empty = state_with(Some(empty), None);

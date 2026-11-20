@@ -731,6 +731,7 @@ mod tests {
             comments: Vec::new(),
             reviews: Vec::new(),
             threads: Vec::new(),
+            reactions: Vec::new(),
             head_oid: "oid7".into(),
         }
     }

@@ -622,8 +622,8 @@ pub(crate) mod pr_detail {
     /// The reactions of generated reaction groups, in the order of
     /// GitHub. GitHub sends a group for each kind, also with a count of
     /// zero, and such a group is left out. An unknown kind is left out.
-    /// The issue comments, the reviews and the thread comments have
-    /// distinct group types with the same fields.
+    /// The pull request, the issue comments, the reviews and the thread
+    /// comments have distinct group types with the same fields.
     macro_rules! reactions {
         ($groups:expr) => {{
             let mut reactions: Vec<Reaction> = Vec::new();
@@ -681,6 +681,7 @@ pub(crate) mod pr_detail {
         let Some(pr) = data.repository.and_then(|repo| repo.pull_request) else {
             return Ok(None);
         };
+        let reactions = reactions!(pr.reaction_groups);
         let mut comments = Vec::new();
         for node in pr.comments.nodes.unwrap_or_default().into_iter().flatten() {
             comments.push(comment!(node));
@@ -745,6 +746,7 @@ pub(crate) mod pr_detail {
             comments,
             reviews,
             threads,
+            reactions,
             head_oid: pr.head_ref_oid,
         };
         Ok(Some(observed(detail, observed_at)))
@@ -1212,6 +1214,41 @@ mod tests {
         let thread = &detail.threads[0].comments[0];
         assert_eq!(thread.id, "PRRC_kwDOAAAAAAAAAAA1");
         assert_eq!(thread.reactions, [reaction(ReactionKind::Heart, 1, true)]);
+    }
+
+    #[test]
+    fn pr_detail_maps_the_reactions_of_the_pull_request() {
+        use crate::domain::detail::{Reaction, ReactionKind};
+        let data = fixture(include_str!("testdata/pr_detail.json"));
+        let detail = pr_detail::detail(data, test_time()).unwrap().unwrap().value;
+        assert_eq!(
+            detail.reactions,
+            [
+                Reaction {
+                    kind: ReactionKind::Hooray,
+                    count: 4,
+                    mine: true,
+                },
+                Reaction {
+                    kind: ReactionKind::Rocket,
+                    count: 2,
+                    mine: false,
+                },
+            ],
+            "the groups with a count of zero are left out"
+        );
+    }
+
+    #[test]
+    fn pr_detail_without_reactions_of_the_pull_request_has_none() {
+        for groups in [serde_json::Value::Null, serde_json::json!([])] {
+            let mut value: serde_json::Value =
+                serde_json::from_str(include_str!("testdata/pr_detail.json")).unwrap();
+            value["data"]["repository"]["pullRequest"]["reactionGroups"] = groups.clone();
+            let data = serde_json::from_value(value["data"].clone()).unwrap();
+            let detail = pr_detail::detail(data, test_time()).unwrap().unwrap().value;
+            assert_eq!(detail.reactions, [], "reactionGroups: {groups}");
+        }
     }
 
     #[test]

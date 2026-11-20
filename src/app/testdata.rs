@@ -353,6 +353,7 @@ pub(crate) fn detail() -> crate::domain::detail::PrDetail {
                 comments: vec![comment("bob", "The gutter eats one column.", 60)],
             },
         ],
+        reactions: Vec::new(),
         head_oid: "oid7".into(),
     }
 }
