@@ -21,7 +21,7 @@ expression: screen(&mut app)
 "                                                            ▌ a             filter by author       ┃"
 "                                                            ▌ f             jump to PR             ┃"
 "                                                            ▌ t             all open / ready only  ┃"
-"                                                            ▌ T             hidden rows / normal … ┃"
+"                                                            ▌ T             hidden rows / normal   ┃"
 "                                                            ▌ R             refresh                ┃"
 "                                                            ▌ H             column headers         ┃"
 "                                                            ▌ q Esc Ctrl-c  quit                   ┃"

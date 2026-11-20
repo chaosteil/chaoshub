@@ -1001,7 +1001,7 @@ for `[keys]`.
 | `authors` | `a` | Opens the author picker of the Review or the Team tab. Inside Rex, the picker can open in the Rex palette (see "Questions in the Rex palette"). |
 | `jump` | `f` | Inside Rex, asks for a pull request of the rows of all tabs in the Rex palette. The pick selects the tab and the row, and opens the pull request as `enter` does. Without the Rex palette, `f` opens the filter, as `/` does (see "Questions in the Rex palette"). |
 | `toggle_all` | `t` | On the Review and the Team tab, switches between every open pull request and only the ready ones. The help shows it as "all open / ready only". |
-| `show_hidden` | `T` | Switches between the normal view and every open pull request of the active tab, also the rows that the age limit, the ready rule, the author picker and the filter text hide (see "Hidden rows"). The help shows it as "hidden rows / normal view". Only the help overlay shows this key, not the key hint bar. |
+| `show_hidden` | `T` | Switches between the normal view and every open pull request of the active tab, also the rows that the age limit, the ready rule, the author picker and the filter text hide (see "Hidden rows"). The help shows it as "hidden rows / normal". Only the help overlay shows this key, not the key hint bar. |
 | `refresh` | `R` | Syncs both lists now. In the pull request detail, syncs the pull request and its stack, and scans its repo. |
 | `column_headers` | `H` | Shows or hides the header row with the column names. chaoshub saves the choice in the cache. |
 | `help` | `?` | Shows the help overlay with every binding. |

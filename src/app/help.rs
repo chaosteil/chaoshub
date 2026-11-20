@@ -29,7 +29,7 @@ const APP_KEYS: &[(&[&str], &str)] = &[
     (&["authors"], "filter by author"),
     (&["jump"], "jump to PR"),
     (&["toggle_all"], "all open / ready only"),
-    (&["show_hidden"], "hidden rows / normal view"),
+    (&["show_hidden"], "hidden rows / normal"),
     (&["refresh"], "refresh"),
     (&["column_headers"], "column headers"),
     (&["quit"], "quit"),
@@ -283,7 +283,7 @@ mod tests {
         assert!(keys.contains(&entry("q Esc Ctrl-c", "quit")));
         assert!(keys.contains(&entry("Esc q", "close")));
         assert!(keys.contains(&entry("j k", "down, up")));
-        assert!(keys.contains(&entry("T", "hidden rows / normal view")));
+        assert!(keys.contains(&entry("T", "hidden rows / normal")));
         assert!(
             !keys.iter().any(|(_, label)| label == "filter by author"),
             "an unbound key is not in the help"
