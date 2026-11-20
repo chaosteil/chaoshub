@@ -10,23 +10,22 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Debug, Clone, PartialEq, Eq, Parser)]
 #[command(name = "chaoshub", version, about)]
 pub struct Cli {
-    /// Adds a repo for this session, in the `owner/name` form. Repeat the
+    /// Add a repo for this session, in the `owner/name` form. Repeat the
     /// option for more repos.
     #[arg(long, value_name = "OWNER/NAME")]
     pub repo: Vec<String>,
-    /// Reads the configuration from this file instead of
+    /// Read the configuration from this file instead of
     /// `~/.config/chaoshub/config.toml`.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
-    /// Turns off the background fetch of pull request refs for this
-    /// session.
+    /// Turn off the background fetch of PR refs for this session.
     #[arg(long)]
     pub no_prefetch: bool,
-    /// Uses this theme style for this session, in place of `[theme]
+    /// Use this theme style for this session, in place of `[theme]
     /// style`.
     #[arg(long, value_name = "STYLE")]
     pub theme: Option<ThemeArg>,
-    /// Uses this palette for this session, in place of `[theme] palette`.
+    /// Use this palette for this session, in place of `[theme] palette`.
     #[arg(long, value_name = "NAME")]
     pub palette: Option<PaletteArg>,
     #[command(subcommand)]
@@ -57,26 +56,26 @@ pub enum PaletteArg {
 /// The subcommands. Without one, chaoshub starts the TUI.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
-    /// Manages the SQLite cache.
+    /// Manage the SQLite cache.
     #[command(subcommand)]
     Cache(CacheAction),
-    /// Prints the pull requests of the tabs from the cache, and makes no
-    /// GitHub call. The Rex action `chaoshub: open PR…` runs it.
+    /// Print the PRs of the tabs from the cache, with no GitHub call. The
+    /// Rex action `chaoshub: open PR…` runs it.
     List {
-        /// Prints JSON for scripts, in place of lines of text.
+        /// Print JSON for scripts, in place of lines of text.
         #[arg(long)]
         json: bool,
-        /// Prints every open pull request of the cache: no age limit and
-        /// no ready rule.
+        /// Print every open PR of the cache: no age limit and no ready
+        /// rule.
         #[arg(long)]
         all: bool,
     },
-    /// Shows one pull request. The detail pane of the list runs it.
+    /// Show one PR (the detail pane runs this).
     Pr {
-        /// The repo of the pull request, in the `owner/name` form.
+        /// The repo of the PR, in the `owner/name` form.
         #[arg(value_name = "OWNER/NAME")]
         repo: String,
-        /// The number of the pull request.
+        /// The number of the PR.
         number: u64,
     },
 }
@@ -84,7 +83,7 @@ pub enum Command {
 /// The `cache` subcommands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
 pub enum CacheAction {
-    /// Deletes the cache file. The next start syncs from GitHub again.
+    /// Delete the cache file. The next start syncs from GitHub again.
     Clear,
 }
 
