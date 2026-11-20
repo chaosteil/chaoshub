@@ -36,13 +36,12 @@
 <polygon points="981.8,18.0 982.8,18.0 975.4,36.0 974.4,36.0" fill="#009fff"/>
 <polygon points="990.2,18.0 991.2,18.0 983.8,36.0 982.8,36.0" fill="#009fff"/>
 <rect x="991.20" y="25.80" width="8.40" height="2.4" fill="#009fff"/>
-<polygon points="999.6,18.0 1008.0,18.0 1008.0,36.0" fill="#009fff"/>
+<polygon points="999.6,18.0 1008.0,36.0 999.6,36.0" fill="#009fff"/>
 <rect x="8.40" y="44.30" width="8.40" height="1.4" fill="#a3a3a3"/>
 <text x="25.2" y="49.5" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">feat(export): write t</text>
 <rect x="201.60" y="36.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="218.4" y="49.5" textLength="285.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa" font-weight="bold">#142 feat(sync): retry rate limits</text>
-<rect x="1002.60" y="36.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="43.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="36.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="8.40" y="62.30" width="8.40" height="1.4" fill="#a3a3a3"/>
 <text x="25.2" y="67.5" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">fix(diff): keep the c</text>
 <rect x="201.60" y="54.00" width="4.20" height="18.00" fill="#009fff"/>
@@ -51,8 +50,7 @@
 <text x="319.2" y="67.5" textLength="218.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">chaosteil/push-142 -&gt; main</text>
 <text x="550.2" y="67.5" text-anchor="middle" fill="#a3a3a3">·</text>
 <text x="562.8" y="67.5" textLength="33.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">open</text>
-<rect x="1002.60" y="54.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="61.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="54.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="8.40" y="80.30" width="8.40" height="1.4" fill="#a3a3a3"/>
 <text x="25.2" y="85.5" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">feat(review): send a</text>
 <rect x="201.60" y="72.00" width="4.20" height="18.00" fill="#009fff"/>
@@ -72,15 +70,13 @@
 <text x="756.0" y="85.5" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#0a0a0a">5 Stack</text>
 <polygon points="823.2,72.0 831.6,72.0 823.2,90.0" fill="#a3a3a3"/>
 <text x="856.8" y="85.5" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3" fill-opacity="0.6">6 Agent</text>
-<rect x="1002.60" y="72.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="79.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="72.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="8.40" y="98.30" width="8.40" height="1.4" fill="#a3a3a3"/>
 <text x="25.2" y="103.5" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">chore(nvim): pin the</text>
 <rect x="201.60" y="90.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="218.40" y="97.80" width="764.40" height="2.4" fill="#a3a3a3"/>
 <polygon points="990.2,90.0 991.2,90.0 983.8,108.0 982.8,108.0" fill="#a3a3a3"/>
-<rect x="1002.60" y="90.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="97.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="90.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="8.4" y="121.5" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">stack #7 -&gt; main</text>
 <text x="155.4" y="121.5" text-anchor="middle" fill="#a3a3a3">·</text>
 <text x="168.0" y="121.5" textLength="33.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">3 PR</text>
@@ -89,14 +85,12 @@
 <text x="243.6" y="121.5" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#009fff">3</text>
 <text x="277.2" y="121.5" text-anchor="middle" fill="#a3a3a3">🚀</text>
 <text x="294.0" y="121.5" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">2</text>
-<rect x="1002.60" y="108.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="115.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="108.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="11.90" y="134.30" width="4.90" height="1.40" fill="#a3a3a3"/>
 <rect x="11.90" y="134.30" width="1.40" height="9.70" fill="#a3a3a3"/>
 <text x="25.2" y="139.5" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">feat(ui): sync progre</text>
 <rect x="201.60" y="126.00" width="4.20" height="18.00" fill="#009fff"/>
-<rect x="1002.60" y="126.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="133.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="126.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="4.2" y="157.5" text-anchor="middle" fill="#0a0a0a" font-weight="bold">▶</text>
 <rect x="20.30" y="152.30" width="4.90" height="1.40" fill="#0a0a0a"/>
 <rect x="20.30" y="144.00" width="1.40" height="9.70" fill="#0a0a0a"/>
@@ -106,8 +100,7 @@
 <text x="226.8" y="157.5" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#0a0a0a" font-weight="bold">READY</text>
 <polygon points="293.0,144.0 294.0,144.0 286.6,162.0 285.6,162.0" fill="#07c480"/>
 <text x="302.4" y="157.5" textLength="117.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">ready to merge</text>
-<rect x="1002.60" y="144.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="151.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="144.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="11.90" y="170.30" width="4.90" height="1.40" fill="#a3a3a3"/>
 <rect x="11.90" y="162.00" width="1.40" height="9.70" fill="#a3a3a3"/>
 <text x="25.2" y="175.5" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">feat(sync): read PRs</text>
@@ -123,8 +116,7 @@
 <text x="638.4" y="175.5" textLength="33.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#07c480">+138</text>
 <text x="684.6" y="175.5" text-anchor="middle" fill="#ff2e3f" font-weight="bold">−</text>
 <text x="688.8" y="175.5" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff2e3f" font-weight="bold">12</text>
-<rect x="1002.60" y="162.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="169.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="162.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="8.40" y="188.30" width="8.40" height="1.4" fill="#a3a3a3"/>
 <text x="25.2" y="193.5" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">fix(store): reopen th</text>
 <rect x="201.60" y="180.00" width="4.20" height="18.00" fill="#009fff"/>
@@ -132,81 +124,64 @@
 <text x="252.0" y="193.5" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">approved 35m ago</text>
 <text x="399.0" y="193.5" text-anchor="middle" fill="#a3a3a3">·</text>
 <text x="411.6" y="193.5" textLength="100.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">stack 2 of 3</text>
-<rect x="1002.60" y="180.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="187.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="180.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="8.40" y="206.30" width="8.40" height="1.4" fill="#a3a3a3"/>
 <text x="25.2" y="211.5" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">perf(ui): draw only t</text>
 <rect x="201.60" y="198.00" width="4.20" height="18.00" fill="#009fff"/>
-<rect x="1002.60" y="198.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="205.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="198.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="8.40" y="224.30" width="8.40" height="1.4" fill="#a3a3a3"/>
 <text x="25.2" y="229.5" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">docs(readme): describ</text>
 <rect x="201.60" y="216.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="218.4" y="229.5" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#009fff" font-weight="bold">## Why</text>
-<rect x="1002.60" y="216.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="223.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="216.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="8.40" y="242.30" width="8.40" height="1.4" fill="#a3a3a3"/>
 <text x="25.2" y="247.5" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">wip(ui): a gutter for</text>
 <rect x="201.60" y="234.00" width="4.20" height="18.00" fill="#009fff"/>
-<rect x="1002.60" y="234.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="241.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="234.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="252.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="218.4" y="265.5" textLength="705.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">A large repo can hit the rate limit of GitHub in the middle of a sync. The sync then</text>
-<rect x="1002.60" y="252.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="259.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="252.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="270.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="218.4" y="283.5" textLength="319.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">stopped, and the list showed old data.</text>
-<rect x="1002.60" y="270.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="277.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="270.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="288.00" width="4.20" height="18.00" fill="#009fff"/>
-<rect x="1002.60" y="288.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="295.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="288.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="306.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="218.4" y="319.5" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#009fff" font-weight="bold">## What</text>
-<rect x="1002.60" y="306.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="313.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="306.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="324.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="218.4" y="337.5" textLength="562.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">* The sync waits until the limit resets, then reads the page again.</text>
-<rect x="1002.60" y="324.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="331.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="324.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="342.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="218.4" y="355.5" textLength="184.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">* The status bar shows</text>
 <text x="411.6" y="355.5" textLength="218.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffa359">rate limited, retry in 42s</text>
 <text x="630.0" y="355.5" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">.</text>
-<rect x="1002.60" y="342.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="349.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="342.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="360.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="218.4" y="373.5" textLength="403.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">* A second failure stops the sync with an error.</text>
-<rect x="1002.60" y="360.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="367.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="360.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="378.00" width="4.20" height="18.00" fill="#009fff"/>
-<rect x="1002.60" y="378.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="385.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="378.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="396.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="218.4" y="409.5" textLength="84.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#009fff" font-weight="bold">## Testing</text>
-<rect x="1002.60" y="396.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="403.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="396.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="414.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="218.4" y="427.5" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">* New</text>
 <text x="268.8" y="427.5" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffa359">wiremock</text>
 <text x="344.4" y="427.5" textLength="319.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">tests for the 403 and the 429 replies.</text>
-<rect x="1002.60" y="414.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="421.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="414.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="432.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="218.4" y="445.5" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">*</text>
 <text x="235.2" y="445.5" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffa359">scripts/check.sh</text>
 <text x="378.0" y="445.5" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">passes.</text>
-<rect x="1002.60" y="432.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="439.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="432.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="450.00" width="4.20" height="18.00" fill="#009fff"/>
-<rect x="1002.60" y="450.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="457.80" width="2.40" height="10.20" fill="#009fff"/>
+<rect x="1003.80" y="450.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="201.60" y="468.00" width="4.20" height="18.00" fill="#009fff"/>
-<rect x="1002.60" y="468.00" width="2.40" height="10.20" fill="#009fff"/>
-<rect x="1002.60" y="475.80" width="2.40" height="10.20" fill="#009fff"/>
-<polygon points="201.6,486.0 210.0,486.0 201.6,504.0" fill="#009fff"/>
+<rect x="1003.80" y="468.00" width="4.20" height="18.00" fill="#009fff"/>
+<polygon points="201.6,486.0 210.0,486.0 210.0,504.0" fill="#009fff"/>
 <rect x="210.00" y="493.80" width="789.60" height="2.4" fill="#009fff"/>
-<polygon points="999.6,486.0 1008.0,504.0 999.6,504.0" fill="#009fff"/>
+<polygon points="999.6,486.0 1008.0,486.0 999.6,504.0" fill="#009fff"/>
 <polygon points="7.4,504.0 8.4,504.0 1.0,522.0 0.0,522.0" fill="#009fff"/>
 <text x="16.8" y="517.5" textLength="109.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#009fff" font-weight="bold">1/2/3/4/5/Tab</text>
 <text x="134.4" y="517.5" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#d4d4d4">panes</text>

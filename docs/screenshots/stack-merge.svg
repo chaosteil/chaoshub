@@ -107,7 +107,7 @@
 <polygon points="746.6,180.0 747.6,180.0 740.2,198.0 739.2,198.0" fill="#ff2e3f"/>
 <polygon points="755.0,180.0 756.0,180.0 748.6,198.0 747.6,198.0" fill="#ff2e3f"/>
 <rect x="756.00" y="187.80" width="8.40" height="2.4" fill="#ff2e3f"/>
-<polygon points="764.4,180.0 772.8,180.0 772.8,198.0" fill="#ff2e3f"/>
+<polygon points="764.4,180.0 772.8,198.0 764.4,198.0" fill="#ff2e3f"/>
 <text x="772.8" y="193.5" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">e</text>
 <text x="844.2" y="193.5" text-anchor="middle" fill="#ff2e3f" font-weight="bold">✗</text>
 <text x="856.8" y="193.5" textLength="25.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff2e3f" font-weight="bold">3/4</text>
@@ -119,8 +119,7 @@
 <text x="25.2" y="211.5" textLength="210.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">perf(ui): draw only the r</text>
 <rect x="235.20" y="198.00" width="4.20" height="18.00" fill="#ff2e3f"/>
 <text x="252.0" y="211.5" textLength="319.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">merges 3 PRs atomically, bottom first:</text>
-<rect x="767.40" y="198.00" width="2.40" height="10.20" fill="#ff2e3f"/>
-<rect x="767.40" y="205.80" width="2.40" height="10.20" fill="#ff2e3f"/>
+<rect x="768.60" y="198.00" width="4.20" height="18.00" fill="#ff2e3f"/>
 <text x="844.2" y="211.5" text-anchor="middle" fill="#ffca00" font-weight="bold">●</text>
 <text x="856.8" y="211.5" textLength="25.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffca00" font-weight="bold">3/4</text>
 <text x="919.8" y="211.5" text-anchor="middle" fill="#a3a3a3">○</text>
@@ -128,8 +127,7 @@
 <text x="25.2" y="229.5" textLength="210.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">docs(readme): describe th</text>
 <rect x="235.20" y="216.00" width="4.20" height="18.00" fill="#ff2e3f"/>
 <text x="268.8" y="229.5" textLength="478.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">1 #141 feat(sync): read PRs in pages  CI passed, approved</text>
-<rect x="767.40" y="216.00" width="2.40" height="10.20" fill="#ff2e3f"/>
-<rect x="767.40" y="223.80" width="2.40" height="10.20" fill="#ff2e3f"/>
+<rect x="768.60" y="216.00" width="4.20" height="18.00" fill="#ff2e3f"/>
 <text x="844.2" y="229.5" text-anchor="middle" fill="#07c480">✓</text>
 <text x="856.8" y="229.5" textLength="25.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#07c480">4/4</text>
 <text x="911.4" y="229.5" text-anchor="middle" fill="#07c480">✓</text>
@@ -138,22 +136,18 @@
 <text x="25.2" y="247.5" textLength="210.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">wip(ui): a gutter for the</text>
 <rect x="235.20" y="234.00" width="4.20" height="18.00" fill="#ff2e3f"/>
 <text x="268.8" y="247.5" textLength="478.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">2 #142 feat(sync): retry rate limits  CI passed, approved</text>
-<rect x="767.40" y="234.00" width="2.40" height="10.20" fill="#ff2e3f"/>
-<rect x="767.40" y="241.80" width="2.40" height="10.20" fill="#ff2e3f"/>
+<rect x="768.60" y="234.00" width="4.20" height="18.00" fill="#ff2e3f"/>
 <text x="861.0" y="247.5" text-anchor="middle" fill="#a3a3a3">·</text>
 <text x="919.8" y="247.5" text-anchor="middle" fill="#a3a3a3">·</text>
 <text x="949.2" y="247.5" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ffca00" font-weight="bold">D</text>
 <rect x="235.20" y="252.00" width="4.20" height="18.00" fill="#ff2e3f"/>
 <text x="268.8" y="265.5" textLength="470.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">3 #143 feat(ui): sync progress bar  CI running, approved</text>
-<rect x="767.40" y="252.00" width="2.40" height="10.20" fill="#ff2e3f"/>
-<rect x="767.40" y="259.80" width="2.40" height="10.20" fill="#ff2e3f"/>
+<rect x="768.60" y="252.00" width="4.20" height="18.00" fill="#ff2e3f"/>
 <rect x="235.20" y="270.00" width="4.20" height="18.00" fill="#ff2e3f"/>
 <text x="252.0" y="283.5" textLength="117.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa">method: squash</text>
-<rect x="767.40" y="270.00" width="2.40" height="10.20" fill="#ff2e3f"/>
-<rect x="767.40" y="277.80" width="2.40" height="10.20" fill="#ff2e3f"/>
+<rect x="768.60" y="270.00" width="4.20" height="18.00" fill="#ff2e3f"/>
 <rect x="235.20" y="288.00" width="4.20" height="18.00" fill="#ff2e3f"/>
-<rect x="767.40" y="288.00" width="2.40" height="10.20" fill="#ff2e3f"/>
-<rect x="767.40" y="295.80" width="2.40" height="10.20" fill="#ff2e3f"/>
+<rect x="768.60" y="288.00" width="4.20" height="18.00" fill="#ff2e3f"/>
 <rect x="235.20" y="306.00" width="4.20" height="18.00" fill="#ff2e3f"/>
 <text x="252.0" y="319.5" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#ff2e3f" font-weight="bold">y</text>
 <text x="268.8" y="319.5" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">confirm</text>
@@ -162,11 +156,10 @@
 <text x="369.6" y="319.5" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">/</text>
 <text x="386.4" y="319.5" textLength="25.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#fafafa" font-weight="bold">Esc</text>
 <text x="420.0" y="319.5" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">cancel</text>
-<rect x="767.40" y="306.00" width="2.40" height="10.20" fill="#ff2e3f"/>
-<rect x="767.40" y="313.80" width="2.40" height="10.20" fill="#ff2e3f"/>
-<polygon points="235.2,324.0 243.6,324.0 235.2,342.0" fill="#ff2e3f"/>
+<rect x="768.60" y="306.00" width="4.20" height="18.00" fill="#ff2e3f"/>
+<polygon points="235.2,324.0 243.6,324.0 243.6,342.0" fill="#ff2e3f"/>
 <rect x="243.60" y="331.80" width="520.80" height="2.4" fill="#ff2e3f"/>
-<polygon points="764.4,324.0 772.8,342.0 764.4,342.0" fill="#ff2e3f"/>
+<polygon points="764.4,324.0 772.8,324.0 764.4,342.0" fill="#ff2e3f"/>
 <polygon points="7.4,504.0 8.4,504.0 1.0,522.0 0.0,522.0" fill="#009fff"/>
 <text x="16.8" y="517.5" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#009fff" font-weight="bold">y</text>
 <text x="33.6" y="517.5" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#d4d4d4">confirm</text>
