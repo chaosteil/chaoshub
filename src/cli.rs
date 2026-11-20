@@ -1,6 +1,6 @@
 //! Command line types (clap): `--repo`, `--config`, `--no-prefetch`,
 //! `--theme`, `--palette`, `cache clear`, `list` and `pr OWNER/NAME
-//! NUMBER`.
+//! NUMBER` (or `pr URL`).
 
 use std::path::PathBuf;
 
@@ -70,13 +70,15 @@ pub enum Command {
         #[arg(long)]
         all: bool,
     },
-    /// Show one PR (the detail pane runs this).
+    /// Show one PR (the detail pane runs this). Give `OWNER/NAME NUMBER`,
+    /// or a PR url such as `https://github.com/OWNER/NAME/pull/7/files`.
     Pr {
-        /// The repo of the PR, in the `owner/name` form.
-        #[arg(value_name = "OWNER/NAME")]
-        repo: String,
-        /// The number of the PR.
-        number: u64,
+        /// The repo of the PR, in the `owner/name` form, or a PR url. The
+        /// tail of the url selects the first pane.
+        #[arg(value_name = "OWNER/NAME|URL")]
+        pr: String,
+        /// The number of the PR. Leave it out for a PR url.
+        number: Option<u64>,
     },
 }
 
@@ -208,11 +210,19 @@ mod tests {
         assert_eq!(
             parse(&["pr", "chaosteil/chaoshub", "7"]).command,
             Some(Command::Pr {
-                repo: "chaosteil/chaoshub".into(),
-                number: 7,
+                pr: "chaosteil/chaoshub".into(),
+                number: Some(7),
             })
         );
-        assert!(Cli::try_parse_from(["chaoshub", "pr", "chaosteil/chaoshub"]).is_err());
+        let url = "https://github.com/chaosteil/chaoshub/pull/7/files";
+        assert_eq!(
+            parse(&["pr", url]).command,
+            Some(Command::Pr {
+                pr: url.into(),
+                number: None,
+            })
+        );
         assert!(Cli::try_parse_from(["chaoshub", "pr"]).is_err());
+        assert!(Cli::try_parse_from(["chaoshub", "pr", "a/b", "x"]).is_err());
     }
 }

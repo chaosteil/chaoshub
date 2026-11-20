@@ -21,7 +21,8 @@ The words of these pages:
   PR.
 - **The PR view**: the panes of one PR. Inside Rex, it opens in a Rex
   pane beside the list. Outside Rex, it opens in the sidebar.
-  `chaoshub pr OWNER/NAME NUMBER` starts it alone.
+  `chaoshub pr OWNER/NAME NUMBER` or `chaoshub pr URL` starts it
+  alone.
 - **The actions menu**: the menu that `space` opens, with every action
   for a PR.
 - **The Review popup**: the popup that `r` opens. It sends a review to

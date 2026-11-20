@@ -40,6 +40,7 @@ use crate::bus::{Cmd, Interest, Msg, Size, UiEvent};
 use crate::config::schema::{ConversationOrder, FiltersConfig};
 use crate::domain::agent::Backend;
 use crate::domain::keys::PrKey;
+use crate::domain::pr_url::FirstPane;
 use crate::domain::repo::Repo;
 use crate::store::Snapshot;
 
@@ -175,9 +176,10 @@ impl App {
 
     /// Pins the pull request `key`: the pinned mode of `chaoshub pr`. The
     /// popup of `key` is in place from the first frame, without a slide,
-    /// and the interest is the one of the pinned pull request.
-    pub(crate) fn pinned(mut self, key: PrKey) -> Self {
-        update::pin(&mut self.state, key);
+    /// on the pane `pane`, and the interest is the one of the pinned pull
+    /// request.
+    pub(crate) fn pinned(mut self, key: PrKey, pane: FirstPane) -> Self {
+        update::pin(&mut self.state, key, pane);
         self
     }
 
@@ -315,7 +317,7 @@ mod tests {
         app.update(Msg::PrRefreshed(Box::new(old.clone())));
         assert_eq!(numbers(&mut app), [2, 4]);
         assert!(app.state.data.prs.contains_key(&old.key));
-        app = app.pinned(old.key.clone());
+        app = app.pinned(old.key.clone(), FirstPane::Description);
         assert_eq!(
             app.interest().unwrap().selected.as_ref().unwrap().key,
             old.key

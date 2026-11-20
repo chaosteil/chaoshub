@@ -49,6 +49,7 @@ use crate::cli::{CacheAction, Cli, Command};
 use crate::config::schema::{DetailMode, NotifyConfig, parse_repo_name};
 use crate::config::{self, Config, paths};
 use crate::domain::keys::{PrKey, RepoKey};
+use crate::domain::pr_url::{self, FirstPane};
 use crate::domain::repo::Repo;
 use crate::github::{GITHUB_API, GithubClient, TokenSource};
 use crate::ipc;
@@ -110,11 +111,14 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         palette: palette_arg,
         command,
     } = cli;
-    let pinned = match command {
+    let (pinned, first_pane) = match command {
         Some(Command::Cache(CacheAction::Clear)) => return clear_cache(),
         Some(Command::List { json, all }) => return list_prs(config_path, json, all),
-        Some(Command::Pr { repo, number }) => Some(pinned_key(&repo, number)?),
-        None => None,
+        Some(Command::Pr { pr, number }) => {
+            let (key, pane) = pinned_pr(&pr, number)?;
+            (Some(key), pane)
+        }
+        None => (None, FirstPane::Description),
     };
     let config_path = config_path
         .or_else(paths::config_file)
@@ -215,7 +219,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     // The pinned app comes before the first interest, so the workers
     // start with the pinned interest.
     let app = match &pinned {
-        Some(key) => app.pinned(key.clone()),
+        Some(key) => app.pinned(key.clone(), first_pane),
         None => app,
     };
     let session = Session {
@@ -703,6 +707,18 @@ fn pinned_key(repo: &str, number: u64) -> anyhow::Result<PrKey> {
     let repo =
         parse_repo_name(repo).with_context(|| format!("`{repo}` is not in the owner/name form"))?;
     Ok(PrKey { repo, number })
+}
+
+/// The pull request of `chaoshub pr` and its first pane: `OWNER/NAME N`
+/// opens the Description pane, and a PR url without a number opens the
+/// pane of its tail (see `domain::pr_url`).
+fn pinned_pr(pr: &str, number: Option<u64>) -> anyhow::Result<(PrKey, FirstPane)> {
+    if let Some(number) = number {
+        return Ok((pinned_key(pr, number)?, FirstPane::Description));
+    }
+    let url = pr_url::parse(pr)
+        .with_context(|| format!("`{pr}` is not a PR url, and not `OWNER/NAME NUMBER`"))?;
+    Ok((url.key, url.pane))
 }
 
 /// The `[actions.<id>]` tables for the selections. The table of the
@@ -1938,6 +1954,42 @@ mod tests {
         );
         let err = pinned_key("chaoshub", 7).unwrap_err();
         assert_eq!(err.to_string(), "`chaoshub` is not in the owner/name form");
+    }
+
+    #[test]
+    fn pinned_pr_takes_a_repo_and_a_number_or_a_url() {
+        let key = pinned_key("chaosteil/chaoshub", 7).unwrap();
+        assert_eq!(
+            pinned_pr("chaosteil/chaoshub", Some(7)).unwrap(),
+            (key.clone(), FirstPane::Description)
+        );
+        assert_eq!(
+            pinned_pr("https://github.com/chaosteil/chaoshub/pull/7", None).unwrap(),
+            (key.clone(), FirstPane::Description)
+        );
+        assert_eq!(
+            pinned_pr("<github.com/chaosteil/chaoshub/pull/7/files>", None).unwrap(),
+            (key.clone(), FirstPane::Files)
+        );
+        assert_eq!(
+            pinned_pr(
+                "https://github.com/chaosteil/chaoshub/pull/7#issuecomment-1",
+                None
+            )
+            .unwrap(),
+            (key, FirstPane::Conversation)
+        );
+        let err = pinned_pr("chaosteil/chaoshub", None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "`chaosteil/chaoshub` is not a PR url, and not `OWNER/NAME NUMBER`"
+        );
+        let url = "https://github.com/chaosteil/chaoshub/pull/7";
+        let err = pinned_pr(url, Some(7)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("`{url}` is not in the owner/name form")
+        );
     }
 
     fn rex() -> RexLauncher {
@@ -3651,8 +3703,10 @@ mod tests {
 
     /// The seeded mine app in the pinned mode of #101.
     fn detail_pane_app(width: u16, height: u16) -> App {
-        seeded_app(width, height, crate::app::testdata::mine_snapshot())
-            .pinned(crate::app::testdata::pr_key("chaoshub", 101))
+        seeded_app(width, height, crate::app::testdata::mine_snapshot()).pinned(
+            crate::app::testdata::pr_key("chaoshub", 101),
+            FirstPane::Description,
+        )
     }
 
     #[test]

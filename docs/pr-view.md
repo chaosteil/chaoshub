@@ -33,7 +33,8 @@ key hint bar and the status bar stay visible. `esc` or `q` closes the
 sidebar.
 
 You can also start the PR view yourself with
-`chaoshub pr OWNER/NAME NUMBER` (see [Start](usage.md#start)).
+`chaoshub pr OWNER/NAME NUMBER`, or with `chaoshub pr URL` for a GitHub
+PR URL (see [Start](usage.md#start)).
 
 The header of the PR view shows the number and the title of the PR, then
 the author, the branches and the state. When the PR has reactions, the
@@ -49,7 +50,7 @@ The number keys select a pane, and `tab` selects the next pane:
 
 | Key | Pane | What it shows |
 |---|---|---|
-| `1` | Description | The body of the PR as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The PR view opens on this pane. The pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the PR has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments (1 on an older push) · r to send` (see [The Review popup](actions.md#the-review-popup)). Without such comments, the pane shows no line. |
+| `1` | Description | The body of the PR as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The PR view opens on this pane, unless the end of a PR URL selects another pane (see [Start](usage.md#start)). The pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the PR has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments (1 on an older push) · r to send` (see [The Review popup](actions.md#the-review-popup)). Without such comments, the pane shows no line. |
 | `2` | Checks | One row per check, with its state and its duration. `o` opens the selected check in the browser. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order, with the reactions of each comment. `[conversation] order` can put the newest at the top. `r` replies to the comment of the cursor (see [Replies](#replies)). The threads start expanded. `enter` on a thread collapses or expands it. A collapsed thread stays collapsed while the PR view is open, also when chaoshub reads the conversation again. `enter` on a comment opens the comment menu: reply, or react (see [Reactions](#reactions)). |
 | `4` | Files | The changed files as a tree, with the diff of each file inline (see [Diff colors](#diff-colors)). |

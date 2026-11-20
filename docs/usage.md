@@ -36,6 +36,27 @@ To show one PR and nothing else, for example #7 of
 chaoshub pr chaosteil/chaoshub-test 7
 ```
 
+You can also give the URL of the PR, for example a link from a chat.
+Thus a link handler can open the PR in chaoshub:
+
+```sh
+chaoshub pr https://github.com/chaosteil/chaoshub-test/pull/7/files
+```
+
+The URL can have no `https://` and no `www.`, and it can be in `<...>`.
+A query (`?w=1`) and an anchor (`#...`) are permitted. The end of the
+URL selects the first pane:
+
+| End of the URL | First pane |
+|---|---|
+| `/files`, `/changes` | Files |
+| `/checks` | Checks |
+| `#discussion_r…`, `#issuecomment-…`, `#pullrequestreview-…` | Conversation |
+| Other, for example no end or `/commits` | Description |
+
+Any other text, for example the URL of an issue, gives the error
+`` `<text>` is not a PR url, and not `OWNER/NAME NUMBER` ``.
+
 Command line options:
 
 | Option | What it does |
@@ -48,6 +69,7 @@ Command line options:
 | `cache clear` | Deletes the cache file. The next start syncs from GitHub again. |
 | `list [--json] [--all]` | Prints the PRs of the tabs from the cache, and makes no GitHub call. See [List the PRs from a script](#list-the-prs-from-a-script). |
 | `pr OWNER/NAME NUMBER` | Shows one PR and nothing else: the panes of the PR view. A PR that is not in the cache loads from GitHub. `q` or `esc` quits. The PR view pane inside Rex runs this command. |
+| `pr URL` | The same as `pr OWNER/NAME NUMBER`, for the PR of a GitHub PR URL. The end of the URL selects the first pane (see above). |
 
 ## The tabs
 

@@ -52,6 +52,7 @@ use crate::domain::local::LocalState;
 use crate::domain::observed::{Observed, apply_newer};
 use crate::domain::plural;
 use crate::domain::pr::{CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest};
+use crate::domain::pr_url::FirstPane;
 use crate::domain::repo::Repo;
 
 /// Applies one message to the state, with the tabs of `TABS`.
@@ -2768,20 +2769,20 @@ pub(crate) fn start(state: &mut AppState) {
 }
 
 /// Pins the pull request `key`: it sets `UiState.pinned`, pushes the
-/// popup of `key` without a `UiEvent` (the popup is in place from the
-/// first frame), and runs `start` again, so the interest is the one of the
-/// pinned pull request.
-pub(crate) fn pin(state: &mut AppState, key: PrKey) {
+/// popup of `key` on the pane `pane` without a `UiEvent` (the popup is in
+/// place from the first frame), and runs `start` again, so the interest
+/// is the one of the pinned pull request.
+pub(crate) fn pin(state: &mut AppState, key: PrKey, pane: FirstPane) {
     state.ui.pinned = Some(key.clone());
     let panes = init_states(&PANES, pr_target(&state.data, &key).as_ref());
+    let active = PANES
+        .iter()
+        .position(|p| p.id() == pane.pane_id())
+        .unwrap_or(0);
     state.ui.overlays.push(Overlay {
         kind: OverlayKind::Popup,
         closing: false,
-        state: OverlayState::Popup(PopupState {
-            key,
-            active: 0,
-            panes,
-        }),
+        state: OverlayState::Popup(PopupState { key, active, panes }),
     });
     state.bump();
     start(state);
@@ -7765,7 +7766,11 @@ mod tests {
     fn the_pinned_popup_starts_the_stack_cursor_on_its_entry() {
         let mut state = AppState::new(SIZE);
         state.load(testdata::mine_snapshot(), Vec::new());
-        pin(&mut state, testdata::pr_key("chaoshub", 103));
+        pin(
+            &mut state,
+            testdata::pr_key("chaoshub", 103),
+            FirstPane::Description,
+        );
         let stack = PANES.iter().position(|pane| pane.id() == "stack").unwrap();
         let Some(OverlayState::Popup(popup)) = state.ui.overlays.first().map(|o| &o.state) else {
             panic!("no popup");
@@ -8505,7 +8510,7 @@ mod tests {
         state.load(testdata::mine_snapshot(), repos);
         state.data.session.login = Some("chaosteil".into());
         state.data.now = test_time() + TimeDelta::minutes(5);
-        pin(&mut state, key);
+        pin(&mut state, key, FirstPane::Description);
         state
     }
 
@@ -8532,6 +8537,26 @@ mod tests {
                 && popup.panes.len() == PANES.len()
         ));
         assert_eq!(state.ui.ui_events, vec![]);
+    }
+
+    #[test]
+    fn the_pinned_app_opens_on_the_pane_of_the_url() {
+        for (pane, id) in [
+            (FirstPane::Description, "description"),
+            (FirstPane::Checks, "checks"),
+            (FirstPane::Conversation, "conversation"),
+            (FirstPane::Files, "files"),
+        ] {
+            let mut state = AppState::new(SIZE);
+            state.load(testdata::mine_snapshot(), Vec::new());
+            pin(&mut state, testdata::pr_key("chaoshub", 101), pane);
+            let Some(OverlayState::Popup(popup)) = state.ui.overlays.last().map(|o| &o.state)
+            else {
+                panic!("no popup");
+            };
+            assert_eq!(PANES[popup.active].id(), id);
+            assert_eq!(state.ui.ui_events, vec![]);
+        }
     }
 
     #[test]
@@ -8654,7 +8679,11 @@ mod tests {
         let mut state = AppState::new(SIZE);
         state.load(snapshot, Vec::new());
         state.data.session.login = Some("chaosteil".into());
-        pin(&mut state, testdata::pr_key("chaoshub", 102));
+        pin(
+            &mut state,
+            testdata::pr_key("chaoshub", 102),
+            FirstPane::Description,
+        );
         state
     }
 
@@ -11131,7 +11160,7 @@ mod tests {
     /// The approval state, pinned to #89: the PR view of #89.
     fn pr_view_state() -> (AppState, PrKey) {
         let (mut state, pr) = approval_state();
-        pin(&mut state, pr.clone());
+        pin(&mut state, pr.clone(), FirstPane::Description);
         (state, pr)
     }
 
