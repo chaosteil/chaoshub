@@ -375,6 +375,8 @@ pub(crate) struct UiState {
     pub overlays: Vec<Overlay>,
     /// The last status message, until it expires.
     pub status: Option<StatusMsg>,
+    /// The toast, until it expires. A new toast replaces it.
+    pub toast: Option<Toast>,
     /// The events for the transitions since the last draw.
     pub ui_events: Vec<UiEvent>,
     /// The interest that was last sent to the workers.
@@ -519,6 +521,19 @@ pub(crate) struct StatusMsg {
     /// time.
     pub expires: DateTime<Utc>,
 }
+
+/// A toast: a short card at the bottom right that says what a key did,
+/// when the screen does not show it at once. For example, a copy to the
+/// clipboard. It takes no keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Toast {
+    pub text: String,
+    /// The toast goes away on the first tick after this time.
+    pub expires: DateTime<Utc>,
+}
+
+/// How long a toast stays on the screen.
+pub(crate) const TOAST_TTL: chrono::TimeDelta = chrono::TimeDelta::seconds(2);
 
 /// The `ui_state` key kind of the filter text of a tab.
 pub(crate) const FILTER_KEY: &str = "filter";
@@ -1048,6 +1063,7 @@ impl AppState {
                 tabs: tabs.iter().map(|tab| tab.init_state()).collect(),
                 overlays: Vec::new(),
                 status: None,
+                toast: None,
                 ui_events: Vec::new(),
                 interest: None,
                 filter_edit: false,
@@ -1081,6 +1097,22 @@ impl AppState {
             style,
             expires: self.data.now + ttl,
         });
+        self.bump();
+    }
+
+    /// Shows the toast `text` for `TOAST_TTL` from now. It replaces the
+    /// toast on the screen.
+    pub(crate) fn toast(&mut self, text: impl Into<String>) {
+        self.toast_at(text, Utc::now());
+    }
+
+    /// Shows the toast `text` for `TOAST_TTL` from `now`.
+    pub(crate) fn toast_at(&mut self, text: impl Into<String>, now: DateTime<Utc>) {
+        self.ui.toast = Some(Toast {
+            text: text.into(),
+            expires: now + TOAST_TTL,
+        });
+        self.ui.ui_events.push(UiEvent::ToastShown);
         self.bump();
     }
 

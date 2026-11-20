@@ -268,6 +268,7 @@ pub(crate) fn frame() -> FrameModel {
         filter: None,
         hints: None,
         column_headers: false,
+        toast: None,
     }
 }
 

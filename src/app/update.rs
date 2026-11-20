@@ -4006,6 +4006,16 @@ fn tick(state: &mut AppState, tabs: &[Box<dyn Tab>], now: DateTime<Utc>) -> Vec<
     }
     if state
         .ui
+        .toast
+        .as_ref()
+        .is_some_and(|toast| toast.expires <= now)
+    {
+        state.ui.toast = None;
+        state.ui.ui_events.push(UiEvent::ToastExpired);
+        state.bump();
+    }
+    if state
+        .ui
         .status
         .as_ref()
         .is_some_and(|msg| msg.expires <= now)
@@ -4581,6 +4591,64 @@ mod tests {
         tick(&mut state, &tabs, at(30));
         assert_eq!(state.ui.status, None);
         assert_eq!(state.ui.ui_events, vec![UiEvent::StatusExpired]);
+    }
+
+    #[test]
+    fn a_toast_goes_away_on_the_first_tick_after_two_seconds() {
+        let (tabs, mut state) = setup(None);
+        state.data.now = at(0);
+        state.toast_at("copied url of #7", at(0));
+        assert_eq!(state.ui.ui_events, vec![UiEvent::ToastShown]);
+        state.ui.ui_events.clear();
+        let generation = state.generation;
+        tick(&mut state, &tabs, at(1));
+        assert_eq!(
+            state.ui.toast.as_ref().map(|toast| toast.text.as_str()),
+            Some("copied url of #7")
+        );
+        tick(&mut state, &tabs, at(2));
+        assert_eq!(state.ui.toast, None);
+        assert_eq!(state.ui.ui_events, vec![UiEvent::ToastExpired]);
+        assert!(state.generation > generation, "the frame draws again");
+    }
+
+    #[test]
+    fn a_new_toast_replaces_the_old_one_and_its_time() {
+        let (tabs, mut state) = setup(None);
+        state.data.now = at(0);
+        state.toast_at("copied url of #7", at(0));
+        state.toast_at("copied branch of #7", at(1));
+        tick(&mut state, &tabs, at(2));
+        assert_eq!(
+            state.ui.toast.as_ref().map(|toast| toast.text.as_str()),
+            Some("copied branch of #7")
+        );
+        tick(&mut state, &tabs, at(3));
+        assert_eq!(state.ui.toast, None);
+    }
+
+    #[test]
+    fn a_toast_and_a_status_message_are_separate() {
+        let (tabs, mut state) = setup(None);
+        state.data.now = at(0);
+        state.message("merged #101", CellStyle::Success, TimeDelta::seconds(5));
+        state.toast_at("copied url of #7", at(0));
+        tick(&mut state, &tabs, at(2));
+        assert_eq!(state.ui.toast, None);
+        assert_eq!(
+            status_of(&state),
+            Some(("merged #101".to_owned(), CellStyle::Success))
+        );
+        let frame = crate::app::frame::frame_model_with(&mut state, &tabs);
+        assert_eq!(frame.toast, None);
+        state.toast_at("copied url of #7", at(2));
+        let frame = crate::app::frame::frame_model_with(&mut state, &tabs);
+        assert_eq!(
+            frame.toast,
+            Some(crate::app::models::ToastModel {
+                text: "copied url of #7".into()
+            })
+        );
     }
 
     #[test]

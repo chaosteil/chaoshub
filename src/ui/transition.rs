@@ -30,6 +30,10 @@
 //! - Action success (`FxKey::Flash`): the list row of the pull request
 //!   fades from the primary color to its background in 200 ms. Not when
 //!   the row is out of view or under an overlay.
+//! - New toast (`FxKey::Toast`): the card and its drop shadow fade in
+//!   from the background in 120 ms.
+//! - Expired toast: the cells of the card of the last frame fade to the
+//!   background of the cells below them in 300 ms.
 //! - Sync change (`FxKey::Glow(row)`): a visible row whose CI state, check
 //!   counts or review counts changed fades from the surface color to its
 //!   background in 250 ms. One glow per row at a time.
@@ -54,7 +58,9 @@ use crate::theme::{Skin, Theme, ThemeBlock, ThemeKind};
 use crate::ui::hits::HitMap;
 use crate::ui::list::Window;
 use crate::ui::status::message_place;
-use crate::ui::{list, list_areas, overlay_area, picker, rect, render_overlay, screen, tabbar};
+use crate::ui::{
+    list, list_areas, overlay_area, picker, rect, render_overlay, screen, tabbar, toast,
+};
 
 /// The duration of the confirm and prompt slides, in milliseconds.
 const DIALOG_MS: u64 = 100;
@@ -72,6 +78,10 @@ const ROW_GLOW_MS: u64 = 250;
 /// The duration of the slide in of a new status message, in
 /// milliseconds.
 const STATUS_IN_MS: u64 = 80;
+/// The duration of the fade in of a new toast, in milliseconds.
+const TOAST_IN_MS: u64 = 120;
+/// The duration of the fade out of an expired toast, in milliseconds.
+const TOAST_OUT_MS: u64 = 300;
 /// The duration of the unfold of the new rows of a tree node, in
 /// milliseconds.
 const UNFOLD_MS: u64 = 80;
@@ -97,6 +107,7 @@ enum FxKey {
     Scroll,
     Status,
     StatusIn,
+    Toast,
     Overlay(usize),
 }
 
@@ -127,6 +138,7 @@ fn key(event: &UiEvent) -> FxKey {
         UiEvent::OverlayOpened(kind) | UiEvent::OverlayClosed(kind) => FxKey::Overlay(slot(*kind)),
         UiEvent::ScrollTo { .. } => FxKey::Scroll,
         UiEvent::StatusExpired => FxKey::Status,
+        UiEvent::ToastShown | UiEvent::ToastExpired => FxKey::Toast,
     }
 }
 
@@ -367,6 +379,14 @@ pub(crate) struct Transitions {
     status_pending: bool,
     /// The status row of the last frame.
     status_row: Option<Buffer>,
+    /// True when a new toast shows and its fade in must start.
+    toast_in: bool,
+    /// True when the toast expired and its fade out must start.
+    toast_out: bool,
+    /// The area of the toast and its shadow, from `prepare`.
+    toast_area: Option<Rect>,
+    /// The cells of the toast of the last frame, before the effects.
+    toast_cells: Option<Buffer>,
 }
 
 impl Transitions {
@@ -397,6 +417,10 @@ impl Transitions {
             scroll: None,
             status_pending: false,
             status_row: None,
+            toast_in: false,
+            toast_out: false,
+            toast_area: None,
+            toast_cells: None,
         }
     }
 
@@ -433,6 +457,11 @@ impl Transitions {
                 UiEvent::OverlayClosed(kind) => self.overlay_slide(key, kind, false),
                 UiEvent::ScrollTo { from, to, .. } => self.scroll(key, from, to),
                 UiEvent::StatusExpired => self.status_pending = true,
+                UiEvent::ToastShown => {
+                    self.toast_in = true;
+                    self.toast_out = false;
+                }
+                UiEvent::ToastExpired => self.toast_out = true,
             }
         }
     }
@@ -820,6 +849,19 @@ impl Transitions {
             self.unfold(model, areas, first, rows);
         }
         self.tree_area = Self::tree_popup(model, areas).map(|(_, area)| area);
+        self.toast_area = model
+            .toast
+            .as_ref()
+            .and_then(|toast| toast::area(&toast.text, areas))
+            .map(|card| toast::effect_area(card, &self.theme).intersection(screen(areas)));
+        if std::mem::take(&mut self.toast_in)
+            && let Some(area) = self.toast_area
+        {
+            let p = &self.theme.palette;
+            let timer = Self::timer(Duration::from_millis(TOAST_IN_MS));
+            let effect = fx::fade_from(p.bg, p.bg, timer).with_area(area);
+            self.manager.add_unique_effect(FxKey::Toast, effect);
+        }
         let message = model.status.center.as_ref().map(|c| c.text.clone());
         if self.prepared && message.is_some() && self.last_message != message {
             self.message_in =
@@ -874,6 +916,12 @@ impl Transitions {
                 .tree_area
                 .map(|area| copy(buf, area.intersection(buf.area)));
             self.status_row = Some(copy(buf, status));
+            if std::mem::take(&mut self.toast_out) {
+                self.toast_fade();
+            }
+            self.toast_cells = self
+                .toast_area
+                .map(|area| copy(buf, area.intersection(buf.area)));
         }
         self.manager.process_effects(elapsed.into(), buf, area);
     }
@@ -946,6 +994,40 @@ impl Transitions {
         self.manager.add_unique_effect(FxKey::Status, effect);
     }
 
+    /// Starts the fade out of an expired toast. The toast is gone from
+    /// the new frame, so the fade draws the cells of the toast of the last
+    /// frame. At alpha `a`, their colors are `a` of the way to the
+    /// background of the new cells below them. The last frame of the fade
+    /// shows the new frame.
+    fn toast_fade(&mut self) {
+        let Some(old) = self.toast_cells.take() else {
+            return;
+        };
+        let p = self.theme.palette;
+        let timer = Self::timer(Duration::from_millis(TOAST_OUT_MS));
+        let effect = fx::effect_fn_buf(old, timer, move |old, cx, buf| {
+            if cx.timer.done() {
+                return;
+            }
+            let alpha = cx.alpha().clamp(0.0, 1.0);
+            let or = |color: Color, reset: Color| {
+                if color == Color::Reset { reset } else { color }
+            };
+            for (x, y) in positions(old.area) {
+                let Some(dst) = buf.cell_mut((x, y)) else {
+                    continue;
+                };
+                let target = or(dst.bg, p.bg);
+                let src = &old[(x, y)];
+                let fg = or(src.fg, p.fg).lerp(&target, alpha);
+                let bg = or(src.bg, p.bg).lerp(&target, alpha);
+                *dst = src.clone();
+                dst.set_fg(fg).set_bg(bg);
+            }
+        });
+        self.manager.add_unique_effect(FxKey::Toast, effect);
+    }
+
     /// Turns the transitions off for the rest of the session and stops
     /// the running effects.
     pub(crate) fn disable(&mut self) {
@@ -964,11 +1046,13 @@ impl Transitions {
         self.pending_unfold = None;
         self.scroll = None;
         self.status_pending = false;
+        self.toast_in = false;
+        self.toast_out = false;
     }
 
     /// True while a transition runs.
     pub(crate) fn active(&self) -> bool {
-        self.manager.is_running() || self.status_pending
+        self.manager.is_running() || self.status_pending || self.toast_out
     }
 
     /// How long the event loop waits for a message: one frame while a
@@ -2283,5 +2367,83 @@ mod tests {
         assert!(!fx.active());
         draw(&mut terminal, &mut fx, &expired, 16);
         assert_eq!(terminal.backend().buffer()[at].symbol(), " ");
+    }
+
+    /// The list with a toast, or without one.
+    fn with_toast(text: Option<&str>) -> FrameModel {
+        FrameModel {
+            toast: text.map(|text| crate::app::models::ToastModel { text: text.into() }),
+            ..testdata::frame()
+        }
+    }
+
+    #[test]
+    fn a_new_toast_fades_in_and_an_expired_toast_fades_out() {
+        let theme = testdata::punk();
+        let p = theme.palette;
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut fx = Transitions::new(true, 160).with_theme(theme);
+        let shown = with_toast(Some("copied url of #142"));
+        let gone = with_toast(None);
+        let card = toast::area("copied url of #142", &testdata::areas(WIDTH, HEIGHT)).unwrap();
+        let text = (card.x + 2, card.y + 1);
+        let corner = (card.x, card.y);
+        let plain = draw_view_in(
+            &mut terminal,
+            &mut Transitions::new(false, 160),
+            &shown,
+            0,
+            &theme,
+        );
+        draw_view_in(&mut terminal, &mut fx, &gone, 0, &theme);
+        fx.apply(vec![UiEvent::ToastShown]);
+        let start = draw_view_in(&mut terminal, &mut fx, &shown, 0, &theme);
+        assert!(fx.active());
+        assert_eq!(start[text].symbol(), "c");
+        assert_eq!(
+            start[text].fg, p.bg,
+            "the text starts in the background color"
+        );
+        let middle = draw_view_in(&mut terminal, &mut fx, &shown, 60, &theme);
+        assert_ne!(middle[text].fg, p.bg);
+        assert_ne!(middle[text].fg, p.fg);
+        let end = draw_view_in(&mut terminal, &mut fx, &shown, 80, &theme);
+        assert_eq!(end[text], plain[text]);
+        assert_eq!(end[corner], plain[corner]);
+        draw_view_in(&mut terminal, &mut fx, &shown, 16, &theme);
+        assert!(!fx.active());
+        // The toast expires: the new frame has no toast, and the old card
+        // fades out over it.
+        fx.apply(vec![UiEvent::ToastExpired]);
+        assert!(fx.active());
+        let start = draw_view_in(&mut terminal, &mut fx, &gone, 0, &theme);
+        assert_eq!(start[text].symbol(), "c", "the old card stays");
+        assert_eq!(start[text].fg, p.fg);
+        let middle = draw_view_in(&mut terminal, &mut fx, &gone, 150, &theme);
+        assert_eq!(middle[text].symbol(), "c");
+        assert_ne!(middle[text].fg, p.fg);
+        assert_ne!(middle[text].fg, p.bg);
+        draw_view_in(&mut terminal, &mut fx, &gone, 200, &theme);
+        let end = draw_view_in(&mut terminal, &mut fx, &gone, 16, &theme);
+        assert!(!fx.active());
+        assert_eq!(end[text].symbol(), " ", "the list shows again");
+        assert_eq!(end[corner].symbol(), " ");
+    }
+
+    #[test]
+    fn a_toast_shows_at_once_without_animations() {
+        let theme = testdata::punk();
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut fx = Transitions::new(false, 160).with_theme(theme);
+        let shown = with_toast(Some("copied url of #142"));
+        let card = toast::area("copied url of #142", &testdata::areas(WIDTH, HEIGHT)).unwrap();
+        fx.apply(vec![UiEvent::ToastShown]);
+        let buf = draw_view_in(&mut terminal, &mut fx, &shown, 0, &theme);
+        assert!(!fx.active());
+        assert_eq!(buf[(card.x + 2, card.y + 1)].fg, theme.palette.fg);
+        fx.apply(vec![UiEvent::ToastExpired]);
+        assert!(!fx.active());
+        let buf = draw_view_in(&mut terminal, &mut fx, &with_toast(None), 0, &theme);
+        assert_eq!(buf[(card.x + 2, card.y + 1)].symbol(), " ");
     }
 }

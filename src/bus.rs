@@ -707,6 +707,10 @@ pub(crate) enum UiEvent {
         to: usize,
     },
     StatusExpired,
+    /// A new toast shows. It replaces the old toast.
+    ToastShown,
+    /// The toast expired: it is gone from the new frame.
+    ToastExpired,
     /// The active pane tab of the popup changed. `from` and `to` are pane
     /// registry indexes.
     PaneTabChanged {

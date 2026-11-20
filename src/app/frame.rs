@@ -16,7 +16,7 @@ use crate::app::layout::{Areas, layout_full, without_popup_title};
 use crate::app::models::{
     Cell, CellStyle, FilterModel, FrameModel, HINT_CUT, HINT_GAP, HINT_PREFIX, KeyHint,
     KeyHintsModel, ListModel, OverlayContent, OverlayModel, PaneModel, PaneTab, StatusModel,
-    TabBarModel, pane_tab_rows,
+    TabBarModel, ToastModel, pane_tab_rows,
 };
 use crate::app::panes::conversation::is_stale;
 use crate::app::panes::{PANES, Pane, applicable};
@@ -130,6 +130,9 @@ pub(crate) fn frame_model_full<'s>(
             filter: filter_model(state),
             hints,
             column_headers: column_headers(state),
+            toast: state.ui.toast.as_ref().map(|toast| ToastModel {
+                text: toast.text.clone(),
+            }),
         };
         state.cache.frame = frame;
         state.cache.frame_generation = Some(state.generation);
@@ -1056,6 +1059,7 @@ fn empty_frame() -> FrameModel {
         filter: None,
         hints: None,
         column_headers: false,
+        toast: None,
     }
 }
 

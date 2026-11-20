@@ -27,6 +27,14 @@ pub(crate) struct FrameModel {
     /// True when the list has a header row with the column titles. It
     /// takes the first row of the list area.
     pub column_headers: bool,
+    /// The toast at the bottom right, over the list and the overlays.
+    pub toast: Option<ToastModel>,
+}
+
+/// The toast: a short card that says what a key did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToastModel {
+    pub text: String,
 }
 
 /// The text before the first key hint: the stencil marker of the

@@ -22,6 +22,7 @@ mod tabbar;
 #[cfg(test)]
 mod testdata;
 mod text;
+pub(crate) mod toast;
 pub(crate) mod transition;
 
 use ratatui::Frame;
@@ -127,9 +128,11 @@ pub(crate) fn overlay_area(overlay: &OverlayModel, areas: &Areas) -> Rect {
     }
 }
 
-/// Draws one frame: the tab bar, the list, the overlay stack, the key
-/// hint bar and the status bar. The two bars come last, so the drop
-/// shadow of an overlay does not cover them. `hits` gets the targets of
+/// Draws one frame: the tab bar, the list, the overlay stack, the toast,
+/// the key hint bar and the status bar. The two bars come last, so the
+/// drop shadow of an overlay does not cover them. The toast comes after
+/// the overlays, so it also shows over the PR view. It adds no target to
+/// `hits`, so a click on it goes to the target below it. `hits` gets the targets of
 /// the frame, in draw order, so an overlay covers the targets below it.
 pub(crate) fn view(
     frame: &mut Frame<'_>,
@@ -151,6 +154,9 @@ pub(crate) fn view(
     list::render(&model.list, parts.body, buf, theme, hits);
     for overlay in &model.overlays {
         render_overlay(overlay, areas, buf, theme, hits);
+    }
+    if let Some(toast) = &model.toast {
+        toast::render(toast, areas, buf, theme);
     }
     if let Some(model) = &model.hints {
         hints::render(model, rect(areas.hints), buf, theme, hits);
