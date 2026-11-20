@@ -506,6 +506,20 @@ mod tests {
         }
     }
 
+    /// The punk list with a dark purple primary color: the band is purple
+    /// and its text is white. The snapshot has the styles of the cells.
+    #[test]
+    fn punk_mine_with_a_custom_primary() {
+        let purple = Color::Rgb(0x5f, 0x00, 0xaf);
+        let theme = testdata::punk().with_primary(Some(purple));
+        let p = theme.palette;
+        let buf = draw(&testdata::mine_list(), 100, 3, &theme);
+        for x in 1..98 {
+            assert_eq!((buf[(x, 1)].fg, buf[(x, 1)].bg), (p.fg, purple), "x {x}");
+        }
+        insta::assert_debug_snapshot!(buf);
+    }
+
     #[test]
     fn the_header_row_names_the_columns_dim_and_bold() {
         for theme in [testdata::pierre(), testdata::punk()] {

@@ -302,6 +302,10 @@ pub(crate) struct ThemeConfig {
     pub style: ThemeStyleSetting,
     /// The colors: Pierre or the 16 ANSI colors.
     pub palette: PaletteSetting,
+    /// The primary color in place of the one of the palette: a hex color
+    /// or an ANSI color name. `None` keeps the color of the palette.
+    #[serde(deserialize_with = "theme_color")]
+    pub primary: Option<ColorSetting>,
     /// Draws the rough block borders. Grunge only.
     pub grunge: bool,
     /// Fills empty areas with noise textures. Grunge only.
@@ -321,6 +325,7 @@ impl Default for ThemeConfig {
         Self {
             style: ThemeStyleSetting::Punk,
             palette: PaletteSetting::Pierre,
+            primary: None,
             grunge: true,
             textures: true,
             animations: true,
@@ -329,6 +334,87 @@ impl Default for ThemeConfig {
             column_headers: true,
         }
     }
+}
+
+/// A color of the `[theme]` section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ColorSetting {
+    /// A hex color, as `"#ff5f87"` or `"#f58"`.
+    Rgb(u8, u8, u8),
+    /// One of the 16 ANSI colors by its number: 0 is `black`, 15 is
+    /// `bright_white`.
+    Ansi(u8),
+}
+
+/// The names of the 16 ANSI colors, in the order of their numbers.
+pub(crate) const ANSI_COLOR_NAMES: [&str; 16] = [
+    "black",
+    "red",
+    "green",
+    "yellow",
+    "blue",
+    "magenta",
+    "cyan",
+    "white",
+    "bright_black",
+    "bright_red",
+    "bright_green",
+    "bright_yellow",
+    "bright_blue",
+    "bright_magenta",
+    "bright_cyan",
+    "bright_white",
+];
+
+impl ColorSetting {
+    /// Reads `#rrggbb`, `#rgb`, or the name of an ANSI color, as `blue` or
+    /// `bright_magenta`. The error tells which values are valid.
+    pub(crate) fn parse(text: &str) -> Result<Self, String> {
+        if let Some(hex) = text.strip_prefix('#') {
+            return parse_hex(hex).ok_or_else(|| {
+                format!("invalid hex color `{text}`: use `#rrggbb` or `#rgb`, as `#ff5f87`")
+            });
+        }
+        ANSI_COLOR_NAMES
+            .iter()
+            .position(|name| *name == text)
+            .and_then(|i| u8::try_from(i).ok())
+            .map(Self::Ansi)
+            .ok_or_else(|| {
+                format!(
+                    "unknown color `{text}`: use a hex color as `#ff5f87`, or one of {}",
+                    ANSI_COLOR_NAMES.join(", ")
+                )
+            })
+    }
+}
+
+/// The color of the hex digits after `#`: six digits, or three digits
+/// that each count twice (`f80` is `ff8800`).
+fn parse_hex(hex: &str) -> Option<ColorSetting> {
+    if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let byte = |i: usize, len: usize| u8::from_str_radix(&hex[i..i + len], 16).ok();
+    match hex.len() {
+        6 => Some(ColorSetting::Rgb(byte(0, 2)?, byte(2, 2)?, byte(4, 2)?)),
+        3 => Some(ColorSetting::Rgb(
+            byte(0, 1)? * 0x11,
+            byte(1, 1)? * 0x11,
+            byte(2, 1)? * 0x11,
+        )),
+        _ => None,
+    }
+}
+
+/// Reads a color of the `[theme]` section, as `"#ff5f87"` or `"blue"`.
+fn theme_color<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ColorSetting>, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    ColorSetting::parse(&text)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 /// A `[theme] style` in the configuration file.
@@ -920,6 +1006,63 @@ mod tests {
         assert_eq!(theme.style, ThemeStyleSetting::Punk);
         assert_eq!(ThemeConfig::default().style, ThemeStyleSetting::Punk);
         assert!(toml::from_str::<ThemeConfig>("style = \"neon\"").is_err());
+    }
+
+    #[test]
+    fn hex_colors_parse() {
+        let parse = ColorSetting::parse;
+        assert_eq!(parse("#ff5f87"), Ok(ColorSetting::Rgb(0xff, 0x5f, 0x87)));
+        assert_eq!(parse("#FF5F87"), Ok(ColorSetting::Rgb(0xff, 0x5f, 0x87)));
+        assert_eq!(parse("#f80"), Ok(ColorSetting::Rgb(0xff, 0x88, 0x00)));
+        assert_eq!(parse("#000"), Ok(ColorSetting::Rgb(0, 0, 0)));
+    }
+
+    #[test]
+    fn ansi_color_names_parse() {
+        let parse = ColorSetting::parse;
+        assert_eq!(parse("black"), Ok(ColorSetting::Ansi(0)));
+        assert_eq!(parse("blue"), Ok(ColorSetting::Ansi(4)));
+        assert_eq!(parse("white"), Ok(ColorSetting::Ansi(7)));
+        assert_eq!(parse("bright_black"), Ok(ColorSetting::Ansi(8)));
+        assert_eq!(parse("bright_magenta"), Ok(ColorSetting::Ansi(13)));
+        assert_eq!(parse("bright_white"), Ok(ColorSetting::Ansi(15)));
+    }
+
+    #[test]
+    fn other_colors_do_not_parse() {
+        for text in [
+            "",
+            "#",
+            "#ff5f8",
+            "#ff5f877",
+            "#ggg",
+            "#+12",
+            "#é12",
+            "ff5f87",
+            "Blue",
+            "lightblue",
+            "pink",
+        ] {
+            assert!(ColorSetting::parse(text).is_err(), "{text:?}");
+        }
+        let err = ColorSetting::parse("pink").unwrap_err();
+        assert!(err.contains("unknown color `pink`"), "{err}");
+        assert!(err.contains("bright_magenta"), "{err}");
+        let err = ColorSetting::parse("#12").unwrap_err();
+        assert!(err.contains("invalid hex color `#12`"), "{err}");
+    }
+
+    #[test]
+    fn theme_primary_parses() {
+        let theme: ThemeConfig = toml::from_str("").unwrap();
+        assert_eq!(theme.primary, None);
+        let theme: ThemeConfig = toml::from_str("primary = \"#ff5f87\"").unwrap();
+        assert_eq!(theme.primary, Some(ColorSetting::Rgb(0xff, 0x5f, 0x87)));
+        let theme: ThemeConfig = toml::from_str("primary = \"yellow\"").unwrap();
+        assert_eq!(theme.primary, Some(ColorSetting::Ansi(3)));
+        let err = toml::from_str::<ThemeConfig>("primary = \"neon\"").unwrap_err();
+        assert!(err.to_string().contains("unknown color `neon`"), "{err}");
+        assert!(toml::from_str::<ThemeConfig>("primary = 3").is_err());
     }
 
     #[test]

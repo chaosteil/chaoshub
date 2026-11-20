@@ -197,7 +197,7 @@ mod tests {
 
     use super::*;
     use crate::config::schema::{
-        ConversationOrder, EnvValue, MergeMethodSetting, StackSetting, StackUrlsOrder,
+        ColorSetting, ConversationOrder, EnvValue, MergeMethodSetting, StackSetting, StackUrlsOrder,
     };
 
     const SAMPLE: &str = include_str!("testdata/sample.toml");
@@ -229,6 +229,7 @@ mod tests {
         assert_eq!(config.agent, AgentConfig::default());
         assert!(config.theme.grunge);
         assert!(config.theme.textures);
+        assert_eq!(config.theme.primary, None);
         assert!(config.theme.animations);
         assert_eq!(config.theme.animation_ms, 120);
         assert!(config.theme.column_headers);
@@ -297,6 +298,8 @@ mod tests {
         );
         assert!(config.theme.grunge);
         assert!(!config.theme.textures);
+        let pink = ColorSetting::Rgb(0xff, 0x5f, 0x87);
+        assert_eq!(config.theme.primary, Some(pink));
         assert_eq!(config.theme.animation_ms, 120);
         assert_eq!(config.terminal.title, None);
         assert_eq!(config.terminal.program_status, None);

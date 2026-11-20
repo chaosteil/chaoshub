@@ -3,7 +3,7 @@
 
 use ratatui::style::Color;
 
-use super::{Palette, SyntaxColors};
+use super::{Palette, SyntaxColors, color};
 
 impl Palette {
     /// The Pierre palette, from `pierre-theme.nvim`.
@@ -15,6 +15,7 @@ impl Palette {
             fg_dim: Color::Rgb(0xd4, 0xd4, 0xd4),
             fg_mute: Color::Rgb(0xa3, 0xa3, 0xa3),
             primary: Color::Rgb(0x00, 0x9f, 0xff),
+            on_primary: Color::Rgb(0x0a, 0x0a, 0x0a),
             success: Color::Rgb(0x07, 0xc4, 0x80),
             danger: Color::Rgb(0xff, 0x2e, 0x3f),
             warn: Color::Rgb(0xff, 0xca, 0x00),
@@ -65,6 +66,7 @@ impl Palette {
             fg_dim: Color::Gray,
             fg_mute: Color::DarkGray,
             primary: Color::LightBlue,
+            on_primary: Color::Black,
             success: Color::Green,
             danger: Color::Red,
             warn: Color::Yellow,
@@ -100,6 +102,30 @@ impl Palette {
                 parameter: Color::Gray,
                 punctuation: Color::DarkGray,
             },
+        }
+    }
+}
+
+impl Palette {
+    /// The palette with `primary` in place of its own primary color. A
+    /// palette of named colors, as `ansi16`, takes the nearest ANSI color
+    /// of a hex color. The text on the primary color changes to the dark
+    /// or the light text color of the palette, the one with more contrast.
+    /// The own primary color of the palette keeps the palette as it is.
+    #[must_use]
+    pub(crate) fn with_primary(self, primary: Color) -> Self {
+        let primary = if matches!(self.primary, Color::Rgb(..)) {
+            primary
+        } else {
+            color::nearest_ansi(primary)
+        };
+        if primary == self.primary {
+            return self;
+        }
+        Self {
+            primary,
+            on_primary: color::readable_on(primary, self.bg, self.fg),
+            ..self
         }
     }
 }
@@ -237,6 +263,7 @@ mod tests {
             p.fg_dim,
             p.fg_mute,
             p.primary,
+            p.on_primary,
             p.success,
             p.danger,
             p.warn,
@@ -273,6 +300,54 @@ mod tests {
     }
 
     #[test]
+    fn with_primary_sets_the_color_and_its_text() {
+        let pink = Color::Rgb(0xff, 0x5f, 0x87);
+        let p = Palette::pierre().with_primary(pink);
+        assert_eq!(p.primary, pink);
+        assert_eq!(p.on_primary, p.bg, "black text on pink");
+        assert_eq!(
+            Palette {
+                primary: Palette::pierre().primary,
+                on_primary: p.bg,
+                ..p
+            },
+            Palette::pierre(),
+            "the other colors stay"
+        );
+        let purple = Color::Rgb(0x5f, 0x00, 0xaf);
+        let p = Palette::pierre().with_primary(purple);
+        assert_eq!(p.on_primary, p.fg, "white text on dark purple");
+        // An ANSI name stays as it is, also on Pierre.
+        let p = Palette::pierre().with_primary(Color::Yellow);
+        assert_eq!((p.primary, p.on_primary), (Color::Yellow, p.bg));
+        let p = Palette::pierre().with_primary(Color::Blue);
+        assert_eq!((p.primary, p.on_primary), (Color::Blue, p.fg));
+    }
+
+    #[test]
+    fn with_primary_maps_hex_to_ansi_on_ansi16() {
+        let p = Palette::ansi16().with_primary(Color::Rgb(0xff, 0xff, 0x00));
+        assert_eq!(
+            (p.primary, p.on_primary),
+            (Color::LightYellow, Color::Black)
+        );
+        let p = Palette::ansi16().with_primary(Color::Rgb(0x00, 0x00, 0x80));
+        assert_eq!((p.primary, p.on_primary), (Color::Blue, Color::White));
+        let p = Palette::ansi16().with_primary(Color::Magenta);
+        assert_eq!((p.primary, p.on_primary), (Color::Magenta, Color::White));
+    }
+
+    #[test]
+    fn with_primary_keeps_the_own_color() {
+        let own = Palette::pierre().primary;
+        assert_eq!(Palette::pierre().with_primary(own), Palette::pierre());
+        let ansi16 = Palette::ansi16();
+        assert_eq!(ansi16.with_primary(Color::LightBlue), ansi16);
+        // A hex color that maps to the own ANSI color keeps the text too.
+        assert_eq!(ansi16.with_primary(Color::Rgb(0x5c, 0x5c, 0xff)), ansi16);
+    }
+
+    #[test]
     fn pierre_bands_keep_contrast() {
         let p = Palette::pierre();
         // Black text on the selection band, the inverted headers, the
@@ -289,5 +364,6 @@ mod tests {
             let ratio = contrast(p.bg, color);
             assert!(ratio >= 4.5, "bg on {name}: {ratio:.2}");
         }
+        assert_eq!(p.on_primary, p.bg, "black text on the blue");
     }
 }

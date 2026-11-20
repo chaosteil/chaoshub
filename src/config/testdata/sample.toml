@@ -37,6 +37,7 @@ method = "merge"
 order = "top_first"
 
 [theme]
+primary = "#ff5f87"
 textures = false
 animation_ms = 120
 

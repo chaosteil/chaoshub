@@ -2,6 +2,7 @@
 #![allow(dead_code, reason = "ui and run use the theme in later phases")]
 
 mod block;
+pub(crate) mod color;
 pub(crate) mod grunge;
 mod palette;
 pub(crate) mod punk;
@@ -34,6 +35,9 @@ pub(crate) struct Palette {
     pub fg_dim: Color,
     pub fg_mute: Color,
     pub primary: Color,
+    /// The text on a background in the primary color: the selection band,
+    /// the active tab card, the status band and the inverted headers.
+    pub on_primary: Color,
     pub success: Color,
     pub danger: Color,
     pub warn: Color,
@@ -201,6 +205,30 @@ impl Theme {
         Self::styled(kind, ThemeStyle::Punk, PaletteChoice::Pierre, true, true)
     }
 
+    /// The theme with the primary color of `[theme] primary`. `None` keeps
+    /// the color of the palette. See `Palette::with_primary`.
+    #[must_use]
+    pub(crate) fn with_primary(self, primary: Option<Color>) -> Self {
+        let Some(primary) = primary else {
+            return self;
+        };
+        Self {
+            palette: self.palette.with_primary(primary),
+            ..self
+        }
+    }
+
+    /// The text color on a background of `color`: the text color of the
+    /// primary color on it, else the background color, as black text on a
+    /// colored block.
+    pub(crate) fn text_on(&self, color: Color) -> Color {
+        if color == self.palette.primary {
+            self.palette.on_primary
+        } else {
+            self.palette.bg
+        }
+    }
+
     /// A framed block with a header on the top edge. An empty `title`
     /// gives a block without a header.
     pub(crate) fn block<'a>(&self, title: &'a str) -> ThemeBlock<'a> {
@@ -208,11 +236,11 @@ impl Theme {
     }
 
     /// A header line in the color `color`. Grunge and plain headers are
-    /// stencils in the color. Punk headers are inverted: black text on a
-    /// block of the color.
+    /// stencils in the color. Punk headers are inverted: text in the color
+    /// of `text_on` on a block of the color.
     pub(crate) fn header(&self, text: &str, color: Color) -> Line<'static> {
         match self.skin {
-            Skin::Punk => punk::inverted(text, color, self.palette.bg),
+            Skin::Punk => punk::inverted(text, color, self.text_on(color)),
             Skin::Grunge { .. } | Skin::Plain => stencil(text, Style::new().fg(color)),
         }
     }
@@ -252,13 +280,14 @@ impl Theme {
 
     /// How the selected row of a list looks. Grunge and plain rows get
     /// the surface background and a `▌` marker. A punk row is a blue card
-    /// on a white card: `▶` in black on white, the cells in black on the
-    /// primary color, a `◤◤` tail, and the text one cell to the right.
+    /// on a white card: `▶` in black on white, the cells in the text color
+    /// of the primary color (`on_primary`) on the primary color, a `◤◤`
+    /// tail, and the text one cell to the right.
     pub(crate) fn selected_row(&self) -> Selection {
         let p = &self.palette;
         match self.skin {
             Skin::Punk => Selection {
-                patch: Style::new().bg(p.primary).fg(p.bg),
+                patch: Style::new().bg(p.primary).fg(p.on_primary),
                 marker: "▶",
                 marker_fg: p.bg,
                 marker_bg: Some(p.fg),
@@ -266,7 +295,7 @@ impl Theme {
                     ("◤", Style::new().bg(p.fg).fg(p.primary)),
                     ("◤", Style::new().bg(p.bg).fg(p.fg)),
                 ]),
-                cell_fg: Some(p.bg),
+                cell_fg: Some(p.on_primary),
                 shift: 1,
             },
             Skin::Grunge { .. } | Skin::Plain => Selection {
@@ -297,8 +326,8 @@ impl Theme {
 
     /// The spans of one tab with its label. The active tab stands out.
     /// A punk tab is a slanted card, `◢ label ◤`: the active one has
-    /// black bold text on the primary color, the others have black text
-    /// on grey.
+    /// bold text in `on_primary` on the primary color, the others have
+    /// black text on grey.
     pub(crate) fn tab(&self, label: &str, active: bool) -> Vec<Span<'static>> {
         let p = &self.palette;
         if self.skin == Skin::Punk {
@@ -310,7 +339,7 @@ impl Theme {
             let edge = Style::new().bg(p.bg).fg(card);
             return vec![
                 Span::styled("◢", edge),
-                Span::styled(label.to_owned(), text.bg(card).fg(p.bg)),
+                Span::styled(label.to_owned(), text.bg(card).fg(self.text_on(card))),
                 Span::styled("◤", edge),
             ];
         }
@@ -344,14 +373,14 @@ impl Theme {
     }
 
     /// The background and the foreground of the highlight of a tab slide:
-    /// black on the primary color for punk, and the surface background
+    /// `on_primary` on the primary color for punk, and the surface background
     /// for grunge and plain, as on the active tab. On a 16-color terminal
     /// the surface is the background, so grunge and plain use the muted
     /// grey there. Else the highlight does not show.
     pub(crate) fn slide_colors(&self) -> (Color, Color) {
         let p = &self.palette;
         match self.skin {
-            Skin::Punk => (p.primary, p.bg),
+            Skin::Punk => (p.primary, p.on_primary),
             Skin::Grunge { .. } | Skin::Plain if p.surface == p.bg => (p.fg_mute, p.fg),
             Skin::Grunge { .. } | Skin::Plain => (p.surface, p.fg),
         }
@@ -390,7 +419,8 @@ impl Theme {
                 if i == 0 {
                     spans.push(Span::styled("◢", Style::new().bg(p.bg).fg(card(i))));
                 }
-                spans.push(Span::styled(label.clone(), text.bg(card(i)).fg(p.bg)));
+                let fg = self.text_on(card(i));
+                spans.push(Span::styled(label.clone(), text.bg(card(i)).fg(fg)));
                 spans.push(Span::styled("◤", Style::new().bg(next).fg(card(i))));
                 spans
             })
@@ -399,7 +429,7 @@ impl Theme {
 
     /// How the status bar looks. Grunge and plain bars have the surface
     /// background. The punk bar has a band in the primary color with
-    /// black text on the left, a diagonal end, and the message in white.
+    /// text in `on_primary` on the left, a diagonal end, and the message in white.
     pub(crate) fn status_band(&self) -> StatusBand {
         let p = &self.palette;
         match self.skin {
@@ -408,7 +438,7 @@ impl Theme {
                 left: Some(
                     Style::new()
                         .bg(p.primary)
-                        .fg(p.bg)
+                        .fg(p.on_primary)
                         .add_modifier(Modifier::BOLD),
                 ),
                 end: Some(("◤", Style::new().bg(p.bg).fg(p.primary))),
@@ -662,6 +692,47 @@ mod tests {
             true,
         );
         assert_eq!(grunge.hint_prefix("▌ ").content, "▌ ");
+    }
+
+    #[test]
+    fn a_dark_primary_gets_light_text_on_its_bands() {
+        let purple = Color::Rgb(0x5f, 0x00, 0xaf);
+        let theme = Theme::punk(ThemeKind::TrueColor).with_primary(Some(purple));
+        let p = theme.palette;
+        assert_eq!((p.primary, p.on_primary), (purple, p.fg));
+        let selection = theme.selected_row();
+        assert_eq!(selection.patch.fg, Some(p.fg));
+        assert_eq!(selection.cell_fg, Some(p.fg));
+        assert_eq!(selection.marker_fg, p.bg, "the marker stays on white");
+        let active = theme.tab(" MINE ", true);
+        assert_eq!(
+            (active[1].style.fg, active[1].style.bg),
+            (Some(p.fg), Some(purple))
+        );
+        let other = theme.tab(" TEAM ", false);
+        assert_eq!(other[1].style.fg, Some(p.bg), "black on grey");
+        let labels = vec![" 1 MINE ".to_owned(), " 2 TEAM ".to_owned()];
+        let strip = theme.tab_strip(&labels, 1);
+        assert_eq!(strip[0][1].style.fg, Some(p.bg));
+        assert_eq!(strip[1][0].style.fg, Some(p.fg));
+        assert_eq!(theme.slide_colors(), (purple, p.fg));
+        assert_eq!(theme.status_band().left.unwrap().fg, Some(p.fg));
+        let header = theme.header("merge", purple);
+        assert_eq!(header.spans[0].style.fg, Some(p.fg));
+        let header = theme.header("danger", p.danger);
+        assert_eq!(
+            header.spans[0].style.fg,
+            Some(p.bg),
+            "other headers stay black"
+        );
+    }
+
+    #[test]
+    fn no_primary_keeps_the_theme() {
+        for kind in [ThemeKind::TrueColor, ThemeKind::Ansi16] {
+            let theme = Theme::punk(kind);
+            assert_eq!(theme.with_primary(None), theme);
+        }
     }
 
     #[test]

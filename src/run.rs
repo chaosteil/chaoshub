@@ -289,7 +289,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
 
 /// The theme of the session: the style of `--theme` or `[theme] style`
 /// and the palette of `--palette` or `[theme] palette`, for the terminal
-/// kind.
+/// kind, with the primary color of `[theme] primary`.
 fn session_theme(
     kind: ThemeKind,
     arg: Option<crate::cli::ThemeArg>,
@@ -303,6 +303,16 @@ fn session_theme(
         config.theme.grunge,
         config.theme.textures,
     )
+    .with_primary(config.theme.primary.and_then(primary_color))
+}
+
+/// The theme color of a color of the configuration.
+fn primary_color(setting: crate::config::schema::ColorSetting) -> Option<ratatui::style::Color> {
+    use crate::config::schema::ColorSetting;
+    match setting {
+        ColorSetting::Rgb(r, g, b) => Some(ratatui::style::Color::Rgb(r, g, b)),
+        ColorSetting::Ansi(index) => crate::theme::color::ansi(index),
+    }
 }
 
 /// The theme style of the session: `--theme` when the user gave it, else
@@ -1863,6 +1873,30 @@ mod tests {
         config.theme.grunge = false;
         for kind in [ThemeKind::TrueColor, ThemeKind::Ansi16] {
             assert_eq!(session_theme(kind, None, None, &config), Theme::punk(kind));
+        }
+    }
+
+    #[test]
+    fn the_session_theme_takes_the_primary_color() {
+        use crate::config::schema::ColorSetting;
+        use ratatui::style::Color;
+        let mut config = Config::default();
+        config.theme.primary = Some(ColorSetting::Rgb(0xff, 0x5f, 0x87));
+        let theme = session_theme(ThemeKind::TrueColor, None, None, &config);
+        assert_eq!(theme.palette.primary, Color::Rgb(0xff, 0x5f, 0x87));
+        // A 16-color terminal gets the nearest ANSI color.
+        let theme = session_theme(ThemeKind::Ansi16, None, None, &config);
+        assert_eq!(theme.palette.primary, Color::Magenta);
+        config.theme.primary = Some(ColorSetting::Ansi(3));
+        let theme = session_theme(ThemeKind::Ansi16, None, None, &config);
+        assert_eq!(theme.palette.primary, Color::Yellow);
+        assert_eq!(theme.palette.on_primary, Color::Black);
+        // Every color name of the configuration has a theme color.
+        for index in 0..16 {
+            assert!(
+                primary_color(ColorSetting::Ansi(index)).is_some(),
+                "{index}"
+            );
         }
     }
 

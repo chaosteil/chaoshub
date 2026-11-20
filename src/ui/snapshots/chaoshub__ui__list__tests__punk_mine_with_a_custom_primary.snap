@@ -1,0 +1,38 @@
+---
+source: src/ui/list.rs
+expression: buf
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 100, height: 3 },
+    content: [
+        " stack #12 -> main · 3 PRs                                                                          ",
+        "▶ ┌ feat(ui): popup frame with pane tabs            #103 wqnvzxop 3ccf7581 default     ●   ○  D   ◤◤",
+        " ├ feat(app): checks pane                          #102 xlmkrtpq 3ccf7581 default     ✓   ✓         ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Rgb(212, 212, 212), bg: Rgb(10, 10, 10), underline: Reset, modifier: BOLD,
+        x: 1, y: 0, fg: Rgb(163, 163, 163), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 26, y: 0, fg: Rgb(212, 212, 212), bg: Rgb(10, 10, 10), underline: Reset, modifier: BOLD,
+        x: 0, y: 1, fg: Rgb(10, 10, 10), bg: Rgb(250, 250, 250), underline: Reset, modifier: BOLD,
+        x: 1, y: 1, fg: Rgb(250, 250, 250), bg: Rgb(95, 0, 175), underline: Reset, modifier: BOLD,
+        x: 98, y: 1, fg: Rgb(95, 0, 175), bg: Rgb(250, 250, 250), underline: Reset, modifier: BOLD,
+        x: 99, y: 1, fg: Rgb(250, 250, 250), bg: Rgb(10, 10, 10), underline: Reset, modifier: BOLD,
+        x: 0, y: 2, fg: Rgb(250, 250, 250), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 1, y: 2, fg: Rgb(163, 163, 163), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 3, y: 2, fg: Rgb(250, 250, 250), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 49, y: 2, fg: Rgb(163, 163, 163), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 55, y: 2, fg: Rgb(250, 250, 250), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 56, y: 2, fg: Rgb(95, 0, 175), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 64, y: 2, fg: Rgb(250, 250, 250), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 65, y: 2, fg: Rgb(163, 163, 163), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 73, y: 2, fg: Rgb(250, 250, 250), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 74, y: 2, fg: Rgb(163, 163, 163), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 84, y: 2, fg: Rgb(250, 250, 250), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 85, y: 2, fg: Rgb(7, 196, 128), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 88, y: 2, fg: Rgb(250, 250, 250), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 89, y: 2, fg: Rgb(7, 196, 128), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 92, y: 2, fg: Rgb(250, 250, 250), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+        x: 93, y: 2, fg: Rgb(255, 202, 0), bg: Rgb(10, 10, 10), underline: Reset, modifier: BOLD,
+        x: 97, y: 2, fg: Rgb(250, 250, 250), bg: Rgb(10, 10, 10), underline: Reset, modifier: NONE,
+    ]
+}

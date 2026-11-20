@@ -219,6 +219,7 @@ for examples of each model provider, see
 |---|---|---|
 | `style` | `punk` | The look: `punk`, `grunge` or `plain`. |
 | `palette` | `pierre` | The colors: `pierre` or `ansi16`. On a 16-color terminal, `pierre` changes to `ansi16`. |
+| `primary` | none | The main color of the palette, in place of the blue (see [Primary color](#primary-color)). A hex color as `"#ff5f87"` or `"#f58"`, or an ANSI color name. Any other value is an error. |
 | `grunge` | `true` | Draws the rough block borders. Applies to the grunge style only. |
 | `textures` | `true` | Fills empty areas with noise textures. Applies to the grunge style only. |
 | `animations` | `true` | Turns the transitions on (see [Transitions](#transitions)). With `false`, none of them runs. |
@@ -237,6 +238,32 @@ noise textures. To try it, start chaoshub with `--theme grunge`. The
 `grunge` and `textures` keys only affect the grunge style. With
 `grunge = false`, or on a 16-color terminal, the grunge style draws the
 plain look.
+
+### Primary color
+
+The primary color is the main color of the theme. The active tab, the
+selection band, the popup frames, the drop shadows, the key names in
+the hint bar and the row flash use it. Without `primary`, the palette
+keeps its own blue.
+
+```toml
+[theme]
+primary = "#ff5f87"
+```
+
+The value is a hex color (`"#rrggbb"` or `"#rgb"`), or one of the
+names of the 16 ANSI colors: `black`, `red`, `green`, `yellow`, `blue`,
+`magenta`, `cyan`, `white`, and the same names with `bright_` before
+them, as `bright_magenta`. The terminal sets the exact shade of an
+ANSI color.
+
+The key applies to both palettes. The `ansi16` palette, and a 16-color
+terminal, use the nearest ANSI color of a hex color. An ANSI name stays
+as it is.
+
+The text on a block of the primary color is black or white. chaoshub
+picks the one with more contrast, so the text on a light color as
+`yellow` stays black, and the text on a dark color is white.
 
 ### Transitions
 
