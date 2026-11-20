@@ -200,6 +200,28 @@ pub(crate) enum ConversationOrder {
     NewestFirst,
 }
 
+/// The `[actions.copy_stack_urls]` table: the settings of the action
+/// that copies the urls of a stack. The action reads the table, and
+/// `Config::parse` also reads it, so a bad value stops the load.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub(crate) struct CopyStackUrlsConfig {
+    /// The order of the urls, one url on each line.
+    pub order: StackUrlsOrder,
+}
+
+/// An `[actions.copy_stack_urls] order` in the configuration file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StackUrlsOrder {
+    /// The order of the Stack pane: position 1, the bottom of the stack,
+    /// first.
+    #[default]
+    BottomFirst,
+    /// The order of the list: the top of the stack first.
+    TopFirst,
+}
+
 /// The `[merge]` section. `Config::parse` also copies its keys into
 /// `[actions.merge]`, the table that the merge action reads, unless
 /// `[actions.merge]` sets the key. So `[merge.repos."owner/name"]` and
@@ -686,6 +708,23 @@ mod tests {
             let text = format!("order = {bad:?}");
             assert!(
                 toml::from_str::<ConversationConfig>(&text).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn copy_stack_urls_order_parses() {
+        let copy: CopyStackUrlsConfig = toml::from_str("").unwrap();
+        assert_eq!(copy.order, StackUrlsOrder::BottomFirst);
+        let copy: CopyStackUrlsConfig = toml::from_str("order = \"bottom_first\"").unwrap();
+        assert_eq!(copy.order, StackUrlsOrder::BottomFirst);
+        let copy: CopyStackUrlsConfig = toml::from_str("order = \"top_first\"").unwrap();
+        assert_eq!(copy.order, StackUrlsOrder::TopFirst);
+        for bad in ["top", "TopFirst", "top-first", ""] {
+            let text = format!("order = {bad:?}");
+            assert!(
+                toml::from_str::<CopyStackUrlsConfig>(&text).is_err(),
                 "{bad}"
             );
         }

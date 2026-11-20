@@ -493,13 +493,19 @@ chaoshub copies these keys into `[actions.merge]`. If you set a key in
 
 ### `[actions.<id>]`
 
-Each action reads the table with its id. Three actions use a table:
+Each action reads the table with its id. Four actions use a table:
 
 | Table | Key | Meaning |
 |---|---|---|
 | `[actions.review]` | `zoom` | Zooms the review pane. The default is the value of `[codeview] zoom`. |
 | `[actions.codeview_send]` | `comments_dir` | The directory of the codeview comment files. The default is the value of `[codeview] comments_dir`. |
 | `[actions.merge]` | `method`, `bypass_rules`, `stack`, `repos` | The same keys as `[merge]`. |
+| `[actions.copy_stack_urls]` | `order` | The order of the URLs that `copy_stack_urls` (`Y`) copies. `"bottom_first"` (the default) is the order of the Stack pane: position 1, the bottom of the stack, first. `"top_first"` is the order of the list: the top of the stack first. Any other value is an error. |
+
+```toml
+[actions.copy_stack_urls]
+order = "top_first"
+```
 
 The other actions ignore their table. A new action can read its own
 table (see "How to extend").
@@ -1372,7 +1378,7 @@ the selected row or of the detail. These bindings have no default.
 | `close` | `c` | Closes the pull request after a confirm popup. |
 | `browser` | `o` | Opens the pull request in the browser. |
 | `copy_url` | `y` | Copies the pull request URL. |
-| `copy_stack_urls` | `Y` | Copies the URLs of the open pull requests of the stack, one URL on each line. The order is the order of the list: the top of the stack first. It works only in the actions menu (`space` then `Y`). Hidden for a pull request without a stack. When an open entry of the stack is not loaded, the status line shows "stack not loaded yet, refreshing the stack". Try again after the refresh. |
+| `copy_stack_urls` | `Y` | Copies the URLs of the open pull requests of the stack, one URL on each line. The order is the order of the Stack pane: position 1, the bottom of the stack, first. `[actions.copy_stack_urls] order = "top_first"` puts the top of the stack first, as the list does (see `[actions.<id>]`). It works only in the actions menu (`space` then `Y`). Hidden for a pull request without a stack. When an open entry of the stack is not loaded, the status line shows "stack not loaded yet, refreshing the stack". Try again after the refresh. |
 | `copy_change_id` | `i` | Copies the jj change id of the local change that matches the pull request. In a git repo, it copies the local branch name, and the actions menu shows "copy the branch name". Hidden when no local change matches. |
 | `agent` | `p` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
 | `codeview_send` | `r` | Opens the Review popup, also directly in the list and in the detail. In the conversation pane, `r` is the reply, so use `space` then `r` there. In the popup, you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). The hint bar, the help and the actions menu show it as "send comments". |

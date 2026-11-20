@@ -19,9 +19,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::config::schema::{
-    AgentConfig, CodeviewConfig, ConversationConfig, DetailConfig, FiltersConfig, MergeConfig,
-    NotifyConfig, PrefetchConfig, RefreshConfig, RepoEntry, RepoMerge, TerminalConfig, ThemeConfig,
-    WorkspacesConfig,
+    AgentConfig, CodeviewConfig, ConversationConfig, CopyStackUrlsConfig, DetailConfig,
+    FiltersConfig, MergeConfig, NotifyConfig, PrefetchConfig, RefreshConfig, RepoEntry, RepoMerge,
+    TerminalConfig, ThemeConfig, WorkspacesConfig,
 };
 use crate::domain::keys::RepoKey;
 use crate::domain::repo::Repo;
@@ -69,6 +69,22 @@ pub(crate) struct Config {
 /// The keys of `[merge]` that `parse` copies into `[actions.merge]`.
 const MERGE_KEYS: &[&str] = &["method", "bypass_rules", "stack", "repos"];
 
+/// The `[actions.<id>]` tables that have a typed form. `parse` reads
+/// them only to stop at a bad value. Each action reads its own table
+/// from `Config::actions`.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct TypedActions {
+    actions: TypedActionTables,
+}
+
+/// The tables of `TypedActions`, by action id.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct TypedActionTables {
+    copy_stack_urls: CopyStackUrlsConfig,
+}
+
 /// An error that stops the configuration from loading.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConfigError {
@@ -90,10 +106,12 @@ impl Config {
     /// Parses the text of a configuration file and expands `~` to `home`.
     /// Without a home directory, paths stay as they are. The keys of
     /// `[merge]` go into `[actions.merge]` when that table does not set
-    /// them.
+    /// them. A bad value in a typed `[actions.<id>]` table (see
+    /// `TypedActions`) is an error.
     pub(crate) fn parse(text: &str, home: Option<&Path>) -> Result<Self, toml::de::Error> {
         let mut config: Self = toml::from_str(text)?;
         let raw: toml::Table = toml::from_str(text)?;
+        toml::from_str::<TypedActions>(text)?;
         config.mirror_merge(&raw);
         if let Some(home) = home {
             config.expand_paths(home);
@@ -178,7 +196,9 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::config::schema::{ConversationOrder, EnvValue, MergeMethodSetting, StackSetting};
+    use crate::config::schema::{
+        ConversationOrder, EnvValue, MergeMethodSetting, StackSetting, StackUrlsOrder,
+    };
 
     const SAMPLE: &str = include_str!("testdata/sample.toml");
 
@@ -261,6 +281,10 @@ mod tests {
         assert!(!config.codeview.zoom);
         assert_eq!(config.codeview.ratio, Some(70));
         assert_eq!(config.conversation.order, ConversationOrder::NewestFirst);
+        assert_eq!(
+            config.action("copy_stack_urls").unwrap()["order"].as_str(),
+            Some("top_first")
+        );
         assert!(config.theme.grunge);
         assert!(!config.theme.textures);
         assert_eq!(config.theme.animation_ms, 120);
@@ -431,6 +455,25 @@ mod tests {
     fn bad_conversation_order_is_an_error() {
         let err = Config::parse("[conversation]\norder = \"newest\"\n", None).unwrap_err();
         assert!(err.to_string().contains("newest_first"), "{err}");
+    }
+
+    #[test]
+    fn bad_copy_stack_urls_order_is_an_error() {
+        let err = Config::parse("[actions.copy_stack_urls]\norder = \"top\"\n", None).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("top_first"), "{err}");
+        assert!(text.contains("bottom_first"), "{err}");
+    }
+
+    #[test]
+    fn copy_stack_urls_order_reaches_the_action() {
+        let config = Config::parse("", None).unwrap();
+        assert_eq!(config.action("copy_stack_urls"), None, "the default");
+        let text = "[actions.copy_stack_urls]\norder = \"top_first\"\n";
+        let config = Config::parse(text, None).unwrap();
+        let table = config.action("copy_stack_urls").unwrap().clone();
+        let copy: CopyStackUrlsConfig = toml::Value::Table(table).try_into().unwrap();
+        assert_eq!(copy.order, StackUrlsOrder::TopFirst);
     }
 
     #[test]

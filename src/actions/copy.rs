@@ -5,6 +5,7 @@ use futures::future::BoxFuture;
 
 use crate::actions::{Action, Applicability, Group, Prepare, STACK_NOT_LOADED, Services};
 use crate::bus::{ActionInput, Cmd, KeyChord, KeyCode, KeyModifiers, Selection, Target};
+use crate::config::schema::{CopyStackUrlsConfig, StackUrlsOrder};
 use crate::domain::local::{LocalMatch, Vcs};
 use crate::domain::pr::PrState;
 
@@ -12,8 +13,10 @@ use crate::domain::pr::PrState;
 pub(crate) struct CopyUrl;
 
 /// The action that copies the urls of the open pull requests of a stack,
-/// one url on each line. The order is the order of the list: the top of
-/// the stack first.
+/// one url on each line. The order is the order of the Stack pane:
+/// position 1, the bottom of the stack, first.
+/// `[actions.copy_stack_urls] order = "top_first"` puts the top of the
+/// stack first, as the list does.
 pub(crate) struct CopyStackUrls;
 
 /// The action that copies the jj change id of a pull request. In a git
@@ -35,22 +38,22 @@ enum StackUrls {
     NoStack,
     /// An entry of the stack that did not merge is not loaded.
     NotLoaded,
-    /// The urls of the open entries, the top of the stack first.
+    /// The urls of the open entries, in the order of the configuration.
     Loaded(Vec<String>),
 }
 
-/// The urls of the stack of the pull request of `target`. A merged entry
-/// does not have to be loaded, because the stack names the merged
-/// positions. The list shows only open pull requests, so the urls skip a
-/// merged or closed entry. The pull request of the target is always in
-/// the urls.
-fn stack_urls(target: &Target) -> StackUrls {
+/// The urls of the stack of the pull request of `target`, in `order`. A
+/// merged entry does not have to be loaded, because the stack names the
+/// merged positions. The list shows only open pull requests, so the urls
+/// skip a merged or closed entry. The pull request of the target is
+/// always in the urls.
+fn stack_urls(target: &Target, order: StackUrlsOrder) -> StackUrls {
     let Target::Pr { pr, stack, .. } = target;
     let Some(stack_ref) = pr.head.value.stack.as_ref().filter(|s| s.size >= 2) else {
         return StackUrls::NoStack;
     };
     let mut urls = Vec::new();
-    for position in (1..=stack_ref.size.max(stack_ref.position)).rev() {
+    for position in 1..=stack_ref.size.max(stack_ref.position) {
         if stack_ref.merged.contains(&position) && position != stack_ref.position {
             continue;
         }
@@ -73,7 +76,21 @@ fn stack_urls(target: &Target) -> StackUrls {
             urls.push(entry.head.value.url.clone());
         }
     }
+    if order == StackUrlsOrder::TopFirst {
+        urls.reverse();
+    }
     StackUrls::Loaded(urls)
+}
+
+/// The order of the stack urls, from the `[actions.copy_stack_urls]`
+/// table. The default without a table. `Config::parse` stops at a bad
+/// value, so a table that does not parse also gives the default.
+fn stack_urls_order(sel: &Selection) -> StackUrlsOrder {
+    sel.action_config
+        .clone()
+        .and_then(|table| toml::Value::Table(table).try_into().ok())
+        .map(|config: CopyStackUrlsConfig| config.order)
+        .unwrap_or_default()
 }
 
 /// The change id of the local change that matches the pull request of the
@@ -149,15 +166,16 @@ impl Action for CopyStackUrls {
     /// when an entry of the stack is not loaded. The app then refreshes
     /// the stack, as for `merge_stack`.
     fn applies(&self, sel: &Selection) -> Applicability {
-        match stack_urls(&sel.target) {
+        match stack_urls(&sel.target, StackUrlsOrder::default()) {
             StackUrls::NoStack => Applicability::Hidden,
             StackUrls::NotLoaded => Applicability::Disabled(STACK_NOT_LOADED),
             StackUrls::Loaded(_) => Applicability::Enabled,
         }
     }
 
+    /// The urls in the order of `[actions.copy_stack_urls] order`.
     fn prepare(&self, sel: &Selection) -> Prepare {
-        let urls = match stack_urls(&sel.target) {
+        let urls = match stack_urls(&sel.target, stack_urls_order(sel)) {
             StackUrls::Loaded(urls) => urls,
             StackUrls::NoStack | StackUrls::NotLoaded => Vec::new(),
         };
@@ -345,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_y_copies_the_stack_urls_top_first() {
+    fn shift_y_copies_the_stack_urls_bottom_first() {
         let stack = vec![entry(11, 1), entry(12, 2), entry(13, 3)];
         for selected in &stack {
             let sel = stack_selection(selected.clone(), stack.clone());
@@ -353,14 +371,40 @@ mod tests {
             assert_eq!(
                 CopyStackUrls.prepare(&sel),
                 Prepare::Command(Cmd::Copy(
-                    "https://github.com/o/r/pull/13\n\
+                    "https://github.com/o/r/pull/11\n\
                      https://github.com/o/r/pull/12\n\
-                     https://github.com/o/r/pull/11"
+                     https://github.com/o/r/pull/13"
                         .into()
                 )),
                 "#{}",
                 selected.key.number
             );
+        }
+    }
+
+    #[test]
+    fn shift_y_copies_the_stack_urls_in_the_order_of_the_configuration() {
+        let stack = vec![entry(11, 1), entry(12, 2), entry(13, 3)];
+        let mut sel = stack_selection(entry(12, 2), stack);
+        let copied = |sel: &Selection| {
+            let Prepare::Command(Cmd::Copy(text)) = CopyStackUrls.prepare(sel) else {
+                unreachable!()
+            };
+            text
+        };
+        let bottom_first = "https://github.com/o/r/pull/11\n\
+                            https://github.com/o/r/pull/12\n\
+                            https://github.com/o/r/pull/13";
+        let top_first = "https://github.com/o/r/pull/13\n\
+                         https://github.com/o/r/pull/12\n\
+                         https://github.com/o/r/pull/11";
+        for (config, expected) in [
+            ("", bottom_first),
+            ("order = \"bottom_first\"", bottom_first),
+            ("order = \"top_first\"", top_first),
+        ] {
+            sel.action_config = Some(toml::from_str(config).unwrap());
+            assert_eq!(copied(&sel), expected, "{config}");
         }
     }
 
@@ -374,7 +418,7 @@ mod tests {
             pr.head.value.stack.as_mut().unwrap().merged = vec![1];
         }
         let copied = Prepare::Command(Cmd::Copy(
-            "https://github.com/o/r/pull/13\nhttps://github.com/o/r/pull/12".into(),
+            "https://github.com/o/r/pull/12\nhttps://github.com/o/r/pull/13".into(),
         ));
         let loaded = stack_selection(top.clone(), vec![merged, middle.clone(), top.clone()]);
         assert_eq!(CopyStackUrls.prepare(&loaded), copied);

@@ -33,6 +33,9 @@ bypass_rules = true
 [merge.repos."chaosteil/chaoshub"]
 method = "merge"
 
+[actions.copy_stack_urls]
+order = "top_first"
+
 [theme]
 textures = false
 animation_ms = 120
