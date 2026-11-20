@@ -5623,7 +5623,7 @@ mod tests {
         else {
             panic!("not a pick: {ask:?}");
         };
-        assert_eq!(title, "jump to a pull request");
+        assert_eq!(title, "jump to PR");
         assert_eq!(*confirm, Some("Open"));
         let Some(review) = items.iter().find(|item| item.id == "chaosteil/chaoshub#88") else {
             panic!("no review request #88: {items:?}");

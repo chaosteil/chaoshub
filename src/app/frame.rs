@@ -158,7 +158,7 @@ fn overlay_models(
                     popup_content(&state.data, &areas, pinned, popup, panes)
                 }
                 OverlayState::Authors(picker) => OverlayContent::Picker {
-                    title: "author".into(),
+                    title: "filter by author".into(),
                     items: picker.items(),
                     cursor: picker.cursor,
                 },

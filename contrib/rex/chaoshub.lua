@@ -154,7 +154,7 @@ function M.setup(opts)
   rex.action{
     name = "chaoshub_open_pr",
     title = "chaoshub: open PR…",
-    description = "Pick a pull request of the chaoshub tabs and open it in a new window.",
+    description = "Open a PR from the chaoshub tabs in a new window.",
     category = "chaoshub",
     keywords = "pull request github review pr",
     run = function(ctx)
@@ -170,13 +170,13 @@ function M.setup(opts)
       if #items == 0 then
         items[1] = {
           id = EMPTY_ID,
-          title = "No pull requests in the cache",
+          title = "No PRs in the cache",
           subtitle = "Start chaoshub to sync",
         }
       end
       local id, why = rex.ui.pick{
         title = "chaoshub: open PR",
-        placeholder = "Filter pull requests",
+        placeholder = "Filter PRs",
         confirm = "Open",
         items = items,
       }
@@ -190,7 +190,7 @@ function M.setup(opts)
   }
   rex.action{
     name = "chaoshub_ask",
-    title = "chaoshub: ask a question of the TUI",
+    title = "chaoshub: TUI question (internal)",
     description = "The chaoshub TUI runs this action to ask one question in the palette.",
     category = "chaoshub",
     args = { ask = "object?", timeout = "integer?" },

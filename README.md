@@ -1891,7 +1891,7 @@ show in a list after the next sync.
 [`contrib/rex/chaoshub.lua`](contrib/rex/chaoshub.lua) adds the Rex
 action `chaoshub: open PR…` to the command palette. It works from any
 block, also when no chaoshub list runs. The file also adds the action
-`chaoshub_ask` (`chaoshub: ask a question of the TUI`). The chaoshub
+`chaoshub_ask` (`chaoshub: TUI question (internal)`). The chaoshub
 TUI uses it to ask its questions in the palette (see "Questions in the
 Rex palette"). Started from the palette, it has no question and does
 nothing.

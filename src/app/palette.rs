@@ -65,8 +65,8 @@ fn authors(picker: &AuthorPicker) -> PaletteAsk {
         })
         .collect();
     PaletteAsk::Pick {
-        title: "author".to_owned(),
-        placeholder: "filter the authors".to_owned(),
+        title: "filter by author".to_owned(),
+        placeholder: "filter authors".to_owned(),
         value: String::new(),
         confirm: Some(FILTER),
         allow_other: false,
@@ -115,8 +115,8 @@ pub(crate) fn jump(data: &AppData, rows: &[(&str, PrKey)]) -> Option<PaletteAsk>
         return None;
     }
     Some(PaletteAsk::Pick {
-        title: "jump to a pull request".to_owned(),
-        placeholder: "filter the pull requests".to_owned(),
+        title: "jump to PR".to_owned(),
+        placeholder: "filter PRs".to_owned(),
         value: String::new(),
         confirm: Some(OPEN),
         allow_other: false,
@@ -160,8 +160,8 @@ mod tests {
         assert_eq!(
             ask(&overlay),
             Some(PaletteAsk::Pick {
-                title: "author".into(),
-                placeholder: "filter the authors".into(),
+                title: "filter by author".into(),
+                placeholder: "filter authors".into(),
                 value: String::new(),
                 confirm: Some("Filter"),
                 allow_other: false,
