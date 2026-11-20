@@ -198,7 +198,7 @@ mod tests {
         assert!(!scrolled.contains("move down / up"), "{scrolled}");
         assert!(scrolled.contains("first / last row"), "{scrolled}");
         assert_eq!(draw(17), draw(13), "the last page");
-        assert!(draw(17).contains("re-run failed checks"));
+        assert!(draw(17).contains("rerun failed checks"));
     }
 
     #[test]

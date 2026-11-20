@@ -181,7 +181,7 @@ mod tests {
         let model = StatusModel {
             left: vec![
                 cell("[MINE]", CellStyle::Primary),
-                cell(" 3 repos · cache from 42s ago", CellStyle::Dim),
+                cell(" 3 repos · cached 42s ago", CellStyle::Dim),
             ],
             center: None,
             right: vec![cell("? help", CellStyle::Dim)],
@@ -198,7 +198,7 @@ mod tests {
         ));
         let buf = draw(&model, 100, &testdata::pierre());
         insta::assert_snapshot!(row(&buf));
-        assert!(row(&buf).contains("Ba…  ? help"));
+        assert!(row(&buf).contains("502…  ? help"));
     }
 
     #[test]

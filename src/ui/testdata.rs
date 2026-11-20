@@ -241,7 +241,7 @@ pub(crate) fn status() -> StatusModel {
     StatusModel {
         left: vec![
             cell("[MINE]", CellStyle::Primary),
-            cell(" 3 repos · synced 12s ago · prefetch 2", CellStyle::Dim),
+            cell(" 3 repos · synced 12s ago · prefetching 2", CellStyle::Dim),
         ],
         center: Some(cell("merged #101", CellStyle::Success)),
         right: vec![cell("? help", CellStyle::Dim)],
@@ -499,7 +499,7 @@ pub(crate) fn help_overlay() -> OverlayModel {
                         entries: Vec::new(),
                         symbols: vec![
                             (cell("CHECKS", CellStyle::Dim), "CI state".to_owned()),
-                            (cell("✓ 5/5", CellStyle::Success), "CI green".to_owned()),
+                            (cell("✓ 5/5", CellStyle::Success), "CI passed".to_owned()),
                             (cell("◆", CellStyle::Warn), "a pane is open".to_owned()),
                         ],
                     },
@@ -510,7 +510,7 @@ pub(crate) fn help_overlay() -> OverlayModel {
                             ("m", "merge"),
                             ("A", "approve"),
                             ("R", "request changes"),
-                            ("x", "re-run failed checks"),
+                            ("x", "rerun failed checks"),
                         ]),
                         symbols: Vec::new(),
                     },

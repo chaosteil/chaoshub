@@ -2,4 +2,4 @@
 source: src/ui/status.rs
 expression: row(&buf)
 ---
- [MINE] 3 repos · synced 12s ago · prefetch 2  sync failed: the GitHub API answered 502 Ba…  ? help
+ [MINE] 3 repos · synced 12s ago · prefetching 2  sync failed: the GitHub API answered 502…  ? help
