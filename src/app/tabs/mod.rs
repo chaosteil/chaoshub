@@ -118,6 +118,9 @@ pub(crate) struct Handled {
     /// sends it on the pull request of the popup, and the conversation
     /// shows it at once. Only a pane sets it.
     pub react: Option<ReactSpec>,
+    /// The text of a toast, for a key whose effect is not on the screen,
+    /// for example a url that opens in the browser.
+    pub toast: Option<String>,
 }
 
 /// One tab of the main screen.

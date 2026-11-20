@@ -141,6 +141,14 @@ pub(crate) trait Action: Send + Sync {
     fn pending(&self, _sel: &Selection, _input: &ActionInput) -> Vec<Pending> {
         Vec::new()
     }
+    /// The text of the toast after a key press that gives
+    /// `Prepare::Command` or `Prepare::Terminal` for `sel`, for example
+    /// `copied url of #142`. The work of such an action happens outside
+    /// the screen, so the toast says that the key did something. It names
+    /// the pull request as `#N`. The default is no toast.
+    fn toast(&self, _sel: &Selection) -> Option<String> {
+        None
+    }
     /// Runs the action as a task. The runner sends `ActionEvent::Done`
     /// with the result.
     fn execute(
@@ -224,6 +232,7 @@ pub(crate) mod fake {
         pub applies: Applicability,
         pub prepare: Prepare,
         pub result: Result<String, String>,
+        pub toast: Option<String>,
     }
 
     impl FakeAction {
@@ -239,6 +248,7 @@ pub(crate) mod fake {
                 applies: Applicability::Enabled,
                 prepare: Prepare::Run,
                 result: Ok(id.to_owned()),
+                toast: None,
             }
         }
     }
@@ -266,6 +276,10 @@ pub(crate) mod fake {
 
         fn prepare(&self, _sel: &Selection) -> Prepare {
             self.prepare.clone()
+        }
+
+        fn toast(&self, _sel: &Selection) -> Option<String> {
+            self.toast.clone()
         }
 
         fn execute(

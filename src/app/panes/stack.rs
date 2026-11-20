@@ -135,6 +135,7 @@ impl Pane for StackPane {
         } else {
             Handled {
                 cmds: vec![Cmd::OpenUrl(entry.head.value.url.clone())],
+                toast: Some(format!("opened #{} in browser", entry.key.number)),
                 ..Handled::default()
             }
         })
@@ -328,6 +329,7 @@ mod tests {
                 KeyCode::Char('o'),
                 Some(Handled {
                     cmds: vec![Cmd::OpenUrl(url(101))],
+                    toast: Some("opened #101 in browser".into()),
                     ..Handled::default()
                 }),
             ),

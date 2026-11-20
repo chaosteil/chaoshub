@@ -89,9 +89,11 @@ impl Pane for Checks {
         let Some(Target::Pr { pr, .. }) = cx.target else {
             return None;
         };
-        let url = pr.checks.value.get(ps.cursor)?.url.clone()?;
+        let check = pr.checks.value.get(ps.cursor)?;
+        let url = check.url.clone()?;
         Some(Handled {
             cmds: vec![Cmd::OpenUrl(url)],
+            toast: Some(format!("opened check {} of #{}", check.name, pr.key.number)),
             ..Handled::default()
         })
     }
@@ -353,10 +355,9 @@ mod tests {
             cursor: 1,
             ..PaneState::default()
         };
-        assert_eq!(
-            Checks.handle_key(o, &cx, &mut ps).map(|h| h.cmds),
-            Some(vec![Cmd::OpenUrl("https://ci/test".into())])
-        );
+        let handled = Checks.handle_key(o, &cx, &mut ps).unwrap();
+        assert_eq!(handled.cmds, vec![Cmd::OpenUrl("https://ci/test".into())]);
+        assert_eq!(handled.toast.as_deref(), Some("opened check test of #7"));
         ps.cursor = 9;
         assert_eq!(Checks.handle_key(o, &cx, &mut ps), None);
     }

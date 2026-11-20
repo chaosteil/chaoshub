@@ -12,6 +12,7 @@ For the actions, see [Actions and reviews](actions.md).
 - [App keys](#app-keys)
 - [Mouse](#mouse)
 - [Status bar](#status-bar)
+- [Toast](#toast)
 - [List the PRs from a script](#list-the-prs-from-a-script)
 - [Files](#files)
 
@@ -384,6 +385,37 @@ show in the list when the batch arrives.
 
 The terminal title and the tab status of Rex and Ghostty also show what
 chaoshub does (see [Rex, Ghostty and the terminal](rex.md#terminal-title)).
+
+## Toast
+
+Some keys do their work outside of the screen. For these keys, a toast
+(a small card) shows at the bottom right, above the key hint bar. The
+toast names the PR, for example `copied url of #142`. It stays for
+about 2 seconds and then fades out. It also shows over the PR view.
+
+The toast does not take keys or clicks. A new toast replaces the old
+one. These keys show a toast:
+
+| Key | Toast |
+|---|---|
+| `y` (`copy_url`) | `copied url of #142` |
+| `space` then `Y` (`copy_stack_urls`) | `copied 3 urls of stack #7`. The number is the number of the stack, as the stack header in the list shows it. |
+| `i` (`copy_change_id`) | `copied change id of #142`, or `copied branch of #142` in a git repo |
+| `o` (`browser`) | `opened #142 in browser` |
+| `o` in the Checks pane | `opened check ci / test of #142` |
+| `o` in the Files pane | `opened files of #142 in browser` |
+| `o` in the Stack pane | `opened #143 in browser`, with the PR of the entry |
+| `v` (`review`) | `opening #142 in codeview`, while the Rex pane starts |
+| `enter` with a detail pane, or `space` then `u` (`open_pr_url`) inside Rex | `opening #142 in a pane`, while the Rex pane starts |
+| `R` in the PR view | `refreshing #142` |
+
+When the pane of the PR is open already, the key moves the focus
+to the pane, and no toast shows. A copy to the clipboard shows the same
+toast when chaoshub copies through the terminal (OSC 52).
+
+Errors do not show in a toast. They show in the status line. The keys
+that change the screen at once show no toast, for example `R` in the
+list, which shows `syncing mine` in the status bar.
 
 ## List the PRs from a script
 

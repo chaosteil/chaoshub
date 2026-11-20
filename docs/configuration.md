@@ -262,6 +262,8 @@ retargets it, so nothing blocks typing:
   unfold from top to bottom in 80 ms. Collapsing is instant.
 - A new status message slides in from the left in 80 ms. An expired
   message fades out in 300 ms.
+- A new toast fades in in 120 ms. An expired toast fades out in 300 ms
+  (see [Toast](usage.md#toast)).
 
 If 5 of the last 10 drawn frames take longer than 12 ms to draw,
 chaoshub turns the transitions off until it quits, and writes a line in

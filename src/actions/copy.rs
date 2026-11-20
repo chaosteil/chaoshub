@@ -93,6 +93,22 @@ fn stack_urls_order(sel: &Selection) -> StackUrlsOrder {
         .unwrap_or_default()
 }
 
+/// True when the local match of the target is a git branch, not a jj
+/// change.
+fn git_branch(target: &Target) -> bool {
+    let Target::Pr { local, .. } = target;
+    matches!(
+        local,
+        LocalMatch::Synced { vcs: Vcs::Git, .. } | LocalMatch::Diverged { vcs: Vcs::Git, .. }
+    )
+}
+
+/// The number of the pull request of the selection.
+fn number(sel: &Selection) -> u64 {
+    let Target::Pr { pr, .. } = &sel.target;
+    pr.key.number
+}
+
 /// The change id of the local change that matches the pull request of the
 /// target. In a git repo, the branch name. `None` for a pull request
 /// without a local change.
@@ -135,6 +151,10 @@ impl Action for CopyUrl {
     fn prepare(&self, sel: &Selection) -> Prepare {
         let Target::Pr { pr, .. } = &sel.target;
         Prepare::Command(Cmd::Copy(pr.head.value.url.clone()))
+    }
+
+    fn toast(&self, sel: &Selection) -> Option<String> {
+        Some(format!("copied url of #{}", number(sel)))
     }
 
     /// The url goes to the clipboard through `Cmd::Copy`; the runtime
@@ -190,6 +210,20 @@ impl Action for CopyStackUrls {
         Prepare::Command(Cmd::Copy(urls.join("\n")))
     }
 
+    /// The number of urls and the number of the stack, as the stack
+    /// header in the list shows it, for example `copied 3 urls of stack
+    /// #7`.
+    fn toast(&self, sel: &Selection) -> Option<String> {
+        let count = match stack_urls(&sel.target, StackUrlsOrder::default()) {
+            StackUrls::Loaded(urls) => urls.len(),
+            StackUrls::NoStack | StackUrls::NotLoaded => return None,
+        };
+        let Target::Pr { pr, .. } = &sel.target;
+        let stack = pr.head.value.stack.as_ref()?.number;
+        let urls = crate::domain::plural::count(count, "url", "urls");
+        Some(format!("copied {urls} of stack #{stack}"))
+    }
+
     /// The urls go to the clipboard through `Cmd::Copy`; the runtime
     /// never calls this.
     fn execute(
@@ -213,21 +247,19 @@ impl Action for CopyChangeId {
 
     /// "copy branch name" for a git branch.
     fn target_label(&self, target: &Target) -> &'static str {
-        let Target::Pr { local, .. } = target;
-        match local {
-            LocalMatch::Synced { vcs: Vcs::Git, .. }
-            | LocalMatch::Diverged { vcs: Vcs::Git, .. } => "copy branch name",
-            _ => self.label(),
+        if git_branch(target) {
+            "copy branch name"
+        } else {
+            self.label()
         }
     }
 
     /// "copy branch" for a git branch.
     fn target_hint(&self, target: &Target) -> String {
-        let Target::Pr { local, .. } = target;
-        match local {
-            LocalMatch::Synced { vcs: Vcs::Git, .. }
-            | LocalMatch::Diverged { vcs: Vcs::Git, .. } => "copy branch".to_owned(),
-            _ => self.hint(),
+        if git_branch(target) {
+            "copy branch".to_owned()
+        } else {
+            self.hint()
         }
     }
 
@@ -250,6 +282,17 @@ impl Action for CopyChangeId {
     fn prepare(&self, sel: &Selection) -> Prepare {
         let id = change_id(&sel.target).unwrap_or_default();
         Prepare::Command(Cmd::Copy(id.to_owned()))
+    }
+
+    /// `copied branch of #N` for a git branch, else `copied change id of
+    /// #N`.
+    fn toast(&self, sel: &Selection) -> Option<String> {
+        let what = if git_branch(&sel.target) {
+            "branch"
+        } else {
+            "change id"
+        };
+        Some(format!("copied {what} of #{}", number(sel)))
     }
 
     /// The change id or the branch name goes to the clipboard through
@@ -356,6 +399,40 @@ mod tests {
             CopyChangeId.target_label(&selection(LocalMatch::None).target),
             "copy change id"
         );
+    }
+
+    #[test]
+    fn the_toasts_say_what_went_to_the_clipboard() {
+        let none = selection(LocalMatch::None);
+        assert_eq!(CopyUrl.toast(&none).as_deref(), Some("copied url of #7"));
+        let jj = selection(LocalMatch::Synced {
+            workspace: "default".into(),
+            change_id: "kpqvxwyz".into(),
+            commit_id: "oid7".into(),
+            vcs: Vcs::Jj,
+        });
+        assert_eq!(
+            CopyChangeId.toast(&jj).as_deref(),
+            Some("copied change id of #7")
+        );
+        let git = selection(LocalMatch::Diverged {
+            workspace: "default".into(),
+            change_id: "chaosteil/export".into(),
+            commit_id: "c0ffee".into(),
+            vcs: Vcs::Git,
+        });
+        assert_eq!(
+            CopyChangeId.toast(&git).as_deref(),
+            Some("copied branch of #7")
+        );
+        let stack = vec![entry(11, 1), entry(12, 2), entry(13, 3)];
+        let sel = stack_selection(entry(12, 2), stack);
+        assert_eq!(
+            CopyStackUrls.toast(&sel).as_deref(),
+            Some("copied 3 urls of stack #1")
+        );
+        let alone = stack_selection(entry(12, 2), Vec::new());
+        assert_eq!(CopyStackUrls.toast(&alone), None, "not loaded");
     }
 
     /// The pull request `number` at `position` of the stack `s` of three

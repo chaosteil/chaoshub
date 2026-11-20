@@ -442,6 +442,9 @@ fn key(
         state.bump();
     }
     state.ui.ui_events.extend(handled.events);
+    if let Some(text) = handled.toast {
+        state.toast(text);
+    }
     let mut cmds = handled.cmds;
     cmds.extend(after_change(state, tabs));
     cmds
@@ -716,6 +719,9 @@ fn popup_handled(
         state.bump();
     }
     state.ui.ui_events.extend(handled.events);
+    if let Some(text) = handled.toast {
+        state.toast(text);
+    }
     if let Some((id, spec)) = handled.confirm {
         open_confirm(state, key, id, spec);
     }
@@ -804,6 +810,7 @@ fn run_action(
             return Some(Vec::new());
         }
     }
+    let toast = action.toast(&selection);
     let cmds = match action.prepare(&selection) {
         Prepare::Run => vec![Cmd::RunAction {
             id,
@@ -836,12 +843,21 @@ fn run_action(
         }
         Prepare::Terminal(request) => {
             let key = selection.target.key();
+            // The focus moves to the open pane at once: no toast.
             if state.data.panes.contains_key(&(id, key.clone())) {
                 return Some(vec![Cmd::FocusPane { id, key }]);
             }
+            if let Some(text) = toast {
+                state.toast(text);
+            }
             vec![start_pane(state, id, key, request)]
         }
-        Prepare::Command(cmd) => vec![cmd],
+        Prepare::Command(cmd) => {
+            if let Some(text) = toast {
+                state.toast(text);
+            }
+            vec![cmd]
+        }
         Prepare::OpenPopup(pane) => open_popup(state, panes, &selection.target, Some(pane)),
         Prepare::Review => open_review(state, id, selection),
     };
@@ -1313,6 +1329,8 @@ fn open_pane(
             key: pane_key,
         }];
     }
+    // The pane needs a moment to start, so the toast says that it comes.
+    state.toast(format!("opening #{} in a pane", key.number));
     let PrKey {
         repo: RepoKey { owner, name },
         number,
@@ -2391,7 +2409,8 @@ fn overlay_key(
         OverlayState::Popup(popup) => {
             let Some(handled) = popup_key(&state.data, &areas, keymap, panes, popup, chord) else {
                 if keymap.matches("refresh", chord) {
-                    return refresh_popup(&state.data, &popup.key);
+                    let key = popup.key.clone();
+                    return refresh_popup(state, &key);
                 }
                 if keymap.matches("help", chord) {
                     let help = help_model(keymap, tabs, actions);
@@ -2474,8 +2493,11 @@ fn overlay_key(
 /// The `refresh` key in the popup of `key`: a load by number when the
 /// pull request is not loaded, else a refresh of its stack group, a
 /// reload of its detail, a load of its codeview comments and a scan of
-/// its repo.
-fn refresh_popup(data: &AppData, key: &PrKey) -> Vec<Cmd> {
+/// its repo. The reloads take a moment and the popup shows no spinner,
+/// so a toast says that they started.
+fn refresh_popup(state: &mut AppState, key: &PrKey) -> Vec<Cmd> {
+    state.toast(format!("refreshing #{}", key.number));
+    let data = &state.data;
     let Some(pr) = data.prs.get(key) else {
         return vec![Cmd::LoadPr(key.clone())];
     };
@@ -4335,6 +4357,7 @@ mod tests {
             reply: None,
             menu: None,
             react: None,
+            toast: None,
         };
         let (tabs, mut state) = setup(Some(handled));
         let j = press(KeyCode::Char('z'), KeyModifiers::NONE);
@@ -6592,6 +6615,56 @@ mod tests {
         state
     }
 
+    /// The text of the toast.
+    fn toast_of(state: &AppState) -> Option<&str> {
+        state.ui.toast.as_ref().map(|toast| toast.text.as_str())
+    }
+
+    /// The real actions on the row of #102: each copy and the browser
+    /// show a toast with the pull request, in the list and in the popup.
+    /// `R` in the popup shows one too.
+    #[test]
+    fn keys_without_a_visible_effect_show_a_toast() {
+        let mut state = action_state(&pr_row(102));
+        let url = state.data.prs[&testdata::pr_key("chaoshub", 102)]
+            .head
+            .value
+            .url
+            .clone();
+        assert_eq!(
+            act(&mut state, &REGISTRY, KeyCode::Char('y')),
+            vec![Cmd::Copy(url.clone())]
+        );
+        assert_eq!(toast_of(&state), Some("copied url of #102"));
+        assert!(state.ui.ui_events.contains(&UiEvent::ToastShown));
+        assert_eq!(state.ui.status, None, "the status line stays free");
+        assert_eq!(
+            act(&mut state, &REGISTRY, KeyCode::Char('o')),
+            vec![Cmd::OpenUrl(url.clone())]
+        );
+        assert_eq!(toast_of(&state), Some("opened #102 in browser"));
+        act(&mut state, &REGISTRY, KeyCode::Enter);
+        assert!(matches!(
+            state.ui.overlays.last().map(|o| &o.state),
+            Some(OverlayState::Popup(_))
+        ));
+        state.ui.toast = None;
+        assert_eq!(
+            act(&mut state, &REGISTRY, KeyCode::Char('y')),
+            vec![Cmd::Copy(url)]
+        );
+        assert_eq!(toast_of(&state), Some("copied url of #102"));
+        let cmds = act(&mut state, &REGISTRY, KeyCode::Char('R'));
+        assert_eq!(cmds.len(), 4, "{cmds:?}");
+        assert_eq!(toast_of(&state), Some("refreshing #102"));
+        let frame = frame::frame_model(&mut state);
+        assert_eq!(
+            frame.toast.as_ref().map(|toast| toast.text.as_str()),
+            Some("refreshing #102"),
+            "the toast shows over the popup"
+        );
+    }
+
     /// The row item of the pull request `#number` of `chaoshub`.
     fn pr_row(number: u64) -> impl Fn(&AppData) -> RowItem {
         move |data: &AppData| RowItem::Pr(pr_ref(&data.prs[&testdata::pr_key("chaoshub", number)]))
@@ -7197,6 +7270,7 @@ mod tests {
         assert_eq!(request.argv[3..], ["pr", url]);
         assert_eq!(request.label, "chaoshub#500");
         assert_eq!(request.cwd, std::path::PathBuf::from("/code/chaoshub"));
+        assert_eq!(toast_of(&state), Some("opening #500 in a pane"));
         let url = "https://github.com/acme/other/pull/3";
         ask_for_url(&mut state, None);
         let (_, request) = detail_run(&type_and_enter(&mut state, url)[0]);
@@ -7943,6 +8017,7 @@ mod tests {
 
         let mut review = FakeAction::new("review", 'v');
         review.prepare = Prepare::Terminal(request.clone());
+        review.toast = Some("opening #99 in codeview".into());
         let actions = fake(review);
         let key = TargetKey::Pr(testdata::pr_key("chaoshub", 99));
         let run_terminal = Cmd::RunTerminal {
@@ -7960,6 +8035,8 @@ mod tests {
             Some(&PaneHandleState::Starting)
         );
         assert_eq!(flags_of(&mut state, 99), "◆");
+        assert_eq!(toast_of(&state), Some("opening #99 in codeview"));
+        state.ui.toast = None;
         let focus = Cmd::FocusPane {
             id: "review",
             key: key.clone(),
@@ -7968,6 +8045,7 @@ mod tests {
             act_menu(&mut state, &actions, KeyCode::Char('v')),
             vec![focus.clone()]
         );
+        assert_eq!(toast_of(&state), None, "the focus moves at once");
         let started = Msg::PaneStarted {
             id: "review",
             key: key.clone(),
@@ -9608,6 +9686,7 @@ mod tests {
             "Rex shows the PR overview in the header of the block"
         );
         assert!(state.ui.overlays.is_empty(), "no sidebar");
+        assert_eq!(toast_of(&state), Some("opening #99 in a pane"));
         assert_eq!(
             state.data.panes.get(&(DETAIL_ID, key.clone())),
             Some(&PaneHandleState::Starting)
@@ -9634,6 +9713,7 @@ mod tests {
     fn enter_on_the_open_detail_pane_focuses_it() {
         let mut state = detail_state();
         enter(&mut state);
+        state.ui.toast = None;
         assert_eq!(
             enter(&mut state),
             vec![Cmd::FocusPane {
@@ -9641,6 +9721,7 @@ mod tests {
                 key: TargetKey::Pr(testdata::pr_key("chaoshub", 99)),
             }]
         );
+        assert_eq!(toast_of(&state), None, "the focus moves at once");
     }
 
     #[test]

@@ -60,8 +60,8 @@ and the table name for `[actions.<id>]`.
 | `rerun_checks` | `x` | Runs the failed checks again. |
 | `draft` | `d` | Changes the PR from draft to ready, or from ready to draft. The actions menu shows "mark ready" for a draft and "convert to draft" for a ready PR. |
 | `close` | `c` | Closes the PR after a confirm popup. |
-| `browser` | `o` | Opens the PR in the browser. |
-| `copy_url` | `y` | Copies the PR URL. |
+| `browser` | `o` | Opens the PR in the browser. A toast says `opened #7 in browser` (see [Toast](usage.md#toast)). |
+| `copy_url` | `y` | Copies the PR URL. A toast says `copied url of #7` (see [Toast](usage.md#toast)). |
 | `copy_stack_urls` | `Y` | Copies the URLs of the open PRs of the stack, one URL on each line. The order is the order of the Stack pane: position 1, the bottom of the stack, first. `[actions.copy_stack_urls] order = "top_first"` puts the top of the stack first, as the list does (see [`[actions.<id>]`](configuration.md#actionsid)). It works only in the actions menu (`space` then `Y`). Hidden for a PR without a stack. When an open entry of the stack is not loaded, the status line shows "stack not loaded, refreshing…". Try again after the refresh. |
 | `copy_change_id` | `i` | Copies the jj change id of the local change that matches the PR. In a git repo, it copies the local branch name, the actions menu shows "copy branch name", and the key hint bar shows "copy branch". Hidden when no local change matches. |
 | `agent` | `p` | Opens the PR view on the Agent pane. Needs a repo with a `path`. See [Review agents](review-agents.md). |

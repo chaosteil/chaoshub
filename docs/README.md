@@ -7,7 +7,7 @@ describe every feature.
 | Page | What it tells |
 |---|---|
 | [Install](install.md) | The requirements, jj and git, and each way to install chaoshub. |
-| [Usage](usage.md) | The start, the command line, the tabs, the list columns, the hidden rows, the filter, the app keys, the mouse, the status bar, `chaoshub list` and the files of chaoshub. |
+| [Usage](usage.md) | The start, the command line, the tabs, the list columns, the hidden rows, the filter, the app keys, the mouse, the status bar, the toast, `chaoshub list` and the files of chaoshub. |
 | [The PR view](pr-view.md) | Where the PR view opens, its panes and keys, replies, reactions and the diff colors. |
 | [Actions and reviews](actions.md) | The actions and their keys, the stack merge, the Review popup for codeview comments, and the pulse of changes on their way to GitHub. |
 | [Configuration](configuration.md) | Every key of `config.toml`. |

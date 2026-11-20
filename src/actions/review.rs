@@ -98,6 +98,12 @@ impl Action for Review {
         })
     }
 
+    /// The pane needs a moment to start, so the toast says that it comes.
+    fn toast(&self, sel: &Selection) -> Option<String> {
+        let Target::Pr { pr, .. } = &sel.target;
+        Some(format!("opening #{} in codeview", pr.key.number))
+    }
+
     /// The review runs in a terminal; the runtime never calls this.
     fn execute(
         &self,
@@ -210,7 +216,16 @@ mod tests {
 
     #[test]
     fn prepare_opens_codeview_on_the_pull_request_in_the_repo() {
-        let req = request(&selection(Some("/code/chaoshub")));
+        let sel = selection(Some("/code/chaoshub"));
+        let number = {
+            let Target::Pr { pr, .. } = &sel.target;
+            pr.key.number
+        };
+        assert_eq!(
+            Review.toast(&sel),
+            Some(format!("opening #{number} in codeview"))
+        );
+        let req = request(&sel);
         assert_eq!(
             req.argv,
             [

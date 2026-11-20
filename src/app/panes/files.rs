@@ -193,6 +193,7 @@ impl Pane for FilesPane {
             };
             return Some(Handled {
                 cmds: vec![Cmd::OpenUrl(format!("{}/files", pr.head.value.url))],
+                toast: Some(format!("opened files of #{} in browser", pr.key.number)),
                 ..Handled::default()
             });
         }
@@ -1099,11 +1100,16 @@ mod tests {
         let state = state_with(Some(testdata::files()), None, false);
         let mut ps = FilesPane.init_state();
         let (_, handled) = model_and_keys(&state, &mut ps, &[KeyCode::Char('o')]);
+        let handled = handled.unwrap();
         assert_eq!(
-            handled.map(|h| h.cmds),
-            Some(vec![Cmd::OpenUrl(
+            handled.cmds,
+            vec![Cmd::OpenUrl(
                 "https://github.com/chaosteil/chaoshub/pull/7/files".into()
-            )])
+            )]
+        );
+        assert_eq!(
+            handled.toast.as_deref(),
+            Some("opened files of #7 in browser")
         );
     }
 }

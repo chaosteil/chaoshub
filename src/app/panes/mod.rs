@@ -274,6 +274,7 @@ pub(crate) mod fake {
                 reply: None,
                 menu: None,
                 react: None,
+                toast: None,
             })
         }
     }

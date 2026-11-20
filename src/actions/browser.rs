@@ -38,6 +38,11 @@ impl Action for Browser {
         Prepare::Command(Cmd::OpenUrl(pr.head.value.url.clone()))
     }
 
+    fn toast(&self, sel: &Selection) -> Option<String> {
+        let Target::Pr { pr, .. } = &sel.target;
+        Some(format!("opened #{} in browser", pr.key.number))
+    }
+
     /// The url opens through `Cmd::OpenUrl`; the runtime never calls
     /// this.
     fn execute(
@@ -85,5 +90,6 @@ mod tests {
                 "https://github.com/chaosteil/chaoshub/pull/7".into()
             ))
         );
+        assert_eq!(Browser.toast(&sel).as_deref(), Some("opened #7 in browser"));
     }
 }
