@@ -269,7 +269,7 @@ fn popup_content(
         let subtitle = if pinned {
             "not loaded yet"
         } else {
-            "this pull request is gone"
+            "PR no longer in the list"
         };
         return OverlayContent::Popup {
             title: popup_title(data, pinned, || format!("#{}", popup.key.number)),

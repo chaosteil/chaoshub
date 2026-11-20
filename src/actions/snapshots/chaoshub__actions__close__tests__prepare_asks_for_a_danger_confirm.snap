@@ -6,7 +6,7 @@ ConfirmSpec {
     title: "close #7?",
     lines: [
         "#7 Add the review action",
-        "closes the pull request without a merge",
+        "closes the PR without merging",
     ],
     danger: true,
 }

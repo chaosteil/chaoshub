@@ -125,12 +125,12 @@ pub(crate) fn merge_blockers(entries: &[PullRequest]) -> Blockers {
         if head.merge_state == MergeStateStatus::Blocked {
             blockers
                 .warnings
-                .push(format!("#{number} is blocked by the branch rules"));
+                .push(format!("#{number} blocked by branch rules"));
         }
         if head.mergeable == Mergeable::Unknown || head.merge_state == MergeStateStatus::Unknown {
             blockers
                 .warnings
-                .push(format!("#{number} merge state is not known yet"));
+                .push(format!("#{number} merge state not known yet"));
         }
     }
     blockers
@@ -369,8 +369,8 @@ mod tests {
                 Blockers {
                     hard: Vec::new(),
                     warnings: vec![
-                        "#1 is blocked by the branch rules".into(),
-                        "#2 merge state is not known yet".into(),
+                        "#1 blocked by branch rules".into(),
+                        "#2 merge state not known yet".into(),
                     ],
                 },
             ),

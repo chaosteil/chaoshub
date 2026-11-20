@@ -15,7 +15,7 @@ expression: screen(&mut app)
 "                                                                                                    "
 "                  ◢━ CLOSE #99? ╱━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱╱╱━◥                  "
 "                  ▌ #99 fix(store): reopen the connection after an error         ┃                  "
-"                  ▌ closes the pull request without a merge                      ┃                  "
+"                  ▌ closes the PR without merging                                ┃                  "
 "                  ▌                                                              ┃                  "
 "                  ▌ y confirm · n / Esc cancel                                   ┃                  "
 "                  ◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◣                  "

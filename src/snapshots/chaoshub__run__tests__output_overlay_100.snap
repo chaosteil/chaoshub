@@ -28,7 +28,7 @@ expression: screen(&mut app)
 "                    ▌ pr-agent: step 38                                                            ┃"
 "                    ▌ pr-agent: step 39                                                            ┃"
 "                    ▌ pr-agent: step 40                                                            ┃"
-"                    ▌ 40 lines, last 24 shown · Esc close                                          ┃"
+"                    ▌ last 24 of 40 lines · Esc close                                              ┃"
 "                    ◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◣"
 "╱ Esc close                                                                                         "
 " [MINE] 0 repos · cache from 5m ago ◤                                                        ? help "

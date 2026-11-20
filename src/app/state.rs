@@ -768,7 +768,7 @@ impl ReviewPopup {
             .collect();
         if rows.is_empty() {
             rows.push(ReviewRow::Note(
-                "no codeview comments: the review has only the message".to_owned(),
+                "no codeview comments: message only".to_owned(),
             ));
         }
         rows

@@ -206,7 +206,7 @@ impl Action for MergeStackAction {
             Prepare::Confirm(spec) => {
                 let Target::Pr { pr, .. } = &top.target;
                 Prepare::Confirm(ConfirmSpec {
-                    title: format!("merge the stack up to #{}?", pr.key.number),
+                    title: format!("merge stack up to #{}?", pr.key.number),
                     ..spec
                 })
             }
@@ -731,10 +731,10 @@ fn confirm_lines(
         let count = entries.len();
         lines.push(match strategy {
             StackStrategy::Atomic => {
-                format!("merges {count} pull requests atomically, bottom first:")
+                format!("merges {count} PRs atomically, bottom first:")
             }
             StackStrategy::Sequential => format!(
-                "merges {count} pull requests one by one, bottom first, each with its own message:"
+                "merges {count} PRs one by one, bottom first, each with its own commit message:"
             ),
         });
     }
@@ -751,7 +751,7 @@ fn confirm_lines(
     }
     lines.push(format!("method: {}", method(repo, settings).as_str()));
     if settings.bypass_rules {
-        lines.push("bypasses the branch rules".to_owned());
+        lines.push("bypasses branch rules".to_owned());
     }
     for warning in merge_blockers(entries).warnings {
         lines.push(format!("warning: {warning}"));
@@ -923,7 +923,7 @@ mod tests {
                 confirm(
                     "merge #3?",
                     &[
-                        "merges 3 pull requests one by one, bottom first, each with its own message:",
+                        "merges 3 PRs one by one, bottom first, each with its own commit message:",
                         "  1 #1 Change 1  CI passed, approved",
                         "  2 #2 Change 2  CI passed, approved",
                         "  3 #3 Change 3  CI passed, approved",
@@ -937,7 +937,7 @@ mod tests {
                 confirm(
                     "merge #2?",
                     &[
-                        "merges 2 pull requests one by one, bottom first, each with its own message:",
+                        "merges 2 PRs one by one, bottom first, each with its own commit message:",
                         "  1 #1 Change 1  CI passed, approved",
                         "  2 #2 Change 2  CI passed, approved",
                         "method: squash",
@@ -958,12 +958,12 @@ mod tests {
                 confirm(
                     "merge #2?",
                     &[
-                        "merges 2 pull requests one by one, bottom first, each with its own message:",
+                        "merges 2 PRs one by one, bottom first, each with its own commit message:",
                         "  1 #1 Change 1  CI passed, approved",
                         "  2 #2 Change 2  CI running, review required",
                         "method: squash",
-                        "warning: #1 is blocked by the branch rules",
-                        "warning: #2 merge state is not known yet",
+                        "warning: #1 blocked by branch rules",
+                        "warning: #2 merge state not known yet",
                     ],
                 ),
             ),
@@ -975,7 +975,7 @@ mod tests {
                     &[
                         "  #7 Change 7  CI passed, approved",
                         "method: rebase",
-                        "bypasses the branch rules",
+                        "bypasses branch rules",
                     ],
                 ),
             ),
@@ -1006,7 +1006,7 @@ mod tests {
                 confirm(
                     "merge #2?",
                     &[
-                        "merges 2 pull requests atomically, bottom first:",
+                        "merges 2 PRs atomically, bottom first:",
                         "  1 #1 Change 1  CI passed, approved",
                         "  2 #2 Change 2  CI passed, approved",
                         "method: squash",
@@ -1019,7 +1019,7 @@ mod tests {
                 confirm(
                     "merge #2?",
                     &[
-                        "merges 2 pull requests atomically, bottom first:",
+                        "merges 2 PRs atomically, bottom first:",
                         "  1 #1 Change 1  CI passed, approved",
                         "  2 #2 Change 2  CI passed, approved",
                         "method: squash",
@@ -1090,9 +1090,9 @@ mod tests {
         assert_eq!(
             MergeStackAction.prepare(&sel),
             confirm(
-                "merge the stack up to #3?",
+                "merge stack up to #3?",
                 &[
-                    "merges 3 pull requests one by one, bottom first, each with its own message:",
+                    "merges 3 PRs one by one, bottom first, each with its own commit message:",
                     "  1 #1 Change 1  CI passed, approved",
                     "  2 #2 Change 2  CI passed, approved",
                     "  3 #3 Change 3  CI passed, approved",
@@ -1803,7 +1803,7 @@ mod tests {
         let two_and_3 = confirm(
             "merge #3?",
             &[
-                "merges 2 pull requests one by one, bottom first, each with its own message:",
+                "merges 2 PRs one by one, bottom first, each with its own commit message:",
                 "  2 #2 Change 2  CI passed, approved",
                 "  3 #3 Change 3  CI passed, approved",
                 "method: squash",

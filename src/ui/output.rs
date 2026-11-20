@@ -61,13 +61,13 @@ pub(crate) fn render(
     }
     let hint = if skip + rows < lines.len() {
         format!(
-            "{} lines, lines {} to {} shown · Esc close",
-            lines.len(),
+            "lines {}–{} of {} · Esc close",
             skip + 1,
-            skip + rows
+            skip + rows,
+            lines.len()
         )
     } else if skip > 0 {
-        format!("{} lines, last {rows} shown · Esc close", lines.len())
+        format!("last {rows} of {} lines · Esc close", lines.len())
     } else {
         format!(
             "{} · Esc close",
@@ -139,12 +139,12 @@ mod tests {
     fn output_draws_from_the_scroll_and_stops_at_the_last_page() {
         let top = drawn(0);
         assert!(top.contains("line 1 "), "{top}");
-        assert!(top.contains("30 lines, lines 1 to 5 shown"), "{top}");
+        assert!(top.contains("lines 1–5 of 30"), "{top}");
         let middle = drawn(10);
         assert!(middle.contains("line 11 "), "{middle}");
         assert!(!middle.contains("line 10 "), "{middle}");
         assert_eq!(drawn(29), drawn(25), "the last page");
-        assert!(drawn(29).contains("30 lines, last 5 shown"));
+        assert!(drawn(29).contains("last 5 of 30 lines"));
     }
 
     #[test]

@@ -49,7 +49,7 @@ impl Action for Close {
             title: format!("close #{number}?"),
             lines: vec![
                 format!("#{number} {}", pr.head.value.title),
-                "closes the pull request without a merge".to_owned(),
+                "closes the PR without merging".to_owned(),
             ],
             danger: true,
         })

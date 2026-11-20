@@ -25,13 +25,13 @@ pub(crate) struct Words {
 /// The words of the text popup of the message of a review.
 pub(crate) const MESSAGE: Words = Words {
     hint: "Ctrl-s done · Ctrl-e editor · Esc back",
-    placeholder: "the message of the review",
+    placeholder: "review message",
 };
 
 /// The words of the text popup of a reply.
 pub(crate) const REPLY: Words = Words {
     hint: "Ctrl-s send · Ctrl-e editor · Esc cancel",
-    placeholder: "the text of the reply",
+    placeholder: "reply",
 };
 
 /// The content of a text popup.

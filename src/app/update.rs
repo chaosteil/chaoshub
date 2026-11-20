@@ -1367,7 +1367,7 @@ fn review_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) -> Vec<Cmd
     let event = match chord.code {
         KeyCode::Char('m') if chord.mods.is_empty() => {
             let overlay = OverlayState::ReviewText {
-                title: format!("message of the review to #{}", review.pr().key.number),
+                title: format!("review message for #{}", review.pr().key.number),
                 text: review.message(&state.data).to_owned(),
                 error: None,
                 reply: None,
@@ -1836,7 +1836,7 @@ fn open_ask(state: &mut AppState, key: &PrKey) -> Vec<Cmd> {
         },
         spec: PromptSpec {
             title: format!("ask pr-agent about #{}", key.number),
-            placeholder: "a question about the pull request".to_owned(),
+            placeholder: "question about this PR".to_owned(),
         },
         text: String::new(),
     };
@@ -5864,7 +5864,7 @@ mod tests {
         state.bump();
         assert!(matches!(
             popup_content(&mut state, &PANES),
-            OverlayContent::Popup { subtitle, .. } if subtitle == "this pull request is gone"
+            OverlayContent::Popup { subtitle, .. } if subtitle == "PR no longer in the list"
         ));
     }
 
@@ -9214,7 +9214,7 @@ mod tests {
             ask,
             PaletteAsk::Input {
                 title: format!("ask pr-agent about #{}", pr.number),
-                placeholder: "a question about the pull request".into(),
+                placeholder: "question about this PR".into(),
                 value: String::new(),
                 confirm: Some("Ask"),
             }
@@ -9715,7 +9715,7 @@ mod tests {
         assert_eq!(
             review_spec(&state).rows,
             [crate::bus::ReviewRow::Note(
-                "no codeview comments: the review has only the message".into()
+                "no codeview comments: message only".into()
             )]
         );
         assert_eq!(review_spec(&state).cursor, None);
@@ -9775,7 +9775,7 @@ mod tests {
         let OverlayState::ReviewText { title, text, .. } = top(&state) else {
             panic!("no text popup");
         };
-        assert_eq!(title, &format!("message of the review to #{}", pr.number));
+        assert_eq!(title, &format!("review message for #{}", pr.number));
         assert_eq!(text, "");
         for c in "one q".chars() {
             key(&mut state, c);

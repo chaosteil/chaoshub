@@ -148,7 +148,7 @@ fn apply_confirm(cx: &KeyCx<'_>) -> Option<Handled> {
     lines.push("body".to_owned());
     lines.extend(line_diff(old_body.trim(), body.trim()));
     let spec = ConfirmSpec {
-        title: format!("apply the pr-agent description to #{}?", pr.key.number),
+        title: format!("apply pr-agent description to #{}?", pr.key.number),
         lines,
         danger: false,
     };
@@ -514,7 +514,7 @@ mod tests {
             .unwrap();
         let (id, spec) = handled.confirm.unwrap();
         assert_eq!(id, "agent");
-        assert_eq!(spec.title, "apply the pr-agent description to #7?");
+        assert_eq!(spec.title, "apply pr-agent description to #7?");
         assert_eq!(
             spec.lines,
             [
