@@ -1725,11 +1725,10 @@ rare.
 chaoshub never posts these comments to GitHub itself. Only codeview
 posts, so its lock file and its sent marks stop a second send of the
 same comment, also from an open codeview. The status line then says
-`approved #N with 2 comments` (or `commented on #N …`, `requested
-changes on #N …`), with the count of the comments
-on an older push, and names the comments that stay local and the
-comments that went out already. After the send,
-chaoshub reads the comment files again. See `:help codeview-bridge` in
+`posted N comments on #<number> as a <event> review`, with the count
+of the comments on an older push, and names the comments that stay
+local and the comments that went out already. After the send, chaoshub
+reads the comment files again. See `:help codeview-bridge` in
 nvim for the request and the result.
 
 ### What `enter` runs inside Rex

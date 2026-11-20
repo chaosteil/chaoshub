@@ -397,11 +397,12 @@ async fn send(job: Job) -> Result<Sent, String> {
     } else {
         String::new()
     };
-    let (_, done) = verb(job.event);
+    let name = job.event.name();
+    let article = if name.starts_with('a') { "an" } else { "a" };
     Ok(Sent::Done(format!(
-        "{done} #{} with {}{older}{text}",
-        job.key.number,
-        noun(outcome.posted)
+        "posted {} on #{} as {article} {name} review{older}{text}",
+        noun(outcome.posted),
+        job.key.number
     )))
 }
 
@@ -591,7 +592,10 @@ mod tests {
         let text = send(setup.job(&["c1", "c2"], TIMEOUT)).await.unwrap();
         assert_eq!(
             text,
-            Sent::Done("commented on #14 with 1 comment · already sent from codeview: c2".into())
+            Sent::Done(
+                "posted 1 comment on #14 as a comment review · already sent from codeview: c2"
+                    .into()
+            )
         );
         let request = setup.request();
         assert_eq!(request["version"], 2);
@@ -620,7 +624,7 @@ mod tests {
         let text = send(job).await.unwrap();
         assert_eq!(
             text,
-            Sent::Done("approved #14 with 2 comments (1 on an older push) · already sent from codeview: c2".into())
+            Sent::Done("posted 2 comments on #14 as an approve review (1 on an older push) · already sent from codeview: c2".into())
         );
         assert_eq!(
             setup.request()["pushes"],
@@ -641,7 +645,7 @@ mod tests {
         assert_eq!(
             text,
             Sent::Done(format!(
-                "commented on #14 with 1 comment{STAYS_LOCAL}src/c.rs:L7-8 (old): cannot read the diff of the older push h0"
+                "posted 1 comment on #14 as a comment review{STAYS_LOCAL}src/c.rs:L7-8 (old): cannot read the diff of the older push h0"
             ))
         );
     }
@@ -654,7 +658,10 @@ printf '%s' '{"version":1,"ok":true,"posted":1,"skipped":[],"already_sent":[],"u
     async fn an_older_codeview_gets_the_comments_of_one_push_with_version_1() {
         let setup = Setup::new(OLD_CODEVIEW_BODY);
         let text = send(setup.job(&["c1"], TIMEOUT)).await.unwrap();
-        assert_eq!(text, Sent::Done("commented on #14 with 1 comment".into()));
+        assert_eq!(
+            text,
+            Sent::Done("posted 1 comment on #14 as a comment review".into())
+        );
         let request = setup.request();
         assert_eq!(request["version"], 1, "the second request");
         assert_eq!(request["head"], "h1");

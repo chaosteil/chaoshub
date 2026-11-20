@@ -9488,7 +9488,9 @@ mod tests {
     #[test]
     fn a_review_without_some_comments_shows_a_warning() {
         let (mut state, pr) = codeview_state();
-        let text = format!("approved #7 with 1 comment{STAYS_LOCAL}src/a.rs:L3 (new): no line");
+        let text = format!(
+            "posted 1 comment on #7 as an approve review{STAYS_LOCAL}src/a.rs:L3 (new): no line"
+        );
         let done = Msg::ActionEvent {
             id: CODEVIEW_SEND_ID,
             key: TargetKey::Pr(pr.clone()),
@@ -9986,11 +9988,14 @@ mod tests {
         let done = Msg::ActionEvent {
             id: "codeview_send",
             key: TargetKey::Pr(pr.clone()),
-            event: ActionEvent::Done(Ok("commented on #7 with 1 comment".into())),
+            event: ActionEvent::Done(Ok("posted 1 comment on #7 as a comment review".into())),
         };
         let cmds = update(&mut state, &Keymap::default(), done);
         assert_eq!(cmds.last(), Some(&Cmd::LoadCodeview(pr)));
-        assert_eq!(status_text(&state), Some("commented on #7 with 1 comment"));
+        assert_eq!(
+            status_text(&state),
+            Some("posted 1 comment on #7 as a comment review")
+        );
     }
 
     #[test]
