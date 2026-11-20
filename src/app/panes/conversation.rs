@@ -341,7 +341,7 @@ fn reply_spec(detail: Option<&PrDetail>, item: Option<Item>, number: u64) -> Rep
                 Some(thread) => {
                     let place = place(thread);
                     ReplySpec {
-                        title: format!("reply on {place}"),
+                        title: format!("reply on #{number} at {place}"),
                         to: ReplyTo::Thread {
                             id: thread.id.clone(),
                             place,
@@ -1466,13 +1466,13 @@ mod tests {
             (
                 2,
                 thread("PRRT_42", "src/ui/list.rs:42"),
-                "reply on src/ui/list.rs:42",
+                "reply on #7 at src/ui/list.rs:42",
                 "",
             ),
             (
                 7,
                 thread("PRRT_7", "src/ui/pane.rs:7"),
-                "reply on src/ui/pane.rs:7",
+                "reply on #7 at src/ui/pane.rs:7",
                 "",
             ),
             (10, ReplyTo::Pr, "comment on #7", bob),

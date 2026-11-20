@@ -3,7 +3,7 @@ source: src/run.rs
 expression: screen(&mut app)
 ---
 "◢ 1 MINE ◤ 2 REVIEW ◤ 3 TEAM ◤                                                             chaoshub "
-" TITLE              ◢━ PR_AGENT OUTPUT ╱━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱╱╱━◥"
+" TITLE              ◢━ PR_AGENT #101 OUTPUT ╱━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱╱╱━◥"
 "▶ ─ fix(store): reop▌ pr-agent: step 17                                                            ┃"
 " stack #12 -> main ·▌ pr-agent: step 18                                                            ┃"
 " ┌ feat(ui): popup f▌ pr-agent: step 19                                                            ┃"

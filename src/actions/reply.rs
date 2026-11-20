@@ -91,7 +91,7 @@ impl Action for Reply {
                         .add_thread_reply(&id, &body)
                         .await
                         .map_err(|err| err.to_string())?;
-                    Ok(format!("replied on {place}"))
+                    Ok(format!("replied on #{} at {place}", pr.key.number))
                 }
                 ReplyTo::Pr => {
                     svc.client
@@ -209,7 +209,7 @@ mod tests {
         let result = Reply
             .execute(selection(), reply(to, "Fixed."), services(&server))
             .await;
-        assert_eq!(result, Ok("replied on src/ui/list.rs:42".to_owned()));
+        assert_eq!(result, Ok("replied on #7 at src/ui/list.rs:42".to_owned()));
         assert_eq!(
             sent(&server).await,
             [(

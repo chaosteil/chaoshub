@@ -1101,11 +1101,11 @@ The text box has the keys of the text box of the review message:
 |---|---|
 | `enter` | Adds a new line. |
 | `ctrl-e` | Opens the text in `$VISUAL`, else `$EDITOR`, else `nvim`. When the editor quits, its text comes back into the text box. |
-| `ctrl-s` | Sends the reply. A text that is empty, or that is still the start text, sends nothing. The status line then says `empty reply, not sent`. |
+| `ctrl-s` | Sends the reply. A text that is empty, or that is still the start text, sends nothing. The status line then says `empty reply to #7, not sent`. |
 | `esc` | Closes the text box. The text is lost. |
 
 When the reply went out, the status line says so, for example
-`commented on #7` or `replied on src/lib.rs:12`, and chaoshub reads the
+`commented on #7` or `replied on #7 at src/lib.rs:12`, and chaoshub reads the
 conversation again. Then the reply shows in the pane. When GitHub
 refuses the reply, the status line shows the error.
 
@@ -1158,8 +1158,8 @@ reaction with no count left shows as `👍 0` while it pulses. When the
 reaction went out, the status line says so, for example `reacted 🎉 on
 #7` or `removed 👍 on #7`, and chaoshub reads the conversation again.
 When GitHub refuses the reaction, the pane shows the old reactions
-again, and the status line shows the error, for example `react to a
-comment failed: offline`.
+again, and the status line shows the error, for example `react failed
+on #7: offline`.
 
 #### Diff colors
 
@@ -1542,7 +1542,7 @@ The pane has no direct keys. Its tools are in the actions menu: press
 | `p` | | Opens a confirm popup with the line diff of the old and the new title and body. `y` sets the title and the body of the pull request on GitHub. |
 
 One run per tool per pull request runs at a time. A second `space`
-then `R` while the review runs only says `pr-agent review already running`. Different tools, and
+then `R` while the review runs only says `pr-agent review #7 already running`. Different tools, and
 different pull requests, run at the same time.
 
 In the menu, the action keys win over the pane keys. Thus a tool uses
@@ -1554,7 +1554,7 @@ pane does not show the `agent` action.
 While a run goes, the status bar shows the spinner and one item per run,
 for example `pr-agent review #7 · pr-agent ask #7`. The last output line of
 pr-agent shows in the status line. At the end, the status line shows
-`pr-agent review done (12k tokens)`, or the error.
+`pr-agent review #7 done (12k tokens)`, or the error.
 
 ### What chaoshub runs
 

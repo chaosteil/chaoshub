@@ -751,7 +751,9 @@ fn run_action(
         Applicability::Enabled => {}
         Applicability::Hidden => return None,
         Applicability::Disabled(reason) => {
-            state.message(reason, CellStyle::Warn, INFO_TTL);
+            let Target::Pr { pr, .. } = &selection.target;
+            let text = format!("#{}: {reason}", pr.key.number);
+            state.message(text, CellStyle::Warn, INFO_TTL);
             // The cached stack can be old, for example after a restart.
             // A refresh by id gives the merged entries of the stack.
             if reason == crate::actions::STACK_NOT_LOADED {
@@ -1388,7 +1390,7 @@ fn review_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) -> Vec<Cmd
         return Vec::new();
     };
     if let Some(reason) = review.blocked(&state.data, event) {
-        let text = format!("{}: {reason}", event.label());
+        let text = format!("{} #{}: {reason}", event.label(), review.pr().key.number);
         state.message(text, CellStyle::Warn, INFO_TTL);
         return Vec::new();
     }
@@ -1748,7 +1750,9 @@ fn review_text_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
 /// only the start text, sends nothing, and the status line says so.
 fn send_reply(state: &mut AppState, reply: ReplyDialog, text: &str) -> Vec<Cmd> {
     if text.trim().is_empty() || text.trim() == reply.start.trim() {
-        state.message("empty reply, not sent", CellStyle::Dim, INFO_TTL);
+        let Target::Pr { pr, .. } = &reply.action.selection.target;
+        let text = format!("empty reply to #{}, not sent", pr.key.number);
+        state.message(text, CellStyle::Dim, INFO_TTL);
         return Vec::new();
     }
     vec![Cmd::RunAction {
@@ -1808,7 +1812,11 @@ fn start_agent(state: &mut AppState, job: AgentJob) -> Vec<Cmd> {
     let kind = job.tool.kind();
     if !state.data.agent_jobs.insert((job.key.clone(), kind)) {
         state.message(
-            format!("pr-agent {} already running", kind.name()),
+            format!(
+                "pr-agent {} #{} already running",
+                kind.name(),
+                job.key.number
+            ),
             CellStyle::Warn,
             INFO_TTL,
         );
@@ -1881,7 +1889,7 @@ fn agent_msg(state: &mut AppState, msg: Msg) -> Vec<Cmd> {
 
 /// The end of a pr-agent run: the job leaves the job set, the record or
 /// the error goes to the results, and the status line says
-/// `pr-agent review done (12k tokens)` or the error. The files load again.
+/// `pr-agent review #7 done (12k tokens)` or the error. The files load again.
 fn agent_finished(
     state: &mut AppState,
     key: PrKey,
@@ -1890,7 +1898,7 @@ fn agent_finished(
 ) -> Vec<Cmd> {
     state.data.agent_jobs.remove(&(key.clone(), kind));
     let results = state.data.agent.entry(key.clone()).or_default();
-    let name = kind.name();
+    let name = format!("{} #{}", kind.name(), key.number);
     let (text, style, ttl) = match result {
         Ok(record) => {
             let text = match record.total_tokens() {
@@ -3501,6 +3509,18 @@ fn drop_gone(data: &mut AppData, key: &PrKey, started_at: DateTime<Utc>) -> bool
     true
 }
 
+/// True when `text` names `#number`, not only a longer number that
+/// starts with the same digits.
+fn names_pr(text: &str, number: u64) -> bool {
+    let tag = format!("#{number}");
+    text.match_indices(&tag).any(|(at, _)| {
+        !text[at + tag.len()..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_ascii_digit())
+    })
+}
+
 /// An event of a running action. Output lines go to the output popup of
 /// the action and its target. Progress and the result show in the status
 /// line, and the result runs the follow-up rule.
@@ -3544,8 +3564,14 @@ fn action_event(
                 }
                 Ok(text) => state.message(text, CellStyle::Success, INFO_TTL),
                 Err(err) => {
+                    let TargetKey::Pr(pr) = &key;
+                    let on = if names_pr(&err, pr.number) {
+                        String::new()
+                    } else {
+                        format!(" on #{}", pr.number)
+                    };
                     state.message(
-                        format!("{label} failed: {err}"),
+                        format!("{label} failed{on}: {err}"),
                         CellStyle::Danger,
                         ERROR_TTL,
                     );
@@ -3602,7 +3628,8 @@ fn output(
         });
     let Some((open, scroll)) = open else {
         cap(&mut lines);
-        let title = format!("{label} output");
+        let TargetKey::Pr(pr) = &key;
+        let title = format!("{label} #{} output", pr.number);
         let overlay = OverlayState::Output {
             id,
             key,
@@ -6409,7 +6436,7 @@ mod tests {
         assert_eq!(act_menu(&mut state, &actions, KeyCode::Char('m')), vec![]);
         assert_eq!(
             state.ui.status.as_ref().map(|msg| msg.text.as_str()),
-            Some("stack not loaded")
+            Some("#102: stack not loaded")
         );
         state.ui.status = None;
         assert_eq!(act_menu(&mut state, &actions, KeyCode::Char('h')), vec![]);
@@ -7382,12 +7409,15 @@ mod tests {
         let generation = state.generation;
         run_msg(&mut state, &actions, event("agent", 102, out(2..3)));
         assert!(state.generation > generation);
-        assert_eq!(outputs(&state), [("agent output".to_owned(), lines(0..3))]);
+        assert_eq!(
+            outputs(&state),
+            [("agent #102 output".to_owned(), lines(0..3))]
+        );
         let model = frame::frame_model(&mut state).overlays.last().cloned();
         assert_eq!(
             model.map(|o| o.content),
             Some(OverlayContent::Output {
-                title: "agent output".into(),
+                title: "agent #102 output".into(),
                 lines: lines(0..3),
                 scroll: 2,
             })
@@ -7399,7 +7429,11 @@ mod tests {
                 .iter()
                 .map(|(t, _)| t.as_str())
                 .collect::<Vec<_>>(),
-            ["agent output", "agent output", "other output"]
+            [
+                "agent #102 output",
+                "agent #101 output",
+                "other #102 output"
+            ]
         );
     }
 
@@ -7412,7 +7446,7 @@ mod tests {
         run_msg(&mut state, &actions, out(1500..2600));
         assert_eq!(
             outputs(&state),
-            [("agent output".to_owned(), lines(600..2600))]
+            [("agent #102 output".to_owned(), lines(600..2600))]
         );
         let mut fresh = action_state(&pr_row(102));
         run_msg(&mut fresh, &actions, out(0..2001));
@@ -7428,7 +7462,10 @@ mod tests {
         assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
         assert_eq!(outputs(&state), []);
         run_msg(&mut state, &actions, out(2..3));
-        assert_eq!(outputs(&state), [("agent output".to_owned(), lines(2..3))]);
+        assert_eq!(
+            outputs(&state),
+            [("agent #102 output".to_owned(), lines(2..3))]
+        );
     }
 
     #[test]
@@ -7473,7 +7510,10 @@ mod tests {
         assert_eq!(run_msg(&mut state, &actions, err), follow);
         assert_eq!(
             status(&state),
-            Some(("rerun_checks failed: offline".into(), CellStyle::Danger))
+            Some((
+                "rerun_checks failed on #102: offline".into(),
+                CellStyle::Danger
+            ))
         );
         state.ui.status = None;
         let quiet = event("rerun_checks", 102, ActionEvent::Done(Ok(String::new())));
@@ -7502,6 +7542,14 @@ mod tests {
     }
 
     #[test]
+    fn an_error_that_names_the_pr_gets_no_second_number() {
+        assert!(names_pr("merge of #14 still pending, see GitHub", 14));
+        assert!(names_pr("stopped polling, #14 still merging on GitHub", 14));
+        assert!(!names_pr("#140: in merge queue", 14));
+        assert!(!names_pr("offline", 14));
+    }
+
+    #[test]
     fn a_failed_pane_launch_shows_its_error() {
         let mut state = action_state(&pr_row(99));
         let actions: Vec<Box<dyn Action>> = Vec::new();
@@ -7518,7 +7566,7 @@ mod tests {
         let cmds = run_msg(&mut state, &actions, failed);
         assert_eq!(
             state.ui.status.as_ref().map(|msg| msg.text.as_str()),
-            Some("review failed: cannot open the pane: cannot start rex: gone")
+            Some("review failed on #99: cannot open the pane: cannot start rex: gone")
         );
         assert_eq!(cmds, follow_up(&state.data, &key), "one follow-up");
         assert!(
@@ -8572,8 +8620,8 @@ mod tests {
                 "pinned: {pinned}"
             );
             assert_eq!(
-                state.ui.status.as_ref().map(|msg| msg.text.as_str()),
-                Some(crate::actions::STACK_NOT_LOADED),
+                state.ui.status.as_ref().map(|msg| msg.text.clone()),
+                Some(format!("#102: {}", crate::actions::STACK_NOT_LOADED)),
                 "pinned: {pinned}"
             );
             assert_eq!(confirm_lines(&state), None, "pinned: {pinned}");
@@ -9120,7 +9168,10 @@ mod tests {
                 .contains(&(pr.clone(), ToolKind::Review))
         );
         assert_eq!(menu(&mut state, 'R'), Vec::new());
-        assert_eq!(status_text(&state), Some("pr-agent review already running"));
+        assert_eq!(
+            status_text(&state),
+            Some("pr-agent review #99 already running")
+        );
         // Another tool on the same pull request runs at the same time.
         let improve = agent_job(&state, &pr, Tool::Improve);
         assert_eq!(menu(&mut state, 'I'), vec![Cmd::RunAgent(improve)]);
@@ -9145,7 +9196,7 @@ mod tests {
         );
         assert_eq!(
             status_text(&state),
-            Some("pr-agent review done (12k tokens)")
+            Some("pr-agent review #99 done (12k tokens)")
         );
         let failed = Msg::AgentFinished {
             key: pr.clone(),
@@ -9155,7 +9206,7 @@ mod tests {
         update(&mut state, &Keymap::default(), failed);
         assert_eq!(
             status_text(&state),
-            Some("pr-agent improve failed: exit status 3: no key")
+            Some("pr-agent improve #99 failed: exit status 3: no key")
         );
         assert!(state.data.agent_jobs.is_empty());
         let results = &state.data.agent[&pr];
@@ -9599,7 +9650,7 @@ mod tests {
             Some("needs a message")
         );
         assert_eq!(key(&mut state, 'c'), vec![]);
-        assert_eq!(status_text(&state), Some("comment: needs a message"));
+        assert_eq!(status_text(&state), Some("comment #99: needs a message"));
         let cmds = key(&mut state, 'a');
         let [Cmd::RunAction { input, .. }] = cmds.as_slice() else {
             panic!("no send: {cmds:?}");
@@ -9806,7 +9857,7 @@ mod tests {
         assert_eq!(key(&mut state, 'r'), vec![]);
         assert_eq!(
             status_text(&state),
-            Some("request changes: needs a message")
+            Some("request changes #99: needs a message")
         );
         assert_eq!(
             dialog(&state).blocked(&state.data, ReviewKind::RequestChanges),
@@ -9882,7 +9933,7 @@ mod tests {
             [None, None, Some("your own PR"), Some("your own PR")]
         );
         assert_eq!(key(&mut state, 'a'), vec![]);
-        assert_eq!(status_text(&state), Some("approve: your own PR"));
+        assert_eq!(status_text(&state), Some("approve #99: your own PR"));
         esc(&mut state);
         state.data.session.login = Some("someone".into());
         state.data.prs.get_mut(&pr).unwrap().head.value.state = PrState::Closed;
@@ -10333,7 +10384,7 @@ mod tests {
         key(&mut state, 'j');
         key(&mut state, 'r');
         let (title, text, reply) = reply_box(&state);
-        assert_eq!((title, text), ("reply on src/ui/list.rs:42", ""));
+        assert_eq!((title, text), ("reply on #99 at src/ui/list.rs:42", ""));
         let to = ReplyTo::Thread {
             id: "PRRT_42".into(),
             place: "src/ui/list.rs:42".into(),
@@ -10358,7 +10409,7 @@ mod tests {
         let (mut state, _) = reply_state();
         key(&mut state, 'r');
         assert_eq!(ctrl(&mut state, 's'), vec![], "only the quote");
-        assert_eq!(status_text(&state), Some("empty reply, not sent"));
+        assert_eq!(status_text(&state), Some("empty reply to #99, not sent"));
         assert!(sidebar(&state).is_some());
         key(&mut state, 'j');
         key(&mut state, 'j');
@@ -10439,7 +10490,7 @@ mod tests {
         assert!(cmds.contains(&reload), "{cmds:?}");
         assert_eq!(status_text(&state), Some("commented on #99"));
         update(&mut state, &Keymap::default(), done(Err("offline")));
-        assert_eq!(status_text(&state), Some("reply failed: offline"));
+        assert_eq!(status_text(&state), Some("reply failed on #99: offline"));
     }
 
     /// A state on the Review tab with three ready pull requests that
@@ -10658,7 +10709,10 @@ mod tests {
             send_done(&pr, Err("HTTP 422")),
         );
         assert!(state.data.pending.is_empty());
-        assert_eq!(status_text(&state), Some("send review failed: HTTP 422"));
+        assert_eq!(
+            status_text(&state),
+            Some("send review failed on #89: HTTP 422")
+        );
     }
 
     #[test]
@@ -10690,7 +10744,10 @@ mod tests {
             &Keymap::default(),
             send_done(&pr, Err("HTTP 422")),
         );
-        assert_eq!(status_text(&state), Some("send review failed: HTTP 422"));
+        assert_eq!(
+            status_text(&state),
+            Some("send review failed on #89: HTTP 422")
+        );
         assert_eq!(state.data.pending.review(&pr), None);
         assert_eq!(tab_numbers(&mut state), [90, 89, 88]);
         assert_eq!(
@@ -11388,7 +11445,7 @@ mod tests {
             react_done(&pr, Err("offline")),
         );
         assert_eq!(alice_reactions(&state, &pr), before, "the rollback");
-        assert_eq!(status_text(&state), Some("react failed: offline"));
+        assert_eq!(status_text(&state), Some("react failed on #99: offline"));
         let reload = Cmd::ReloadDetail(vec![pr_ref(&state.data.prs[&pr])]);
         assert!(cmds.contains(&reload), "a reload also after a failure");
         enter(&mut state);
