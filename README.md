@@ -14,6 +14,23 @@ pull request in codeview, merge it, send a review, and do other actions.
 chaoshub keeps a local cache. It shows the cached lists at once when it
 starts, and then syncs with GitHub in the background.
 
+## Screenshots
+
+The screenshots show made-up pull requests.
+
+The Mine tab: a stack of 3 pull requests and single pull requests, with
+their CI and review states and the local jj changes.
+
+![The Mine tab of chaoshub](docs/screenshots/list.svg)
+
+The PR view of a pull request in the stack, on the Description pane.
+
+![The PR view of chaoshub](docs/screenshots/pr-view.svg)
+
+The confirm popup of a merge of the whole stack.
+
+![The stack merge popup of chaoshub](docs/screenshots/stack-merge.svg)
+
 ## Requirements
 
 - **git** on your `PATH`. chaoshub finds the repo of the current
