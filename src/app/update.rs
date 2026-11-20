@@ -752,7 +752,10 @@ fn run_action(
         Applicability::Hidden => return None,
         Applicability::Disabled(reason) => {
             let Target::Pr { pr, .. } = &selection.target;
-            let text = format!("#{}: {reason}", pr.key.number);
+            // The prefix `#N` names the PR, so `PR not open` becomes
+            // `#N: not open`. The actions menu shows the full reason.
+            let short = reason.strip_prefix("PR ").unwrap_or(reason);
+            let text = format!("#{}: {short}", pr.key.number);
             state.message(text, CellStyle::Warn, INFO_TTL);
             // The cached stack can be old, for example after a restart.
             // A refresh by id gives the merged entries of the stack.
@@ -3532,10 +3535,8 @@ fn action_event(
     key: TargetKey,
     event: ActionEvent,
 ) -> Vec<Cmd> {
-    let label = actions
-        .iter()
-        .find(|action| action.id() == id)
-        .map_or(id, |action| action.label());
+    let action = actions.iter().find(|action| action.id() == id);
+    let label = action.map_or(id, |action| action.label());
     match event {
         ActionEvent::Output(lines) => {
             output(state, id, key, label, lines);
@@ -3566,13 +3567,18 @@ fn action_event(
                 Ok(text) => state.message(text, CellStyle::Success, INFO_TTL),
                 Err(err) => {
                     let TargetKey::Pr(pr) = &key;
+                    let label = action.map_or(id, |action| action.fail_label());
                     let on = if names_pr(&err, pr.number) {
                         String::new()
                     } else {
                         format!(" on #{}", pr.number)
                     };
+                    // An error that starts with ` · ` is a list, for
+                    // example the comments that stay local. It needs no
+                    // colon.
+                    let colon = if err.starts_with(" · ") { "" } else { ": " };
                     state.message(
-                        format!("{label} failed{on}: {err}"),
+                        format!("{label} failed{on}{colon}{err}"),
                         CellStyle::Danger,
                         ERROR_TTL,
                     );
@@ -6442,6 +6448,20 @@ mod tests {
         state.ui.status = None;
         assert_eq!(act_menu(&mut state, &actions, KeyCode::Char('h')), vec![]);
         assert_eq!(state.ui.status, None, "a hidden action says nothing");
+    }
+
+    #[test]
+    fn a_disabled_reason_names_the_pr_once() {
+        let mut state = action_state(&pr_row(102));
+        let mut merge = FakeAction::new("merge", 'm');
+        merge.applies = Applicability::Disabled("PR not open");
+        let mut review = FakeAction::new("review", 'v');
+        review.applies = Applicability::Disabled("repo has no path");
+        let actions: Vec<Box<dyn Action>> = vec![Box::new(merge), Box::new(review)];
+        act_menu(&mut state, &actions, KeyCode::Char('m'));
+        assert_eq!(status_text(&state), Some("#102: not open"));
+        act_menu(&mut state, &actions, KeyCode::Char('v'));
+        assert_eq!(status_text(&state), Some("#102: repo has no path"));
     }
 
     #[test]
@@ -9601,6 +9621,35 @@ mod tests {
         let status = state.ui.status.as_ref().unwrap();
         assert_eq!(status.text, text);
         assert_eq!(status.style, CellStyle::Warn);
+    }
+
+    #[test]
+    fn a_send_without_a_posted_comment_names_the_comments_once() {
+        let (mut state, pr) = codeview_state();
+        let done = Msg::ActionEvent {
+            id: CODEVIEW_SEND_ID,
+            key: TargetKey::Pr(pr.clone()),
+            event: ActionEvent::Done(Err(format!("{STAYS_LOCAL}src/a.rs:L3 (new): no line"))),
+        };
+        update(&mut state, &Keymap::default(), done);
+        let status = state.ui.status.as_ref().unwrap();
+        assert_eq!(
+            status.text,
+            "send review failed on #99 · not sent: src/a.rs:L3 (new): no line"
+        );
+        assert_eq!(status.style, CellStyle::Danger);
+    }
+
+    #[test]
+    fn a_failed_rerun_says_failed_once() {
+        let (mut state, pr) = codeview_state();
+        let done = Msg::ActionEvent {
+            id: "rerun_checks",
+            key: TargetKey::Pr(pr.clone()),
+            event: ActionEvent::Done(Err("offline".into())),
+        };
+        update(&mut state, &Keymap::default(), done);
+        assert_eq!(status_text(&state), Some("rerun failed on #99: offline"));
     }
 
     #[test]

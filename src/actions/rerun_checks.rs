@@ -75,6 +75,11 @@ impl Action for RerunChecks {
         "rerun failed checks"
     }
 
+    /// `rerun failed on #N`, not `rerun failed checks failed on #N`.
+    fn fail_label(&self) -> &'static str {
+        "rerun"
+    }
+
     fn default_key(&self) -> Option<KeyChord> {
         Some(KeyChord {
             code: KeyCode::Char('x'),

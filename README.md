@@ -1341,8 +1341,9 @@ also finds a comment that GitHub holds already, for example after a
 send that stopped before codeview wrote its sent marks, and it does not
 post that comment again. When codeview can post none of the marked comments, for
 example because no comment maps to the diff, it sends no review. The
-status line then says `review not sent`, and names the
-comments that stay local. When the review went out, but some marked
+status line names the comments that stay local, with the reason, for
+example `send review failed on #7 · not sent: src/a.rs:L3 (new): no
+line`. When the review went out, but some marked
 comments stay local, the status line shows a warning that names them
 with the reason. When GitHub refuses the review of an older push, for
 example after a force push, the review does not go out, and the status

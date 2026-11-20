@@ -21,8 +21,8 @@
 //! directory, runs
 //! `nvim --headless -c "lua require('codeview.bridge').submit_file('<path>')"`
 //! in the repo directory, and reads the result file. When codeview posts
-//! no comment, it sends no review, and the action fails with
-//! "review not sent".
+//! no comment, it sends no review, and the action fails. The error then
+//! names the comments that stay local, with the reasons.
 //!
 //! The request names the chosen comments per push of the head (version
 //! 2). codeview posts the comments of an older push first, in a review of
@@ -259,11 +259,12 @@ struct Skipped {
 }
 
 /// The error of the comments that went out from codeview already.
-const SENT_ALREADY: &str = "review not sent: codeview already sent these comments";
+const SENT_ALREADY: &str = "codeview already sent these comments";
 
-/// The error of a send that posted no comment: codeview then sends no
-/// review.
-const NOT_OUT: &str = "review not sent";
+/// The error of a send that posted no comment and names no comment:
+/// codeview then sends no review. When the send names comments, the
+/// error is the list of the comments, without this text.
+const NOT_OUT: &str = "codeview posted nothing";
 
 /// The text before the comments that stay local, in the result of a
 /// send. The status shows such a result as a warning.
@@ -275,7 +276,7 @@ const UNKNOWN_VERSION: &str = "the request has version";
 
 /// The error of a codeview without version 2, for comments of more than
 /// one push.
-const OLD_CODEVIEW: &str = "review not sent: update codeview to send comments of older pushes";
+const OLD_CODEVIEW: &str = "update codeview to send comments of older pushes";
 
 /// Posts a review of `pr` with only the message `body`, with
 /// `addPullRequestReview`. A comment review and a change request need a
@@ -390,7 +391,10 @@ async fn send(job: Job) -> Result<Sent, String> {
             let (_, done) = verb(job.event);
             return Ok(Sent::Done(format!("{done} #{}{text}", job.key.number)));
         }
-        return Err(format!("{NOT_OUT}{text}"));
+        if text.is_empty() {
+            return Err(NOT_OUT.to_owned());
+        }
+        return Err(text);
     }
     let older = if outcome.older > 0 {
         format!(" ({} on an older push)", outcome.older)
@@ -685,7 +689,7 @@ printf '%s' '{"version":1,"ok":true,"posted":1,"skipped":[],"already_sent":[],"u
         let err = send(setup.job(&["c1"], TIMEOUT)).await.unwrap_err();
         assert_eq!(
             err,
-            "review not sent · not sent: src/a.rs:L2 (new): the diff does not hold new line 2"
+            " · not sent: src/a.rs:L2 (new): the diff does not hold new line 2"
         );
     }
 

@@ -104,6 +104,12 @@ pub(crate) trait Action: Send + Sync {
     /// `[keys]` and the table name in `[actions.<id>]`.
     fn id(&self) -> &'static str;
     fn label(&self) -> &'static str;
+    /// The label of the failure text `<label> failed on #N: <error>`.
+    /// The default is `label`. An action whose label holds the word
+    /// `failed` gives a shorter label here.
+    fn fail_label(&self) -> &'static str {
+        self.label()
+    }
     /// The short label of the hint bar. The default is the id, with
     /// spaces in place of the underscores.
     fn hint(&self) -> String {
