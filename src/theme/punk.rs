@@ -7,20 +7,32 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
-/// The top left corner: a cut.
+// Each corner glyph fills the half of its cell that is away from the
+// outer corner of the frame. Thus each corner is a diagonal cut with a
+// horn, and the full sides of the triangle touch the two edges: the `━`
+// line in the next cell, and the `▌` or `▐` edge on the next row. The
+// outer side of the `▌` and `▐` edges is in line with the tip of the
+// triangle. No edge has a gap or a step at a corner.
+
+/// The top left corner: a cut. The glyph fills the lower right half of
+/// the cell.
 const TOP_LEFT: &str = "◢";
-/// The top right corner: a cut.
-const TOP_RIGHT: &str = "◥";
-/// The bottom left corner.
-const BOTTOM_LEFT: &str = "◤";
-/// The bottom right corner.
-const BOTTOM_RIGHT: &str = "◣";
+/// The top right corner: a cut, the mirror of `TOP_LEFT`. The glyph
+/// fills the lower left half of the cell.
+const TOP_RIGHT: &str = "◣";
+/// The bottom left corner: a cut. The glyph fills the upper right half
+/// of the cell.
+const BOTTOM_LEFT: &str = "◥";
+/// The bottom right corner: a cut, the mirror of `BOTTOM_LEFT`. The
+/// glyph fills the upper left half of the cell.
+const BOTTOM_RIGHT: &str = "◤";
 /// The heavy top and bottom edges.
 const HORIZONTAL: &str = "━";
-/// The thick left edge.
+/// The thick left edge: the left half of the cell.
 const LEFT: &str = "▌";
-/// The right edge.
-const RIGHT: &str = "┃";
+/// The thick right edge: the right half of the cell, the mirror of
+/// `LEFT`.
+const RIGHT: &str = "▐";
 /// The diagonal accent at the top right.
 const SLASH: &str = "╱";
 /// The number of slashes in the accent.
@@ -71,9 +83,9 @@ pub(crate) fn shift_right(buf: &mut Buffer, area: Rect, cells: u16, fill: Style)
     }
 }
 
-/// A block with the punk frame: a thick left edge, a heavy top line with
-/// cut corners and a diagonal accent at the top right, and a heavy
-/// bottom line. The inside is plain.
+/// A block with the punk frame: thick left and right edges, heavy top and
+/// bottom lines, four cut corners, and a diagonal accent at the top
+/// right. The inside is plain.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PunkBlock<'a> {
     title: Option<Line<'a>>,

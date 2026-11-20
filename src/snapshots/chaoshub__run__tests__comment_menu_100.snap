@@ -3,32 +3,32 @@ source: src/run.rs
 expression: "screen(&mut comment_menu_app(100, 30))"
 ---
 "◢ 1 MINE ◤ 2 REVIEW ◤ 3 TEAM ◤                                                             chaoshub "
-" TITLE              ◢━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱╱╱━◥"
-" ─ fix(store): reope▌ #101 feat(app): Pane trait, registry and overlay stack                       ┃"
-" stack #12 -> main ·▌ chaosteil · chaosteil/101 -> main · open                                     ┃"
-" ┌ feat(ui): popup f▌ ◢ 1 Desc ◤ ◢ 2 Checks ◤ ◢ 3 Convo ◤ ◢ 4 Files ◤ ◢ 5 Stack ◤   6 Agent        ┃"
-" ├ feat(app): checks▌ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱ ┃"
-"▶ └ feat(app): Pane ▌ ▶   alice · commented 5m ago                                                 ┃"
-" ─ docs: describe th▌      Looks good, one question about layout.                                  ┃"
-"                    ▌      👍 ◢━ ALICE'S COMMENT ╱━━━━━━━━━━━━━━━╱╱╱━◥                             ┃" Hidden by multi-width symbols: [(28, " ")]
-"                    ▌  ▾ src/u▌▶  r  reply                         ◤◤┃                             ┃"
-"                    ▌      bob▌                                      ┃                             ┃"
-"                    ▌        O▌  1  👍 thumbs up ✓                   ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
-"                    ▌         ▌  2  👎 thumbs down                   ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
-"                    ▌      cha▌  3  😄 laugh                         ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
-"                    ▌        F▌  4  🎉 hooray                        ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
-"                    ▌  ▾ src/u▌  5  😕 confused                      ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
-"                    ▌      bob▌  6  ❤️ heart                         ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
-"                    ▌        T▌  7  🚀 rocket                        ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
-"                    ▌    bob ·▌  8  👀 eyes                          ┃                             ┃" Hidden by multi-width symbols: [(37, " ")]
-"                    ▌      Ple◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◣                             ┃"
-"                    ▌      ❤️ 2                                                                    ┃" Hidden by multi-width symbols: [(28, " ")]
-"                    ▌                                                                              ┃"
-"                    ▌                                                                              ┃"
-"                    ▌                                                                              ┃"
-"                    ▌                                                                              ┃"
-"                    ▌                                                                              ┃"
-"                    ▌                                                                              ┃"
-"                    ◤━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◣"
+" TITLE              ◢━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱╱╱━◣"
+" ─ fix(store): reope▌ #101 feat(app): Pane trait, registry and overlay stack                       ▐"
+" stack #12 -> main ·▌ chaosteil · chaosteil/101 -> main · open                                     ▐"
+" ┌ feat(ui): popup f▌ ◢ 1 Desc ◤ ◢ 2 Checks ◤ ◢ 3 Convo ◤ ◢ 4 Files ◤ ◢ 5 Stack ◤   6 Agent        ▐"
+" ├ feat(app): checks▌ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╱ ▐"
+"▶ └ feat(app): Pane ▌ ▶   alice · commented 5m ago                                                 ▐"
+" ─ docs: describe th▌      Looks good, one question about layout.                                  ▐"
+"                    ▌      👍 ◢━ ALICE'S COMMENT ╱━━━━━━━━━━━━━━━╱╱╱━◣                             ▐" Hidden by multi-width symbols: [(28, " ")]
+"                    ▌  ▾ src/u▌▶  r  reply                         ◤◤▐                             ▐"
+"                    ▌      bob▌                                      ▐                             ▐"
+"                    ▌        O▌  1  👍 thumbs up ✓                   ▐                             ▐" Hidden by multi-width symbols: [(37, " ")]
+"                    ▌         ▌  2  👎 thumbs down                   ▐                             ▐" Hidden by multi-width symbols: [(37, " ")]
+"                    ▌      cha▌  3  😄 laugh                         ▐                             ▐" Hidden by multi-width symbols: [(37, " ")]
+"                    ▌        F▌  4  🎉 hooray                        ▐                             ▐" Hidden by multi-width symbols: [(37, " ")]
+"                    ▌  ▾ src/u▌  5  😕 confused                      ▐                             ▐" Hidden by multi-width symbols: [(37, " ")]
+"                    ▌      bob▌  6  ❤️ heart                         ▐                             ▐" Hidden by multi-width symbols: [(37, " ")]
+"                    ▌        T▌  7  🚀 rocket                        ▐                             ▐" Hidden by multi-width symbols: [(37, " ")]
+"                    ▌    bob ·▌  8  👀 eyes                          ▐                             ▐" Hidden by multi-width symbols: [(37, " ")]
+"                    ▌      Ple◥━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◤                             ▐"
+"                    ▌      ❤️ 2                                                                    ▐" Hidden by multi-width symbols: [(28, " ")]
+"                    ▌                                                                              ▐"
+"                    ▌                                                                              ▐"
+"                    ▌                                                                              ▐"
+"                    ▌                                                                              ▐"
+"                    ▌                                                                              ▐"
+"                    ▌                                                                              ▐"
+"                    ◥━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◤"
 "╱ j/k move  Enter run  Esc close                                                                    "
 " [MINE] 0 repos · cached 5m ago ◤                                                            ? help "
