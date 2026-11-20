@@ -173,8 +173,8 @@ impl Keymap {
     }
 }
 
-/// The help section of `actions`: the chords of each action and its
-/// label, in registry order.
+/// The help section of `actions`: the chords of each action in the form
+/// of the key hint bar, and its label, in registry order.
 pub(crate) fn action_help(keymap: &Keymap, actions: &[Box<dyn Action>]) -> HelpSection {
     let entries = actions
         .iter()
@@ -182,7 +182,7 @@ pub(crate) fn action_help(keymap: &Keymap, actions: &[Box<dyn Action>]) -> HelpS
             let keys: Vec<String> = keymap
                 .chords(action.id())
                 .iter()
-                .map(|&chord| chord_text(chord))
+                .map(|&chord| crate::app::frame::key_text(chord))
                 .collect();
             (keys.join(" "), action.label().to_owned())
         })
@@ -435,7 +435,7 @@ mod tests {
             HelpSection {
                 title: "actions".into(),
                 entries: vec![
-                    ("M ctrl-m".into(), "merge".into()),
+                    ("M Ctrl-m".into(), "merge".into()),
                     ("v".into(), "review".into()),
                     (String::new(), "quiet".into()),
                 ],

@@ -5,6 +5,7 @@
 //! renders it without a look at the tabs or the actions.
 
 use crate::actions::Action;
+use crate::app::frame::key_text;
 use crate::app::keymap::{self, Keymap};
 use crate::app::models::{Cell, CellStyle, HelpModel, HelpSection};
 use crate::app::tabs::Tab;
@@ -21,16 +22,16 @@ const APP_KEYS: &[(&[&str], &str)] = &[
     (&["top", "bottom"], "top, bottom"),
     (&["page_down", "page_up"], "half a page down, up"),
     (&["scroll_down", "scroll_up"], "scroll down, up"),
-    (&["open"], "open, comment menu"),
-    (&["actions"], "open the actions menu"),
-    (&["close_overlay"], "close the popup"),
+    (&["open"], "open, menu"),
+    (&["actions"], "actions menu"),
+    (&["close_overlay"], "close"),
     (&["filter"], "filter"),
-    (&["authors"], "pick an author"),
-    (&["jump"], "jump to a pull request"),
-    (&["toggle_all"], "show all open"),
-    (&["show_hidden"], "show the hidden rows"),
+    (&["authors"], "filter by author"),
+    (&["jump"], "jump to PR"),
+    (&["toggle_all"], "all open / ready only"),
+    (&["show_hidden"], "hidden rows / normal view"),
     (&["refresh"], "refresh"),
-    (&["column_headers"], "show or hide the column names"),
+    (&["column_headers"], "column headers"),
     (&["quit"], "quit"),
 ];
 
@@ -42,26 +43,26 @@ const FILTER_TITLE: &str = "filter";
 /// labels are short, so that they fit the help overlay at its minimum
 /// width.
 const FILTER_SYNTAX: &[(&str, &str)] = &[
-    ("a b", "every word must match (AND)"),
+    ("a b", "all words match"),
     ("abc", "fuzzy: letters in this order"),
     ("'exact", "exact text, not fuzzy"),
-    ("^start", "the title starts with it"),
-    ("end$", "the branch ends with it"),
-    ("!not", "does not contain it"),
-    ("Abc", "upper case: case must match"),
-    ("enter", "keep the filter"),
-    ("esc", "clear the filter"),
+    ("^start", "title starts with"),
+    ("end$", "branch ends with"),
+    ("!not", "excludes"),
+    ("Abc", "uppercase: case-sensitive"),
+    ("Enter", "apply"),
+    ("Esc", "clear"),
 ];
 
 /// The title of the section of the list symbols.
 const SYMBOLS_TITLE: &str = "list symbols";
 
 /// The title of the actions section of the help.
-const ACTIONS_TITLE: &str = "actions (in the actions menu)";
+const ACTIONS_TITLE: &str = "actions menu";
 
 /// The title of the section of the action keys that work directly in the
 /// list and in the pull request detail.
-const DETAIL_TITLE: &str = "actions in the list and the detail";
+const DETAIL_TITLE: &str = "direct keys (list, detail)";
 
 /// The help model: the app keys, the filter syntax, the list symbols, the
 /// keys of each tab
@@ -83,7 +84,7 @@ pub(crate) fn help_model(
         let entries: Vec<(String, String)> = tab
             .help()
             .into_iter()
-            .map(|(chord, label)| (keymap::chord_text(chord), label.to_owned()))
+            .map(|(chord, label)| (key_text(chord), label.to_owned()))
             .collect();
         if !entries.is_empty() {
             sections.push(HelpSection {
@@ -102,7 +103,7 @@ pub(crate) fn help_model(
             let keys: Vec<String> = keymap
                 .detail_chords(action.id())
                 .into_iter()
-                .map(keymap::chord_text)
+                .map(key_text)
                 .collect();
             (!keys.is_empty()).then(|| (keys.join(" "), action.label().to_owned()))
         })
@@ -122,7 +123,7 @@ fn app_section(keymap: &Keymap, tabs: &[Box<dyn Tab>]) -> HelpSection {
     let tab_keys = tabs.iter().take(9).enumerate().map(|(i, tab)| {
         (
             vec![format!("tab_{}", i + 1)],
-            format!("tab {}", tab.title()),
+            format!("{} tab", tab.title()),
         )
     });
     let app_keys = APP_KEYS.iter().map(|&(names, label)| {
@@ -135,7 +136,7 @@ fn app_section(keymap: &Keymap, tabs: &[Box<dyn Tab>]) -> HelpSection {
             let keys: Vec<String> = names
                 .iter()
                 .flat_map(|name| keymap.chords(name))
-                .map(|&chord| keymap::chord_text(chord))
+                .map(|&chord| key_text(chord))
                 .collect();
             (!keys.is_empty()).then(|| (keys.join(" "), label))
         })
@@ -153,7 +154,7 @@ fn filter_section(keymap: &Keymap) -> HelpSection {
     let keys: Vec<String> = keymap
         .chords("filter")
         .iter()
-        .map(|&chord| keymap::chord_text(chord))
+        .map(|&chord| key_text(chord))
         .collect();
     let first = (keys.join(" "), "title, number, author, branch".to_owned());
     let syntax = FILTER_SYNTAX
@@ -181,9 +182,9 @@ fn symbols_section() -> HelpSection {
     let symbols: [(Cell, &str); 30] = [
         (heading("CHECKS"), "CI state, passed/all checks"),
         (cell("·", CellStyle::Dim), "no checks"),
-        (checks(CiState::Success, "5/5"), "CI green, 5 of 5 pass"),
+        (checks(CiState::Success, "5/5"), "CI passed, 5 of 5 pass"),
         (checks(CiState::Failure, "3/5"), "CI failed, 3 of 5 pass"),
-        (checks(CiState::Pending, "2/5"), "CI pending, 2 of 5 pass"),
+        (checks(CiState::Pending, "2/5"), "CI running, 2 of 5 pass"),
         (heading("REV"), "approvals and change requests"),
         (cell("✓2", CellStyle::Success), "2 approvals"),
         (
@@ -220,7 +221,10 @@ fn symbols_section() -> HelpSection {
         (cell("├", CellStyle::Dim), "a middle PR of a stack"),
         (cell("└", CellStyle::Dim), "the bottom PR of a stack"),
         (heading("READY"), "what Review and Team show"),
-        (cell("ready", CellStyle::Dim), "open, not a draft, CI green"),
+        (
+            cell("ready", CellStyle::Dim),
+            "open, not a draft, CI passed",
+        ),
         (heading("HIDDEN"), "the rows that only T shows"),
         (cell("?", CellStyle::Dim), "before the title of the row"),
         (cell("title", CellStyle::Dim), "the row is dim"),
@@ -273,18 +277,18 @@ mod tests {
             ]
         );
         let keys = &model.sections[0].entries;
-        assert_eq!(keys[0], entry("1", "tab one"));
-        assert_eq!(keys[1], entry("tab", "next tab"));
+        assert_eq!(keys[0], entry("1", "one tab"));
+        assert_eq!(keys[1], entry("Tab", "next tab"));
         assert!(keys.contains(&entry("F5 r", "refresh")));
-        assert!(keys.contains(&entry("q esc ctrl-c", "quit")));
-        assert!(keys.contains(&entry("esc q", "close the popup")));
+        assert!(keys.contains(&entry("q Esc Ctrl-c", "quit")));
+        assert!(keys.contains(&entry("Esc q", "close")));
         assert!(keys.contains(&entry("j k", "down, up")));
-        assert!(keys.contains(&entry("T", "show the hidden rows")));
+        assert!(keys.contains(&entry("T", "hidden rows / normal view")));
         assert!(
-            !keys.iter().any(|(_, label)| label == "pick an author"),
+            !keys.iter().any(|(_, label)| label == "filter by author"),
             "an unbound key is not in the help"
         );
-        assert!(!keys.iter().any(|(_, label)| label == "tab two"));
+        assert!(!keys.iter().any(|(_, label)| label == "two tab"));
         assert_eq!(
             model.sections[1].entries[0],
             entry("/", "title, number, author, branch")
@@ -316,7 +320,7 @@ mod tests {
         for (i, tab) in TABS.iter().enumerate() {
             assert_eq!(
                 keys[i],
-                entry(&(i + 1).to_string(), &format!("tab {}", tab.title()))
+                entry(&(i + 1).to_string(), &format!("{} tab", tab.title()))
             );
         }
         assert_eq!(
@@ -347,7 +351,7 @@ mod tests {
         let model = help_model(&Keymap::default(), &TABS, actions);
         let keys = &model.sections[0];
         assert!(
-            keys.entries.contains(&entry("enter", "open, comment menu")),
+            keys.entries.contains(&entry("Enter", "open, menu")),
             "{:?}",
             keys.entries
         );

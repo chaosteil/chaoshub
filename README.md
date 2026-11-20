@@ -730,7 +730,7 @@ the sequence only inside Rex (`REX_BLOCK` is set) and Ghostty
 The list title is `chaoshub · 3 PRs to review`, or
 `chaoshub · 1 PR to review` for one PR. The count uses the normal
 Review tab: open PRs that request review from you or your teams, are
-not drafts, have green CI, and pass the age limit. Text and author
+not drafts, have passed CI, and pass the age limit. Text and author
 filters and the `t` and `T` switches do not change it. Until the first
 review list sync completes, `? PRs to review` shows that the count is
 not known yet.
@@ -886,8 +886,8 @@ two ways:
 ### Ready for review
 
 By default, the Review and the Team tab show only the pull requests that
-are ready for review: open, not a draft, and CI green. `t` shows all open
-pull requests.
+are ready for review: open, not a draft, and CI passed. `t` shows all open
+pull requests, and a second `t` shows only the ready ones again.
 
 ### Hidden rows
 
@@ -1000,8 +1000,8 @@ for `[keys]`.
 | `filter` | `/` | Types a fuzzy filter for the active tab. |
 | `authors` | `a` | Opens the author picker of the Review or the Team tab. Inside Rex, the picker can open in the Rex palette (see "Questions in the Rex palette"). |
 | `jump` | `f` | Inside Rex, asks for a pull request of the rows of all tabs in the Rex palette. The pick selects the tab and the row, and opens the pull request as `enter` does. Without the Rex palette, `f` opens the filter, as `/` does (see "Questions in the Rex palette"). |
-| `toggle_all` | `t` | On the Review and the Team tab, shows every open pull request, not only the ready ones. |
-| `show_hidden` | `T` | Shows every open pull request of the active tab, also the rows that the age limit, the ready rule, the author picker and the filter text hide (see "Hidden rows"). Only the help overlay shows this key, not the key hint bar. |
+| `toggle_all` | `t` | On the Review and the Team tab, switches between every open pull request and only the ready ones. The help shows it as "all open / ready only". |
+| `show_hidden` | `T` | Switches between the normal view and every open pull request of the active tab, also the rows that the age limit, the ready rule, the author picker and the filter text hide (see "Hidden rows"). The help shows it as "hidden rows / normal view". Only the help overlay shows this key, not the key hint bar. |
 | `refresh` | `R` | Syncs both lists now. In the pull request detail, syncs the pull request and its stack, and scans its repo. |
 | `column_headers` | `H` | Shows or hides the header row with the column names. chaoshub saves the choice in the cache. |
 | `help` | `?` | Shows the help overlay with every binding. |
@@ -1963,7 +1963,7 @@ Rex shows the notice as a dot and a message on the tab, and as a
 desktop notification with the text.
 
 A pull request is new when it becomes ready in a watched tab (`[notify]
-tabs`) for the first time. Ready means open, not a draft, CI green, and
+tabs`) for the first time. Ready means open, not a draft, CI passed, and
 in the `max_age` limit. These changes make a pull request new:
 
 - A colleague opens it.
