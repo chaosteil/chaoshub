@@ -248,6 +248,16 @@ mod tests {
     }
 
     #[test]
+    fn the_old_pr_agent_keys_of_the_sample_keep_the_default_backend() {
+        let config = Config::parse(SAMPLE, Some(Path::new("/home/me"))).unwrap();
+        assert_eq!(
+            config.agent.backend,
+            crate::domain::agent::Backend::OpenCodeReview
+        );
+        assert_eq!(config.agent.pr_agent.model, "anthropic/claude-sonnet-5-5");
+    }
+
+    #[test]
     fn sample_file_parses() {
         let config = Config::parse(SAMPLE, Some(Path::new("/home/me"))).unwrap();
         assert_eq!(config.login.as_deref(), Some("chaosteil"));
@@ -295,12 +305,6 @@ mod tests {
         assert_eq!(
             config.keys.get("refresh").map(String::as_str),
             Some("ctrl-r")
-        );
-        // The sample has the old pr-agent keys at the top of `[agent]`:
-        // they go to pr-agent, and the backend stays the default.
-        assert_eq!(
-            config.agent.backend,
-            crate::domain::agent::Backend::OpenCodeReview
         );
         assert_eq!(
             config.agent.pr_agent.command,
