@@ -93,7 +93,7 @@ impl Action for RerunChecks {
         if !checks.iter().any(failed) {
             Applicability::Disabled("no failed checks")
         } else if rerun_plan(checks).is_empty() {
-            Applicability::Disabled("the failed checks cannot run again")
+            Applicability::Disabled("failed checks cannot rerun")
         } else {
             Applicability::Enabled
         }
@@ -132,10 +132,7 @@ impl Action for RerunChecks {
                     .await
                     .map_err(|err| err.to_string())?;
             }
-            Ok(format!(
-                "re-running the failed checks of #{}",
-                pr.key.number
-            ))
+            Ok(format!("rerunning failed checks of #{}", pr.key.number))
         })
     }
 }
@@ -247,7 +244,7 @@ mod tests {
         let status = check("ci/legacy", CheckConclusion::Failure, None, None);
         assert_eq!(
             RerunChecks.applies(&selection(vec![status])),
-            Applicability::Disabled("the failed checks cannot run again")
+            Applicability::Disabled("failed checks cannot rerun")
         );
         let failed = check("build", CheckConclusion::Failure, Some(11), Some(21));
         let sel = selection(vec![failed]);
@@ -284,7 +281,7 @@ mod tests {
         let result = RerunChecks
             .execute(selection(checks), ActionInput::None, services(&server))
             .await;
-        assert_eq!(result, Ok("re-running the failed checks of #7".to_owned()));
+        assert_eq!(result, Ok("rerunning failed checks of #7".to_owned()));
         server.verify().await;
     }
 

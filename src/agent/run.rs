@@ -324,7 +324,7 @@ async fn spawn(
         Ok(Ok(status)) => status,
         Ok(Err(err)) => {
             abort(&readers);
-            return Err(format!("pr-agent failed: {err}"));
+            return Err(err.to_string());
         }
         Err(_) => {
             let _ = child.kill().await;
@@ -428,7 +428,11 @@ fn read_output(
 ) -> Result<(serde_json::Value, serde_json::Value), String> {
     if !finished.status.success() {
         let last = finished.last_line.unwrap_or_default();
-        return Err(format!("pr-agent failed ({}): {last}", finished.status));
+        let status = finished.status.code().map_or_else(
+            || finished.status.to_string(),
+            |code| format!("exit status {code}"),
+        );
+        return Err(format!("{status}: {last}"));
     }
     if matches!(job.tool, Tool::Ask(_)) {
         let answer = finished.stdout.trim();
@@ -714,7 +718,7 @@ mod tests {
         let err = run(&job, &setup.config("fail"), &setup.store, &token(), &tx)
             .await
             .unwrap_err();
-        assert!(err.starts_with("pr-agent failed ("), "{err}");
+        assert!(err.starts_with("exit status "), "{err}");
         assert!(err.ends_with("model error: no key"), "{err}");
         assert_eq!(
             setup.store.read(&key(), ToolKind::Review).unwrap(),

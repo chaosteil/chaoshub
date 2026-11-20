@@ -22,7 +22,7 @@
 //! `nvim --headless -c "lua require('codeview.bridge').submit_file('<path>')"`
 //! in the repo directory, and reads the result file. When codeview posts
 //! no comment, it sends no review, and the action fails with
-//! "the review did not go out".
+//! "review not sent".
 //!
 //! The request names the chosen comments per push of the head (version
 //! 2). codeview posts the comments of an older push first, in a review of
@@ -259,15 +259,15 @@ struct Skipped {
 }
 
 /// The error of the comments that went out from codeview already.
-const SENT_ALREADY: &str = "the review did not go out: the comments went out from codeview already";
+const SENT_ALREADY: &str = "review not sent: codeview already sent these comments";
 
 /// The error of a send that posted no comment: codeview then sends no
 /// review.
-const NOT_OUT: &str = "the review did not go out";
+const NOT_OUT: &str = "review not sent";
 
 /// The text before the comments that stay local, in the result of a
 /// send. The status shows such a result as a warning.
-pub(crate) const STAYS_LOCAL: &str = " · stays local: ";
+pub(crate) const STAYS_LOCAL: &str = " · not sent: ";
 
 /// The start of the error of a codeview that does not know the version of
 /// the request.
@@ -275,7 +275,7 @@ const UNKNOWN_VERSION: &str = "the request has version";
 
 /// The error of a codeview without version 2, for comments of more than
 /// one push.
-const OLD_CODEVIEW: &str = "the review did not go out: this codeview cannot send the comments of an older push. Update codeview";
+const OLD_CODEVIEW: &str = "review not sent: update codeview to send comments of older pushes";
 
 /// Posts a review of `pr` with only the message `body`, with
 /// `addPullRequestReview`. A comment review and a change request need a
@@ -350,7 +350,7 @@ async fn send(job: Job) -> Result<Sent, String> {
             return Err(SENT_ALREADY.to_owned());
         }
         return Ok(Sent::Gone(format!(
-            " · went out from codeview already: {}",
+            " · already sent from codeview: {}",
             job.ids.join(", ")
         )));
     }
@@ -383,11 +383,7 @@ async fn send(job: Job) -> Result<Sent, String> {
     if !outcome.already_sent.is_empty() || !gone.is_empty() {
         let mut names: Vec<String> = outcome.already_sent.iter().map(|id| place(id)).collect();
         names.extend(gone.iter().map(|id| place(id)));
-        let _ = write!(
-            text,
-            " · went out from codeview already: {}",
-            names.join(", ")
-        );
+        let _ = write!(text, " · already sent from codeview: {}", names.join(", "));
     }
     if outcome.posted == 0 {
         if outcome.reviewed {
@@ -401,10 +397,10 @@ async fn send(job: Job) -> Result<Sent, String> {
     } else {
         String::new()
     };
-    let name = job.event.name();
-    let article = if name.starts_with('a') { "an" } else { "a" };
+    let (_, done) = verb(job.event);
     Ok(Sent::Done(format!(
-        "posted {} as {article} {name} review{older}{text}",
+        "{done} #{} with {}{older}{text}",
+        job.key.number,
         noun(outcome.posted)
     )))
 }
@@ -595,9 +591,7 @@ mod tests {
         let text = send(setup.job(&["c1", "c2"], TIMEOUT)).await.unwrap();
         assert_eq!(
             text,
-            Sent::Done(
-                "posted 1 comment as a comment review · went out from codeview already: c2".into()
-            )
+            Sent::Done("commented on #14 with 1 comment · already sent from codeview: c2".into())
         );
         let request = setup.request();
         assert_eq!(request["version"], 2);
@@ -626,7 +620,7 @@ mod tests {
         let text = send(job).await.unwrap();
         assert_eq!(
             text,
-            Sent::Done("posted 2 comments as an approve review (1 on an older push) · went out from codeview already: c2".into())
+            Sent::Done("approved #14 with 2 comments (1 on an older push) · already sent from codeview: c2".into())
         );
         assert_eq!(
             setup.request()["pushes"],
@@ -647,7 +641,7 @@ mod tests {
         assert_eq!(
             text,
             Sent::Done(format!(
-                "posted 1 comment as a comment review{STAYS_LOCAL}src/c.rs:L7-8 (old): cannot read the diff of the older push h0"
+                "commented on #14 with 1 comment{STAYS_LOCAL}src/c.rs:L7-8 (old): cannot read the diff of the older push h0"
             ))
         );
     }
@@ -660,10 +654,7 @@ printf '%s' '{"version":1,"ok":true,"posted":1,"skipped":[],"already_sent":[],"u
     async fn an_older_codeview_gets_the_comments_of_one_push_with_version_1() {
         let setup = Setup::new(OLD_CODEVIEW_BODY);
         let text = send(setup.job(&["c1"], TIMEOUT)).await.unwrap();
-        assert_eq!(
-            text,
-            Sent::Done("posted 1 comment as a comment review".into())
-        );
+        assert_eq!(text, Sent::Done("commented on #14 with 1 comment".into()));
         let request = setup.request();
         assert_eq!(request["version"], 1, "the second request");
         assert_eq!(request["head"], "h1");
@@ -687,7 +678,7 @@ printf '%s' '{"version":1,"ok":true,"posted":1,"skipped":[],"already_sent":[],"u
         let err = send(setup.job(&["c1"], TIMEOUT)).await.unwrap_err();
         assert_eq!(
             err,
-            "the review did not go out · stays local: src/a.rs:L2 (new): the diff does not hold new line 2"
+            "review not sent · not sent: src/a.rs:L2 (new): the diff does not hold new line 2"
         );
     }
 
@@ -724,10 +715,7 @@ printf '%s' '{"version":1,"ok":true,"posted":1,"skipped":[],"already_sent":[],"u
     async fn comments_that_went_out_already_leave_only_the_message() {
         let setup = Setup::new(OK);
         let sent = send(setup.job(&["c2"], TIMEOUT)).await.unwrap();
-        assert_eq!(
-            sent,
-            Sent::Gone(" · went out from codeview already: c2".into())
-        );
+        assert_eq!(sent, Sent::Gone(" · already sent from codeview: c2".into()));
         assert!(
             !setup.root.path().join("request.json").exists(),
             "nvim did not run"
@@ -753,7 +741,7 @@ printf '%s' '{"version":1,"ok":true,"posted":1,"skipped":[],"already_sent":[],"u
         let sent = send(job).await.unwrap();
         assert_eq!(
             sent,
-            Sent::Done("approved #14 · went out from codeview already: src/a.rs:L2 (new)".into())
+            Sent::Done("approved #14 · already sent from codeview: src/a.rs:L2 (new)".into())
         );
     }
 
@@ -781,7 +769,7 @@ printf '%s' '{"version":1,"ok":true,"posted":1,"skipped":[],"already_sent":[],"u
             .await;
         assert_eq!(
             result,
-            Ok("approved #7 · went out from codeview already: c2".to_owned())
+            Ok("approved #7 · already sent from codeview: c2".to_owned())
         );
         let requests = server.received_requests().await.unwrap();
         assert_eq!(requests.len(), 1, "only the approval");

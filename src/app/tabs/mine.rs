@@ -637,7 +637,7 @@ mod tests {
             .map(|row| (row.cells[0].text.clone(), row.hidden))
             .collect();
         let expected: Vec<(String, bool)> = vec![
-            ("everything · 4 · T for the normal view".into(), false),
+            ("everything · 4 · T shows normal view".into(), false),
             ("Fix the export".into(), true),
             ("stack #12 -> main · 3 PRs".into(), false),
             ("Add the top".into(), false),

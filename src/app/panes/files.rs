@@ -339,10 +339,7 @@ fn nodes(cx: &KeyCx<'_>, state: &FilesState) -> Vec<(TreeNode, Option<Toggle>)> 
     let files = &files.value;
     if is_stale(files, pr) {
         out.push((
-            line(
-                "stale: read at an older head, a new load is on its way",
-                CellStyle::Warn,
-            ),
+            line("stale: reloading for the new head…", CellStyle::Warn),
             None,
         ));
     }
@@ -373,10 +370,7 @@ fn summary(files: &PrFiles) -> TreeNode {
         cell(format!(" −{deletions}"), CellStyle::Danger),
     ];
     if files.truncated {
-        cells.push(cell(
-            " · more files on GitHub, o opens them",
-            CellStyle::Warn,
-        ));
+        cells.push(cell(" · more on GitHub (o)", CellStyle::Warn));
     }
     node(0, None, cells)
 }
@@ -1090,16 +1084,13 @@ mod tests {
         let stale = state_with(Some(old), None, false);
         assert_eq!(
             outline(&model_and_keys(&stale, &mut ps, &[]).0)[0],
-            "stale: read at an older head, a new load is on its way"
+            "stale: reloading for the new head…"
         );
         let mut more = testdata::files();
         more.truncated = true;
         let truncated = state_with(Some(more), None, false);
         let (model, _) = model_and_keys(&truncated, &mut ps, &[]);
-        assert_eq!(
-            outline(&model)[0],
-            "5 files · +6 −4 · more files on GitHub, o opens them"
-        );
+        assert_eq!(outline(&model)[0], "5 files · +6 −4 · more on GitHub (o)");
         assert_eq!(tree_nodes(&model)[0].cells[3].style, CellStyle::Warn);
     }
 

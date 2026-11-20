@@ -949,7 +949,7 @@ fn jump(state: &mut AppState, tabs: &[Box<dyn Tab>]) -> Vec<Cmd> {
         })
         .collect();
     let Some(ask) = palette::jump(&state.data, &rows) else {
-        state.message("no pull requests to jump to", CellStyle::Dim, INFO_TTL);
+        state.message("no PRs to jump to", CellStyle::Dim, INFO_TTL);
         return Vec::new();
     };
     ask_palette(state, PaletteQuestion::Jump, ask)
@@ -980,7 +980,7 @@ fn jump_to(
     });
     let Some((index, row, model)) = found else {
         state.message(
-            format!("{id} is not in the list now"),
+            format!("{id} no longer in the list"),
             CellStyle::Dim,
             INFO_TTL,
         );
@@ -1005,7 +1005,7 @@ fn jump_to(
 fn palette_wait_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) -> Vec<Cmd> {
     if keymap.matches("close_overlay", chord) {
         state.ui.palette_wait = None;
-        state.message("stopped the wait for Rex", CellStyle::Dim, INFO_TTL);
+        state.message("Rex question cancelled", CellStyle::Dim, INFO_TTL);
         return vec![Cmd::CancelPalette];
     }
     let keys = keymap
@@ -1013,7 +1013,7 @@ fn palette_wait_key(state: &mut AppState, keymap: &Keymap, chord: KeyChord) -> V
         .first()
         .map(|&chord| frame::key_text(chord));
     let text = match keys {
-        Some(key) => format!("{} · {key} stops the wait", palette::WAITING),
+        Some(key) => format!("{} · {key} cancels", palette::WAITING),
         None => palette::WAITING.to_owned(),
     };
     state.message(text, CellStyle::Dim, INFO_TTL);
@@ -1748,7 +1748,7 @@ fn review_text_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
 /// only the start text, sends nothing, and the status line says so.
 fn send_reply(state: &mut AppState, reply: ReplyDialog, text: &str) -> Vec<Cmd> {
     if text.trim().is_empty() || text.trim() == reply.start.trim() {
-        state.message("the reply is empty: nothing sent", CellStyle::Dim, INFO_TTL);
+        state.message("empty reply, not sent", CellStyle::Dim, INFO_TTL);
         return Vec::new();
     }
     vec![Cmd::RunAction {
@@ -1808,7 +1808,7 @@ fn start_agent(state: &mut AppState, job: AgentJob) -> Vec<Cmd> {
     let kind = job.tool.kind();
     if !state.data.agent_jobs.insert((job.key.clone(), kind)) {
         state.message(
-            format!("{} runs already", kind.name()),
+            format!("pr-agent {} already running", kind.name()),
             CellStyle::Warn,
             INFO_TTL,
         );
@@ -1881,7 +1881,7 @@ fn agent_msg(state: &mut AppState, msg: Msg) -> Vec<Cmd> {
 
 /// The end of a pr-agent run: the job leaves the job set, the record or
 /// the error goes to the results, and the status line says
-/// `review done (12k tokens)` or the error. The files load again.
+/// `pr-agent review done (12k tokens)` or the error. The files load again.
 fn agent_finished(
     state: &mut AppState,
     key: PrKey,
@@ -1894,8 +1894,8 @@ fn agent_finished(
     let (text, style, ttl) = match result {
         Ok(record) => {
             let text = match record.total_tokens() {
-                Some(tokens) => format!("{name} done ({} tokens)", short_tokens(tokens)),
-                None => format!("{name} done"),
+                Some(tokens) => format!("pr-agent {name} done ({} tokens)", short_tokens(tokens)),
+                None => format!("pr-agent {name} done"),
             };
             results.errors.remove(&kind);
             results.records.insert(kind, record);
@@ -1904,7 +1904,7 @@ fn agent_finished(
         Err(err) => {
             results.errors.insert(kind, err.clone());
             (
-                format!("{name} failed: {err}"),
+                format!("pr-agent {name} failed: {err}"),
                 CellStyle::Danger,
                 ERROR_TTL,
             )
@@ -5507,10 +5507,7 @@ mod tests {
         assert_eq!(key(&mut state, 'a'), vec![]);
         assert_eq!(key(&mut state, '1'), vec![]);
         assert_eq!(state.ui.active, 2, "1 does not switch the tab");
-        assert_eq!(
-            status_text(&state),
-            Some("waiting for an answer in Rex · Esc stops the wait")
-        );
+        assert_eq!(status_text(&state), Some("waiting for Rex · Esc cancels"));
         let click = Msg::Mouse {
             kind: MouseKind::Click,
             x: 1,
@@ -5688,7 +5685,7 @@ mod tests {
         assert!(state.ui.overlays.is_empty());
         assert_eq!(
             status_text(&state),
-            Some("chaosteil/chaoshub#9999 is not in the list now")
+            Some("chaosteil/chaoshub#9999 no longer in the list")
         );
     }
 
@@ -8809,7 +8806,7 @@ mod tests {
         assert_eq!(frame.status.left[0].text, "[#7]");
         assert_eq!(
             frame.status.left[1].text,
-            " chaosteil/codeview · updated 5m ago"
+            " chaosteil/codeview · synced 5m ago"
         );
 
         let mut state = pinned(not_cached());
@@ -9123,7 +9120,7 @@ mod tests {
                 .contains(&(pr.clone(), ToolKind::Review))
         );
         assert_eq!(menu(&mut state, 'R'), Vec::new());
-        assert_eq!(status_text(&state), Some("review runs already"));
+        assert_eq!(status_text(&state), Some("pr-agent review already running"));
         // Another tool on the same pull request runs at the same time.
         let improve = agent_job(&state, &pr, Tool::Improve);
         assert_eq!(menu(&mut state, 'I'), vec![Cmd::RunAgent(improve)]);
@@ -9146,24 +9143,24 @@ mod tests {
             update(&mut state, &Keymap::default(), done),
             vec![Cmd::LoadAgent(pr.clone())]
         );
-        assert_eq!(status_text(&state), Some("review done (12k tokens)"));
+        assert_eq!(
+            status_text(&state),
+            Some("pr-agent review done (12k tokens)")
+        );
         let failed = Msg::AgentFinished {
             key: pr.clone(),
             kind: ToolKind::Improve,
-            result: Err("pr-agent failed (exit status: 3): no key".into()),
+            result: Err("exit status 3: no key".into()),
         };
         update(&mut state, &Keymap::default(), failed);
         assert_eq!(
             status_text(&state),
-            Some("improve failed: pr-agent failed (exit status: 3): no key")
+            Some("pr-agent improve failed: exit status 3: no key")
         );
         assert!(state.data.agent_jobs.is_empty());
         let results = &state.data.agent[&pr];
         assert_eq!(results.records[&ToolKind::Review], review_record());
-        assert_eq!(
-            results.errors[&ToolKind::Improve],
-            "pr-agent failed (exit status: 3): no key"
-        );
+        assert_eq!(results.errors[&ToolKind::Improve], "exit status 3: no key");
         // A load replaces the records and keeps the run errors.
         let loaded = Msg::AgentLoaded {
             key: pr.clone(),
@@ -9491,8 +9488,7 @@ mod tests {
     #[test]
     fn a_review_without_some_comments_shows_a_warning() {
         let (mut state, pr) = codeview_state();
-        let text =
-            format!("posted 1 comment as an approve review{STAYS_LOCAL}src/a.rs:L3 (new): no line");
+        let text = format!("approved #7 with 1 comment{STAYS_LOCAL}src/a.rs:L3 (new): no line");
         let done = Msg::ActionEvent {
             id: CODEVIEW_SEND_ID,
             key: TargetKey::Pr(pr.clone()),
@@ -9990,14 +9986,11 @@ mod tests {
         let done = Msg::ActionEvent {
             id: "codeview_send",
             key: TargetKey::Pr(pr.clone()),
-            event: ActionEvent::Done(Ok("posted 1 comment as a comment review".into())),
+            event: ActionEvent::Done(Ok("commented on #7 with 1 comment".into())),
         };
         let cmds = update(&mut state, &Keymap::default(), done);
         assert_eq!(cmds.last(), Some(&Cmd::LoadCodeview(pr)));
-        assert_eq!(
-            status_text(&state),
-            Some("posted 1 comment as a comment review")
-        );
+        assert_eq!(status_text(&state), Some("commented on #7 with 1 comment"));
     }
 
     #[test]
@@ -10360,10 +10353,7 @@ mod tests {
         let (mut state, _) = reply_state();
         key(&mut state, 'r');
         assert_eq!(ctrl(&mut state, 's'), vec![], "only the quote");
-        assert_eq!(
-            status_text(&state),
-            Some("the reply is empty: nothing sent")
-        );
+        assert_eq!(status_text(&state), Some("empty reply, not sent"));
         assert!(sidebar(&state).is_some());
         key(&mut state, 'j');
         key(&mut state, 'j');

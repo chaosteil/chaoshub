@@ -132,7 +132,7 @@ fn codeview_line(cx: &KeyCx<'_>, pr: &PullRequest) -> Option<Vec<Cell>> {
         let _ = write!(text, " ({older} on an older push)");
     }
     if let Some(key) = review_key(cx.keys) {
-        let _ = write!(text, " · {key} to review");
+        let _ = write!(text, " · {key} to send");
     }
     Some(vec![cell(text, CellStyle::Dim)])
 }
@@ -1296,7 +1296,7 @@ mod tests {
             codeview_texts(&state, &crate::app::keymap::DEFAULT)[3..],
             [
                 "",
-                "4 unsent codeview comments (1 on an older push) · r to review",
+                "4 unsent codeview comments (1 on an older push) · r to send",
                 "",
                 "(no description)",
             ]
@@ -1316,7 +1316,7 @@ mod tests {
             std::collections::BTreeMap::from([("codeview_send".to_owned(), "ctrl-r".to_owned())]);
         let keys = Keymap::new(&overrides).unwrap();
         let lines = codeview_texts(&state, &keys);
-        assert_eq!(lines[4], "1 unsent codeview comment · ctrl-r to review");
+        assert_eq!(lines[4], "1 unsent codeview comment · ctrl-r to send");
         let overrides =
             std::collections::BTreeMap::from([("codeview_send".to_owned(), String::new())]);
         let keys = Keymap::new(&overrides).unwrap();
@@ -1345,7 +1345,7 @@ mod tests {
         let state = codeview_state(Some(Ok(older)));
         assert_eq!(
             codeview_texts(&state, &crate::app::keymap::DEFAULT)[4],
-            "1 unsent codeview comment (1 on an older push) · r to review"
+            "1 unsent codeview comment (1 on an older push) · r to send"
         );
     }
 

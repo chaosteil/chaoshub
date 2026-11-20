@@ -877,13 +877,13 @@ pub(crate) fn status_model(state: &AppState, tabs: &[Box<dyn Tab>]) -> StatusMod
 }
 
 /// The left of the status bar in the pinned mode, for example `[#7]`
-/// and ` owner/name · updated 2m ago`, or ` owner/name · not loaded yet`
+/// and ` owner/name · synced 2m ago`, or ` owner/name · not loaded yet`
 /// before the pull request is loaded.
 fn pinned_status(data: &AppData, key: &PrKey) -> Vec<Cell> {
     let repo = format!("{}/{}", key.repo.owner, key.repo.name);
     let text = match data.prs.get(key) {
         Some(pr) => format!(
-            " {repo} · updated {} ago",
+            " {repo} · synced {} ago",
             age(pr.head.observed_at, data.now)
         ),
         None => format!(" {repo} · not loaded yet"),
@@ -956,7 +956,7 @@ fn activity(data: &AppData) -> Option<String> {
         parts.push(format!("syncing {}", scopes.join(" and ")));
     }
     if let Some(batch) = data.prefetch {
-        parts.push(format!("prefetch {}", batch.total - batch.done));
+        parts.push(format!("prefetching {}", batch.total - batch.done));
     }
     match data.details_loading.len() {
         0 => {}
@@ -970,7 +970,7 @@ fn activity(data: &AppData) -> Option<String> {
         n => parts.push(format!("loading {}", plural::count(n, "diff", "diffs"))),
     }
     for (key, kind) in &data.agent_jobs {
-        parts.push(format!("agent {} #{}", kind.name(), key.number));
+        parts.push(format!("pr-agent {} #{}", kind.name(), key.number));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
@@ -987,7 +987,7 @@ fn sync_text(state: &AppState, tabs: &[Box<dyn Tab>]) -> String {
         data.cache_at,
     ) {
         (Some(&at), _) => format!(" {repos} {noun} · synced {} ago", age(at, data.now)),
-        (None, Some(at)) => format!(" {repos} {noun} · cache from {} ago", age(at, data.now)),
+        (None, Some(at)) => format!(" {repos} {noun} · cached {} ago", age(at, data.now)),
         (None, None) => format!(" {repos} {noun}"),
     }
 }
@@ -1182,7 +1182,10 @@ mod tests {
         assert_eq!(right(&state)[1], " syncing team   ", "a timed sync shows");
         state.data.sync.running.insert(Scope::Mine);
         state.data.prefetch = Some(crate::app::state::PrefetchBatch { done: 1, total: 3 });
-        assert_eq!(right(&state)[1], " syncing mine and team · prefetch 2   ");
+        assert_eq!(
+            right(&state)[1],
+            " syncing mine and team · prefetching 2   "
+        );
         assert!(state.data.busy());
 
         state.data.sync.running.clear();
@@ -1207,7 +1210,7 @@ mod tests {
             .data
             .agent_jobs
             .insert((key(7), crate::domain::agent::ToolKind::Review));
-        assert_eq!(right(&state)[1], " agent review #7   ");
+        assert_eq!(right(&state)[1], " pr-agent review #7   ");
         assert!(state.data.busy());
         state
             .data
@@ -1219,7 +1222,7 @@ mod tests {
             .insert((key(9), crate::domain::agent::ToolKind::Improve));
         assert_eq!(
             right(&state)[1],
-            " agent review #7 · agent ask #7 · agent improve #9   "
+            " pr-agent review #7 · pr-agent ask #7 · pr-agent improve #9   "
         );
     }
 
@@ -1349,7 +1352,7 @@ mod tests {
         state.data.now = crate::domain::test_time() + chrono::TimeDelta::seconds(330);
         assert_eq!(
             status_model(&state, &tabs).left[1].text,
-            " 1 repo · cache from 5m ago"
+            " 1 repo · cached 5m ago"
         );
     }
 }

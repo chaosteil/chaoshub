@@ -183,7 +183,7 @@ pub(crate) fn list_interest(tab: &dyn Tab, model: &ListModel, height: u16) -> In
 /// The text of the mode row while the `show_hidden` key (`T`) shows
 /// `count` pull requests.
 pub(crate) fn show_hidden_text(count: usize) -> String {
-    format!("everything · {count} · T for the normal view")
+    format!("everything · {count} · T shows normal view")
 }
 
 /// The tab registry, in tab bar order.

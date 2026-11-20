@@ -221,7 +221,7 @@ fn section(
             CellStyle::Success,
         )
     } else {
-        cell("never", CellStyle::Dim)
+        cell("not run", CellStyle::Dim)
     });
     if let Some(record) = record {
         header.push(cell(
@@ -239,7 +239,7 @@ fn section(
     if record.head_sha != head {
         lines.push(vec![cell(
             format!(
-                "outdated: for {}, the head is now {}",
+                "outdated: ran on {}, head is now {}",
                 short(&record.head_sha),
                 short(head)
             ),
@@ -378,17 +378,17 @@ mod tests {
     }
 
     #[test]
-    fn a_pull_request_without_results_shows_never() {
+    fn a_pull_request_without_results_shows_not_run() {
         assert_eq!(
             texts(&state()),
             [
-                "Review [space R] · never",
+                "Review [space R] · not run",
                 "",
-                "Improve [space I] · never",
+                "Improve [space I] · not run",
                 "",
-                "Describe [space D] · never",
+                "Describe [space D] · not run",
                 "",
-                "Ask [space a] · never",
+                "Ask [space a] · not run",
             ]
         );
     }
@@ -429,7 +429,7 @@ mod tests {
             lines[..3],
             [
                 "Review [space R] · done 5m ago · anthropic/claude-sonnet-5-5 · head 3a1f2c0",
-                "outdated: for 3a1f2c0, the head is now oid7",
+                "outdated: ran on 3a1f2c0, head is now oid7",
                 "**Key issues**\n\n- **Possible Bug** `src/lib.rs:3-5`: It breaks.",
             ]
         );

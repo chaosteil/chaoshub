@@ -391,7 +391,7 @@ mod tests {
         let model = Team::Rest.model(&cx, &ts, SIZE);
         assert_eq!(
             model.rows[0].cells[0].text,
-            "everything · 3 · T for the normal view"
+            "everything · 3 · T shows normal view"
         );
         assert_eq!(
             hidden(&model),

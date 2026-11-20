@@ -49,7 +49,7 @@ pub(crate) const STACK_ID: &str = "merge_stack";
 
 /// The reason of a merge that needs an entry of the stack that is not
 /// loaded. The app then refreshes the stack, so the next try can work.
-pub(crate) const STACK_NOT_LOADED: &str = "stack not loaded yet, refreshing the stack";
+pub(crate) const STACK_NOT_LOADED: &str = "stack not loaded, refreshing…";
 
 /// The merge action. Its key (`m`) works directly in the list and in the
 /// pull request detail, and in the actions menu. The key only opens the
@@ -64,7 +64,7 @@ impl MergeAction {
     pub(crate) fn applies(sel: &Selection) -> Applicability {
         let Target::Pr { pr, stack, .. } = &sel.target;
         if repo_merge(sel).is_err() {
-            return Applicability::Disabled("invalid [actions.merge] configuration");
+            return Applicability::Disabled("invalid [merge] config");
         }
         let Some(entries) = merged_entries(pr, stack) else {
             return Applicability::Disabled(STACK_NOT_LOADED);
@@ -421,7 +421,7 @@ impl Run<'_> {
             };
             tokio::select! {
                 () = self.svc.cancel.cancelled() => {
-                    return Err(format!("stopped the poll, the merge of #{number} goes on"));
+                    return Err(format!("stopped polling, #{number} still merging on GitHub"));
                 }
                 () = tokio::time::sleep(delay) => {}
             }
@@ -526,11 +526,13 @@ impl Run<'_> {
                 }
             }
             if start.elapsed() >= self.retarget.limit {
-                return self.fail(format!("#{number} did not move to {base}")).await;
+                return self
+                    .fail(format!("#{number} not retargeted to {base}"))
+                    .await;
             }
             tokio::select! {
                 () = self.svc.cancel.cancelled() => {
-                    return Err(format!("stopped the wait for #{number}"));
+                    return Err(format!("stopped waiting for #{number}"));
                 }
                 () = tokio::time::sleep(self.retarget.every) => {}
             }
@@ -553,7 +555,7 @@ impl Run<'_> {
             }
             Err(err) => {
                 tracing::warn!(%text, %err, "no fetch after the merge");
-                return format!("{text}, no fetch: {err}");
+                return format!("{text}, fetch failed: {err}");
             }
         };
         match result {
@@ -712,10 +714,10 @@ fn hard_reason(entries: &[PullRequest]) -> &'static str {
     let single = entries.len() == 1;
     let draft = entries.iter().any(|pr| pr.head.value.is_draft);
     match (single, draft) {
-        (true, true) => "the pull request is a draft",
-        (true, false) => "the pull request has conflicts",
-        (false, true) => "a pull request of the stack is a draft",
-        (false, false) => "a pull request of the stack has conflicts",
+        (true, true) => "PR is a draft",
+        (true, false) => "PR has conflicts",
+        (false, true) => "a stack PR is a draft",
+        (false, false) => "a stack PR has conflicts",
     }
 }
 
@@ -879,7 +881,7 @@ mod tests {
         assert!(repo_merge(&sel).is_err());
         assert_eq!(
             MergeAction::applies(&sel),
-            Applicability::Disabled("invalid [actions.merge] configuration")
+            Applicability::Disabled("invalid [merge] config")
         );
     }
 
@@ -1051,27 +1053,27 @@ mod tests {
             (
                 "draft below in the stack",
                 select(entry(3, 3), draft_below, None),
-                "a pull request of the stack is a draft",
+                "a stack PR is a draft",
             ),
             (
                 "conflict below in the stack",
                 select(entry(3, 3), conflict_below, None),
-                "a pull request of the stack has conflicts",
+                "a stack PR has conflicts",
             ),
             (
                 "draft pull request",
                 select(draft, Vec::new(), None),
-                "the pull request is a draft",
+                "PR is a draft",
             ),
             (
                 "conflicting pull request",
                 select(conflict, Vec::new(), None),
-                "the pull request has conflicts",
+                "PR has conflicts",
             ),
             (
                 "invalid configuration",
                 select(entry(7, 0), Vec::new(), Some("repos = 3")),
-                "invalid [actions.merge] configuration",
+                "invalid [merge] config",
             ),
         ];
         for (name, sel, reason) in cases {
@@ -1148,7 +1150,7 @@ mod tests {
             (
                 "draft at the top",
                 draft_sel,
-                Applicability::Disabled("a pull request of the stack is a draft"),
+                Applicability::Disabled("a stack PR is a draft"),
             ),
         ];
         for (name, sel, applies) in cases {

@@ -573,10 +573,7 @@ fn nodes(cx: &KeyCx<'_>, collapsed: &HashSet<usize>) -> Vec<(TreeNode, Option<It
         push(node(
             0,
             None,
-            vec![cell(
-                "stale: read at an older head, a new load is on its way",
-                CellStyle::Warn,
-            )],
+            vec![cell("stale: reloading for the new head…", CellStyle::Warn)],
         ));
     }
     let entries = entries(&detail.value, order);
@@ -1392,10 +1389,7 @@ mod tests {
         let state = state_with(Some(detail), None);
         let mut ps = Conversation.init_state();
         let model = model_and_keys(&state, &mut ps, &[]);
-        assert_eq!(
-            outline(&model)[0],
-            "stale: read at an older head, a new load is on its way"
-        );
+        assert_eq!(outline(&model)[0], "stale: reloading for the new head…");
         let fresh = state_with(Some(testdata::detail()), None);
         let model = model_and_keys(&fresh, &mut ps, &[]);
         assert_eq!(outline(&model)[0], "alice · commented 3h ago");

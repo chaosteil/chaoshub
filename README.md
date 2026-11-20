@@ -908,7 +908,7 @@ filter text apply. Press `T` again for the normal view.
 | dim row | The same rows are dim. |
 
 While `T` is on, the mode row at the top of the list shows the number of
-rows, for example `everything · 12 · T for the normal view`.
+rows, for example `everything · 12 · T shows normal view`.
 
 Each tab has its own `T` switch. chaoshub does not save it: after a
 restart, every tab shows the normal view.
@@ -1035,7 +1035,7 @@ selects the next pane:
 
 | Key | Pane | What it shows |
 |---|---|---|
-| `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the pull request has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments (1 on an older push) · r to review` (see "Codeview comments" below). Without such comments, the pane shows no line. |
+| `1` | Description | The body of the pull request as GitHub renders it, with tables, details and task lists. The text reflows when the pane width changes. The detail opens on this pane. The Description pane starts with a readiness block: the merge verdict and its reasons, the checks, the reviews, the open threads, the size, and the latest activity. When the pull request has codeview comments that did not go to GitHub yet, one dim line below the block counts them, for example `3 unsent codeview comments (1 on an older push) · r to send` (see "Codeview comments" below). Without such comments, the pane shows no line. |
 | `2` | Checks | One row per check, with its state and its duration. |
 | `3` | Conversation | The comments, the reviews and the review threads, in time order, with the reactions of each comment. `[conversation] order` can put the newest at the top. `r` replies to the comment of the cursor (see "Replies" below). The threads start expanded. `enter` on a thread collapses or expands it. A collapsed thread stays collapsed while the detail is open, also when chaoshub reads the conversation again. `enter` on a comment opens the comment menu: reply, or react (see "Reactions" below). |
 | `4` | Files | The changed files as a tree, with the diff of each file inline. See "Diff colors" below. |
@@ -1101,7 +1101,7 @@ The text box has the keys of the text box of the review message:
 |---|---|
 | `enter` | Adds a new line. |
 | `ctrl-e` | Opens the text in `$VISUAL`, else `$EDITOR`, else `nvim`. When the editor quits, its text comes back into the text box. |
-| `ctrl-s` | Sends the reply. A text that is empty, or that is still the start text, sends nothing. The status line then says `the reply is empty: nothing sent`. |
+| `ctrl-s` | Sends the reply. A text that is empty, or that is still the start text, sends nothing. The status line then says `empty reply, not sent`. |
 | `esc` | Closes the text box. The text is lost. |
 
 When the reply went out, the status line says so, for example
@@ -1333,7 +1333,7 @@ also finds a comment that GitHub holds already, for example after a
 send that stopped before codeview wrote its sent marks, and it does not
 post that comment again. When codeview can post none of the marked comments, for
 example because no comment maps to the diff, it sends no review. The
-status line then says `the review did not go out`, and names the
+status line then says `review not sent`, and names the
 comments that stay local. When the review went out, but some marked
 comments stay local, the status line shows a warning that names them
 with the reason. When GitHub refuses the review of an older push, for
@@ -1384,7 +1384,7 @@ the selected row or of the detail. These bindings have no default.
 | `close` | `c` | Closes the pull request after a confirm popup. |
 | `browser` | `o` | Opens the pull request in the browser. |
 | `copy_url` | `y` | Copies the pull request URL. |
-| `copy_stack_urls` | `Y` | Copies the URLs of the open pull requests of the stack, one URL on each line. The order is the order of the Stack pane: position 1, the bottom of the stack, first. `[actions.copy_stack_urls] order = "top_first"` puts the top of the stack first, as the list does (see `[actions.<id>]`). It works only in the actions menu (`space` then `Y`). Hidden for a pull request without a stack. When an open entry of the stack is not loaded, the status line shows "stack not loaded yet, refreshing the stack". Try again after the refresh. |
+| `copy_stack_urls` | `Y` | Copies the URLs of the open pull requests of the stack, one URL on each line. The order is the order of the Stack pane: position 1, the bottom of the stack, first. `[actions.copy_stack_urls] order = "top_first"` puts the top of the stack first, as the list does (see `[actions.<id>]`). It works only in the actions menu (`space` then `Y`). Hidden for a pull request without a stack. When an open entry of the stack is not loaded, the status line shows "stack not loaded, refreshing…". Try again after the refresh. |
 | `copy_change_id` | `i` | Copies the jj change id of the local change that matches the pull request. In a git repo, it copies the local branch name, the actions menu shows "copy branch name", and the key hint bar shows "copy branch". Hidden when no local change matches. |
 | `agent` | `p` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
 | `codeview_send` | `r` | Opens the Review popup, also directly in the list and in the detail. In the conversation pane, `r` is the reply, so use `space` then `r` there. In the popup, you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). The hint bar, the help and the actions menu show it as "send review". |
@@ -1395,8 +1395,8 @@ A merge of a stacked pull request includes every entry up to it. A
 merged entry needs no merge, so the merge skips it. GitHub tells
 chaoshub which entries merged with each pull request of the stack, so a
 merged entry does not have to be in the cache. When an entry is not
-loaded, the status line shows "stack not loaded yet, refreshing the
-stack", and chaoshub reads the stack again. Try the merge again after
+loaded, the status line shows "stack not loaded, refreshing…", and
+chaoshub reads the stack again. Try the merge again after
 the refresh. When the entries below an entry merged, but GitHub did not
 move the entry to the base of the stack yet, the merge waits for the
 move, up to 2 min. To merge every entry, use `merge_stack` (`s`) from
@@ -1523,11 +1523,11 @@ needs a `path`.
 ### The Agent pane
 
 `space` then `p` on a pull request opens the detail on the Agent pane
-(`6`). The pane has one section per tool. Each section shows the state (`never`,
+(`6`). The pane has one section per tool. Each section shows the state (`not run`,
 `running` with a spinner, `done 5m ago`, or `failed` with the error), the
 model and the head commit of the result. When the head of the pull
 request moved after the run, the section says
-`outdated: for 3a1f2c0, the head is now 9bd2e11`. chaoshub does not run
+`outdated: ran on 3a1f2c0, head is now 9bd2e11`. chaoshub does not run
 pr-agent again by itself.
 
 The pane has no direct keys. Its tools are in the actions menu: press
@@ -1542,7 +1542,7 @@ The pane has no direct keys. Its tools are in the actions menu: press
 | `p` | | Opens a confirm popup with the line diff of the old and the new title and body. `y` sets the title and the body of the pull request on GitHub. |
 
 One run per tool per pull request runs at a time. A second `space`
-then `R` while the review runs only says `review runs already`. Different tools, and
+then `R` while the review runs only says `pr-agent review already running`. Different tools, and
 different pull requests, run at the same time.
 
 In the menu, the action keys win over the pane keys. Thus a tool uses
@@ -1552,9 +1552,9 @@ state. `p` applies the describe result, because the menu of the Agent
 pane does not show the `agent` action.
 
 While a run goes, the status bar shows the spinner and one item per run,
-for example `agent review #7 · agent ask #7`. The last output line of
+for example `pr-agent review #7 · pr-agent ask #7`. The last output line of
 pr-agent shows in the status line. At the end, the status line shows
-`review done (12k tokens)`, or the error.
+`pr-agent review done (12k tokens)`, or the error.
 
 ### What chaoshub runs
 
@@ -1725,7 +1725,8 @@ rare.
 chaoshub never posts these comments to GitHub itself. Only codeview
 posts, so its lock file and its sent marks stop a second send of the
 same comment, also from an open codeview. The status line then says
-`posted N comments as a <event> review`, with the count of the comments
+`approved #N with 2 comments` (or `commented on #N …`, `requested
+changes on #N …`), with the count of the comments
 on an older push, and names the comments that stay local and the
 comments that went out already. After the send,
 chaoshub reads the comment files again. See `:help codeview-bridge` in
@@ -1831,7 +1832,7 @@ binary is the same one as for the panes. After a change of `init.lua`,
 restart chaoshub, because it checks only at start.
 
 While the question waits, the status bar shows
-`waiting for an answer in Rex`. chaoshub then ignores the mouse and
+`waiting for Rex`. chaoshub then ignores the mouse and
 its keys, so no second question can start. `esc` or `q` stops the
 wait, and `ctrl-c` quits.
 
@@ -2046,19 +2047,19 @@ press:
 Other messages show for 5 or 10 seconds and then fade out.
 
 The right part of the status bar shows the work that runs, after a
-spinner. For example, `⠹ syncing team · prefetch 2` tells you that the
+spinner. For example, `⠹ syncing team · prefetching 2` tells you that the
 sync of the pull requests of your colleagues runs, and that the prefetch
 has 2 pull requests left. The right part shows these items:
 
 - `syncing mine`, `syncing team`: a sync of the pull requests, also a
   timed sync in the background. `syncing team` is the sync of the pull
   requests of your colleagues. It feeds the Review and the Team tab.
-- `prefetch N`: the prefetch of pull request refs.
+- `prefetching N`: the prefetch of pull request refs.
 - `loading N conversations`: the comments, reviews and threads of N
   pull requests load from GitHub.
-- `agent review #7`: a pr-agent run of one tool on one pull request.
+- `pr-agent review #7`: a pr-agent run of one tool on one pull request.
   Each run has its own item.
-- `waiting for an answer in Rex`: a question waits in the command
+- `waiting for Rex`: a question waits in the command
   palette of Rex (see "Questions in the Rex palette").
 
 When no work runs, the spinner and the items go away. A sync first

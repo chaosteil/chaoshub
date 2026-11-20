@@ -37,7 +37,7 @@ impl Action for Close {
     fn applies(&self, sel: &Selection) -> Applicability {
         match &sel.target {
             Target::Pr { pr, .. } if pr.head.value.state == PrState::Open => Applicability::Enabled,
-            Target::Pr { .. } => Applicability::Disabled("the pull request is not open"),
+            Target::Pr { .. } => Applicability::Disabled("PR not open"),
         }
     }
 
@@ -131,7 +131,7 @@ mod tests {
         pr.head.value.state = PrState::Closed;
         assert_eq!(
             Close.applies(&closed),
-            Applicability::Disabled("the pull request is not open")
+            Applicability::Disabled("PR not open")
         );
     }
 

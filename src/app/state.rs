@@ -526,7 +526,7 @@ pub(crate) fn ui_key(kind: &str, tab: &str) -> String {
 /// The text of a sync error for the user.
 pub(crate) fn error_text(err: &SyncError) -> String {
     match err {
-        SyncError::Auth => "GitHub login failed, run gh auth login".to_owned(),
+        SyncError::Auth => "GitHub auth failed: run gh auth login".to_owned(),
         SyncError::RateLimited { until } => {
             format!(
                 "rate limited until {}",

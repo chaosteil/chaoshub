@@ -66,7 +66,7 @@ impl Action for Review {
     fn applies(&self, sel: &Selection) -> Applicability {
         match &sel.target {
             Target::Pr { repo, .. } if repo.path.is_some() => Applicability::Enabled,
-            Target::Pr { .. } => Applicability::Disabled("the repo has no local path"),
+            Target::Pr { .. } => Applicability::Disabled("repo has no path"),
         }
     }
 
@@ -204,7 +204,7 @@ mod tests {
         );
         assert_eq!(
             Review.applies(&selection(None)),
-            Applicability::Disabled("the repo has no local path")
+            Applicability::Disabled("repo has no path")
         );
     }
 

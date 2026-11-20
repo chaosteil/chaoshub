@@ -9,7 +9,7 @@ use crate::bus::{PaletteAsk, PaletteItem};
 use crate::domain::keys::PrKey;
 
 /// The text of the status bar while a question waits for its answer.
-pub(crate) const WAITING: &str = "waiting for an answer in Rex";
+pub(crate) const WAITING: &str = "waiting for Rex";
 
 /// The label of the submit row of the question to pr-agent.
 const ASK: &str = "Ask";

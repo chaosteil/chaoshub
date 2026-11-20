@@ -44,7 +44,7 @@ impl Action for Agent {
     fn applies(&self, sel: &Selection) -> Applicability {
         match &sel.target {
             Target::Pr { repo, .. } if repo.path.is_some() => Applicability::Enabled,
-            Target::Pr { .. } => Applicability::Disabled("the repo has no local path"),
+            Target::Pr { .. } => Applicability::Disabled("repo has no path"),
         }
     }
 
@@ -126,7 +126,7 @@ mod tests {
     fn it_needs_a_repo_path_and_opens_the_agent_pane() {
         assert_eq!(
             Agent.applies(&selection(None)),
-            Applicability::Disabled("the repo has no local path")
+            Applicability::Disabled("repo has no path")
         );
         let sel = selection(Some("/code/chaoshub"));
         assert_eq!(Agent.applies(&sel), Applicability::Enabled);
