@@ -1745,6 +1745,9 @@ fn spawn_signals(tx: mpsc::Sender<Msg>) -> io::Result<signal_hook::iterator::Han
 }
 
 #[cfg(test)]
+mod screenshots;
+
+#[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 

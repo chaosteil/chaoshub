@@ -2198,6 +2198,17 @@ bench/bench.sh clean
 Each case runs 5 times (`BENCH_RUNS`) and prints the median of each stage
 in milliseconds. `bench/bench.sh` lists all options.
 
+### README screenshots
+
+The screenshots in `docs/screenshots/` come from made-up test data, not
+from a GitHub account. An ignored test draws each screen and writes it as
+an SVG image (see `src/run/screenshots.rs`). The usual test run does not
+write them. To write them again after a change to the screens, run:
+
+```sh
+cargo test --locked readme_screenshots -- --ignored
+```
+
 ## License
 
 chaoshub is licensed under either of these licenses, at your option:
