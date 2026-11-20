@@ -132,8 +132,9 @@ pub(crate) fn overlay_area(overlay: &OverlayModel, areas: &Areas) -> Rect {
 /// the key hint bar and the status bar. The two bars come last, so the
 /// drop shadow of an overlay does not cover them. The toast comes after
 /// the overlays, so it also shows over the PR view. It adds no target to
-/// `hits`, so a click on it goes to the target below it. `hits` gets the targets of
-/// the frame, in draw order, so an overlay covers the targets below it.
+/// `hits`, so a click on it goes to the target below it. `hits` gets the
+/// targets of the frame, in draw order, so an overlay covers the targets
+/// below it.
 pub(crate) fn view(
     frame: &mut Frame<'_>,
     model: &FrameModel,
@@ -141,8 +142,19 @@ pub(crate) fn view(
     theme: &Theme,
     hits: &mut HitMap,
 ) {
+    draw(frame.buffer_mut(), model, areas, theme, hits);
+}
+
+/// Draws one frame into `buf`, as `view` does. The transitions draw a
+/// frame without its toast with it.
+pub(crate) fn draw(
+    buf: &mut ratatui::buffer::Buffer,
+    model: &FrameModel,
+    areas: &Areas,
+    theme: &Theme,
+    hits: &mut HitMap,
+) {
     hits.clear();
-    let buf = frame.buffer_mut();
     tabbar::render(&model.tab_bar, rect(areas.tab_bar), buf, theme, hits);
     let parts = list_areas(model, areas);
     if let Some(header) = parts.header {

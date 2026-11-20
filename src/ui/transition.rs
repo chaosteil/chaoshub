@@ -30,8 +30,10 @@
 //! - Action success (`FxKey::Flash`): the list row of the pull request
 //!   fades from the primary color to its background in 200 ms. Not when
 //!   the row is out of view or under an overlay.
-//! - New toast (`FxKey::Toast`): the card and its drop shadow fade in
-//!   from the background in 120 ms.
+//! - New toast (`FxKey::Toast`): the card and its drop shadow slide in
+//!   from the right edge of the screen in `animation_ms`. A toast that
+//!   replaces a toast during the slide takes over the slide. A toast that
+//!   replaces a toast at rest shows at once.
 //! - Expired toast: the cells of the card of the last frame fade to the
 //!   background of the cells below them in 300 ms.
 //! - Sync change (`FxKey::Glow(row)`): a visible row whose CI state, check
@@ -78,8 +80,6 @@ const ROW_GLOW_MS: u64 = 250;
 /// The duration of the slide in of a new status message, in
 /// milliseconds.
 const STATUS_IN_MS: u64 = 80;
-/// The duration of the fade in of a new toast, in milliseconds.
-const TOAST_IN_MS: u64 = 120;
 /// The duration of the fade out of an expired toast, in milliseconds.
 const TOAST_OUT_MS: u64 = 300;
 /// The duration of the unfold of the new rows of a tree node, in
@@ -152,6 +152,27 @@ struct ScrollState {
     list: RefRect,
     /// True when the list scrolls down.
     down: bool,
+}
+
+/// The cells of a toast slide: the frame without the toast and the card
+/// at its place, from `prepare`. The slide effect reads them on each
+/// frame, so a new frame below the slide, or a new toast, shows at once.
+#[derive(Debug, Clone)]
+struct SlideCells {
+    /// The frame without the toast, from the left edge of the card to the
+    /// right edge of the screen, in the rows of the card and its shadow.
+    below: Buffer,
+    /// The card and its shadow at their place.
+    card: Buffer,
+}
+
+impl Default for SlideCells {
+    fn default() -> Self {
+        Self {
+            below: Buffer::empty(Rect::default()),
+            card: Buffer::empty(Rect::default()),
+        }
+    }
 }
 
 /// What the cursor moves in: the list of a tab, the table pane of the
@@ -379,7 +400,7 @@ pub(crate) struct Transitions {
     status_pending: bool,
     /// The status row of the last frame.
     status_row: Option<Buffer>,
-    /// True when a new toast shows and its fade in must start.
+    /// True when a new toast shows and its slide must start.
     toast_in: bool,
     /// True when the toast expired and its fade out must start.
     toast_out: bool,
@@ -387,6 +408,8 @@ pub(crate) struct Transitions {
     toast_area: Option<Rect>,
     /// The cells of the toast of the last frame, before the effects.
     toast_cells: Option<Buffer>,
+    /// The cells of the toast slide, shared with the slide effect.
+    slide: RefCount<SlideCells>,
 }
 
 impl Transitions {
@@ -421,6 +444,7 @@ impl Transitions {
             toast_out: false,
             toast_area: None,
             toast_cells: None,
+            slide: ref_count(SlideCells::default()),
         }
     }
 
@@ -849,19 +873,7 @@ impl Transitions {
             self.unfold(model, areas, first, rows);
         }
         self.tree_area = Self::tree_popup(model, areas).map(|(_, area)| area);
-        self.toast_area = model
-            .toast
-            .as_ref()
-            .and_then(|toast| toast::area(&toast.text, areas))
-            .map(|card| toast::effect_area(card, &self.theme).intersection(screen(areas)));
-        if std::mem::take(&mut self.toast_in)
-            && let Some(area) = self.toast_area
-        {
-            let p = &self.theme.palette;
-            let timer = Self::timer(Duration::from_millis(TOAST_IN_MS));
-            let effect = fx::fade_from(p.bg, p.bg, timer).with_area(area);
-            self.manager.add_unique_effect(FxKey::Toast, effect);
-        }
+        self.toast_prepare(model, areas);
         let message = model.status.center.as_ref().map(|c| c.text.clone());
         if self.prepared && message.is_some() && self.last_message != message {
             self.message_in =
@@ -992,6 +1004,98 @@ impl Transitions {
             fx::fade_to_fg(self.theme.palette.surface, timer).with_area(span),
         ]);
         self.manager.add_unique_effect(FxKey::Status, effect);
+    }
+
+    /// Starts or retargets the slide of a new toast, and draws the cells
+    /// of a running slide. A new toast slides in when the last frame had
+    /// no toast. During a slide, the new toast takes over the slide. A
+    /// toast that replaces a toast at rest shows at once, with no
+    /// flicker.
+    fn toast_prepare(&mut self, model: &FrameModel, areas: &Areas) {
+        let had_toast = self.toast_area.is_some();
+        self.toast_area = model
+            .toast
+            .as_ref()
+            .and_then(|toast| toast::area(&toast.text, areas))
+            .map(|card| toast::effect_area(card, &self.theme).intersection(screen(areas)));
+        let sliding = Rc::strong_count(&self.slide) > 1;
+        if std::mem::take(&mut self.toast_in) && !sliding {
+            if had_toast {
+                self.manager.cancel_unique_effect(FxKey::Toast);
+            } else if self.toast_area.is_some() {
+                self.toast_slide();
+            }
+        }
+        if Rc::strong_count(&self.slide) > 1 {
+            let cells = self.slide_cells(model, areas);
+            *self.slide.borrow_mut() = cells;
+        }
+    }
+
+    /// The cells of the slide of the toast of `model`: the frame without
+    /// the toast and the card. Empty without a toast.
+    fn slide_cells(&self, model: &FrameModel, areas: &Areas) -> SlideCells {
+        let (Some(toast), Some(card)) = (&model.toast, self.toast_area) else {
+            return SlideCells::default();
+        };
+        let screen = screen(areas);
+        let region = Rect::new(card.x, card.y, screen.right() - card.x, card.height);
+        let without = FrameModel {
+            toast: None,
+            ..model.clone()
+        };
+        let mut below = Buffer::empty(screen);
+        crate::ui::draw(
+            &mut below,
+            &without,
+            areas,
+            &self.theme,
+            &mut HitMap::default(),
+        );
+        let mut with = copy(&below, card);
+        toast::render(toast, areas, &mut with, &self.theme);
+        SlideCells {
+            below: copy(&below, region),
+            card: with,
+        }
+    }
+
+    /// Starts the slide of a new toast. At alpha `a`, the card is
+    /// `(1 − a) × distance` cells right of its place, where `distance`
+    /// runs from its left edge to the right edge of the screen. The cells
+    /// that the card does not cover show the frame below it.
+    fn toast_slide(&mut self) {
+        let timer = Self::timer(self.duration);
+        let effect = fx::effect_fn_buf(Rc::clone(&self.slide), timer, |cells, cx, buf| {
+            if cx.timer.done() {
+                return;
+            }
+            let cells = cells.borrow();
+            let (below, card) = (&cells.below, &cells.card);
+            let region = below.area;
+            let distance = region.right().saturating_sub(card.area.x);
+            let offset = (f32::from(distance) * (1.0 - cx.alpha().clamp(0.0, 1.0))).round();
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "offset is rounded and between 0 and distance"
+            )]
+            let offset = offset as u16;
+            for (x, y) in positions(region) {
+                let from_card = x
+                    .checked_sub(offset)
+                    .filter(|&cx| cx >= card.area.x && cx < card.area.right())
+                    .filter(|_| y < card.area.bottom());
+                let cell = match from_card {
+                    Some(cx) => card[(cx, y)].clone(),
+                    None => below[(x, y)].clone(),
+                };
+                if let Some(dst) = buf.cell_mut((x, y)) {
+                    *dst = cell;
+                }
+            }
+        });
+        self.manager.add_unique_effect(FxKey::Toast, effect);
     }
 
     /// Starts the fade out of an expired toast. The toast is gone from
@@ -2377,8 +2481,14 @@ mod tests {
         }
     }
 
+    /// The x of the top left corner `◢` of the toast card on `row`, the
+    /// first one from the left edge of the card area `from`.
+    fn corner_x(buf: &Buffer, from: u16, row: u16) -> Option<u16> {
+        (from..buf.area.right()).find(|&x| buf[(x, row)].symbol() == "◢")
+    }
+
     #[test]
-    fn a_new_toast_fades_in_and_an_expired_toast_fades_out() {
+    fn a_new_toast_slides_in_and_an_expired_toast_fades_out() {
         let theme = testdata::punk();
         let p = theme.palette;
         let mut terminal = testdata::terminal(WIDTH, HEIGHT);
@@ -2395,23 +2505,25 @@ mod tests {
             0,
             &theme,
         );
-        draw_view_in(&mut terminal, &mut fx, &gone, 0, &theme);
+        let empty = draw_view_in(&mut terminal, &mut fx, &gone, 0, &theme);
         fx.apply(vec![UiEvent::ToastShown]);
         let start = draw_view_in(&mut terminal, &mut fx, &shown, 0, &theme);
         assert!(fx.active());
-        assert_eq!(start[text].symbol(), "c");
-        assert_eq!(
-            start[text].fg, p.bg,
-            "the text starts in the background color"
-        );
-        let middle = draw_view_in(&mut terminal, &mut fx, &shown, 60, &theme);
-        assert_ne!(middle[text].fg, p.bg);
-        assert_ne!(middle[text].fg, p.fg);
+        assert_eq!(corner_x(&start, card.x, card.y), None, "out of the screen");
+        assert_eq!(start[text], empty[text], "the list shows at the place");
+        let middle = draw_view_in(&mut terminal, &mut fx, &shown, 40, &theme);
+        let x = corner_x(&middle, card.x, card.y).unwrap();
+        assert!(x > card.x, "the card moves in from the right: {x}");
+        assert_eq!(middle[(x + 2, card.y + 1)].symbol(), "c");
+        assert_eq!(middle[corner], empty[corner]);
+        let later = draw_view_in(&mut terminal, &mut fx, &shown, 40, &theme);
+        let later_x = corner_x(&later, card.x, card.y).unwrap();
+        assert!(later_x < x, "{later_x} < {x}");
         let end = draw_view_in(&mut terminal, &mut fx, &shown, 80, &theme);
-        assert_eq!(end[text], plain[text]);
-        assert_eq!(end[corner], plain[corner]);
+        assert_eq!(end, plain, "the card settles at its place");
         draw_view_in(&mut terminal, &mut fx, &shown, 16, &theme);
         assert!(!fx.active());
+        assert_eq!(plain[text].fg, p.fg);
         // The toast expires: the new frame has no toast, and the old card
         // fades out over it.
         fx.apply(vec![UiEvent::ToastExpired]);
@@ -2428,6 +2540,77 @@ mod tests {
         assert!(!fx.active());
         assert_eq!(end[text].symbol(), " ", "the list shows again");
         assert_eq!(end[corner].symbol(), " ");
+    }
+
+    #[test]
+    fn a_new_toast_takes_over_a_running_slide_and_replaces_a_toast_at_rest_at_once() {
+        let theme = testdata::punk();
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut fx = Transitions::new(true, 160).with_theme(theme);
+        let first = with_toast(Some("copied url of #142"));
+        let second = with_toast(Some("opened #142 in browser"));
+        let areas = testdata::areas(WIDTH, HEIGHT);
+        let card = toast::area("opened #142 in browser", &areas).unwrap();
+        let plain = draw_view_in(
+            &mut terminal,
+            &mut Transitions::new(false, 160),
+            &second,
+            0,
+            &theme,
+        );
+        draw_view_in(&mut terminal, &mut fx, &with_toast(None), 0, &theme);
+        fx.apply(vec![UiEvent::ToastShown]);
+        draw_view_in(&mut terminal, &mut fx, &first, 0, &theme);
+        let middle = draw_view_in(&mut terminal, &mut fx, &first, 60, &theme);
+        let x = corner_x(&middle, 0, card.y).unwrap();
+        // The second toast during the slide: the slide goes on from the
+        // same place, with the new card.
+        fx.apply(vec![UiEvent::ToastShown]);
+        // The new card is wider, so its place is more to the left.
+        let retarget = draw_view_in(&mut terminal, &mut fx, &second, 0, &theme);
+        let new_x = corner_x(&retarget, 0, card.y).unwrap();
+        assert!(new_x > card.x && new_x <= x, "no jump back: {new_x}");
+        assert_eq!(retarget[(new_x + 2, card.y + 1)].symbol(), "o");
+        let end = draw_view_in(&mut terminal, &mut fx, &second, 100, &theme);
+        assert_eq!(end, plain);
+        draw_view_in(&mut terminal, &mut fx, &second, 16, &theme);
+        assert!(!fx.active());
+        // A third toast replaces the card at rest at once.
+        let third = with_toast(Some("copied url of #142"));
+        fx.apply(vec![UiEvent::ToastShown]);
+        let now = draw_view_in(&mut terminal, &mut fx, &third, 0, &theme);
+        assert!(!fx.active(), "no slide");
+        let plain = draw_view_in(
+            &mut terminal,
+            &mut Transitions::new(false, 160),
+            &third,
+            0,
+            &theme,
+        );
+        assert_eq!(now, plain);
+    }
+
+    #[test]
+    fn the_safety_switch_stops_a_toast_slide() {
+        let theme = testdata::punk();
+        let mut terminal = testdata::terminal(WIDTH, HEIGHT);
+        let mut fx = Transitions::new(true, 160).with_theme(theme);
+        let shown = with_toast(Some("copied url of #142"));
+        let plain = draw_view_in(
+            &mut terminal,
+            &mut Transitions::new(false, 160),
+            &shown,
+            0,
+            &theme,
+        );
+        draw_view_in(&mut terminal, &mut fx, &with_toast(None), 0, &theme);
+        fx.apply(vec![UiEvent::ToastShown]);
+        draw_view_in(&mut terminal, &mut fx, &shown, 40, &theme);
+        assert!(fx.active());
+        fx.disable();
+        assert!(!fx.active());
+        let now = draw_view_in(&mut terminal, &mut fx, &shown, 16, &theme);
+        assert_eq!(now, plain, "the card is at its place at once");
     }
 
     #[test]

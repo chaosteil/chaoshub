@@ -390,8 +390,10 @@ chaoshub does (see [Rex, Ghostty and the terminal](rex.md#terminal-title)).
 
 Some keys do their work outside of the screen. For these keys, a toast
 (a small card) shows at the bottom right, above the key hint bar. The
-toast names the PR, for example `copied url of #142`. It stays for
-about 2 seconds and then fades out. It also shows over the PR view.
+toast names the PR, for example `copied url of #142`. It slides in from
+the right, stays for about 2 seconds and then fades out. It also shows
+over the PR view. With `[theme] animations = false`, the toast shows and
+goes away at once.
 
 The toast does not take keys or clicks. A new toast replaces the old
 one. These keys show a toast:
