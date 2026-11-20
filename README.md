@@ -1030,6 +1030,14 @@ right and covers 80% of the width, over the list rows. The tab bar, the
 key hint bar and the status bar stay visible. `esc` or `q` closes the
 sidebar.
 
+The header of the detail shows the number and the title of the pull
+request, then the author, the branches and the state. When the pull
+request has reactions, one row under the title shows them, as the
+conversation pane shows the reactions of a comment, for example
+`👍 3  🎉 1`. Your own reactions have the primary color. A pull request
+without reactions has no such row. The row comes when the conversation
+loads.
+
 The detail has five panes. The number keys select a pane, and `tab`
 selects the next pane:
 

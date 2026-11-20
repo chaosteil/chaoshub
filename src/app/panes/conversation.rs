@@ -31,7 +31,7 @@ use crate::actions::REPLY_ID;
 use crate::app::age::age;
 use crate::app::models::{Cell, CellStyle, PaneModel, TreeNode};
 use crate::app::panes::{Pane, PaneAction, PaneMenu, PaneState};
-use crate::app::tabs::cells::cell;
+use crate::app::tabs::cells::{self, cell};
 use crate::app::tabs::{Handled, KeyCx, tree_toggled};
 use crate::bus::{
     KeyChord, KeyCode, KeyModifiers, PendingPart, ReactSpec, ReplySpec, ReplyTo, Size, Target,
@@ -478,41 +478,10 @@ fn body(depth: u8, text: &str, html: &str) -> Option<TreeNode> {
     (!text.is_empty()).then(|| node(depth, None, vec![cell(text, CellStyle::Markdown)]))
 }
 
-/// The reactions of a comment or a review as a node: `👍 3  🎉 1`, in
-/// the order of GitHub. The reactions of the viewer have the primary
-/// color, the others are dim. A reaction of `pulses` pulses with its
-/// mix: it is on its way to GitHub. A removed reaction that is on its
-/// way and has no count left shows as `👍 0`. `None` without reactions.
+/// The reactions of a comment or a review as a node: `👍 3  🎉 1` (see
+/// `cells::reactions`). `None` without reactions.
 fn reactions(depth: u8, reactions: &[Reaction], pulses: &[(ReactionKind, u8)]) -> Option<TreeNode> {
-    let pulse = |kind: ReactionKind| {
-        pulses
-            .iter()
-            .find(|(pending, _)| *pending == kind)
-            .map(|&(_, mix)| mix)
-    };
-    let mut cells = Vec::new();
-    let mut push = |text: String, style: CellStyle| {
-        if !cells.is_empty() {
-            cells.push(cell("  ", CellStyle::Normal));
-        }
-        cells.push(cell(text, style));
-    };
-    for reaction in reactions {
-        let style = match pulse(reaction.kind) {
-            Some(mix) => CellStyle::Pulse(mix),
-            None if reaction.mine => CellStyle::Primary,
-            None => CellStyle::Dim,
-        };
-        push(
-            format!("{} {}", reaction.kind.emoji(), reaction.count),
-            style,
-        );
-    }
-    for &(kind, mix) in pulses {
-        if !reactions.iter().any(|reaction| reaction.kind == kind) {
-            push(format!("{} 0", kind.emoji()), CellStyle::Pulse(mix));
-        }
-    }
+    let cells = cells::reactions(reactions, pulses);
     (!cells.is_empty()).then(|| node(depth, None, cells))
 }
 

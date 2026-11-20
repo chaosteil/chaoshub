@@ -1,7 +1,9 @@
-//! Cells that several tabs share: CI, review and flag glyphs.
+//! Cells that several tabs and panes share: CI, review and flag glyphs,
+//! and reactions.
 
 use crate::app::models::{Cell, CellStyle};
 use crate::domain::check::CheckConclusion;
+use crate::domain::detail::{Reaction, ReactionKind};
 use crate::domain::pr::{CiState, Mergeable, PrHead, PullRequest, ReviewDecision};
 
 /// A cell.
@@ -10,6 +12,44 @@ pub(crate) fn cell(text: impl Into<String>, style: CellStyle) -> Cell {
         text: text.into(),
         style,
     }
+}
+
+/// The cells of `reactions`: `👍 3  🎉 1`, in the order of GitHub. The
+/// reactions of the viewer have the primary color, the others are dim.
+/// A reaction of `pulses` pulses with its mix: it is on its way to
+/// GitHub. A removed reaction that is on its way and has no count left
+/// shows as `👍 0`. Empty without reactions.
+pub(crate) fn reactions(reactions: &[Reaction], pulses: &[(ReactionKind, u8)]) -> Vec<Cell> {
+    let pulse = |kind: ReactionKind| {
+        pulses
+            .iter()
+            .find(|(pending, _)| *pending == kind)
+            .map(|&(_, mix)| mix)
+    };
+    let mut cells = Vec::new();
+    let mut push = |text: String, style: CellStyle| {
+        if !cells.is_empty() {
+            cells.push(cell("  ", CellStyle::Normal));
+        }
+        cells.push(cell(text, style));
+    };
+    for reaction in reactions {
+        let style = match pulse(reaction.kind) {
+            Some(mix) => CellStyle::Pulse(mix),
+            None if reaction.mine => CellStyle::Primary,
+            None => CellStyle::Dim,
+        };
+        push(
+            format!("{} {}", reaction.kind.emoji(), reaction.count),
+            style,
+        );
+    }
+    for &(kind, mix) in pulses {
+        if !reactions.iter().any(|reaction| reaction.kind == kind) {
+            push(format!("{} 0", kind.emoji()), CellStyle::Pulse(mix));
+        }
+    }
+    cells
 }
 
 /// The CI glyph: `✓` success, `✗` failure, `●` pending, `·` none.

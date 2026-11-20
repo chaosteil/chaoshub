@@ -267,6 +267,9 @@ pub(crate) fn review_list_rows(rows: usize, height: u16) -> usize {
 pub(crate) enum OverlayContent {
     Popup {
         title: String,
+        /// The reactions of the pull request, on one row under the
+        /// title. Empty without reactions, and before the detail loads.
+        reactions: Vec<Cell>,
         subtitle: String,
         /// The panes that apply and the panes that keep their tab, in
         /// registry order.
