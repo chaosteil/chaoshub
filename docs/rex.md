@@ -140,6 +140,12 @@ pane. It waits for the pane with `rex wait <block>`. The
 `CHAOSHUB_LIST_SOCKET` env is there only when the list listens on its
 socket (see [How the PR view talks to the list](#how-the-pr-view-talks-to-the-list)).
 
+For `open url` (`space` then `u`), the pane runs `pr <url>` in place of
+`pr <owner/name> <N>`, so the end of the URL selects the first pane (see
+[Open a PR from a URL](actions.md#open-a-pr-from-a-url)). For a PR that
+the list does not have, the label is `<name>#N` until the PR loads, and
+a repo that chaoshub does not know runs in the directory of the list.
+
 ## Questions in the Rex palette
 
 Inside Rex, chaoshub can ask a question in the command palette of Rex
@@ -149,10 +155,14 @@ in place of its own popup. It does this for these questions:
   `all authors` comes first. The current choice shows `current` at the
   end of its row. The submit row says `Filter`.
 - The one-line prompts: the question to pr-agent (`a` in the Agent
-  pane), and the text prompt of an action. The palette shows a text
-  field with the title and the placeholder of the prompt. Your text
-  goes to the same place as the text of the prompt popup. The submit
-  row says `Ask` for pr-agent, and `Send` for an action.
+  pane), the text prompt of an action, and the PR URL of `open url`
+  (`space` then `u`, see
+  [Open a PR from a URL](actions.md#open-a-pr-from-a-url)). The palette
+  shows a text field with the title and the placeholder of the prompt,
+  and the start text of the prompt, for example a PR URL from the
+  clipboard. Your text goes to the same place as the text of the prompt
+  popup. The submit row says `Ask` for pr-agent, `Send` for an action,
+  and `Open` for the PR URL.
 - The jump to a PR (`f` in the list). The palette lists the PRs that
   the tabs show now, in tab order: the filter, the author picker and
   the ready rule of each tab apply. A PR in two tabs shows once, with

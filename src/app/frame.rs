@@ -20,7 +20,7 @@ use crate::app::models::{
 };
 use crate::app::panes::conversation::is_stale;
 use crate::app::panes::{PANES, Pane, applicable};
-use crate::app::state::{AppData, AppState, OverlayState, PopupState};
+use crate::app::state::{AppData, AppState, OverlayState, PopupState, PromptFor};
 use crate::app::tabs::{KeyCx, TABS, Tab};
 use crate::app::target::{pr_target, row_target};
 use crate::app::term::{block_label, term_status, term_title};
@@ -163,20 +163,30 @@ fn overlay_models(
                     cursor: picker.cursor,
                 },
                 OverlayState::Actions(menu) => {
-                    let Target::Pr { pr, .. } = &*menu.target;
-                    OverlayContent::Picker {
-                        title: menu
-                            .title
+                    let title =
+                        menu.title
                             .clone()
-                            .unwrap_or_else(|| format!("actions for #{}", pr.key.number)),
+                            .unwrap_or_else(|| match menu.target.as_deref() {
+                                Some(Target::Pr { pr, .. }) => {
+                                    format!("actions for #{}", pr.key.number)
+                                }
+                                None => "actions".to_owned(),
+                            });
+                    OverlayContent::Picker {
+                        title,
                         items: menu.items(&state.data, &state.cache.keymap, actions),
                         cursor: menu.row(menu.cursor),
                     }
                 }
                 OverlayState::Confirm { spec, .. } => OverlayContent::Confirm(spec.clone()),
-                OverlayState::Prompt { spec, text, .. } => OverlayContent::Prompt {
+                OverlayState::Prompt {
+                    purpose,
+                    spec,
+                    text,
+                } => OverlayContent::Prompt {
                     spec: spec.clone(),
                     text: text.clone(),
+                    submit: prompt_submit(purpose),
                 },
                 OverlayState::Review(review) => OverlayContent::Review(review.spec(&state.data)),
                 OverlayState::ReviewText {
@@ -387,10 +397,11 @@ fn hints_model(
     })
 }
 
-/// The hints of the list: the app keys, the keys of the active tab, and
-/// when the cursor row has a target, the `actions` key and the direct
-/// keys of `actions` that are enabled for it. The primary hints come
-/// first.
+/// The hints of the list: the app keys, the `actions` key, the keys of
+/// the active tab, and when the cursor row has a target, the direct keys
+/// of `actions` that are enabled for it. The `actions` key shows also
+/// without a target, because the menu always has `open url`. The primary
+/// hints come first.
 fn list_hints(
     state: &AppState,
     keymap: &Keymap,
@@ -424,12 +435,12 @@ fn list_hints(
             chord: Some(chord),
         }));
     }
+    hints.extend(app_hint(keymap, &["actions"], "actions", true));
     if let Some(target) = list
         .rows
         .get(list.cursor)
         .and_then(|row| row_target(&state.data, &row.item))
     {
-        hints.extend(app_hint(keymap, &["actions"], "actions", true));
         hints.extend(direct_hints(&state.data, keymap, actions, target));
     }
     hints.sort_by_key(|hint| !hint.primary);
@@ -578,8 +589,8 @@ fn overlay_hints(
             app_hint(keymap, &["confirm"], "confirm", true),
             app_hint(keymap, &["cancel", "close_overlay"], "cancel", true),
         ],
-        OverlayState::Prompt { .. } => vec![
-            hint(&[plain_key(KeyCode::Enter)], "send"),
+        OverlayState::Prompt { purpose, .. } => vec![
+            hint(&[plain_key(KeyCode::Enter)], prompt_submit(purpose)),
             hint(&[plain_key(KeyCode::Esc)], "cancel"),
         ],
         OverlayState::Review(_) => {
@@ -619,6 +630,15 @@ fn overlay_hints(
         }
     };
     hints.into_iter().flatten().collect()
+}
+
+/// What `enter` does in a prompt popup for `purpose`: `send` the text of
+/// an action, or `open` the PR of a URL.
+fn prompt_submit(purpose: &PromptFor) -> &'static str {
+    match purpose {
+        PromptFor::Action(_) => "send",
+        PromptFor::OpenUrl => "open",
+    }
 }
 
 /// The hint of the bindings `names`: the first chord of each binding,

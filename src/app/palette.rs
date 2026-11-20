@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use crate::app::state::{AppData, AuthorPicker, OverlayState};
+use crate::app::state::{AppData, AuthorPicker, OverlayState, PromptFor};
 use crate::app::term::pr_status;
 use crate::bus::{PaletteAsk, PaletteItem};
 use crate::domain::keys::PrKey;
@@ -33,14 +33,18 @@ const TAB_ICONS: &[(&str, &str)] = &[("mine", "branch"), ("review", "person"), (
 pub(crate) fn ask(overlay: &OverlayState) -> Option<PaletteAsk> {
     match overlay {
         OverlayState::Authors(picker) => Some(authors(picker)),
-        OverlayState::Prompt { action, spec, text } => Some(PaletteAsk::Input {
+        OverlayState::Prompt {
+            purpose,
+            spec,
+            text,
+        } => Some(PaletteAsk::Input {
             title: spec.title.clone(),
             placeholder: spec.placeholder.clone(),
             value: text.clone(),
-            confirm: Some(if action.id == crate::agent::ID {
-                ASK
-            } else {
-                SEND
+            confirm: Some(match purpose {
+                PromptFor::Action(action) if action.id == crate::agent::ID => ASK,
+                PromptFor::Action(_) => SEND,
+                PromptFor::OpenUrl => OPEN,
             }),
         }),
         _ => None,
@@ -191,14 +195,14 @@ mod tests {
         state.load(testdata::mine_snapshot(), Vec::new());
         let key = &testdata::mine_prs()[0].key;
         let prompt = |id: &'static str| OverlayState::Prompt {
-            action: ActionDialog {
+            purpose: PromptFor::Action(ActionDialog {
                 id,
                 selection: Box::new(crate::bus::Selection {
                     target: crate::app::target::pr_target(&state.data, key).unwrap(),
                     me: String::new(),
                     action_config: None,
                 }),
-            },
+            }),
             spec: PromptSpec {
                 title: "t".into(),
                 placeholder: String::new(),
@@ -211,6 +215,23 @@ mod tests {
         };
         assert_eq!(confirm("agent"), ("draft".into(), Some("Ask")));
         assert_eq!(confirm("request_changes"), ("draft".into(), Some("Send")));
+        let url = OverlayState::Prompt {
+            purpose: PromptFor::OpenUrl,
+            spec: PromptSpec {
+                title: "open url".into(),
+                placeholder: "https://github.com/OWNER/NAME/pull/N".into(),
+            },
+            text: "github.com/a/b/pull/1".into(),
+        };
+        assert_eq!(
+            ask(&url),
+            Some(PaletteAsk::Input {
+                title: "open url".into(),
+                placeholder: "https://github.com/OWNER/NAME/pull/N".into(),
+                value: "github.com/a/b/pull/1".into(),
+                confirm: Some("Open"),
+            })
+        );
     }
 
     #[test]

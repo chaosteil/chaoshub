@@ -858,6 +858,10 @@ pub(crate) enum Msg {
     /// A mouse drag selected this text in a text area, and the left
     /// button went up. `run` sends it, and `app` copies the text.
     CopyText(String),
+    /// The text of the system clipboard, for `Cmd::ReadClipboard`.
+    /// `None` when chaoshub cannot read the clipboard, or when it holds no
+    /// text.
+    ClipboardRead(Option<String>),
     PaneEnded {
         id: &'static str,
         key: TargetKey,
@@ -935,6 +939,9 @@ pub(crate) enum Cmd {
     CancelPalette,
     Persist(Persist),
     Copy(String),
+    /// Reads the text of the system clipboard. The runtime sends
+    /// `Msg::ClipboardRead`.
+    ReadClipboard,
     OpenUrl(String),
     Quit,
 }

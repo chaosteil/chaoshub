@@ -6,6 +6,7 @@ why.
 
 - [Direct keys and the actions menu](#direct-keys-and-the-actions-menu)
 - [Actions](#actions)
+- [Open a PR from a URL](#open-a-pr-from-a-url)
 - [Merge a stack](#merge-a-stack)
 - [The Review popup](#the-review-popup)
 - [Changes on their way to GitHub](#changes-on-their-way-to-github)
@@ -26,7 +27,10 @@ hint bar shows the direct keys that the row can run.
 
 The `actions` key (`space`) opens the actions menu of the selected row,
 or of the PR of the PR view. The menu shows each action for the PR, with
-its key. A disabled action shows the reason in parentheses. In the menu:
+its key. A disabled action shows the reason in parentheses. The last
+item, `open url` (`u`), needs no PR (see
+[Open a PR from a URL](#open-a-pr-from-a-url)). On a row without a PR,
+or in an empty tab, the menu has only this item. In the menu:
 
 - `j` and `k` move the cursor.
 - `enter` runs the action of the cursor.
@@ -67,6 +71,60 @@ and the table name for `[actions.<id>]`.
 
 After an action is done, chaoshub syncs the PR again and scans the repo
 again.
+
+## Open a PR from a URL
+
+A PR link from a chat, for example from Slack, opens in chaoshub with
+the actions menu:
+
+1. Copy the link.
+2. Press `space`, then `u` (`open url`). This works in every tab, also
+   without a selected row.
+3. If the clipboard holds a GitHub PR URL, the prompt starts with it.
+   Else, paste or type the URL.
+4. Press `enter`.
+
+The prompt is the usual prompt popup. Inside Rex, the question opens in
+the Rex palette (see
+[Questions in the Rex palette](rex.md#questions-in-the-rex-palette)).
+chaoshub reads the system clipboard. When it cannot, for example over
+ssh, the prompt starts empty.
+
+The URL has the form `https://github.com/OWNER/NAME/pull/N`. It can have
+no `https://` and no `www.`, spaces around it, and `<...>` around it, as
+Slack writes links. A query (`?w=1`) and an anchor (`#...`) are
+permitted. The end of the URL selects the first pane of the PR view:
+
+| End of the URL | First pane |
+|---|---|
+| `/files`, `/changes` | Files |
+| `/checks` | Checks |
+| `#discussion_r…`, `#issuecomment-…`, `#pullrequestreview-…` | Conversation |
+| Other, for example no end or `/commits` | Description |
+
+Any other text shows `not a PR url` in the status line. An empty text
+does nothing.
+
+Where the PR view opens:
+
+- When a tab shows the PR, chaoshub selects that tab and the row of the
+  PR. Then the PR view opens as `enter` opens it.
+- Inside Rex (or with `[detail] mode = "pane"`), the Rex pane runs
+  `chaoshub pr <url>`, also for a PR that no tab shows. That process
+  loads the PR from GitHub, and the block label shows `<name>#N` until
+  the PR loads (see [What `enter` runs inside Rex](rex.md#what-enter-runs-inside-rex)).
+- In the sidebar, a PR that no tab shows opens at once when chaoshub has
+  it in the cache, for example a merged PR. Else the status line shows
+  `loading #N…`, chaoshub loads the PR from GitHub, and the sidebar
+  opens when the PR arrives. If the load fails, the status line shows
+  the error, and nothing opens.
+
+A loaded PR stays in the cache until the next full sync. If it is open
+and its tab rules permit it, it shows in its tab until then.
+
+The PR view process (`chaoshub pr`) shows one PR only. Its actions
+menu has no `open url`. For the command line form, see
+[Start](usage.md#start).
 
 ## Merge a stack
 

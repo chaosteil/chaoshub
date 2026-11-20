@@ -38,7 +38,7 @@ The confirm popup of a merge of the whole stack.
   you when the local change and the PR diverged.
 - The state at a glance: columns show the CI checks, the reviews,
   drafts, merge conflicts and the merge queue. A fuzzy filter finds a PR
-  in each tab.
+  in each tab. `space` then `u` opens a pasted PR link.
 - The PR view: one PR in six panes. The panes are the description with
   a readiness block, the checks, the conversation with replies and
   reactions, the changed files with syntax colors, the stack, and the

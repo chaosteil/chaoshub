@@ -555,7 +555,7 @@ mod tests {
                 |s| {
                     s.data.sync.pending.insert(Scope::Mine);
                     let prompt = OverlayState::Prompt {
-                        action: dialog(),
+                        purpose: crate::app::state::PromptFor::Action(dialog()),
                         spec: PromptSpec {
                             title: "request changes on #7".into(),
                             placeholder: String::new(),

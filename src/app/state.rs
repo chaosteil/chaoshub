@@ -37,6 +37,7 @@ use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::local::LocalState;
 use crate::domain::observed::Observed;
 use crate::domain::pr::{PrState, PullRequest};
+use crate::domain::pr_url::PrUrl;
 use crate::domain::repo::Repo;
 use crate::store::Snapshot;
 
@@ -393,6 +394,12 @@ pub(crate) struct UiState {
     pub palette_wait: Option<PaletteWait>,
     /// The serial of the last `Cmd::AskPalette`.
     pub palette_serial: u64,
+    /// True from the `open_pr_url` item of the actions menu until
+    /// `Msg::ClipboardRead`. Then the URL prompt opens.
+    pub clipboard_wait: bool,
+    /// The PR URL whose pull request loads from GitHub. When the pull
+    /// request arrives, its PR view opens.
+    pub url_load: Option<PrUrl>,
 }
 
 /// A question in the command palette of Rex that waits for its answer,
@@ -565,9 +572,10 @@ pub(crate) enum OverlayState {
         action: ActionDialog,
         spec: ConfirmSpec,
     },
-    /// The prompt popup of an action: Enter runs it with the text.
+    /// The prompt popup of an action or of the PR URL: Enter runs the
+    /// action with the text, or opens the PR of the URL.
     Prompt {
-        action: ActionDialog,
+        purpose: PromptFor,
         spec: PromptSpec,
         text: String,
     },
@@ -603,6 +611,15 @@ pub(crate) enum OverlayState {
 
 /// The most lines that an output popup keeps. Older lines go first.
 pub(crate) const OUTPUT_LINES: usize = 2000;
+
+/// What the text of a prompt popup is for.
+#[derive(Debug)]
+pub(crate) enum PromptFor {
+    /// The text input of an action, or the question to pr-agent.
+    Action(ActionDialog),
+    /// A PR URL: the PR view of its pull request opens.
+    OpenUrl,
+}
 
 /// The action that a confirm or a prompt popup runs, and its selection.
 #[derive(Debug)]
@@ -850,12 +867,15 @@ impl AuthorPicker {
 
 /// The actions menu of a list row or of the pull request popup: one item
 /// for each action that is not hidden for the pull request, then one
-/// item for each own action of the active pane of the popup. A gap row
-/// shows between two groups of items. A gap row is not an item.
+/// item for each own action of the active pane of the popup, then the
+/// `open_pr_url` item. A gap row shows between two groups of items. A
+/// gap row is not an item.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ActionMenu {
-    /// The pull request that the actions run on.
-    pub target: Box<Target>,
+    /// The pull request that the actions run on. `None` for a list row
+    /// without a pull request: then the menu has only the `open_pr_url`
+    /// item.
+    pub target: Option<Box<Target>>,
     /// The title of the menu. `None` gives `actions for #N`.
     pub title: Option<String>,
     /// The ids of the actions, in display order.
@@ -863,6 +883,9 @@ pub(crate) struct ActionMenu {
     /// The own actions of the active pane of the popup under the menu,
     /// after the actions. Empty for a list row.
     pub pane: Vec<PaneAction>,
+    /// True when the last item is `open_pr_url`: it asks for a PR URL
+    /// and opens its PR view.
+    pub open_url: bool,
     /// The indices of the items that have a gap row before them, in
     /// increasing order.
     pub gaps: Vec<usize>,
@@ -870,10 +893,23 @@ pub(crate) struct ActionMenu {
     pub cursor: usize,
 }
 
+/// The binding name of the `open url` item of the actions menu.
+pub(crate) const OPEN_URL_ID: &str = "open_pr_url";
+
+/// The label of the `open url` item of the actions menu.
+pub(crate) const OPEN_URL_LABEL: &str = "open url";
+
 impl ActionMenu {
-    /// The number of items: the actions and the pane actions.
+    /// The number of items: the actions, the pane actions and the
+    /// `open_pr_url` item.
     pub(crate) fn len(&self) -> usize {
-        self.ids.len() + self.pane.len()
+        self.ids.len() + self.pane.len() + usize::from(self.open_url)
+    }
+
+    /// The index of the `open_pr_url` item. `None` when the menu does not
+    /// have it.
+    pub(crate) fn open_url_item(&self) -> Option<usize> {
+        self.open_url.then(|| self.ids.len() + self.pane.len())
     }
 
     /// The row of the item at `item`: the index of the item plus the
@@ -889,30 +925,42 @@ impl ActionMenu {
     }
 
     /// The rows of the menu: the key and the label of each action of
-    /// `actions` in `ids`, then of each pane action, with an empty row
-    /// for each gap. A disabled action or pane action also shows its
-    /// reason in parentheses. An action without a key shows only its label. In the
-    /// menu, an action key wins over a pane key, so a pane action with
-    /// the key of an action in `ids` also shows only its label. `enter`
-    /// on it still runs it.
+    /// `actions` in `ids`, then of each pane action, then of the
+    /// `open_pr_url` item, with an empty row for each gap. A disabled
+    /// action or pane action also shows its reason in parentheses. An
+    /// action without a key shows only its label. In the menu, an action
+    /// key wins over a pane key, so a pane action with the key of an
+    /// action in `ids` also shows only its label. `enter` on it still
+    /// runs it.
     pub(crate) fn items(
         &self,
         data: &AppData,
         keymap: &Keymap,
         actions: &[Box<dyn Action>],
     ) -> Vec<String> {
-        let states = frame::applicability(data, actions, (*self.target).clone());
+        let states = match &self.target {
+            Some(target) => frame::applicability(data, actions, (**target).clone()),
+            None => Vec::new(),
+        };
+        let open_url = self
+            .open_url
+            .then(|| match keymap.chords(OPEN_URL_ID).first() {
+                Some(&chord) => format!("{}  {OPEN_URL_LABEL}", frame::key_text(chord)),
+                None => OPEN_URL_LABEL.to_owned(),
+            });
         self.ids
             .iter()
             .map(|&id| {
-                let Some((action, state)) = actions
-                    .iter()
-                    .zip(&states)
-                    .find(|(action, _)| action.id() == id)
-                else {
+                let (Some(target), Some((action, state))) = (
+                    &self.target,
+                    actions
+                        .iter()
+                        .zip(&states)
+                        .find(|(action, _)| action.id() == id),
+                ) else {
                     return id.replace('_', " ");
                 };
-                let label = action.target_label(&self.target);
+                let label = action.target_label(target);
                 let text = match keymap.chords(id).first() {
                     Some(&chord) => format!("{}  {label}", frame::key_text(chord)),
                     None => label.to_owned(),
@@ -933,6 +981,7 @@ impl ActionMenu {
                     None => text,
                 }
             }))
+            .chain(open_url)
             .enumerate()
             .flat_map(|(item, text)| {
                 let gap = self.gaps.contains(&item).then(String::new);
@@ -1007,6 +1056,8 @@ impl AppState {
                 saved_column_headers: None,
                 palette_wait: None,
                 palette_serial: 0,
+                clipboard_wait: false,
+                url_load: None,
             },
             generation: 0,
             cache: ModelCache::default(),

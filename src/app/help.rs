@@ -8,6 +8,7 @@ use crate::actions::Action;
 use crate::app::frame::key_text;
 use crate::app::keymap::{self, Keymap};
 use crate::app::models::{Cell, CellStyle, HelpModel, HelpSection};
+use crate::app::state::{OPEN_URL_ID, OPEN_URL_LABEL};
 use crate::app::tabs::Tab;
 use crate::app::tabs::cells::{self, cell};
 use crate::domain::pr::{CiState, ReviewDecision};
@@ -96,6 +97,18 @@ pub(crate) fn help_model(
     }
     let mut action_section = keymap::action_help(keymap, actions);
     ACTIONS_TITLE.clone_into(&mut action_section.title);
+    // The `open url` item of the menu is no action: it needs no pull
+    // request.
+    let open_url: Vec<String> = keymap
+        .chords(OPEN_URL_ID)
+        .iter()
+        .map(|&chord| key_text(chord))
+        .collect();
+    if !open_url.is_empty() {
+        action_section
+            .entries
+            .push((open_url.join(" "), OPEN_URL_LABEL.to_owned()));
+    }
     sections.push(action_section);
     let detail: Vec<(String, String)> = actions
         .iter()
@@ -296,7 +309,11 @@ mod tests {
         assert_eq!(model.sections[1].entries.len(), FILTER_SYNTAX.len() + 1);
         assert_eq!(
             model.sections[3].entries,
-            [entry("c", "close"), entry("v", "review")]
+            [
+                entry("c", "close"),
+                entry("v", "review"),
+                entry("u", "open url")
+            ]
         );
         assert_eq!(
             model.sections[4].entries,

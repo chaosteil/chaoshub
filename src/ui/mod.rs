@@ -192,8 +192,8 @@ pub(crate) fn render_overlay(
         OverlayContent::Help { help, scroll } => {
             help::render(help, *scroll, area, buf, theme, hits);
         }
-        OverlayContent::Prompt { spec, text } => {
-            prompt::render(spec, text, area, buf, theme, hits);
+        OverlayContent::Prompt { spec, text, submit } => {
+            prompt::render(spec, text, submit, area, buf, theme, hits);
         }
         OverlayContent::Output {
             title,

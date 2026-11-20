@@ -44,6 +44,8 @@ const DEFAULTS: &[(&str, &[&str])] = &[
     ("filter", &["/"]),
     ("authors", &["a"]),
     ("jump", &["f"]),
+    // Only the actions menu reads it (`space` then `u`).
+    ("open_pr_url", &["u"]),
     ("toggle_all", &["t"]),
     ("show_hidden", &["T"]),
     ("refresh", &["R"]),

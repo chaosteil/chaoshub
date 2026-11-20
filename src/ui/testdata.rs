@@ -515,6 +515,7 @@ pub(crate) fn prompt_overlay(text: &str) -> OverlayModel {
                 placeholder: "What must change?".to_owned(),
             },
             text: text.to_owned(),
+            submit: "send",
         },
     }
 }

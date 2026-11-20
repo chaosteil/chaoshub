@@ -195,6 +195,16 @@ impl Runtime {
             Cmd::Copy(text) => {
                 self.handle.spawn_blocking(move || copy(&text));
             }
+            Cmd::ReadClipboard => {
+                let tx = self.env.tx.clone();
+                self.handle.spawn(async move {
+                    let text = tokio::task::spawn_blocking(crate::clipboard::paste)
+                        .await
+                        .ok()
+                        .flatten();
+                    send(&tx, Msg::ClipboardRead(text)).await;
+                });
+            }
             Cmd::OpenUrl(url) => {
                 self.handle.spawn_blocking(move || {
                     if let Err(err) = open::that(&url) {

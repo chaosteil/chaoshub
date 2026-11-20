@@ -28,8 +28,9 @@ use crate::app::state::MergeState;
 use crate::app::state::PrefetchBatch;
 use crate::app::state::{
     AUTHOR_KEY, ActionDialog, ActionMenu, AppData, AppState, AuthorPicker, COLUMN_HEADERS_KEY,
-    Condition, FILTER_KEY, Failure, OUTPUT_LINES, Overlay, OverlayState, PaletteQuestion,
-    PaletteWait, PaneHandleState, PopupState, ReplyDialog, ReviewPopup, error_text, ui_key,
+    Condition, FILTER_KEY, Failure, OPEN_URL_ID, OUTPUT_LINES, Overlay, OverlayState,
+    PaletteQuestion, PaletteWait, PaneHandleState, PopupState, PromptFor, ReplyDialog, ReviewPopup,
+    error_text, ui_key,
 };
 use crate::app::tabs::{Handled, KeyCx, TABS, Tab, cells, pr_ref};
 use crate::app::target::{pr_target, row_target};
@@ -52,7 +53,7 @@ use crate::domain::local::LocalState;
 use crate::domain::observed::{Observed, apply_newer};
 use crate::domain::plural;
 use crate::domain::pr::{CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest};
-use crate::domain::pr_url::FirstPane;
+use crate::domain::pr_url::{self, FirstPane, PrUrl};
 use crate::domain::repo::Repo;
 
 /// Applies one message to the state, with the tabs of `TABS`.
@@ -174,15 +175,20 @@ fn dispatch(
             let synced = synced_scopes(state);
             let key = pr.key.clone();
             let before = updated_at(&state.data, &key);
-            if pr_refreshed(state, *pr) {
-                let mut cmds: Vec<Cmd> =
-                    detail_reload(state, [(key, before)]).into_iter().collect();
+            let mut cmds = if pr_refreshed(state, *pr) {
+                let mut cmds: Vec<Cmd> = detail_reload(state, [(key.clone(), before)])
+                    .into_iter()
+                    .collect();
                 cmds.extend(notify_new(state, &synced));
                 cmds.extend(after_change(state, tabs));
                 cmds
             } else {
                 Vec::new()
+            };
+            if let Some(url) = state.ui.url_load.take_if(|url| url.key == key) {
+                cmds.extend(open_pr_url(state, tabs, panes, &url));
             }
+            cmds
         }
         Msg::JjScanned { repo, state: scan } => {
             if jj_scanned(state, repo, scan) {
@@ -278,6 +284,7 @@ fn dispatch(
             Vec::new()
         }
         Msg::CopyText(text) => copy_text(state, text),
+        Msg::ClipboardRead(text) => clipboard_read(state, text.as_deref()),
         Msg::PaneStarted { id, key } => {
             state.data.panes.insert((id, key), PaneHandleState::Running);
             state.bump();
@@ -492,43 +499,46 @@ fn list_action_key(
     run_detail_key(state, keymap, panes, actions, target, chord)
 }
 
-/// Opens the actions menu of the cursor row. A row without a target
-/// opens nothing.
+/// Opens the actions menu of the cursor row. For a row without a target,
+/// or without a row, the menu has only the `open_pr_url` item.
 fn open_actions(state: &mut AppState, tabs: &[Box<dyn Tab>], actions: &[Box<dyn Action>]) {
     let model = frame::active_list(state, tabs);
-    let Some(target) = model
+    let target = model
         .rows
         .get(model.cursor)
-        .and_then(|row| row_target(&state.data, &row.item))
-    else {
-        return;
-    };
+        .and_then(|row| row_target(&state.data, &row.item));
     open_menu(state, actions, target, Vec::new(), None);
 }
 
 /// Opens the actions menu of `target`: one item for each action that is
 /// not hidden for it, in registry order, then one item for each pane
-/// action of `pane`. `active` is the id of the active pane of the popup
-/// under the menu. An action that opens that pane is not in the menu,
-/// because the pane shows already. A gap goes before the first item of
-/// each new action group and before the pane actions, but not before the
-/// first item.
+/// action of `pane`, then the `open_pr_url` item. `active` is the id of
+/// the active pane of the popup under the menu. An action that opens that
+/// pane is not in the menu, because the pane shows already. A gap goes
+/// before the first item of each new action group, before the pane
+/// actions and before the `open_pr_url` item, but not before the first
+/// item. Without a target, the menu has only the `open_pr_url` item. The
+/// pinned mode has no `open_pr_url` item: it shows only its own pull
+/// request.
 fn open_menu(
     state: &mut AppState,
     actions: &[Box<dyn Action>],
-    target: Target,
+    target: Option<Target>,
     pane: Vec<PaneAction>,
     active: Option<&str>,
 ) {
-    let shown: Vec<&dyn Action> = actions
-        .iter()
-        .zip(frame::applicability(&state.data, actions, target.clone()))
-        .filter(|(_, applies)| *applies != Applicability::Hidden)
-        .filter(|(action, _)| {
-            active.is_none_or(|id| !opens_pane(&state.data, action.as_ref(), &target, id))
-        })
-        .map(|(action, _)| action.as_ref())
-        .collect();
+    let shown: Vec<&dyn Action> = match &target {
+        Some(target) => actions
+            .iter()
+            .zip(frame::applicability(&state.data, actions, target.clone()))
+            .filter(|(_, applies)| *applies != Applicability::Hidden)
+            .filter(|(action, _)| {
+                active.is_none_or(|id| !opens_pane(&state.data, action.as_ref(), target, id))
+            })
+            .map(|(action, _)| action.as_ref())
+            .collect(),
+        None => Vec::new(),
+    };
     let mut gaps: Vec<usize> = shown
         .windows(2)
         .enumerate()
@@ -538,14 +548,20 @@ fn open_menu(
     if !shown.is_empty() && !pane.is_empty() {
         gaps.push(shown.len());
     }
+    let open_url = state.ui.pinned.is_none();
+    let before_open_url = shown.len() + pane.len();
+    if open_url && before_open_url > 0 {
+        gaps.push(before_open_url);
+    }
     open_overlay(
         state,
         OverlayKind::Picker,
         OverlayState::Actions(ActionMenu {
-            target: Box::new(target),
+            target: target.map(Box::new),
             title: None,
             ids: shown.iter().map(|action| action.id()).collect(),
             pane,
+            open_url,
             gaps,
             cursor: 0,
         }),
@@ -598,6 +614,10 @@ fn action_menu_key(
                     .position(|action| action.key == chord)
                     .map(|i| menu.ids.len() + i)
             })
+            .or_else(|| {
+                menu.open_url_item()
+                    .filter(|_| keymap.matches(OPEN_URL_ID, chord))
+            })
     };
     let Some(item) = item else {
         return Vec::new();
@@ -606,9 +626,10 @@ fn action_menu_key(
 }
 
 /// Runs the item at `index` of the actions menu on top of the overlay
-/// stack: an action on the target of the menu, or a pane action in the
-/// popup under the menu. The menu closes first. A disabled pane action
-/// shows its reason in the status line and runs nothing.
+/// stack: an action on the target of the menu, a pane action in the
+/// popup under the menu, or the `open_pr_url` item. The menu closes
+/// first. A disabled pane action shows its reason in the status line and
+/// runs nothing.
 fn run_menu_item(
     state: &mut AppState,
     keymap: &Keymap,
@@ -623,8 +644,14 @@ fn run_menu_item(
     else {
         return Vec::new();
     };
+    if menu.open_url_item() == Some(index) {
+        close_overlay(state);
+        return ask_url(state);
+    }
+    let Some(target) = menu.target.as_deref().cloned() else {
+        return Vec::new();
+    };
     if let Some(&id) = menu.ids.get(index) {
-        let target = (*menu.target).clone();
         return run_menu_action(state, panes, actions, id, target);
     }
     let Some(action) = index
@@ -634,7 +661,7 @@ fn run_menu_item(
     else {
         return Vec::new();
     };
-    let Target::Pr { pr, .. } = &*menu.target;
+    let Target::Pr { pr, .. } = &target;
     let number = pr.key.number;
     close_overlay(state);
     if let Some(reason) = action.disabled {
@@ -801,7 +828,7 @@ fn run_action(
                 selection: Box::new(selection),
             };
             let prompt = OverlayState::Prompt {
-                action,
+                purpose: PromptFor::Action(action),
                 spec,
                 text: String::new(),
             };
@@ -822,19 +849,32 @@ fn run_action(
 }
 
 /// A key for the prompt popup on top of the overlay stack: characters
-/// and backspace edit the text, Enter runs the action with it, Esc
-/// closes the popup. `None` when the top overlay is not a prompt.
-fn prompt_key(state: &mut AppState, chord: KeyChord) -> Option<Vec<Cmd>> {
+/// and backspace edit the text, Enter runs the action with it or opens
+/// the PR of the URL, Esc closes the popup. `None` when the top overlay
+/// is not a prompt.
+fn prompt_key(
+    state: &mut AppState,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    chord: KeyChord,
+) -> Option<Vec<Cmd>> {
     let overlay = state.ui.overlays.iter_mut().rev().find(|o| !o.closing)?;
-    let OverlayState::Prompt { action, text, .. } = &mut overlay.state else {
+    let OverlayState::Prompt { purpose, text, .. } = &mut overlay.state else {
         return None;
     };
     match chord.code {
         KeyCode::Esc => {}
         KeyCode::Enter => {
-            let (id, selection, text) = (action.id, action.selection.clone(), text.clone());
+            let text = text.clone();
+            let action = match purpose {
+                PromptFor::Action(action) => Some((action.id, action.selection.clone())),
+                PromptFor::OpenUrl => None,
+            };
             close_overlay(state);
-            return Some(submit_prompt(state, id, selection, text));
+            return Some(match action {
+                Some((id, selection)) => submit_prompt(state, id, selection, text),
+                None => open_url(state, tabs, panes, &text),
+            });
         }
         KeyCode::Backspace => {
             text.pop();
@@ -984,20 +1024,34 @@ fn jump_to(
     panes: &[Box<dyn Pane>],
     id: &str,
 ) -> Vec<Cmd> {
-    let found = (0..tabs.len()).find_map(|index| {
-        let model = frame::tab_list(state, tabs, index);
-        let row = model.rows.iter().position(
-            |row| matches!(&row.item, RowItem::Pr(pr) if palette::pr_id(&pr.key) == id),
-        )?;
-        Some((index, row, model))
-    });
-    let Some((index, row, model)) = found else {
+    if !select_pr(state, tabs, |key| palette::pr_id(key) == id) {
         state.message(
             format!("{id} no longer in the list"),
             CellStyle::Dim,
             INFO_TTL,
         );
         return Vec::new();
+    }
+    let mut cmds = after_change(state, tabs);
+    cmds.extend(open_selected(state, tabs, panes));
+    cmds
+}
+
+/// Selects the row of the first pull request for which `is` is true, in
+/// the first tab that shows one: that tab becomes the active tab, and the
+/// cursor moves to the row. False when no tab shows such a pull request
+/// now. Then nothing changes.
+fn select_pr(state: &mut AppState, tabs: &[Box<dyn Tab>], is: impl Fn(&PrKey) -> bool) -> bool {
+    let found = (0..tabs.len()).find_map(|index| {
+        let model = frame::tab_list(state, tabs, index);
+        let row = model
+            .rows
+            .iter()
+            .position(|row| matches!(&row.item, RowItem::Pr(pr) if is(&pr.key)))?;
+        Some((index, row, model))
+    });
+    let Some((index, row, model)) = found else {
+        return false;
     };
     switch_tab(state, index);
     let height = usize::from(frame::list_size(state).height);
@@ -1007,8 +1061,103 @@ fn jump_to(
         ts.selected = Some(model.rows[row].item.clone());
     }
     state.bump();
-    let mut cmds = after_change(state, tabs);
-    cmds.extend(open_selected(state, tabs, panes));
+    true
+}
+
+/// The title of the URL prompt.
+const URL_TITLE: &str = "open url";
+
+/// The placeholder of the URL prompt.
+const URL_PLACEHOLDER: &str = "https://github.com/OWNER/NAME/pull/N";
+
+/// The error when the text of the URL prompt is not a PR URL.
+const NOT_A_PR_URL: &str = "not a PR url";
+
+/// The `open_pr_url` item of the actions menu: it reads the clipboard
+/// first. `clipboard_read` then opens the URL prompt.
+fn ask_url(state: &mut AppState) -> Vec<Cmd> {
+    state.ui.clipboard_wait = true;
+    vec![Cmd::ReadClipboard]
+}
+
+/// The text of the clipboard for the URL prompt: the prompt opens, or
+/// the command palette of Rex asks (see `open_or_ask`). When the
+/// clipboard holds a PR URL, the prompt starts with it. A read that the
+/// `open_pr_url` item did not ask for does nothing.
+fn clipboard_read(state: &mut AppState, text: Option<&str>) -> Vec<Cmd> {
+    if !std::mem::take(&mut state.ui.clipboard_wait) {
+        return Vec::new();
+    }
+    let text = text
+        .and_then(pr_url::parse)
+        .map(|url| url.text)
+        .unwrap_or_default();
+    let prompt = OverlayState::Prompt {
+        purpose: PromptFor::OpenUrl,
+        spec: PromptSpec {
+            title: URL_TITLE.to_owned(),
+            placeholder: URL_PLACEHOLDER.to_owned(),
+        },
+        text,
+    };
+    open_or_ask(state, OverlayKind::Prompt, prompt)
+}
+
+/// The text of the URL prompt. An empty text does nothing. A text that is
+/// not a PR URL shows `not a PR url`. Else the PR view of the URL opens
+/// (see `open_pr_url`).
+fn open_url(
+    state: &mut AppState,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    text: &str,
+) -> Vec<Cmd> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    let Some(url) = pr_url::parse(text) else {
+        state.message(NOT_A_PR_URL, CellStyle::Warn, INFO_TTL);
+        return Vec::new();
+    };
+    open_pr_url(state, tabs, panes, &url)
+}
+
+/// Opens the PR view of `url`, on the pane of the URL:
+///
+/// - When a tab shows the pull request, that tab becomes the active tab,
+///   the cursor moves to its row, and the PR view opens as with `enter`.
+/// - Else with the detail pane (inside Rex), the pane runs
+///   `chaoshub pr <url>`. That process loads the pull request.
+/// - Else, when the pull request is loaded, the sidebar opens.
+/// - Else the pull request loads from GitHub, and the sidebar opens when
+///   it arrives (see `UiState.url_load`).
+fn open_pr_url(
+    state: &mut AppState,
+    tabs: &[Box<dyn Tab>],
+    panes: &[Box<dyn Pane>],
+    url: &PrUrl,
+) -> Vec<Cmd> {
+    state.ui.url_load = None;
+    let mut cmds = Vec::new();
+    if select_pr(state, tabs, |key| *key == url.key) {
+        cmds.extend(after_change(state, tabs));
+    }
+    let target = pr_target(&state.data, &url.key);
+    if state.data.detail.is_some() {
+        cmds.extend(open_pane(state, &url.key, target.as_ref(), Some(url)));
+        return cmds;
+    }
+    if let Some(target) = target {
+        cmds.extend(open_popup(state, panes, &target, Some(url.pane.pane_id())));
+        return cmds;
+    }
+    state.message(
+        format!("loading #{}…", url.key.number),
+        CellStyle::Dim,
+        INFO_TTL,
+    );
+    state.ui.url_load = Some(url.clone());
+    cmds.push(Cmd::LoadPr(url.key.clone()));
     cmds
 }
 
@@ -1067,9 +1216,14 @@ fn palette_answered(
         PaletteQuestion::Jump => return jump_to(state, ui.tabs, ui.panes, &answer),
     };
     match overlay {
-        OverlayState::Prompt { action, .. } => {
-            submit_prompt(state, action.id, action.selection, answer)
-        }
+        OverlayState::Prompt {
+            purpose: PromptFor::Action(action),
+            ..
+        } => submit_prompt(state, action.id, action.selection, answer),
+        OverlayState::Prompt {
+            purpose: PromptFor::OpenUrl,
+            ..
+        } => open_url(state, ui.tabs, ui.panes, &answer),
         OverlayState::Authors(mut picker) => match palette::author_cursor(&picker, &answer) {
             Some(cursor) => {
                 picker.cursor = cursor;
@@ -1119,7 +1273,7 @@ fn open_selected(state: &mut AppState, tabs: &[Box<dyn Tab>], panes: &[Box<dyn P
         return Vec::new();
     };
     if state.data.detail.is_some() {
-        return open_pane(state, &target);
+        return open_pane(state, &pr.key, Some(&target), None);
     }
     open_popup(state, panes, &target, None)
 }
@@ -1134,40 +1288,64 @@ fn open_pr(state: &mut AppState, panes: &[Box<dyn Pane>], key: Option<&PrKey>) -
     open_popup(state, panes, &target, None)
 }
 
-/// Opens `chaoshub pr OWNER/NAME NUMBER` for `target` in a new detail
-/// pane. A second open of the same pull request focuses its pane. The
-/// detail panes of other pull requests stay open, so each pull request
-/// can have its own pane.
-fn open_pane(state: &mut AppState, target: &Target) -> Vec<Cmd> {
+/// Opens `chaoshub pr OWNER/NAME NUMBER` for the pull request `key` in a
+/// new detail pane, or `chaoshub pr <url>` for `url`. `target` is the
+/// loaded pull request, if any. A second open of the same pull request
+/// focuses its pane. The detail panes of other pull requests stay open,
+/// so each pull request can have its own pane.
+fn open_pane(
+    state: &mut AppState,
+    key: &PrKey,
+    target: Option<&Target>,
+    url: Option<&PrUrl>,
+) -> Vec<Cmd> {
     let Some(detail) = state.data.detail.clone() else {
         return Vec::new();
     };
-    let Target::Pr { pr, repo, .. } = target;
-    let key = target.key();
-    if state.data.panes.contains_key(&(DETAIL_ID, key.clone())) {
-        return vec![Cmd::FocusPane { id: DETAIL_ID, key }];
+    let pane_key = TargetKey::Pr(key.clone());
+    if state
+        .data
+        .panes
+        .contains_key(&(DETAIL_ID, pane_key.clone()))
+    {
+        return vec![Cmd::FocusPane {
+            id: DETAIL_ID,
+            key: pane_key,
+        }];
     }
     let PrKey {
         repo: RepoKey { owner, name },
         number,
-    } = &pr.key;
+    } = key;
     let mut argv = detail.argv;
-    argv.extend([
-        "pr".to_owned(),
-        format!("{owner}/{name}"),
-        number.to_string(),
-    ]);
+    argv.push("pr".to_owned());
+    match url {
+        Some(url) => argv.push(url.text.clone()),
+        None => argv.extend([format!("{owner}/{name}"), number.to_string()]),
+    }
+    let (path, label) = match target {
+        Some(Target::Pr { pr, repo, .. }) => (repo.path.clone(), term::pr_overview(pr)),
+        // The PR view renames its block when the pull request loads.
+        None => (
+            state
+                .data
+                .repos
+                .get(&key.repo)
+                .and_then(|repo| repo.path.clone()),
+            format!("{name}#{number}"),
+        ),
+    };
     let request = LaunchRequest {
         argv,
-        cwd: repo.path.clone().unwrap_or(detail.cwd),
+        cwd: path.unwrap_or(detail.cwd),
         env: detail.env,
         // Rex shows the label in the header of the block.
-        label: term::pr_overview(pr),
+        label,
         zoom: false,
         split: detail.split,
         ratio: detail.ratio,
     };
-    vec![start_pane(state, DETAIL_ID, key, request)]
+    vec![start_pane(state, DETAIL_ID, pane_key, request)]
 }
 
 /// Opens the pull request popup for `target`, on the pane with the id
@@ -1270,10 +1448,11 @@ fn open_pane_menu(state: &mut AppState, key: &PrKey, menu: PaneMenu) {
         state,
         OverlayKind::Picker,
         OverlayState::Actions(ActionMenu {
-            target: Box::new(target),
+            target: Some(Box::new(target)),
             title: Some(menu.title),
             ids: Vec::new(),
             pane: menu.items,
+            open_url: false,
             gaps: menu.gaps,
             cursor: 0,
         }),
@@ -1856,10 +2035,10 @@ fn open_ask(state: &mut AppState, key: &PrKey) -> Vec<Cmd> {
         action_config: None,
     };
     let prompt = OverlayState::Prompt {
-        action: ActionDialog {
+        purpose: PromptFor::Action(ActionDialog {
             id: AGENT_ID,
             selection: Box::new(selection),
-        },
+        }),
         spec: PromptSpec {
             title: format!("ask pr-agent about #{}", key.number),
             placeholder: "question about this PR".to_owned(),
@@ -2191,7 +2370,7 @@ fn overlay_key(
     actions: &[Box<dyn Action>],
     chord: KeyChord,
 ) -> Vec<Cmd> {
-    if let Some(cmds) = prompt_key(state, chord) {
+    if let Some(cmds) = prompt_key(state, tabs, panes, chord) {
         return cmds;
     }
     if let Some(cmds) = review_text_key(state, chord) {
@@ -2237,7 +2416,7 @@ fn overlay_key(
                         |pane, cx, ps, _| pane.actions(cx, ps),
                     )
                     .unwrap_or_default();
-                    open_menu(state, actions, target, pane, active);
+                    open_menu(state, actions, Some(target), pane, active);
                     return Vec::new();
                 }
                 return run_detail_key(state, keymap, panes, actions, target, chord)
@@ -3909,6 +4088,11 @@ fn sync_failed(
     scope: Option<Scope>,
     err: &SyncError,
 ) -> Vec<Cmd> {
+    // A failed load of the pull request of a PR URL shows its error, and
+    // nothing opens later.
+    if scope.is_none() && source == "sync" {
+        state.ui.url_load = None;
+    }
     let sync = &mut state.data.sync;
     match scope {
         Some(scope) => {
@@ -6610,7 +6794,12 @@ mod tests {
         let keymap = Keymap::with_actions(&actions, &std::collections::BTreeMap::new()).unwrap();
         assert_eq!(
             menu.items(&state.data, &keymap, &actions),
-            ["A  approve", "m  merge (stack not loaded)"]
+            [
+                "A  approve",
+                "m  merge (stack not loaded)",
+                "",
+                "u  open url"
+            ]
         );
         assert_eq!(act(&mut state, &actions, KeyCode::Char('h')), vec![]);
         assert!(action_menu(&state).is_some(), "a hidden key does nothing");
@@ -6687,16 +6876,275 @@ mod tests {
     }
 
     #[test]
-    fn space_on_a_row_without_a_target_does_nothing() {
+    fn space_on_a_row_without_a_target_opens_only_open_url() {
         let mut state = action_state(&|_| RowItem::StackHeader {
             stack_id: "S_1".into(),
         });
         state.ui.tabs[0].cursor = 0;
         let actions = fake(FakeAction::new("approve", 'A'));
-        let generation = state.generation;
         assert_eq!(act(&mut state, &actions, KeyCode::Char(' ')), vec![]);
+        let Some(menu) = action_menu(&state) else {
+            panic!("the actions menu opens");
+        };
+        assert_eq!(menu.target, None);
+        assert_eq!(menu.ids, [""; 0]);
+        let keymap = Keymap::with_actions(&actions, &std::collections::BTreeMap::new()).unwrap();
+        assert_eq!(menu.items(&state.data, &keymap, &actions), ["u  open url"]);
+        let frame = frame::frame_model(&mut state).clone();
+        assert!(matches!(
+            &frame.overlays[0].content,
+            OverlayContent::Picker { title, .. } if title == "actions"
+        ));
+        assert_eq!(act(&mut state, &actions, KeyCode::Char('A')), vec![]);
+        assert!(action_menu(&state).is_some(), "no action runs");
+        assert_eq!(
+            act(&mut state, &actions, KeyCode::Enter),
+            vec![Cmd::ReadClipboard]
+        );
+        assert!(action_menu(&state).is_none());
+    }
+
+    /// The URL prompt on top of the overlay stack: its text.
+    fn url_prompt(state: &AppState) -> Option<&str> {
+        match state.ui.overlays.iter().rev().find(|o| !o.closing) {
+            Some(Overlay {
+                state:
+                    OverlayState::Prompt {
+                        purpose: PromptFor::OpenUrl,
+                        text,
+                        ..
+                    },
+                ..
+            }) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// `space`, `u`, and the clipboard text `clipboard`: the URL prompt
+    /// opens.
+    fn ask_for_url(state: &mut AppState, clipboard: Option<&str>) -> Vec<Cmd> {
+        assert_eq!(key(state, ' '), vec![]);
+        assert_eq!(key(state, 'u'), vec![Cmd::ReadClipboard]);
+        update(
+            state,
+            &Keymap::default(),
+            Msg::ClipboardRead(clipboard.map(str::to_owned)),
+        )
+    }
+
+    /// Types `text` into the prompt and presses Enter.
+    fn type_and_enter(state: &mut AppState, text: &str) -> Vec<Cmd> {
+        typed(state, text);
+        update(
+            state,
+            &Keymap::default(),
+            press(KeyCode::Enter, KeyModifiers::NONE),
+        )
+    }
+
+    #[test]
+    fn the_url_prompt_starts_with_a_pr_url_of_the_clipboard() {
+        let mut state = team_state();
+        assert_eq!(
+            ask_for_url(
+                &mut state,
+                Some(" <https://github.com/chaosteil/chaoshub/pull/88/files|#88> ")
+            ),
+            vec![]
+        );
+        assert_eq!(
+            url_prompt(&state),
+            Some("https://github.com/chaosteil/chaoshub/pull/88/files")
+        );
+        let frame = frame::frame_model(&mut state).clone();
+        assert!(matches!(
+            &frame.overlays.last().unwrap().content,
+            OverlayContent::Prompt { spec, submit, .. }
+                if spec.title == "open url" && *submit == "open"
+        ));
+        let mut state = team_state();
+        ask_for_url(&mut state, Some("lunch at noon?"));
+        assert_eq!(url_prompt(&state), Some(""), "other text is no start text");
+        let mut state = team_state();
+        ask_for_url(&mut state, None);
+        assert_eq!(url_prompt(&state), Some(""), "no clipboard");
+    }
+
+    #[test]
+    fn a_clipboard_read_that_nobody_asked_for_does_nothing() {
+        let mut state = team_state();
+        let msg = Msg::ClipboardRead(Some("https://github.com/a/b/pull/1".into()));
+        assert_eq!(update(&mut state, &Keymap::default(), msg), vec![]);
         assert!(state.ui.overlays.is_empty());
-        assert_eq!(state.generation, generation);
+    }
+
+    #[test]
+    fn a_url_of_a_listed_pr_selects_its_row_and_opens_its_pane() {
+        let mut state = team_state();
+        assert_eq!(state.ui.active, 2, "the Team tab");
+        ask_for_url(&mut state, None);
+        type_and_enter(
+            &mut state,
+            "https://github.com/chaosteil/chaoshub/pull/88#issuecomment-1",
+        );
+        assert_eq!(state.ui.active, 1, "the Review tab");
+        assert_eq!(selected_number(&mut state), Some(88));
+        let Some(popup) = sidebar(&state) else {
+            panic!("the pull request does not open");
+        };
+        assert_eq!(popup.key, testdata::pr_key("chaoshub", 88));
+        assert_eq!(PANES[popup.active].id(), "conversation");
+    }
+
+    #[test]
+    fn other_text_in_the_url_prompt_says_not_a_pr_url() {
+        let mut state = team_state();
+        ask_for_url(&mut state, None);
+        assert_eq!(
+            type_and_enter(
+                &mut state,
+                "https://github.com/chaosteil/chaoshub/issues/88"
+            ),
+            vec![]
+        );
+        assert_eq!(status_text(&state), Some("not a PR url"));
+        assert!(state.ui.overlays.iter().all(|o| o.closing));
+        let mut state = team_state();
+        ask_for_url(&mut state, None);
+        assert_eq!(type_and_enter(&mut state, "  "), vec![]);
+        assert_eq!(status_text(&state), None, "an empty text does nothing");
+    }
+
+    #[test]
+    fn a_url_of_a_pr_out_of_the_lists_loads_it_then_opens_the_sidebar() {
+        let mut state = team_state();
+        ask_for_url(&mut state, None);
+        let url = "github.com/chaosteil/chaoshub/pull/500/checks";
+        let key = testdata::pr_key("chaoshub", 500);
+        assert_eq!(
+            type_and_enter(&mut state, url),
+            vec![Cmd::LoadPr(key.clone())]
+        );
+        assert_eq!(status_text(&state), Some("loading #500…"));
+        assert!(sidebar(&state).is_none());
+        let other = testdata::pr("chaoshub", 501, "Other");
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::PrRefreshed(Box::new(other)),
+        );
+        assert!(sidebar(&state).is_none(), "another pull request");
+        let mut pr = testdata::pr("chaoshub", 500, "Five hundred");
+        pr.head.value.state = PrState::Merged;
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::PrRefreshed(Box::new(pr)),
+        );
+        let Some(popup) = sidebar(&state) else {
+            panic!("the pull request does not open");
+        };
+        assert_eq!(popup.key, key);
+        assert_eq!(PANES[popup.active].id(), "checks");
+        assert_eq!(state.ui.url_load, None);
+    }
+
+    #[test]
+    fn a_failed_load_of_a_url_opens_nothing_later() {
+        let mut state = team_state();
+        ask_for_url(&mut state, None);
+        type_and_enter(&mut state, "https://github.com/chaosteil/chaoshub/pull/500");
+        assert!(state.ui.url_load.is_some());
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::SyncFailed {
+                source: "sync",
+                scope: None,
+                err: SyncError::Other("#500 is not in chaosteil/chaoshub".into()),
+            },
+        );
+        assert_eq!(state.ui.url_load, None);
+        let pr = testdata::pr("chaoshub", 500, "Five hundred");
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::PrRefreshed(Box::new(pr)),
+        );
+        assert!(sidebar(&state).is_none());
+    }
+
+    #[test]
+    fn in_rex_the_url_prompt_asks_in_the_palette_and_opens_a_pane() {
+        let mut state = palette_state();
+        state.data.detail = Some(detail_pane());
+        assert_eq!(key(&mut state, ' '), vec![]);
+        assert_eq!(key(&mut state, 'u'), vec![Cmd::ReadClipboard]);
+        let url = "https://github.com/chaosteil/chaoshub/pull/88/files";
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            Msg::ClipboardRead(Some(url.into())),
+        );
+        let (serial, ask) = asked(&cmds);
+        assert_eq!(
+            ask,
+            PaletteAsk::Input {
+                title: "open url".into(),
+                placeholder: "https://github.com/OWNER/NAME/pull/N".into(),
+                value: url.into(),
+                confirm: Some("Open"),
+            }
+        );
+        let cmds = update(
+            &mut state,
+            &Keymap::default(),
+            answered(serial, PaletteReply::Answer(url.into())),
+        );
+        assert_eq!(state.ui.active, 1, "the Review tab");
+        assert_eq!(selected_number(&mut state), Some(88));
+        let run = cmds
+            .iter()
+            .find(|cmd| matches!(cmd, Cmd::RunTerminal { .. }))
+            .unwrap();
+        let (key, request) = detail_run(run);
+        assert_eq!(key, TargetKey::Pr(testdata::pr_key("chaoshub", 88)));
+        assert_eq!(request.argv[3..], ["pr", url]);
+        assert!(
+            request.label.starts_with("#88 docs(readme)"),
+            "{}",
+            request.label
+        );
+    }
+
+    #[test]
+    fn in_rex_a_url_out_of_the_lists_opens_a_pane_at_once() {
+        let mut state = detail_state();
+        ask_for_url(&mut state, None);
+        let url = "https://github.com/chaosteil/chaoshub/pull/500";
+        let cmds = type_and_enter(&mut state, url);
+        assert_eq!(cmds.len(), 1, "{cmds:?}");
+        let (key, request) = detail_run(&cmds[0]);
+        assert_eq!(key, TargetKey::Pr(testdata::pr_key("chaoshub", 500)));
+        assert_eq!(request.argv[3..], ["pr", url]);
+        assert_eq!(request.label, "chaoshub#500");
+        assert_eq!(request.cwd, std::path::PathBuf::from("/code/chaoshub"));
+        let url = "https://github.com/acme/other/pull/3";
+        ask_for_url(&mut state, None);
+        let (_, request) = detail_run(&type_and_enter(&mut state, url)[0]);
+        assert_eq!(request.cwd, std::path::PathBuf::from("/home/me"));
+        assert_eq!(request.label, "other#3");
+    }
+
+    #[test]
+    fn the_pinned_menu_has_no_open_url() {
+        let mut state = pinned(testdata::pr_key("chaoshub", 101));
+        assert_eq!(key(&mut state, ' '), vec![]);
+        let Some(menu) = action_menu(&state) else {
+            panic!("the actions menu opens");
+        };
+        assert!(!menu.open_url);
+        assert_eq!(key(&mut state, 'u'), vec![]);
     }
 
     #[test]
@@ -7032,7 +7480,9 @@ mod tests {
         let Some(menu) = action_menu(&state) else {
             panic!("the actions menu opens");
         };
-        let Target::Pr { pr, .. } = &*menu.target;
+        let Some(Target::Pr { pr, .. }) = menu.target.as_deref() else {
+            panic!("no target");
+        };
         assert_eq!(pr.key.number, 102, "the pull request of the popup");
         assert_eq!(menu.ids.len(), actions.len());
         let kinds: Vec<OverlayKind> = state.ui.overlays.iter().map(|o| o.kind).collect();
@@ -7104,7 +7554,11 @@ mod tests {
         let items = action_menu(&state)
             .unwrap()
             .items(&state.data, &Keymap::default(), &REGISTRY);
-        assert_eq!(items.last().map(String::as_str), Some("a  pr-agent ask"));
+        assert_eq!(
+            items[items.len() - 3..],
+            ["a  pr-agent ask", "", "u  open url"],
+            "open url comes last, after a gap"
+        );
         assert!(
             !action_menu(&state).unwrap().ids.contains(&"agent"),
             "the Agent pane shows already"
@@ -7136,12 +7590,14 @@ mod tests {
             .unwrap()
             .items(&state.data, &Keymap::default(), &REGISTRY);
         assert_eq!(
-            items[items.len() - 4..],
+            items[items.len() - 6..],
             [
                 "R  ocr review",
                 "I  improve (needs pr-agent)",
                 "D  describe (needs pr-agent)",
                 "a  ask (needs pr-agent)",
+                "",
+                "u  open url",
             ]
         );
         // A disabled tool closes the menu and only says why.
@@ -7271,6 +7727,7 @@ mod tests {
             Some(&OverlayContent::Prompt {
                 spec,
                 text: "n".into(),
+                submit: "send",
             })
         );
         assert_eq!(act(&mut state, &actions, KeyCode::Esc), vec![]);
@@ -7302,6 +7759,7 @@ mod tests {
             Some(&OverlayContent::Prompt {
                 spec: spec.clone(),
                 text: "fix q".into(),
+                submit: "send",
             })
         );
         assert_eq!(
@@ -10629,11 +11087,11 @@ mod tests {
         );
         let items = menu.items(&state.data, &Keymap::default(), &REGISTRY);
         assert_eq!(
-            items.last().map(String::as_str),
-            Some("reply"),
+            items[items.len() - 3..],
+            ["reply", "", "u  open url"],
             "the review action has the key r, so the reply shows no key"
         );
-        let reply = menu.len() - 1;
+        let reply = menu.len() - 2;
         for _ in 0..reply {
             key(&mut state, 'j');
         }

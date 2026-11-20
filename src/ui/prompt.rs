@@ -12,14 +12,13 @@ use crate::theme::Theme;
 use crate::theme::ThemeBlock;
 use crate::ui::hits::HitMap;
 
-/// The key hint on the last row.
-const HINT: &str = "Enter send · Esc cancel";
-
-/// Draws the prompt popup into its area. The whole area is a
+/// Draws the prompt popup into its area, with the key hint
+/// `Enter <submit> · Esc cancel` on the last row. The whole area is a
 /// `Hit::Inside`.
 pub(crate) fn render(
     spec: &PromptSpec,
     text: &str,
+    submit: &str,
     area: Rect,
     buf: &mut Buffer,
     theme: &Theme,
@@ -52,7 +51,7 @@ pub(crate) fn render(
     buf.set_stringn(
         input.x,
         inner.bottom() - 1,
-        HINT,
+        format!("Enter {submit} · Esc cancel"),
         usize::from(input.width),
         Style::new().fg(p.fg_mute),
     );
@@ -75,6 +74,7 @@ mod tests {
         render(
             &spec,
             "text",
+            "send",
             area,
             &mut buf,
             &testdata::ansi16(),

@@ -280,6 +280,8 @@ pub(crate) enum OverlayContent {
     Prompt {
         spec: PromptSpec,
         text: String,
+        /// What `enter` does, for the key hint: `send` or `open`.
+        submit: &'static str,
     },
     /// The Review popup of a pull request.
     Review(ReviewSpec),

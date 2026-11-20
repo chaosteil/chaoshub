@@ -272,13 +272,14 @@ and the keys of the panes are in [The PR view](pr-view.md).
 | `scroll_down`, `scroll_up` | `D`, `U` | In the PR view, scrolls the active pane down or up by half its height. The cursor stays. When the cursor leaves the pane, it moves to the first visible row. |
 | `open` | `enter` | Opens the PR view: a Rex pane inside Rex, else the sidebar (see `[detail]`). A second `enter` on the same PR focuses its pane. In the Conversation pane, collapses or expands a thread, and opens the comment menu on a comment (see [Reactions](pr-view.md#reactions)). |
 | `open_url` | `o` | In the Checks pane, opens the selected check in the browser. |
-| `actions` | `space` | Opens the actions menu: in the list, of the selected row. In the PR view, of its PR and its active pane (see [Actions](actions.md#actions)). |
+| `actions` | `space` | Opens the actions menu: in the list, of the selected row. In the PR view, of its PR and its active pane (see [Actions](actions.md#actions)). On a row without a PR, or in an empty tab, the menu has only `open url`. |
 | `close_overlay` | `esc`, `q` | Closes the sidebar or the overlay. When nothing is open, these keys quit (see `quit`). In the Rex pane of the PR view, they quit the pane. |
 | `confirm` | `y` | Confirms in a confirm popup. `enter` also confirms. |
 | `cancel` | `n` | Cancels a confirm popup. |
 | `filter` | `/` | Types a fuzzy filter for the active tab (see [Filter](#filter)). |
 | `authors` | `a` | Opens the author picker of the Review or the Team tab. Inside Rex, the picker can open in the Rex palette (see [Questions in the Rex palette](rex.md#questions-in-the-rex-palette)). |
 | `jump` | `f` | Inside Rex, asks for a PR of the rows of all tabs in the Rex palette. The pick selects the tab and the row, and opens the PR as `enter` does. Without the Rex palette, `f` opens the filter, as `/` does. |
+| `open_pr_url` | `u` | Only in the actions menu (`space` then `u`): asks for a GitHub PR URL and opens its PR view (see [Open a PR from a URL](actions.md#open-a-pr-from-a-url)). |
 | `toggle_all` | `t` | On the Review and the Team tab, switches between every open PR and only the ready ones. The help shows it as "all open / ready only". |
 | `show_hidden` | `T` | Switches between the normal view and every open PR of the active tab, also the rows that the age limit, the ready rule, the author picker and the filter text hide (see [Hidden rows](#hidden-rows)). The help shows it as "hidden rows / normal". Only the help overlay shows this key, not the key hint bar. |
 | `refresh` | `R` | Syncs both lists now. In the PR view, syncs the PR and its stack, and scans its repo. |

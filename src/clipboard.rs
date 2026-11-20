@@ -24,6 +24,20 @@ pub(crate) fn copy(text: &str) -> io::Result<Copied> {
     copy_with(text, system, &mut io::stdout().lock())
 }
 
+/// The text of the system clipboard, through arboard. `None` when the
+/// clipboard has no text, or when arboard cannot read it, for example
+/// over ssh. chaoshub does not read the clipboard of the terminal with
+/// OSC 52: many terminals do not permit it.
+pub(crate) fn paste() -> Option<String> {
+    match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
+        Ok(text) => Some(text),
+        Err(err) => {
+            tracing::debug!(%err, "cannot read the system clipboard");
+            None
+        }
+    }
+}
+
 /// Puts `text` on the system clipboard with arboard.
 fn system(text: &str) -> Result<(), arboard::Error> {
     arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text))
