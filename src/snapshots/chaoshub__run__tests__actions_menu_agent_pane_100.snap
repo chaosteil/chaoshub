@@ -13,7 +13,7 @@ expression: screen(&mut app)
 "                    ▌ * Estimated effort to review: 2                                              ┃"
 "                    ▌         ◢━ ACTIONS FOR #101 ╱━━━━━━━━━━━━━━╱╱╱━◥                             ┃"
 "                    ▌ Key issu▌▶  v  review in codeview            ◤◤┃                             ┃"
-"                    ▌ * Possib▌  r  send comments                    ┃ an pass the end.            ┃"
+"                    ▌ * Possib▌  r  send review                      ┃ an pass the end.            ┃"
 "                    ▌         ▌                                      ┃                             ┃"
 "                    ▌ Improve ▌  o  open in the browser              ┃ e-sonnet-5-5 · head oid101  ┃"
 "                    ▌ possible▌  y  copy the url                     ┃ rsor                        ┃"

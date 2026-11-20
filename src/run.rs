@@ -2887,12 +2887,12 @@ mod tests {
     }
 
     #[test]
-    fn filter_typing_hints_show_apply_and_cancel_only() {
+    fn filter_typing_hints_show_apply_and_clear_only() {
         let mut app = mine_app(100);
         press(&mut app, '/');
         press(&mut app, 'f');
         let screen = screen(&mut app);
-        assert_eq!(hint_row(&screen), "╱ Enter apply  Esc cancel", "{screen}");
+        assert_eq!(hint_row(&screen), "╱ Enter apply  Esc clear", "{screen}");
         insta::assert_snapshot!(screen);
     }
 

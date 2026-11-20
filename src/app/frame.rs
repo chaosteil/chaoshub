@@ -445,15 +445,20 @@ fn direct_hints(
     actions: &[Box<dyn Action>],
     target: Target,
 ) -> Vec<KeyHint> {
+    let labels: Vec<String> = actions
+        .iter()
+        .map(|action| action.target_hint(&target))
+        .collect();
     actions
         .iter()
+        .zip(labels)
         .zip(applicability(data, actions, target))
         .filter(|(_, applies)| *applies == Applicability::Enabled)
-        .filter_map(|(action, _)| {
+        .filter_map(|((action, label), _)| {
             let chord = keymap.detail_chords(action.id()).first().copied()?;
             Some(KeyHint {
                 key: key_text(chord),
-                label: action.hint(),
+                label,
                 primary: false,
                 chord: Some(chord),
             })
@@ -483,12 +488,12 @@ pub(crate) fn applicability(
 }
 
 /// The hints while the user types the filter: Enter keeps the filter,
-/// Esc cancels it. The filter line reads these keys directly, not from
+/// Esc clears it. The filter line reads these keys directly, not from
 /// the key map.
 fn filter_hints() -> Vec<KeyHint> {
     [
         hint(&[plain_key(KeyCode::Enter)], "apply"),
-        hint(&[plain_key(KeyCode::Esc)], "cancel"),
+        hint(&[plain_key(KeyCode::Esc)], "clear"),
     ]
     .into_iter()
     .flatten()
@@ -556,10 +561,10 @@ fn overlay_hints(
                     };
                     pane.open_hint(&cx, ps)
                 }
-                _ => Some("expand"),
+                _ => None,
             };
             let mut hints = vec![
-                hint(&keys, "pane tabs"),
+                hint(&keys, "panes"),
                 open.and_then(|open| app_hint(keymap, &["open"], open, true)),
             ];
             hints.extend(own);
@@ -574,7 +579,7 @@ fn overlay_hints(
             app_hint(keymap, &["cancel", "close_overlay"], "cancel", true),
         ],
         OverlayState::Prompt { .. } => vec![
-            hint(&[plain_key(KeyCode::Enter)], "submit"),
+            hint(&[plain_key(KeyCode::Enter)], "send"),
             hint(&[plain_key(KeyCode::Esc)], "cancel"),
         ],
         OverlayState::Review(_) => {
@@ -587,7 +592,7 @@ fn overlay_hints(
                 app_hint(keymap, &["open"], "mark", true),
                 hint(&[plain_key(KeyCode::Char('m'))], "message"),
                 hint(&events, "send"),
-                app_hint(keymap, &["close_overlay"], "cancel", true),
+                app_hint(keymap, &["close_overlay"], "close", true),
             ]
         }
         OverlayState::ReviewText { reply: None, .. } => vec![
@@ -1298,7 +1303,7 @@ mod tests {
             Some(("o", false)),
             "the direct key of browser is a secondary hint"
         );
-        let send = hints.iter().find(|hint| hint.label == "send comments");
+        let send = hints.iter().find(|hint| hint.label == "send review");
         assert_eq!(
             send.map(|hint| (hint.key.as_str(), hint.primary)),
             Some(("r", false)),

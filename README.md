@@ -944,8 +944,8 @@ a `?` (see "Hidden rows").
 
 | Key | What it does |
 |---|---|
-| `enter` | Keeps the filter. chaoshub saves it in the cache. |
-| `esc` | Clears the filter. |
+| `enter` | Keeps the filter. chaoshub saves it in the cache. The key hint bar shows `Enter apply`. |
+| `esc` | Clears the filter. The key hint bar shows `Esc clear`. |
 | `backspace` | Deletes the last character. |
 | `down`, `up` | Moves the cursor while you type. |
 
@@ -1007,7 +1007,7 @@ for `[keys]`.
 | `help` | `?` | Shows the help overlay with every binding. |
 | `quit` | `q`, `esc`, `ctrl-c` | Quits. When the sidebar or an overlay is open, `esc` and `q` close it first. While you type a filter, `esc` clears the filter. `ctrl-c` quits from everywhere. |
 
-In a prompt popup, `enter` submits the text and `esc` cancels.
+In a prompt popup, `enter` sends the text and `esc` cancels.
 
 ### Pull request detail
 
@@ -1126,8 +1126,14 @@ shows what `enter` does on the line of the cursor:
 |---|---|
 | An expanded thread header | `Enter collapse` |
 | A collapsed thread header | `Enter expand` |
-| An issue comment, a review or a comment in a thread | `Enter react` |
+| An issue comment, a review or a comment in a thread | `Enter menu` |
 | A status line, for example `loading the conversation…` or `no comments yet` | No `Enter` hint, because `enter` does nothing there |
+
+The other panes follow the same rule. In the Files pane, the hint is
+`Enter collapse` on an open directory or file, and `Enter expand` on a
+closed one. In the Stack pane, the hint is `Enter open` on a loaded
+entry. The Description, the Checks and the Agent pane show no `Enter`
+hint, because `enter` does nothing there.
 
 | Key in the menu | What it does |
 |---|---|
@@ -1381,7 +1387,7 @@ the selected row or of the detail. These bindings have no default.
 | `copy_stack_urls` | `Y` | Copies the URLs of the open pull requests of the stack, one URL on each line. The order is the order of the Stack pane: position 1, the bottom of the stack, first. `[actions.copy_stack_urls] order = "top_first"` puts the top of the stack first, as the list does (see `[actions.<id>]`). It works only in the actions menu (`space` then `Y`). Hidden for a pull request without a stack. When an open entry of the stack is not loaded, the status line shows "stack not loaded yet, refreshing the stack". Try again after the refresh. |
 | `copy_change_id` | `i` | Copies the jj change id of the local change that matches the pull request. In a git repo, it copies the local branch name, and the actions menu shows "copy the branch name". Hidden when no local change matches. |
 | `agent` | `p` | Opens the detail on the Agent pane. Needs a repo with a `path`. |
-| `codeview_send` | `r` | Opens the Review popup, also directly in the list and in the detail. In the conversation pane, `r` is the reply, so use `space` then `r` there. In the popup, you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). The hint bar, the help and the actions menu show it as "send comments". |
+| `codeview_send` | `r` | Opens the Review popup, also directly in the list and in the detail. In the conversation pane, `r` is the reply, so use `space` then `r` there. In the popup, you mark the codeview comments, write the message, and comment, approve or request changes (see "Codeview comments"). The hint bar, the help and the actions menu show it as "send review". |
 | `reply` | `r` | Only in the conversation pane of the pull request detail: replies to the comment of the cursor (see "Replies"). The actions menu shows it only as an action of the conversation pane, without a key, because `r` there opens the Review popup. |
 | `react` | none | Only in the comment menu of the conversation pane: adds or removes your reaction on the comment (see "Reactions"). It has no key of its own, and the actions menu does not show it. |
 

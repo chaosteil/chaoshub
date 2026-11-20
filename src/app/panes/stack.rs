@@ -99,6 +99,17 @@ impl Pane for StackPane {
         PaneModel::Tree { nodes }
     }
 
+    /// The label of Enter: `open` on an entry. On the summary node and
+    /// on an entry that is not loaded, Enter does nothing, so the hint
+    /// does not show.
+    fn open_hint(&self, cx: &KeyCx<'_>, ps: &PaneState) -> Option<&'static str> {
+        let Some(Target::Pr { stack, .. }) = cx.target else {
+            return None;
+        };
+        let position = u32::try_from(ps.cursor).ok()?;
+        entry(stack, position).map(|_| "open")
+    }
+
     /// Enter opens the popup of the entry under the cursor. `o` opens the
     /// page of that entry. On the summary node and on an entry that is not
     /// loaded, Enter does nothing and `o` goes to the actions.
@@ -250,6 +261,30 @@ mod tests {
         let mut ps = StackPane.init_state();
         StackPane.place(&target, &mut ps);
         assert_eq!(ps.cursor, 2);
+    }
+
+    #[test]
+    fn the_open_hint_shows_on_a_loaded_entry() {
+        let mut state = state();
+        let hint_at = |state: &AppState, cursor: usize| {
+            let target = pr_target(&state.data, &testdata::pr_key("chaoshub", 102)).unwrap();
+            let areas = layout(state.data.size);
+            let cx = KeyCx {
+                data: &state.data,
+                target: Some(&target),
+                areas: &areas,
+                keys: &crate::app::keymap::DEFAULT,
+            };
+            let ps = PaneState {
+                cursor,
+                ..PaneState::default()
+            };
+            StackPane.open_hint(&cx, &ps)
+        };
+        assert_eq!(hint_at(&state, 1), Some("open"), "an entry");
+        assert_eq!(hint_at(&state, 0), None, "the summary");
+        state.data.prs.remove(&testdata::pr_key("chaoshub", 101));
+        assert_eq!(hint_at(&state, 1), None, "an entry that is not loaded");
     }
 
     #[test]

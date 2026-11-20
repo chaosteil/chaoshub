@@ -12,7 +12,7 @@ expression: screen(&mut app)
 " ─ docs: describe the export file format …     #7                                 ·      ·          "
 "                              ◢━ ACTIONS FOR #99 ╱━━━━━━━━━━━━━━━╱╱╱━◥                              "
 "                              ▌▶  v  review in codeview (the repo …◤◤┃                              "
-"                              ▌  r  send comments                    ┃                              "
+"                              ▌  r  send review                      ┃                              "
 "                              ▌                                      ┃                              "
 "                              ▌  o  open in the browser              ┃                              "
 "                              ▌  y  copy the url                     ┃                              "

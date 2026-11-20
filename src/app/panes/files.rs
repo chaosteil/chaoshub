@@ -230,6 +230,16 @@ impl Pane for FilesPane {
         Some(handled)
     }
 
+    /// The label of Enter on the node of the cursor: `collapse` on an
+    /// open directory or file, `expand` on a closed one. On the other
+    /// nodes, Enter does nothing, so the hint does not show.
+    fn open_hint(&self, cx: &KeyCx<'_>, ps: &PaneState) -> Option<&'static str> {
+        let state = ps.ext.downcast_ref::<FilesState>()?;
+        let (node, toggle) = nodes(cx, state).into_iter().nth(ps.cursor)?;
+        toggle?;
+        Some(if node.expanded? { "collapse" } else { "expand" })
+    }
+
     fn jobs(&self, cx: &KeyCx<'_>, ps: &mut PaneState) -> Vec<Cmd> {
         let Some(state) = ps.ext.downcast_mut::<FilesState>() else {
             return Vec::new();
@@ -817,6 +827,36 @@ mod tests {
         ps.cursor = 0;
         let (_, handled) = model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
         assert_eq!(handled, None, "Enter on the summary does nothing");
+    }
+
+    #[test]
+    fn the_open_hint_follows_the_node_of_the_cursor() {
+        let state = state_with(Some(testdata::files()), None, false);
+        let key = testdata::pr_key("chaoshub", 7);
+        let target = pr_target(&state.data, &key).unwrap();
+        let areas = layout(state.data.size);
+        let keymap = Keymap::default();
+        let cx = KeyCx {
+            data: &state.data,
+            target: Some(&target),
+            areas: &areas,
+            keys: &keymap,
+        };
+        let mut ps = FilesPane.init_state();
+        ps.cursor = 5;
+        assert_eq!(
+            FilesPane.open_hint(&cx, &ps),
+            Some("collapse"),
+            "an open directory"
+        );
+        model_and_keys(&state, &mut ps, &[KeyCode::Enter]);
+        assert_eq!(
+            FilesPane.open_hint(&cx, &ps),
+            Some("expand"),
+            "a closed directory"
+        );
+        ps.cursor = 0;
+        assert_eq!(FilesPane.open_hint(&cx, &ps), None, "the summary");
     }
 
     #[test]

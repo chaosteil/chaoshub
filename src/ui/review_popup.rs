@@ -200,7 +200,7 @@ fn key_lines<'a>(spec: &'a ReviewSpec, theme: &Theme) -> Vec<Line<'a>> {
         .collect();
     lines.push(Line::from(vec![
         Span::styled(format!("{:<KEY_WIDTH$}", "Esc"), key),
-        Span::styled("cancel", normal),
+        Span::styled("close", normal),
     ]));
     lines
 }

@@ -115,6 +115,10 @@ impl Action for CopyUrl {
         "copy the url"
     }
 
+    fn hint(&self) -> String {
+        "copy URL".to_owned()
+    }
+
     fn default_key(&self) -> Option<KeyChord> {
         Some(key('y'))
     }
@@ -152,6 +156,10 @@ impl Action for CopyStackUrls {
 
     fn label(&self) -> &'static str {
         "copy the stack urls"
+    }
+
+    fn hint(&self) -> String {
+        "copy stack URLs".to_owned()
     }
 
     fn default_key(&self) -> Option<KeyChord> {
@@ -210,6 +218,16 @@ impl Action for CopyChangeId {
             LocalMatch::Synced { vcs: Vcs::Git, .. }
             | LocalMatch::Diverged { vcs: Vcs::Git, .. } => "copy the branch name",
             _ => self.label(),
+        }
+    }
+
+    /// "copy branch" for a git branch.
+    fn target_hint(&self, target: &Target) -> String {
+        let Target::Pr { local, .. } = target;
+        match local {
+            LocalMatch::Synced { vcs: Vcs::Git, .. }
+            | LocalMatch::Diverged { vcs: Vcs::Git, .. } => "copy branch".to_owned(),
+            _ => self.hint(),
         }
     }
 
@@ -334,7 +352,9 @@ mod tests {
             commit_id: "oid7".into(),
             vcs: Vcs::Jj,
         });
+        assert_eq!(CopyChangeId.target_hint(&git.target), "copy branch");
         assert_eq!(CopyChangeId.target_label(&jj.target), "copy the change id");
+        assert_eq!(CopyChangeId.target_hint(&jj.target), "copy change id");
         assert_eq!(
             CopyChangeId.target_label(&selection(LocalMatch::None).target),
             "copy the change id"

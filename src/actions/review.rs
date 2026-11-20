@@ -47,6 +47,10 @@ impl Action for Review {
         "review in codeview"
     }
 
+    fn hint(&self) -> String {
+        "codeview".to_owned()
+    }
+
     fn default_key(&self) -> Option<KeyChord> {
         Some(KeyChord {
             code: KeyCode::Char('v'),

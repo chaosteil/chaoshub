@@ -80,9 +80,9 @@ pub(crate) trait Pane: Send + Sync {
     }
     /// The label of the `open` key in the key hints of the popup, for
     /// the item at the cursor of `ps`. `None` hides the hint. The
-    /// default is `expand` for every item.
+    /// default is `None`: Enter does nothing in the pane.
     fn open_hint(&self, _cx: &KeyCx<'_>, _ps: &PaneState) -> Option<&'static str> {
-        Some("expand")
+        None
     }
     /// The own actions of the pane, in display order. The actions menu
     /// of the popup shows them after the actions of the pull request.

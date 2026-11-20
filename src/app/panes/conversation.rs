@@ -116,14 +116,14 @@ impl Pane for Conversation {
     }
 
     /// The label of Enter on the item of the cursor: `collapse` on an
-    /// expanded thread header, `expand` on a collapsed one, and `react`
+    /// expanded thread header, `expand` on a collapsed one, and `menu`
     /// on a comment or a review, where Enter opens the comment menu. On
     /// a status line, Enter does nothing, so the hint does not show.
     fn open_hint(&self, cx: &KeyCx<'_>, ps: &PaneState) -> Option<&'static str> {
         Some(match cursor_item(cx, ps)? {
             Item::Thread(thread) if collapsed(ps).contains(&thread) => "expand",
             Item::Thread(_) => "collapse",
-            Item::Comment(_) | Item::Review(_) | Item::ThreadComment(..) => "react",
+            Item::Comment(_) | Item::Review(_) | Item::ThreadComment(..) => "menu",
         })
     }
 
@@ -1173,7 +1173,7 @@ mod tests {
         for cursor in [0, 1, 3, 4, 10] {
             assert_eq!(
                 open_hint_at(&state, &mut ps, cursor),
-                Some("react"),
+                Some("menu"),
                 "{cursor}"
             );
         }

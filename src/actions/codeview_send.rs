@@ -80,7 +80,7 @@ impl Action for CodeviewSend {
     }
 
     fn label(&self) -> &'static str {
-        "send comments"
+        "send review"
     }
 
     fn hint(&self) -> String {

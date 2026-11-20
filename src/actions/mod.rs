@@ -109,6 +109,11 @@ pub(crate) trait Action: Send + Sync {
     fn hint(&self) -> String {
         self.id().replace('_', " ")
     }
+    /// The short label of the hint bar for `target`. The default is
+    /// `hint`.
+    fn target_hint(&self, _target: &Target) -> String {
+        self.hint()
+    }
     /// The label for `target`. The actions menu shows it. The default is
     /// `label`.
     fn target_label(&self, _target: &Target) -> &'static str {
