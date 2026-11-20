@@ -294,7 +294,7 @@ impl Runtime {
                         };
                         tokio::select! {
                             result = crate::agent::run::run(
-                                &job, &agent.config, &agent.store, &agent.token, &tx,
+                                &job, &agent.config.pr_agent, &agent.store, &agent.token, &tx,
                             ) => result,
                             () = cancel.cancelled() => Err("cancelled".to_owned()),
                         }

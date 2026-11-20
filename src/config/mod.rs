@@ -44,7 +44,7 @@ pub(crate) struct Config {
     /// The conversation pane of the pull request detail.
     pub conversation: ConversationConfig,
     pub merge: MergeConfig,
-    /// The pr-agent runs.
+    /// The agent runs.
     pub agent: AgentConfig,
     pub theme: ThemeConfig,
     pub terminal: TerminalConfig,
@@ -297,13 +297,13 @@ mod tests {
             Some("ctrl-r")
         );
         assert_eq!(
-            config.agent.command,
+            config.agent.pr_agent.command,
             ["uvx", "--from", "pr-agent", "pr-agent"]
         );
-        assert_eq!(config.agent.model, "anthropic/claude-sonnet-5-5");
-        assert_eq!(config.agent.fallback_models, ["openai/gpt-6-luna"]);
+        assert_eq!(config.agent.pr_agent.model, "anthropic/claude-sonnet-5-5");
+        assert_eq!(config.agent.pr_agent.fallback_models, ["openai/gpt-6-luna"]);
         assert_eq!(
-            config.agent.env,
+            config.agent.pr_agent.env,
             BTreeMap::from([
                 (
                     "ANTHROPIC__KEY".to_owned(),
@@ -319,12 +319,12 @@ mod tests {
                 ),
             ])
         );
-        assert_eq!(config.agent.timeout_secs, 600);
+        assert_eq!(config.agent.pr_agent.timeout_secs, 600);
         assert_eq!(
-            config.agent.extra_instructions.review,
+            config.agent.pr_agent.extra_instructions.review,
             "Focus on correctness."
         );
-        assert_eq!(config.agent.extra_instructions.ask, "");
+        assert_eq!(config.agent.pr_agent.extra_instructions.ask, "");
         assert_eq!(config.action("pr_agent"), None);
         let merge: MergeConfig = toml::Value::Table(config.action("merge").unwrap().clone())
             .try_into()

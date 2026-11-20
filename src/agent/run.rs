@@ -1,13 +1,14 @@
 //! One run of pr-agent.
 //!
-//! The run starts the `[agent] command` in the repo directory:
+//! The run starts the `command` of `[agent.pr_agent]` in the repo
+//! directory:
 //!
 //! ```text
 //! <command> --pr_url https://github.com/<owner>/<repo>/pull/<n> --json-output <tmp> <tool>
 //! ```
 //!
 //! pr-agent reads its settings from env variables with the
-//! `SECTION__KEY` form. The run sets the `[agent] env` table, then
+//! `SECTION__KEY` form. The run sets the env of `PrAgentConfig`, then
 //! `GITHUB__USER_TOKEN` (from `gh auth token`), `CONFIG__MODEL`,
 //! `CONFIG__FALLBACK_MODELS`, `CONFIG__PUBLISH_OUTPUT=false`,
 //! `CONFIG__PROPAGATE_TOOL_ERRORS=true` and the extra instructions of the
@@ -21,7 +22,7 @@
 //! finds that Python.
 //!
 //! Each line on stdout and stderr goes to `app` as
-//! `ActionEvent::Progress`. At `[agent] timeout_secs`, the run kills the
+//! `ActionEvent::Progress`. At `timeout_secs`, the run kills the
 //! process. A failed run writes no result file, so the old file stays.
 
 use std::path::{Path, PathBuf};
@@ -37,7 +38,7 @@ use tokio::task::JoinHandle;
 use crate::agent::ID;
 use crate::agent::store::Store;
 use crate::bus::{ActionEvent, Msg, TargetKey};
-use crate::config::schema::AgentConfig;
+use crate::config::schema::{PrAgentConfig, resolve_env};
 use crate::domain::agent::{AskEntry, Record, Tool, ToolKind, VERSION};
 use crate::domain::keys::PrKey;
 use crate::github::TokenSource;
@@ -73,15 +74,14 @@ struct Finished {
 /// the text for the status line.
 pub(crate) async fn run(
     job: &Job,
-    config: &AgentConfig,
+    config: &PrAgentConfig,
     store: &Store,
     token: &TokenSource,
     tx: &Sender<Msg>,
 ) -> Result<Record, String> {
     let started_at = Utc::now();
     let kind = job.tool.kind();
-    let user_env = config
-        .resolve_env(|name| std::env::var(name).ok())
+    let user_env = resolve_env(&config.env, |name| std::env::var(name).ok())
         .await
         .map_err(|err| err.to_string())?;
     let token = token
@@ -128,11 +128,11 @@ fn pr_url(key: &PrKey) -> String {
     )
 }
 
-/// The env of the process: the `[agent] env` table, then the settings
+/// The env of the process: the env of `config`, then the settings
 /// of chaoshub. A setting of chaoshub replaces a value of the table with
 /// the same name.
 fn process_env(
-    config: &AgentConfig,
+    config: &PrAgentConfig,
     kind: ToolKind,
     user_env: std::collections::BTreeMap<String, String>,
     token: &str,
@@ -176,13 +176,13 @@ fn toml_string(text: &str) -> String {
 
 /// The argv of the run.
 fn argv(
-    config: &AgentConfig,
+    config: &PrAgentConfig,
     store: &Store,
     job: &Job,
     output: &Path,
 ) -> Result<Vec<String>, String> {
     if config.command.is_empty() {
-        return Err("[agent] command is empty".to_owned());
+        return Err("[agent.pr_agent] command is empty".to_owned());
     }
     let url = pr_url(&job.key);
     match &job.tool {
@@ -230,7 +230,7 @@ fn ask_argv(
     find: impl Fn(&str) -> Option<PathBuf>,
 ) -> Result<Vec<String>, String> {
     let mut argv = match command {
-        [] => return Err("[agent] command is empty".to_owned()),
+        [] => return Err("[agent.pr_agent] command is empty".to_owned()),
         [program] => {
             let path = find(program).ok_or_else(|| format!("cannot find {program}"))?;
             python_of(&path).ok_or_else(|| {
@@ -530,8 +530,8 @@ mod tests {
 
     impl Setup {
         /// The config with the fake pr-agent. `mode` sets `FAKE_MODE`.
-        fn config(&self, mode: &str) -> AgentConfig {
-            AgentConfig {
+        fn config(&self, mode: &str) -> PrAgentConfig {
+            PrAgentConfig {
                 command: vec![fixture("fake-pr-agent").to_string_lossy().into_owned()],
                 fallback_models: vec!["openai/gpt-6-luna".into()],
                 env: BTreeMap::from([
@@ -549,7 +549,7 @@ mod tests {
                     review: "Focus: on bugs".into(),
                     ..ExtraInstructions::default()
                 },
-                ..AgentConfig::default()
+                ..PrAgentConfig::default()
             }
         }
 
@@ -747,7 +747,7 @@ mod tests {
     #[tokio::test]
     async fn the_timeout_kills_the_process() {
         let setup = setup();
-        let config = AgentConfig {
+        let config = PrAgentConfig {
             timeout_secs: 1,
             ..setup.config("sleep")
         };
@@ -804,7 +804,7 @@ mod tests {
     async fn ask_runs_the_script_and_keeps_a_history() {
         let setup = setup();
         let program = python_script(&setup.repo);
-        let config = AgentConfig {
+        let config = PrAgentConfig {
             command: vec![program.to_string_lossy().into_owned()],
             ..setup.config("ok")
         };
@@ -848,7 +848,7 @@ mod tests {
     async fn a_failed_ask_keeps_the_history() {
         let setup = setup();
         let program = python_script(&setup.repo);
-        let config = AgentConfig {
+        let config = PrAgentConfig {
             command: vec![program.to_string_lossy().into_owned()],
             ..setup.config("ok")
         };
@@ -857,7 +857,7 @@ mod tests {
         run(&job, &config, &setup.store, &token(), &tx)
             .await
             .unwrap();
-        let failing = AgentConfig {
+        let failing = PrAgentConfig {
             command: config.command.clone(),
             ..setup.config("fail")
         };

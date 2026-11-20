@@ -458,15 +458,28 @@ impl Default for WorkspacesConfig {
     }
 }
 
-/// The `[agent]` section: the pr-agent runs. chaoshub does not read the
-/// model names. It gives them to pr-agent, and pr-agent gives them to
-/// `LiteLLM`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+/// The `[agent]` section: the agent runs. `env` and `timeout_secs` at
+/// the top apply to each backend. The `[agent.pr_agent]` table holds the
+/// settings of pr-agent. Its `env` adds to the top `env`, and its
+/// `timeout_secs` replaces the top value.
+///
+/// The pr-agent keys `command`, `model`, `fallback_models` and
+/// `extra_instructions` were at the top of `[agent]` before the
+/// `[agent.pr_agent]` table. They are still valid there. A key in both
+/// places is an error.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "AgentFile")]
 pub(crate) struct AgentConfig {
+    pub pr_agent: PrAgentConfig,
+}
+
+/// The settings of pr-agent, with the shared keys of `[agent]` merged
+/// in. chaoshub does not read the model names. It gives them to
+/// pr-agent, and pr-agent gives them to `LiteLLM`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PrAgentConfig {
     /// The program and its first arguments. A string is one program
     /// name.
-    #[serde(deserialize_with = "command_words")]
     pub command: Vec<String>,
     /// The `LiteLLM` name of the model.
     pub model: String,
@@ -480,17 +493,111 @@ pub(crate) struct AgentConfig {
     pub extra_instructions: ExtraInstructions,
 }
 
-impl Default for AgentConfig {
+/// The default of `[agent] timeout_secs`.
+const AGENT_TIMEOUT_SECS: u64 = 900;
+
+impl Default for PrAgentConfig {
     fn default() -> Self {
         Self {
             command: vec!["pr-agent".to_owned()],
             model: "anthropic/claude-sonnet-5-5".to_owned(),
             fallback_models: Vec::new(),
             env: BTreeMap::new(),
-            timeout_secs: 900,
+            timeout_secs: AGENT_TIMEOUT_SECS,
             extra_instructions: ExtraInstructions::default(),
         }
     }
+}
+
+/// The `[agent]` section as it is in the file. `None` is a key that the
+/// file does not set.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct AgentFile {
+    env: BTreeMap<String, EnvValue>,
+    timeout_secs: Option<u64>,
+    /// The old place of the pr-agent keys.
+    #[serde(flatten)]
+    legacy: PrAgentKeys,
+    pr_agent: PrAgentFile,
+}
+
+/// The `[agent.pr_agent]` table as it is in the file.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct PrAgentFile {
+    #[serde(flatten)]
+    keys: PrAgentKeys,
+    env: BTreeMap<String, EnvValue>,
+    timeout_secs: Option<u64>,
+}
+
+/// The keys of pr-agent that can also be at the top of `[agent]`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct PrAgentKeys {
+    #[serde(deserialize_with = "some_command_words")]
+    command: Option<Vec<String>>,
+    model: Option<String>,
+    fallback_models: Option<Vec<String>>,
+    extra_instructions: Option<ExtraInstructions>,
+}
+
+impl TryFrom<AgentFile> for AgentConfig {
+    type Error = String;
+
+    fn try_from(file: AgentFile) -> Result<Self, String> {
+        let timeout_secs = file.timeout_secs.unwrap_or(AGENT_TIMEOUT_SECS);
+        let keys = merge_pr_agent_keys(file.legacy, file.pr_agent.keys)?;
+        let defaults = PrAgentConfig::default();
+        let pr_agent = PrAgentConfig {
+            command: keys.command.unwrap_or(defaults.command),
+            model: keys.model.unwrap_or(defaults.model),
+            fallback_models: keys.fallback_models.unwrap_or(defaults.fallback_models),
+            env: merge_env(&file.env, file.pr_agent.env),
+            timeout_secs: file.pr_agent.timeout_secs.unwrap_or(timeout_secs),
+            extra_instructions: keys.extra_instructions.unwrap_or_default(),
+        };
+        Ok(Self { pr_agent })
+    }
+}
+
+/// The pr-agent keys of the top of `[agent]` and of `[agent.pr_agent]`
+/// together. A key in both is an error.
+fn merge_pr_agent_keys(top: PrAgentKeys, table: PrAgentKeys) -> Result<PrAgentKeys, String> {
+    fn one<T>(name: &str, top: Option<T>, table: Option<T>) -> Result<Option<T>, String> {
+        match (top, table) {
+            (Some(_), Some(_)) => Err(format!(
+                "agent.{name} and agent.pr_agent.{name} are both set: keep only agent.pr_agent.{name}"
+            )),
+            (top, table) => Ok(table.or(top)),
+        }
+    }
+    Ok(PrAgentKeys {
+        command: one("command", top.command, table.command)?,
+        model: one("model", top.model, table.model)?,
+        fallback_models: one(
+            "fallback_models",
+            top.fallback_models,
+            table.fallback_models,
+        )?,
+        extra_instructions: one(
+            "extra_instructions",
+            top.extra_instructions,
+            table.extra_instructions,
+        )?,
+    })
+}
+
+/// The shared env of `[agent]` with the env of a backend table on top. A
+/// name in both gets the value of the backend table.
+fn merge_env(
+    shared: &BTreeMap<String, EnvValue>,
+    own: BTreeMap<String, EnvValue>,
+) -> BTreeMap<String, EnvValue> {
+    let mut env = shared.clone();
+    env.extend(own);
+    env
 }
 
 /// One value of `[agent] env`.
@@ -534,30 +641,26 @@ pub(crate) enum EnvError {
     Failed { name: String, stderr: String },
 }
 
-impl AgentConfig {
-    /// Reads each value of `env`. `var` gives the value of a variable in
-    /// the env of chaoshub. A command runs in `sh -c`. The first value
-    /// that fails stops the read.
-    pub(crate) async fn resolve_env(
-        &self,
-        var: impl Fn(&str) -> Option<String>,
-    ) -> Result<BTreeMap<String, String>, EnvError> {
-        let mut env = BTreeMap::new();
-        for (name, value) in &self.env {
-            let resolved = match value {
-                EnvValue::Literal(text) => text.clone(),
-                EnvValue::FromEnv { from_env } => {
-                    var(from_env).ok_or_else(|| EnvError::Missing {
-                        name: name.clone(),
-                        var: from_env.clone(),
-                    })?
-                }
-                EnvValue::Command { command } => run_env_command(name, command).await?,
-            };
-            env.insert(name.clone(), resolved);
-        }
-        Ok(env)
+/// Reads each value of `env`. `var` gives the value of a variable in the
+/// env of chaoshub. A command runs in `sh -c`. The first value that fails
+/// stops the read.
+pub(crate) async fn resolve_env(
+    env: &BTreeMap<String, EnvValue>,
+    var: impl Fn(&str) -> Option<String>,
+) -> Result<BTreeMap<String, String>, EnvError> {
+    let mut resolved = BTreeMap::new();
+    for (name, value) in env {
+        let text = match value {
+            EnvValue::Literal(text) => text.clone(),
+            EnvValue::FromEnv { from_env } => var(from_env).ok_or_else(|| EnvError::Missing {
+                name: name.clone(),
+                var: from_env.clone(),
+            })?,
+            EnvValue::Command { command } => run_env_command(name, command).await?,
+        };
+        resolved.insert(name.clone(), text);
     }
+    Ok(resolved)
 }
 
 /// Runs `command` in `sh -c` and returns its trimmed standard output.
@@ -579,6 +682,13 @@ async fn run_env_command(name: &str, command: &str) -> Result<String, EnvError> 
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+/// `command_words` for an optional key.
+fn some_command_words<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error> {
+    command_words(deserializer).map(Some)
 }
 
 /// Deserializes a string or a list of strings into a list. A string
@@ -753,21 +863,88 @@ mod tests {
     #[test]
     fn agent_defaults() {
         let agent: AgentConfig = toml::from_str("").unwrap();
-        assert_eq!(agent.command, ["pr-agent"]);
-        assert_eq!(agent.model, "anthropic/claude-sonnet-5-5");
-        assert_eq!(agent.fallback_models, Vec::<String>::new());
-        assert!(agent.env.is_empty());
-        assert_eq!(agent.timeout_secs, 900);
-        assert_eq!(agent.extra_instructions, ExtraInstructions::default());
+        assert_eq!(agent, AgentConfig::default());
+        let pr_agent = agent.pr_agent;
+        assert_eq!(pr_agent.command, ["pr-agent"]);
+        assert_eq!(pr_agent.model, "anthropic/claude-sonnet-5-5");
+        assert_eq!(pr_agent.fallback_models, Vec::<String>::new());
+        assert!(pr_agent.env.is_empty());
+        assert_eq!(pr_agent.timeout_secs, 900);
+        assert_eq!(pr_agent.extra_instructions, ExtraInstructions::default());
     }
 
     #[test]
     fn agent_command_is_a_string_or_a_list() {
         let agent: AgentConfig = toml::from_str("command = \"pr-agent\"").unwrap();
-        assert_eq!(agent.command, ["pr-agent"]);
+        assert_eq!(agent.pr_agent.command, ["pr-agent"]);
+        let agent: AgentConfig = toml::from_str(
+            "[pr_agent]\ncommand = [\"uvx\", \"--from\", \"pr-agent\", \"pr-agent\"]",
+        )
+        .unwrap();
+        assert_eq!(
+            agent.pr_agent.command,
+            ["uvx", "--from", "pr-agent", "pr-agent"]
+        );
+    }
+
+    #[test]
+    fn the_old_top_keys_and_the_pr_agent_table_give_the_same_settings() {
+        let old = concat!(
+            "command = \"pr-agent\"\n",
+            "model = \"openai/gpt-6.1-sol\"\n",
+            "fallback_models = [\"openai/gpt-6-luna\"]\n",
+            "extra_instructions = { review = \"Focus\" }\n",
+        );
+        let new = concat!(
+            "[pr_agent]\n",
+            "command = \"pr-agent\"\n",
+            "model = \"openai/gpt-6.1-sol\"\n",
+            "fallback_models = [\"openai/gpt-6-luna\"]\n",
+            "extra_instructions = { review = \"Focus\" }\n",
+        );
+        let old: AgentConfig = toml::from_str(old).unwrap();
+        let new: AgentConfig = toml::from_str(new).unwrap();
+        assert_eq!(old, new);
+        assert_eq!(new.pr_agent.model, "openai/gpt-6.1-sol");
+        assert_eq!(new.pr_agent.fallback_models, ["openai/gpt-6-luna"]);
+        assert_eq!(new.pr_agent.extra_instructions.review, "Focus");
+    }
+
+    #[test]
+    fn a_pr_agent_key_in_both_places_is_an_error() {
+        let text = "model = \"a\"\n[pr_agent]\nmodel = \"b\"\n";
+        let err = toml::from_str::<AgentConfig>(text).unwrap_err().to_string();
+        assert!(
+            err.contains("agent.model and agent.pr_agent.model are both set"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_pr_agent_table_adds_env_and_replaces_the_timeout() {
+        let text = concat!(
+            "timeout_secs = 600\n",
+            "[env]\n",
+            "A = \"shared\"\n",
+            "B = \"shared\"\n",
+            "[pr_agent.env]\n",
+            "B = \"own\"\n",
+            "C = \"own\"\n",
+        );
+        let agent: AgentConfig = toml::from_str(text).unwrap();
+        let literal = |text: &str| EnvValue::Literal(text.into());
+        assert_eq!(
+            agent.pr_agent.env,
+            BTreeMap::from([
+                ("A".to_owned(), literal("shared")),
+                ("B".to_owned(), literal("own")),
+                ("C".to_owned(), literal("own")),
+            ])
+        );
+        assert_eq!(agent.pr_agent.timeout_secs, 600);
         let agent: AgentConfig =
-            toml::from_str("command = [\"uvx\", \"--from\", \"pr-agent\", \"pr-agent\"]").unwrap();
-        assert_eq!(agent.command, ["uvx", "--from", "pr-agent", "pr-agent"]);
+            toml::from_str("timeout_secs = 600\n[pr_agent]\ntimeout_secs = 60\n").unwrap();
+        assert_eq!(agent.pr_agent.timeout_secs, 60);
     }
 
     #[test]
@@ -780,7 +957,7 @@ mod tests {
         );
         let agent: AgentConfig = toml::from_str(text).unwrap();
         assert_eq!(
-            agent.env,
+            agent.pr_agent.env,
             BTreeMap::from([
                 ("A".to_owned(), EnvValue::Literal("literal".into())),
                 (
@@ -800,6 +977,11 @@ mod tests {
         assert!(toml::from_str::<AgentConfig>("[env]\nA = { file = \"x\" }").is_err());
     }
 
+    /// The env of `text`, a `[env]` table.
+    fn env_of(text: &str) -> BTreeMap<String, EnvValue> {
+        toml::from_str::<AgentConfig>(text).unwrap().pr_agent.env
+    }
+
     #[tokio::test]
     async fn agent_env_resolves_the_three_forms() {
         let text = concat!(
@@ -808,11 +990,11 @@ mod tests {
             "B = { from_env = \"SOURCE\" }\n",
             "C = { command = \"printf '  from command \\\\n'\" }\n",
         );
-        let agent: AgentConfig = toml::from_str(text).unwrap();
-        let env = agent
-            .resolve_env(|var| (var == "SOURCE").then(|| "from env".to_owned()))
-            .await
-            .unwrap();
+        let env = resolve_env(&env_of(text), |var| {
+            (var == "SOURCE").then(|| "from env".to_owned())
+        })
+        .await
+        .unwrap();
         assert_eq!(
             env,
             BTreeMap::from([
@@ -825,17 +1007,16 @@ mod tests {
 
     #[tokio::test]
     async fn agent_env_fails_on_a_missing_variable() {
-        let agent: AgentConfig = toml::from_str("[env]\nB = { from_env = \"NOPE\" }").unwrap();
-        let err = agent.resolve_env(|_| None).await.unwrap_err();
+        let env = env_of("[env]\nB = { from_env = \"NOPE\" }");
+        let err = resolve_env(&env, |_| None).await.unwrap_err();
         assert!(matches!(err, EnvError::Missing { .. }), "{err}");
         assert_eq!(err.to_string(), "env B: the variable NOPE is not set");
     }
 
     #[tokio::test]
     async fn agent_env_fails_on_a_failed_command() {
-        let text = "[env]\nC = { command = \"echo secret; echo no key >&2; exit 3\" }";
-        let agent: AgentConfig = toml::from_str(text).unwrap();
-        let err = agent.resolve_env(|_| None).await.unwrap_err();
+        let env = env_of("[env]\nC = { command = \"echo secret; echo no key >&2; exit 3\" }");
+        let err = resolve_env(&env, |_| None).await.unwrap_err();
         assert!(matches!(err, EnvError::Failed { .. }), "{err}");
         assert_eq!(err.to_string(), "env C: the command failed: no key");
     }
