@@ -32,7 +32,7 @@
           inherit (cargoToml.package) version;
 
           # Only the files of the build and the tests. A change to the
-          # README does not start a new build.
+          # README or to docs/ does not start a new build.
           src = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
@@ -59,7 +59,7 @@
           ];
 
           # At run time, chaoshub needs git and gh (logged in) on the PATH.
-          # jj and nvim are optional. See the README.
+          # jj and nvim are optional. See docs/install.md.
           meta = {
             inherit (cargoToml.package) description;
             # Cargo.toml has no homepage field: the repository is the homepage.

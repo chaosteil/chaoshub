@@ -23,8 +23,8 @@
 --
 --   rex.bind("cmd+shift+o", "chaoshub_open_pr")
 --
--- See "Open a pull request from the Rex palette" and "Questions in the
--- Rex palette" in the chaoshub README.
+-- See "Open a PR from the Rex palette" and "Questions in the Rex palette"
+-- in docs/rex.md of the chaoshub repo.
 
 local M = {}
 

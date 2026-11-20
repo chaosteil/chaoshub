@@ -2,7 +2,8 @@
 //! merge popup. The data is made up. No GitHub account is used.
 //!
 //! The test is ignored, so the usual test run writes no files. To write
-//! the images again to `docs/screenshots/`, run:
+//! the images again to `docs/screenshots/`, run (see "Screenshots" in
+//! `docs/development.md`):
 //!
 //! ```sh
 //! cargo test --locked readme_screenshots -- --ignored
