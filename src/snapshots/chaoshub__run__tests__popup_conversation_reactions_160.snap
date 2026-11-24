@@ -22,7 +22,7 @@ expression: "screen(&mut reactions_app(160, 40))"
 "                                ▌        The gutter eats one column.                                                                                           ▐"
 "                                ▌    bob · requested changes <1m ago                                                                                           ▐"
 "                                ▌      Please split the transition module.                                                                                     ▐"
-"                                ▌      ❤️ 2                                                                                                                    ▐" Hidden by multi-width symbols: [(40, " ")]
+"                                ▌      ❤️ 2 (alice, carol)                                                                                                     ▐" Hidden by multi-width symbols: [(40, " ")]
 "                                ▌                                                                                                                              ▐"
 "                                ▌                                                                                                                              ▐"
 "                                ▌                                                                                                                              ▐"

@@ -464,7 +464,12 @@ fn local() -> LocalState {
 /// The conversation of #142: the reactions on the pull request, a
 /// comment of alice, a resolved thread and the approval of bob.
 fn detail() -> PrDetail {
-    let reaction = |kind, count, mine| Reaction { kind, count, mine };
+    let reaction = |kind, count, mine, logins: &[&str]| Reaction {
+        kind,
+        count,
+        mine,
+        logins: logins.iter().map(|&login| login.to_owned()).collect(),
+    };
     let comment = |author: &str, body: &str, minutes: i64| Comment {
         id: format!("IC_{minutes}"),
         author: author.into(),
@@ -500,8 +505,8 @@ fn detail() -> PrDetail {
             ],
         }],
         reactions: vec![
-            reaction(ReactionKind::ThumbsUp, 3, true),
-            reaction(ReactionKind::Rocket, 2, false),
+            reaction(ReactionKind::ThumbsUp, 3, true, &["bob", "chaosteil"]),
+            reaction(ReactionKind::Rocket, 2, false, &["alice", "carol"]),
         ],
         head_oid: commit(142),
     }

@@ -12082,7 +12082,12 @@ mod tests {
         count: u32,
         mine: bool,
     ) -> crate::domain::detail::Reaction {
-        crate::domain::detail::Reaction { kind, count, mine }
+        crate::domain::detail::Reaction {
+            kind,
+            count,
+            mine,
+            logins: Vec::new(),
+        }
     }
 
     fn react_done(pr: &PrKey, result: Result<&str, &str>) -> Msg {

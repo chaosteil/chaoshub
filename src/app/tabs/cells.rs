@@ -14,8 +14,12 @@ pub(crate) fn cell(text: impl Into<String>, style: CellStyle) -> Cell {
     }
 }
 
-/// The cells of `reactions`: `👍 3  🎉 1`, in the order of GitHub. The
-/// reactions of the viewer have the primary color, the others are dim.
+/// The most logins that the text of a reaction shows.
+const REACTION_LOGINS: usize = 2;
+
+/// The cells of `reactions`: `👍 3 (alice, bob, …)  🎉 1 (carol)`, in
+/// the order of GitHub (see `reaction_text`). The reactions of the
+/// viewer have the primary color, the others are dim.
 /// A reaction of `pulses` pulses with its mix: it is on its way to
 /// GitHub. A removed reaction that is on its way and has no count left
 /// shows as `👍 0`. Empty without reactions.
@@ -39,10 +43,7 @@ pub(crate) fn reactions(reactions: &[Reaction], pulses: &[(ReactionKind, u8)]) -
             None if reaction.mine => CellStyle::Primary,
             None => CellStyle::Dim,
         };
-        push(
-            format!("{} {}", reaction.kind.emoji(), reaction.count),
-            style,
-        );
+        push(reaction_text(reaction), style);
     }
     for &(kind, mix) in pulses {
         if !reactions.iter().any(|reaction| reaction.kind == kind) {
@@ -50,6 +51,21 @@ pub(crate) fn reactions(reactions: &[Reaction], pulses: &[(ReactionKind, u8)]) -
         }
     }
     cells
+}
+
+/// The text of one reaction: the emoji and the count, then the first
+/// two logins in parentheses, for example `👍 3 (alice, bob, …)`. A `…`
+/// comes when more people reacted than the text names. A reaction
+/// without logins shows only the emoji and the count: `👍 3`.
+fn reaction_text(reaction: &Reaction) -> String {
+    let text = format!("{} {}", reaction.kind.emoji(), reaction.count);
+    let logins = &reaction.logins[..reaction.logins.len().min(REACTION_LOGINS)];
+    if logins.is_empty() {
+        return text;
+    }
+    let count = usize::try_from(reaction.count).unwrap_or(usize::MAX);
+    let more = if count > logins.len() { ", …" } else { "" };
+    format!("{text} ({}{more})", logins.join(", "))
 }
 
 /// The CI glyph: `✓` success, `✗` failure, `●` pending, `·` none.
@@ -180,6 +196,31 @@ mod tests {
         ];
         for (got, text, style) in cases {
             assert_eq!(got, cell(text, style));
+        }
+    }
+
+    #[test]
+    fn a_reaction_names_at_most_two_logins() {
+        let reaction = |count, logins: &[&str]| Reaction {
+            kind: ReactionKind::ThumbsUp,
+            count,
+            mine: false,
+            logins: logins.iter().map(|&login| login.to_owned()).collect(),
+        };
+        let cases = [
+            (reaction(1, &["alice"]), "👍 1 (alice)"),
+            (reaction(2, &["alice", "bob"]), "👍 2 (alice, bob)"),
+            (reaction(3, &["alice", "bob"]), "👍 3 (alice, bob, …)"),
+            (
+                reaction(3, &["alice", "bob", "carol"]),
+                "👍 3 (alice, bob, …)",
+            ),
+            (reaction(2, &["alice"]), "👍 2 (alice, …)"),
+            (reaction(3, &[]), "👍 3"),
+        ];
+        for (reaction, text) in cases {
+            let cells = reactions(std::slice::from_ref(&reaction), &[]);
+            assert_eq!(cells, [cell(text, CellStyle::Dim)], "{reaction:?}");
         }
     }
 

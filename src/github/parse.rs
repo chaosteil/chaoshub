@@ -619,13 +619,29 @@ pub(crate) mod pr_detail {
     };
     use crate::github::queries::pr_detail as q;
 
+    /// The logins of the first people in a reaction group of the
+    /// fragment `ReactionFields`, in the order of GitHub. The query asks
+    /// for two. A null node is left out.
+    fn logins(group: &q::ReactionFields) -> Vec<String> {
+        use q::ReactionFieldsReactorsNodes as R;
+        let nodes = group.reactors.nodes.iter().flatten().flatten();
+        nodes
+            .map(|node| match node {
+                R::Bot(bot) => bot.login.clone(),
+                R::Mannequin(mannequin) => mannequin.login.clone(),
+                R::Organization(organization) => organization.login.clone(),
+                R::User(user) => user.login.clone(),
+            })
+            .collect()
+    }
+
     /// The reactions of generated reaction groups, in the order of
     /// GitHub. GitHub sends a group for each kind, also with a count of
     /// zero, and such a group is left out. An unknown kind is left out.
-    /// The pull request, the issue comments, the reviews and the thread
-    /// comments have distinct group types with the same fields.
+    /// `$logins` gets the logins of one group. The thread comments do
+    /// not ask for logins (see `pr_detail.graphql`), so they have none.
     macro_rules! reactions {
-        ($groups:expr) => {{
+        ($groups:expr, $logins:expr) => {{
             let mut reactions: Vec<Reaction> = Vec::new();
             for group in $groups.unwrap_or_default() {
                 let kind = match group.content {
@@ -645,6 +661,7 @@ pub(crate) mod pr_detail {
                         kind,
                         count,
                         mine: group.viewer_has_reacted,
+                        logins: ($logins)(&group),
                     });
                 }
             }
@@ -655,8 +672,9 @@ pub(crate) mod pr_detail {
 
     /// A `Comment` from a generated comment node. The issue comments and
     /// the thread comments have distinct types with the same fields.
+    /// `$logins` gets the logins of one reaction group.
     macro_rules! comment {
-        ($node:expr) => {{
+        ($node:expr, $logins:expr) => {{
             let node = $node;
             Comment {
                 id: node.id,
@@ -667,7 +685,7 @@ pub(crate) mod pr_detail {
                 body_html: node.body_html,
                 created_at: node.created_at,
                 url: node.url,
-                reactions: reactions!(node.reaction_groups),
+                reactions: reactions!(node.reaction_groups, $logins),
             }
         }};
     }
@@ -681,10 +699,10 @@ pub(crate) mod pr_detail {
         let Some(pr) = data.repository.and_then(|repo| repo.pull_request) else {
             return Ok(None);
         };
-        let reactions = reactions!(pr.reaction_groups);
+        let reactions = reactions!(pr.reaction_groups, logins);
         let mut comments = Vec::new();
         for node in pr.comments.nodes.unwrap_or_default().into_iter().flatten() {
-            comments.push(comment!(node));
+            comments.push(comment!(node, logins));
         }
         let mut reviews = Vec::new();
         for node in pr
@@ -711,7 +729,7 @@ pub(crate) mod pr_detail {
                 body: node.body,
                 body_html: node.body_html,
                 submitted_at: node.submitted_at,
-                reactions: reactions!(node.reaction_groups),
+                reactions: reactions!(node.reaction_groups, logins),
             });
         }
         let mut threads = Vec::new();
@@ -736,7 +754,7 @@ pub(crate) mod pr_detail {
                         .into_iter()
                         .flatten()
                     {
-                        comments.push(comment!(node));
+                        comments.push(comment!(node, |_| Vec::new()));
                     }
                     comments
                 },
@@ -1193,14 +1211,19 @@ mod tests {
         use crate::domain::detail::{Reaction, ReactionKind};
         let data = fixture(include_str!("testdata/pr_detail.json"));
         let detail = pr_detail::detail(data, test_time()).unwrap().unwrap().value;
-        let reaction = |kind, count, mine| Reaction { kind, count, mine };
+        let reaction = |kind, count, mine, logins: &[&str]| Reaction {
+            kind,
+            count,
+            mine,
+            logins: logins.iter().map(|&login| login.to_owned()).collect(),
+        };
         let first = &detail.comments[0];
         assert_eq!(first.id, "IC_kwDOAAAAAAAAAAA1");
         assert_eq!(
             first.reactions,
             [
-                reaction(ReactionKind::ThumbsUp, 2, true),
-                reaction(ReactionKind::Hooray, 1, false),
+                reaction(ReactionKind::ThumbsUp, 2, true, &["alice", "chaosteil"]),
+                reaction(ReactionKind::Hooray, 1, false, &["bob"]),
             ],
             "the groups with a count of zero are left out"
         );
@@ -1208,12 +1231,17 @@ mod tests {
         assert_eq!(detail.reviews[0].id, "PRR_kwDOAAAAAAAAAAA1");
         assert_eq!(
             detail.reviews[0].reactions,
-            [reaction(ReactionKind::Eyes, 3, false)]
+            [reaction(ReactionKind::Eyes, 3, false, &["octo-org"])],
+            "an organization has a login, and a null node is left out"
         );
         assert_eq!(detail.reviews[1].reactions, [], "a null list is empty");
         let thread = &detail.threads[0].comments[0];
         assert_eq!(thread.id, "PRRC_kwDOAAAAAAAAAAA1");
-        assert_eq!(thread.reactions, [reaction(ReactionKind::Heart, 1, true)]);
+        assert_eq!(
+            thread.reactions,
+            [reaction(ReactionKind::Heart, 1, true, &[])],
+            "the thread comments do not ask for logins"
+        );
     }
 
     #[test]
@@ -1228,11 +1256,13 @@ mod tests {
                     kind: ReactionKind::Hooray,
                     count: 4,
                     mine: true,
+                    logins: vec!["alice".into(), "bob".into()],
                 },
                 Reaction {
                     kind: ReactionKind::Rocket,
                     count: 2,
                     mine: false,
+                    logins: vec!["carol".into(), "renovate".into()],
                 },
             ],
             "the groups with a count of zero are left out"

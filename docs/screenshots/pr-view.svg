@@ -82,9 +82,11 @@
 <text x="168.0" y="121.5" textLength="33.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">3 PR</text>
 <rect x="201.60" y="108.00" width="4.20" height="18.00" fill="#009fff"/>
 <text x="226.8" y="121.5" text-anchor="middle" fill="#009fff">👍</text>
-<text x="243.6" y="121.5" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#009fff">3</text>
-<text x="277.2" y="121.5" text-anchor="middle" fill="#a3a3a3">🚀</text>
-<text x="294.0" y="121.5" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">2</text>
+<text x="243.6" y="121.5" textLength="151.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#009fff">3 (bob, chaosteil,</text>
+<text x="407.4" y="121.5" text-anchor="middle" fill="#009fff">…</text>
+<text x="411.6" y="121.5" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#009fff">)</text>
+<text x="445.2" y="121.5" text-anchor="middle" fill="#a3a3a3">🚀</text>
+<text x="462.0" y="121.5" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve" fill="#a3a3a3">2 (alice, carol)</text>
 <rect x="1003.80" y="108.00" width="4.20" height="18.00" fill="#009fff"/>
 <rect x="11.90" y="134.30" width="4.90" height="1.40" fill="#a3a3a3"/>
 <rect x="11.90" y="134.30" width="1.40" height="9.70" fill="#a3a3a3"/>

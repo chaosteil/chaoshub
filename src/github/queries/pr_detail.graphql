@@ -3,11 +3,7 @@ query PrDetail($owner: String!, $name: String!, $number: Int!) {
     pullRequest(number: $number) {
       headRefOid
       reactionGroups {
-        content
-        viewerHasReacted
-        reactors {
-          totalCount
-        }
+        ...ReactionFields
       }
       comments(first: 100) {
         nodes {
@@ -21,11 +17,7 @@ query PrDetail($owner: String!, $name: String!, $number: Int!) {
           createdAt
           url
           reactionGroups {
-            content
-            viewerHasReacted
-            reactors {
-              totalCount
-            }
+            ...ReactionFields
           }
         }
       }
@@ -41,11 +33,7 @@ query PrDetail($owner: String!, $name: String!, $number: Int!) {
           bodyHTML
           submittedAt
           reactionGroups {
-            content
-            viewerHasReacted
-            reactors {
-              totalCount
-            }
+            ...ReactionFields
           }
         }
       }
@@ -83,5 +71,31 @@ query PrDetail($owner: String!, $name: String!, $number: Int!) {
     cost
     remaining
     resetAt
+  }
+}
+
+# The first two people of a reaction group come with its count. The thread
+# comments do not use this fragment: their names make the query cost 53
+# points in place of 3 (100 threads, each with 50 comments).
+fragment ReactionFields on ReactionGroup {
+  content
+  viewerHasReacted
+  reactors(first: 2) {
+    totalCount
+    nodes {
+      __typename
+      ... on Bot {
+        login
+      }
+      ... on Mannequin {
+        login
+      }
+      ... on Organization {
+        login
+      }
+      ... on User {
+        login
+      }
+    }
   }
 }

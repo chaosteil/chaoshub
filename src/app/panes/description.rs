@@ -15,9 +15,11 @@
 //! which loads in the background. The pane does not start a load.
 //!
 //! When the pull request has reactions, one line at the top of the pane
-//! shows them, for example `👍 3  🎉 1`, with a blank line after it. When
-//! the full title starts the pane, the line comes directly under the
-//! title. The reactions of the viewer have the primary color. Without
+//! shows them, for example `👍 3 (alice, bob, …)  🎉 1 (carol)`, with a
+//! blank line after it. Each reaction names at most two of the people
+//! who reacted. When the full title starts the pane, the line comes
+//! directly under the title. The reactions of the viewer have the
+//! primary color. A line that is wider than the pane wraps. Without
 //! reactions, and before the detail loads, the pane shows no line.
 //!
 //! When the pull request has codeview comments that went to GitHub not
@@ -705,11 +707,13 @@ mod tests {
                 kind: ReactionKind::ThumbsUp,
                 count: 3,
                 mine: true,
+                logins: vec!["alice".into(), "chaosteil".into()],
             },
             Reaction {
                 kind: ReactionKind::Hooray,
                 count: 1,
                 mine: false,
+                logins: vec!["bob".into()],
             },
         ]
     }
@@ -758,9 +762,9 @@ mod tests {
         assert_eq!(
             lines[0],
             [
-                cell("👍 3", CellStyle::Primary),
+                cell("👍 3 (alice, chaosteil, …)", CellStyle::Primary),
                 cell("  ", CellStyle::Normal),
-                cell("🎉 1", CellStyle::Dim),
+                cell("🎉 1 (bob)", CellStyle::Dim),
             ]
         );
         assert_eq!(lines[1], [], "a blank line comes after the reactions");
@@ -774,9 +778,22 @@ mod tests {
         detail.reactions = some_reactions();
         let lines = lines_of(long, true, Some(detail));
         assert_eq!(text(&lines[0]), long);
-        assert_eq!(text(&lines[1]), "👍 3  🎉 1");
+        assert_eq!(text(&lines[1]), "👍 3 (alice, chaosteil, …)  🎉 1 (bob)");
         assert_eq!(lines[2], [], "a blank line comes after the reactions");
         assert_eq!(text(&lines[3]), " CHECKING ");
+    }
+
+    #[test]
+    fn a_narrow_pane_wraps_the_reactions_with_the_text() {
+        let mut detail = empty_detail();
+        detail.reactions = some_reactions();
+        let lines = lines_of("Seven", false, Some(detail));
+        let line = text(&lines[0]);
+        let rows: Vec<&str> = crate::app::measure::wrap_ranges(&line, 20)
+            .into_iter()
+            .map(|range| line[range].trim_end())
+            .collect();
+        assert_eq!(rows, ["👍 3 (alice,", "chaosteil, …)  🎉 1", "(bob)"]);
     }
 
     #[test]

@@ -7,8 +7,10 @@
 //! newest at the top. A thread header stays above its comments.
 //! Comment bodies are markdown cells, which `ui` renders and wraps.
 //! The reactions of a comment or a review show on one row under its
-//! body: `👍 3  🎉 1`. The reactions of the viewer have the primary
-//! color.
+//! body: `👍 3 (alice, bob, …)  🎉 1 (carol)`. The reactions of the
+//! viewer have the primary color. A comment in a thread shows no
+//! logins: `👍 3  🎉 1`. A row that is wider than the pane is cut at its
+//! right edge.
 //!
 //! Enter on a comment, a review or a comment in an expanded thread opens
 //! the comment menu: reply, the eight reactions of GitHub (keys `1` to
@@ -1338,7 +1340,7 @@ mod tests {
                 "    The gutter eats one column.",
                 "bob · requested changes 1h ago",
                 "  Please split the **transition** module.",
-                "  ❤️ 2",
+                "  ❤️ 2 (alice, carol)",
             ]
         );
         let PaneModel::Tree { nodes } = &model else {

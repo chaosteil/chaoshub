@@ -118,7 +118,7 @@ impl ReactionKind {
 }
 
 /// The reactions of one kind on a pull request, a comment or a review.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Reaction {
     pub kind: ReactionKind,
     /// The number of people who reacted. A reaction in a list is never
@@ -126,6 +126,12 @@ pub(crate) struct Reaction {
     pub count: u32,
     /// True when the viewer is one of them.
     pub mine: bool,
+    /// The logins of the first people who reacted, at most two, in the
+    /// order of GitHub. Empty when GitHub did not send them: the
+    /// comments of a review thread have no logins. A cached detail
+    /// without them has none until the next load.
+    #[serde(default)]
+    pub logins: Vec<String>,
 }
 
 /// True when the viewer reacted with `kind` in `reactions`.
@@ -162,6 +168,7 @@ pub(crate) fn set_mine(reactions: &mut Vec<Reaction>, kind: ReactionKind, add: b
                     kind,
                     count: 1,
                     mine: true,
+                    logins: Vec::new(),
                 },
             );
         }
@@ -199,6 +206,7 @@ mod tests {
                 kind: ReactionKind::Heart,
                 count: 2,
                 mine: true,
+                logins: vec!["alice".into(), "chaosteil".into()],
             }],
         }
     }
@@ -227,6 +235,7 @@ mod tests {
                 kind: ReactionKind::Rocket,
                 count: 1,
                 mine: false,
+                logins: vec!["bob".into()],
             }],
             head_oid: "abc123".into(),
         });
@@ -256,7 +265,19 @@ mod tests {
     }
 
     fn reaction(kind: ReactionKind, count: u32, mine: bool) -> Reaction {
-        Reaction { kind, count, mine }
+        Reaction {
+            kind,
+            count,
+            mine,
+            logins: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_reaction_without_logins_parses() {
+        let old = r#"{"kind":"Heart","count":2,"mine":true}"#;
+        let reaction: Reaction = serde_json::from_str(old).unwrap();
+        assert_eq!(reaction, self::reaction(ReactionKind::Heart, 2, true));
     }
 
     #[test]

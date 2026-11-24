@@ -22,7 +22,7 @@ expression: "screen(&mut comment_menu_app(160, 40))"
 "                                ▌        The gutter eats one▌  2  👎 thumbs down                   ▐                                                           ▐" Hidden by multi-width symbols: [(67, " ")]
 "                                ▌    bob · requested changes▌  3  😄 laugh                         ▐                                                           ▐" Hidden by multi-width symbols: [(67, " ")]
 "                                ▌      Please split the tran▌  4  🎉 hooray                        ▐                                                           ▐" Hidden by multi-width symbols: [(67, " ")]
-"                                ▌      ❤️ 2                 ▌  5  😕 confused                      ▐                                                           ▐" Hidden by multi-width symbols: [(40, " "), (67, " ")]
+"                                ▌      ❤️ 2 (alice, carol)  ▌  5  😕 confused                      ▐                                                           ▐" Hidden by multi-width symbols: [(40, " "), (67, " ")]
 "                                ▌                           ▌  6  ❤️ heart                         ▐                                                           ▐" Hidden by multi-width symbols: [(67, " ")]
 "                                ▌                           ▌  7  🚀 rocket                        ▐                                                           ▐" Hidden by multi-width symbols: [(67, " ")]
 "                                ▌                           ▌  8  👀 eyes                          ▐                                                           ▐" Hidden by multi-width symbols: [(67, " ")]

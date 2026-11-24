@@ -40,9 +40,10 @@ The header of the PR view shows the number and the title of the PR, then
 the author, the branches and the state. When the PR has reactions, the
 Description pane starts with one line that shows them, directly under
 the title, as the Conversation pane shows the reactions of a comment,
-for example `👍 3  🎉 1`. Your own reactions have the primary color. A
+for example `👍 3 (alice, bob, …)  🎉 1 (carol)` (see
+[Reactions](#reactions)). Your own reactions have the primary color. A
 PR without reactions has no such line. The line comes when the
-conversation loads.
+conversation loads. When the line is wider than the pane, it wraps.
 
 ## The panes
 
@@ -145,8 +146,20 @@ GitHub refuses the reply, the status line shows the error.
 
 The Conversation pane shows the reactions of a comment or a review on
 one row under its body, in the order of GitHub, for example
-`👍 3  🎉 1`. Your own reactions have the primary color. A comment
-without reactions has no such row.
+`👍 3 (alice, bob, …)  🎉 1 (carol)`. Your own reactions have the
+primary color. A comment without reactions has no such row.
+
+Each reaction shows the number of people who reacted and the logins of
+the first two of them, in the order of GitHub. With one or two people,
+the reaction names all of them. With three or more, a `…` comes after
+the two logins. The logins come in the same GitHub request as the
+counts.
+
+A comment in a review thread shows only the counts, for example
+`👍 3  🎉 1`. The PR view reads up to 100 threads of 50 comments each.
+Logins for all these comments raise the cost of the request from 3 to
+53 GraphQL points of the rate limit. When a row is wider than the pane,
+the pane cuts it at the right edge.
 
 `enter` on an issue comment, a review or a comment in an expanded
 thread opens the comment menu. `enter` on a thread header still
