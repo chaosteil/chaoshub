@@ -10,7 +10,8 @@
 //! config: read by app, workers, actions, agent, run.   theme: read by ui and run.   cli: read by main and run.
 //! agent: reads domain, bus, github and config; read by actions, app and run.
 //! codeview: reads domain and config; read by actions, app (exec) and run.
-//! osc: reads bus only; read by run and clipboard.   clipboard: read by app (exec).
+//! osc: reads bus only; read by run, resume and clipboard.   clipboard: read by app (exec).
+//! resume: reads domain and osc; read by run.
 //! ipc: reads domain and bus; read by app (exec) and run.
 //! markup: reads no module; read by app and ui.   highlight: reads domain; read by workers and the tests of app.
 //! ```
@@ -31,6 +32,7 @@ mod ipc;
 mod launch;
 mod markup;
 mod osc;
+mod resume;
 mod run;
 mod store;
 mod theme;
@@ -275,12 +277,14 @@ mod tests {
                 "clipboard",
                 "cli",
                 "ipc",
+                "resume",
             ],
         ),
         ("markup", &[]),
         ("config", &["domain"]),
         ("theme", &[]),
         ("osc", &["bus"]),
+        ("resume", &["domain", "osc"]),
         ("clipboard", &["osc"]),
         ("cli", &[]),
     ];
