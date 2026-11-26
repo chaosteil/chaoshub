@@ -3,7 +3,8 @@
 //!
 //! Threads: the event loop runs on the main thread and is the only code
 //! that touches the terminal. The reader thread reads terminal events. The
-//! signal thread turns SIGTERM and SIGINT into `Msg::Signal`. The ipc
+//! signal thread turns SIGTERM and SIGINT into `Msg::Signal`, and SIGCONT
+//! into `Msg::Continued`. The ipc
 //! thread of the list turns the events of its PR views into
 //! `Msg::PrView` (see `ipc`). The tokio runtime runs the workers and the
 //! action tasks.
@@ -14,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle, ThreadId};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context as _;
 use clap::ValueEnum as _;
@@ -29,7 +30,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::Position;
-use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook::consts::{SIGCONT, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, watch};
@@ -40,10 +41,10 @@ use crate::agent::store::Store as AgentStore;
 use crate::app::exec::{ActionEnv, AgentEnv, Runtime, Senders};
 use crate::app::keymap::Keymap;
 use crate::app::listing;
-use crate::app::{App, DetailPane, Notice, NotifySettings, SPINNER_FRAME};
+use crate::app::{App, DETAIL_ID, DetailPane, Notice, NotifySettings, SPINNER_FRAME};
 use crate::bus::{
-    Cmd, DetailReq, HighlightReq, Hit, Interest, JjReq, LaunchRequest, MouseKind, Msg, Progress,
-    Scope, Session, Size, SyncReq, TargetKey, TermState, TermStatus,
+    Cmd, DetailReq, HighlightReq, Hit, Interest, JjReq, LaunchRequest, MouseKind, Msg, PrViewEvent,
+    Progress, Scope, Session, Size, SyncReq, TargetKey, TermState, TermStatus,
 };
 use crate::cli::{CacheAction, Cli, Command};
 use crate::config::schema::{DetailMode, NotifyConfig, parse_repo_name};
@@ -51,13 +52,16 @@ use crate::config::{self, Config, paths};
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::pr_url::{self, FirstPane};
 use crate::domain::repo::Repo;
-use crate::domain::resume::TOKEN_ENV;
+use crate::domain::resume::{
+    LIST_ID_ENV, PaneResume, PrViewResume, ResumeState, TOKEN_ENV, adoption,
+};
 use crate::github::{GITHUB_API, GithubClient, TokenSource};
 use crate::ipc;
 use crate::launch::Launcher;
 use crate::launch::palette::{Palette, RexPalette};
 use crate::launch::rex::{self, RexLauncher};
 use crate::osc;
+use crate::resume::{self, StateFile};
 use crate::store::handle::StoreHandle;
 use crate::store::{Snapshot, Store};
 use crate::theme::{Theme, ThemeKind};
@@ -113,7 +117,6 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         resume: resume_arg,
         command,
     } = cli;
-    let _ = resume_arg;
     let (pinned, first_pane) = match command {
         Some(Command::Cache(CacheAction::Clear)) => return clear_cache(),
         Some(Command::List { json, all }) => return list_prs(config_path, json, all),
@@ -123,6 +126,8 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         }
         None => (None, FirstPane::Description),
     };
+    // The resume command passes `--config` only when the user gave it.
+    let config_arg = config_path.clone();
     let config_path = config_path
         .or_else(paths::config_file)
         .context("the config directory is unknown")?;
@@ -130,6 +135,90 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     if no_prefetch {
         config.prefetch.enabled = false;
     }
+    // OSC 7577 (program resume): the state file of this instance, and
+    // the state of the last run when the terminal resumed it.
+    let resume_dir = paths::state_dir().map(|dir| resume::dir(&dir));
+    if let Some(dir) = &resume_dir {
+        let pruned = resume::prune(
+            dir,
+            SystemTime::now(),
+            resume::MAX_AGE,
+            resume_arg.as_deref(),
+        );
+        if pruned > 0 {
+            tracing::debug!(pruned, "deleted old resume states");
+        }
+    }
+    let kind = match pinned {
+        Some(_) => resume::Kind::PrView,
+        None => resume::Kind::List,
+    };
+    let state_file = resume_dir
+        .as_deref()
+        .map(|dir| resume_file(dir, kind, resume_arg.as_deref()));
+    let (loaded_list, loaded_view) = match state_file.as_ref().and_then(StateFile::load) {
+        Some(ResumeState::List(list)) if kind == resume::Kind::List => (Some(list), None),
+        Some(ResumeState::PrView(view)) if kind == resume::Kind::PrView => (None, Some(view)),
+        _ => (None, None),
+    };
+    let resumed = loaded_list.is_some() || loaded_view.is_some();
+    let token =
+        resume::Token::parse(std::env::var_os(TOKEN_ENV)).filter(|_| config.terminal.resume);
+    // A resumed PR view gets no env from the terminal, so the state file
+    // gives back the list socket, the label switch and the list id.
+    let list_path = list_socket(pinned.is_some(), std::env::var_os(ipc::ENV)).or_else(|| {
+        loaded_view
+            .as_ref()
+            .and_then(|view| view.list_socket.clone())
+    });
+    let rex_label_on = match std::env::var_os(rex::LABEL_ENV) {
+        Some(env) => rex_label(pinned.is_some(), Some(env)),
+        None => pinned.is_some() && loaded_view.as_ref().is_some_and(|view| view.rex_label),
+    };
+    let list_id = std::env::var(LIST_ID_ENV)
+        .ok()
+        .filter(|id| !id.is_empty())
+        .or_else(|| loaded_view.as_ref().and_then(|view| view.list.clone()));
+    let block = std::env::var("REX_BLOCK")
+        .ok()
+        .filter(|block| !block.is_empty());
+    let attached = match (&pinned, &loaded_view, &list_path, &block) {
+        (Some(pr), Some(_), Some(_), Some(block)) => Some(PrViewEvent::Attached {
+            pr: pr.clone(),
+            block: block.clone(),
+        }),
+        _ => None,
+    };
+    let adopt = match (&loaded_list, &resume_dir, &state_file) {
+        (Some(list), Some(dir), Some(file)) => {
+            let views: Vec<PrViewResume> = resume::pr_views_of(dir, file.id())
+                .into_iter()
+                .map(|(_, view)| view)
+                .collect();
+            adoption(list, &views)
+        }
+        _ => Vec::new(),
+    };
+    let resume_args = ResumeArgs {
+        config: config_arg,
+        no_prefetch,
+        theme_arg,
+        palette_arg,
+        repos: repo.clone(),
+        state: PathBuf::new(),
+        pr: pinned.clone(),
+    };
+    let fixed = match &pinned {
+        Some(pr) => resume::Fixed::PrView {
+            pr: pr.clone(),
+            list: list_id,
+            list_socket: list_path.clone(),
+            rex_label: rex_label_on,
+            block,
+        },
+        None => resume::Fixed::List,
+    };
+    let program_resume = resume_session(token, state_file, resume_args, fixed);
     let keymap = Keymap::new(&config.keys)?;
     let theme = session_theme(theme_kind, theme_arg, palette_arg, &config);
     let transitions =
@@ -148,8 +237,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     let launcher = launcher(&config, RexLauncher::from_env())?;
     // The PR view renames its own block, so it uses the Rex of its env
     // also with `launcher = "inline"`.
-    let label_rex = RexLauncher::from_env()
-        .filter(|_| rex_label(pinned.is_some(), std::env::var_os(rex::LABEL_ENV)));
+    let label_rex = RexLauncher::from_env().filter(|_| rex_label_on);
     let detail = detail_pane(&DetailArgs {
         mode: config.detail.mode,
         launcher: launcher.is_some(),
@@ -188,19 +276,21 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     let signals = spawn_signals(tx.clone())?;
     // The list listens for the events of its PR views. The PR view
     // finds the socket in its env.
-    let listener = detail.as_ref().and_then(|_| {
-        list_listener(
-            paths::socket_dir(),
-            &std::process::id().to_string(),
-            tx.clone(),
-        )
-    });
+    let stem = socket_stem(program_resume.as_ref().map(|session| session.file().id()));
+    let listener = detail
+        .as_ref()
+        .and_then(|_| list_listener(paths::socket_dir(), &stem, tx.clone()));
     let detail = detail.map(|mut detail| {
         if let Some(listener) = &listener {
             detail.env.push((
                 ipc::ENV.to_owned(),
                 listener.path().to_string_lossy().into_owned(),
             ));
+        }
+        if let Some(session) = &program_resume {
+            detail
+                .env
+                .push((LIST_ID_ENV.to_owned(), session.file().id().to_owned()));
         }
         detail
     });
@@ -224,11 +314,14 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     .with_rex_label(label_rex.is_some())
     .with_notify(notify);
     // The pinned app comes before the first interest, so the workers
-    // start with the pinned interest.
-    let app = match &pinned {
-        Some(key) => app.pinned(key.clone(), first_pane),
-        None => app,
+    // start with the pinned interest. A resumed app gets back its state.
+    let app = match (&pinned, &loaded_list, &loaded_view) {
+        (Some(key), _, Some(view)) => app.pinned_on(key.clone(), &view.pane),
+        (Some(key), _, None) => app.pinned(key.clone(), first_pane),
+        (None, Some(list), _) => app.with_resume(list),
+        (None, None, _) => app,
     };
+    let app = if resumed { app.resumed() } else { app };
     let session = Session {
         login: None,
         repos: settings.repos.clone(),
@@ -252,7 +345,7 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         // The pinned process leaves the panes that it opened, for
         // example a codeview review, open on quit.
         runtime: Runtime::new(tokio.handle().clone(), senders, env, pinned.is_none())
-            .with_list(list_socket(pinned.is_some(), std::env::var_os(ipc::ENV))),
+            .with_list(list_path),
         handle: tokio.handle().clone(),
         transitions,
         theme,
@@ -270,10 +363,14 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         overlay_drawn: false,
         selection: None,
         selection_text: String::new(),
+        resume: program_resume,
+        signalled: false,
+        synced: None,
     };
     // The first frame comes before any subprocess: the workers start
     // after it.
     let result = event_loop.draw_now(&mut terminal).and_then(|()| {
+        event_loop.start_resume(adopt, attached);
         let workers = {
             let _runtime = tokio.enter();
             spawn_all(ctx)
@@ -284,6 +381,16 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     });
     if let Err(err) = event_loop.term.clear(&mut io::stdout()) {
         tracing::warn!(%err, "cannot clear the terminal status");
+    }
+    // Only a quit of the user ends the resume record. After a signal or
+    // an error, the terminal can start chaoshub again.
+    let by_user = ends_record(
+        result.is_ok(),
+        event_loop.runtime.quitting(),
+        event_loop.signalled,
+    );
+    if let (Some(session), Some(dir)) = (&mut event_loop.resume, &resume_dir) {
+        session.finish(&mut io::stdout(), by_user, dir);
     }
 
     drop(listener);
@@ -612,19 +719,16 @@ fn detail_pane(args: &DetailArgs) -> Option<DetailPane> {
         }
     };
     let text = |path: &Path| path.to_string_lossy().into_owned();
-    let name = |value: Option<clap::builder::PossibleValue>| {
-        value.map(|value| value.get_name().to_owned())
-    };
     let mut command = vec![
         text(exe),
         "--config".to_owned(),
         text(&args.config_path),
         "--no-prefetch".to_owned(),
     ];
-    if let Some(theme) = name(args.theme_arg.and_then(|arg| arg.to_possible_value())) {
+    if let Some(theme) = arg_name(args.theme_arg.and_then(|arg| arg.to_possible_value())) {
         command.extend(["--theme".to_owned(), theme]);
     }
-    if let Some(palette) = name(args.palette_arg.and_then(|arg| arg.to_possible_value())) {
+    if let Some(palette) = arg_name(args.palette_arg.and_then(|arg| arg.to_possible_value())) {
         command.extend(["--palette".to_owned(), palette]);
     }
     for repo in &args.repos {
@@ -637,6 +741,133 @@ fn detail_pane(args: &DetailArgs) -> Option<DetailPane> {
         split: Some(args.split.clone()),
         ratio: args.ratio,
     })
+}
+
+/// The command line name of a value of `--theme` or `--palette`.
+fn arg_name(value: Option<clap::builder::PossibleValue>) -> Option<String> {
+    value.map(|value| value.get_name().to_owned())
+}
+
+/// The state file of this instance in `dir`: the file of `--resume`
+/// (`arg`) when it is a state file of `dir` for `kind`, else a new file
+/// with a new id.
+fn resume_file(dir: &Path, kind: resume::Kind, arg: Option<&Path>) -> StateFile {
+    if let Some(arg) = arg {
+        if let Some(file) = StateFile::from_arg(dir, kind, arg) {
+            return file;
+        }
+        tracing::warn!(path = %arg.display(), "--resume names no resume state file, chaoshub ignores it");
+    }
+    StateFile::new(dir, kind)
+}
+
+/// The program resume of this instance. `None` when it is not active:
+/// without a valid `OSC7577_TOKEN`, with `[terminal] resume = false`
+/// (then `token` is `None`), without a state directory, or when the
+/// binary is unknown.
+fn resume_session(
+    token: Option<resume::Token>,
+    file: Option<StateFile>,
+    mut args: ResumeArgs,
+    fixed: resume::Fixed,
+) -> Option<resume::Session> {
+    let (token, file) = (token?, file?);
+    let Some(exe) = resume_exe(std::env::current_exe()) else {
+        tracing::warn!("cannot find the chaoshub binary, no program resume");
+        return None;
+    };
+    args.state = file.path().to_path_buf();
+    let command = resume_argv(&exe, &args);
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|dir| dir.to_str().map(str::to_owned));
+    let reporter = resume::Reporter::new(token, command, cwd);
+    Some(resume::Session::new(file, reporter, fixed))
+}
+
+/// The path of the chaoshub binary for the resume command. `None` when
+/// it is unknown or not absolute. A ` (deleted)` suffix goes away: Linux
+/// adds it when the binary changed while chaoshub runs.
+fn resume_exe(exe: io::Result<PathBuf>) -> Option<PathBuf> {
+    let exe = exe.ok()?;
+    let exe = match exe
+        .to_str()
+        .and_then(|text| text.strip_suffix(" (deleted)"))
+    {
+        Some(text) => PathBuf::from(text),
+        None => exe,
+    };
+    exe.is_absolute().then_some(exe)
+}
+
+/// The parts of the resume command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResumeArgs {
+    /// `--config`, when the user gave it.
+    config: Option<PathBuf>,
+    no_prefetch: bool,
+    theme_arg: Option<crate::cli::ThemeArg>,
+    palette_arg: Option<crate::cli::PaletteArg>,
+    /// The `--repo` repos.
+    repos: Vec<String>,
+    /// The state file, for `--resume`.
+    state: PathBuf,
+    /// The pull request of a PR view.
+    pr: Option<PrKey>,
+}
+
+/// The command that starts this instance again: `exe`, the session
+/// flags that the user gave, `--resume` with the state file, and `pr
+/// OWNER/NAME NUMBER` for a PR view. The `--config` path is absolute.
+fn resume_argv(exe: &Path, args: &ResumeArgs) -> Vec<String> {
+    let text = |path: &Path| path.to_string_lossy().into_owned();
+    let mut command = vec![text(exe)];
+    if let Some(path) = &args.config {
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.clone());
+        command.extend(["--config".to_owned(), text(&path)]);
+    }
+    if args.no_prefetch {
+        command.push("--no-prefetch".to_owned());
+    }
+    if let Some(theme) = arg_name(args.theme_arg.and_then(|arg| arg.to_possible_value())) {
+        command.extend(["--theme".to_owned(), theme]);
+    }
+    if let Some(palette) = arg_name(args.palette_arg.and_then(|arg| arg.to_possible_value())) {
+        command.extend(["--palette".to_owned(), palette]);
+    }
+    for repo in &args.repos {
+        command.extend(["--repo".to_owned(), repo.clone()]);
+    }
+    command.extend(["--resume".to_owned(), text(&args.state)]);
+    if let Some(pr) = &args.pr {
+        command.extend([
+            "pr".to_owned(),
+            format!("{}/{}", pr.repo.owner, pr.repo.name),
+            pr.number.to_string(),
+        ]);
+    }
+    command
+}
+
+/// True when the end of the run ends the resume record: only a quit of
+/// the user (`q`, `esc` or `ctrl-c`). A signal, an error or the loss of
+/// every sender keeps the record, so the terminal can resume chaoshub.
+fn ends_record(ok: bool, quitting: bool, signalled: bool) -> bool {
+    ok && quitting && !signalled
+}
+
+/// After a signal: when the program resume is `active`, the quit leaves
+/// the open panes open, so Rex can restore them with the session.
+fn on_signal(runtime: &Runtime, active: bool) {
+    if active {
+        runtime.keep_panes_on_quit();
+    }
+}
+
+/// The stem of the list socket: the instance `id` when the program
+/// resume is active, else the pid.
+fn socket_stem(id: Option<&str>) -> String {
+    id.map_or_else(|| std::process::id().to_string(), str::to_owned)
 }
 
 /// The socket `list-<stem>.sock` of the list process in `dir`, with a
@@ -870,6 +1101,12 @@ struct EventLoop {
     selection: Option<TextSelection>,
     /// The text of the marked cells of the last draw.
     selection_text: String,
+    /// The program resume (OSC 7577). `None` when it is not active.
+    resume: Option<resume::Session>,
+    /// True after `Msg::Signal`: the quit then keeps the resume record.
+    signalled: bool,
+    /// The generation of the last resume state save.
+    synced: Option<u64>,
 }
 
 /// The number of the last drawn frames that the slow frame latch looks
@@ -988,11 +1225,13 @@ impl EventLoop {
             ) {
                 tracing::warn!(%err, "cannot write the terminal status");
             }
+            self.sync_resume();
 
             let redraw = self.drawn != Some(self.app.generation());
             let deadline = wait_deadline(&self.transitions, self.app.busy(), redraw);
             let wait = async { timeout(deadline, rx.recv()).await };
             match self.handle.block_on(wait) {
+                Ok(Some(Msg::Continued)) => self.report_resume(),
                 Ok(Some(msg)) => {
                     if let Some(msg) = self.select(msg) {
                         let msg = with_hit(msg, &self.hits, self.overlay_drawn);
@@ -1102,9 +1341,52 @@ impl EventLoop {
         drop(self.app.take_ui_events());
     }
 
+    /// Starts the program resume after the first frame: the first report
+    /// and the first save. A resumed list adopts the panes of `adopt`, and
+    /// a resumed PR view tells its list the event `attached`.
+    fn start_resume(&mut self, adopt: Vec<PaneResume>, attached: Option<PrViewEvent>) {
+        self.report_resume();
+        self.sync_resume();
+        for cmd in self.app.adopt_panes(adopt) {
+            self.runtime.exec(cmd);
+        }
+        if let Some(event) = attached {
+            self.runtime.exec(Cmd::TellList(event));
+        }
+    }
+
+    /// Writes the resume report with the current time.
+    fn report_resume(&mut self) {
+        if let Some(session) = &mut self.resume
+            && let Err(err) = session.report(&mut io::stdout())
+        {
+            tracing::warn!(%err, "cannot write the resume report");
+        }
+    }
+
+    /// Saves the resume state when the generation moved after the last
+    /// save. The session saves only a changed state.
+    fn sync_resume(&mut self) {
+        let Some(session) = &mut self.resume else {
+            return;
+        };
+        let generation = self.app.generation();
+        if self.synced == Some(generation) {
+            return;
+        }
+        self.synced = Some(generation);
+        if let Err(err) = session.sync(self.app.resume_ui(), self.runtime.pane_handles(DETAIL_ID)) {
+            tracing::warn!(%err, "cannot save the resume state");
+        }
+    }
+
     /// Runs `update` and executes the commands. Without a launcher, a
     /// `Cmd::RunTerminal` waits for `run_foreground`.
     fn update(&mut self, msg: Msg) {
+        if msg == Msg::Signal {
+            self.signalled = true;
+            on_signal(&self.runtime, self.resume.is_some());
+        }
         for cmd in self.app.update(msg) {
             match cmd {
                 Cmd::RunTerminal { id, key, request } if self.settings.launcher.is_none() => {
@@ -1763,16 +2045,22 @@ fn mouse_msg(event: MouseEvent) -> Option<Msg> {
     })
 }
 
-/// Starts the signal thread: SIGTERM and SIGINT become `Msg::Signal`.
-/// Closing the returned handle stops the thread.
+/// Starts the signal thread: SIGTERM and SIGINT become `Msg::Signal`,
+/// and SIGCONT becomes `Msg::Continued`. Closing the returned handle
+/// stops the thread.
 fn spawn_signals(tx: mpsc::Sender<Msg>) -> io::Result<signal_hook::iterator::Handle> {
-    let mut signals = Signals::new([SIGTERM, SIGINT])?;
+    let mut signals = Signals::new([SIGTERM, SIGINT, SIGCONT])?;
     let handle = signals.handle();
     thread::Builder::new()
         .name("signals".into())
         .spawn(move || {
-            for _ in signals.forever() {
-                if tx.blocking_send(Msg::Signal).is_err() {
+            for signal in signals.forever() {
+                let msg = if signal == SIGCONT {
+                    Msg::Continued
+                } else {
+                    Msg::Signal
+                };
+                if tx.blocking_send(msg).is_err() {
                     break;
                 }
             }
@@ -1827,6 +2115,197 @@ mod tests {
         assert!(!rx.has_changed().unwrap());
         label.set(Some("#7 Fix the merge · merged"));
         assert_eq!(*rx.borrow_and_update(), "#7 Fix the merge · merged");
+    }
+
+    fn resume_args() -> ResumeArgs {
+        ResumeArgs {
+            config: None,
+            no_prefetch: false,
+            theme_arg: None,
+            palette_arg: None,
+            repos: Vec::new(),
+            state: PathBuf::from("/s/resume/list-0123456789abcdef.json"),
+            pr: None,
+        }
+    }
+
+    #[test]
+    fn the_resume_argv_carries_the_session_flags_and_the_state_file() {
+        let exe = Path::new("/usr/bin/chaoshub");
+        assert_eq!(
+            resume_argv(exe, &resume_args()),
+            [
+                "/usr/bin/chaoshub",
+                "--resume",
+                "/s/resume/list-0123456789abcdef.json"
+            ]
+        );
+        let args = ResumeArgs {
+            config: Some(PathBuf::from("c.toml")),
+            no_prefetch: true,
+            theme_arg: Some(crate::cli::ThemeArg::Punk),
+            palette_arg: Some(crate::cli::PaletteArg::Ansi16),
+            repos: vec!["a/b".into(), "c/d".into()],
+            ..resume_args()
+        };
+        let config = std::env::current_dir()
+            .unwrap()
+            .join("c.toml")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            resume_argv(exe, &args),
+            [
+                "/usr/bin/chaoshub",
+                "--config",
+                &config,
+                "--no-prefetch",
+                "--theme",
+                "punk",
+                "--palette",
+                "ansi16",
+                "--repo",
+                "a/b",
+                "--repo",
+                "c/d",
+                "--resume",
+                "/s/resume/list-0123456789abcdef.json",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_resume_argv_of_a_pr_view_ends_with_pr() {
+        let args = ResumeArgs {
+            config: Some(PathBuf::from("/c.toml")),
+            no_prefetch: true,
+            state: PathBuf::from("/s/resume/pr-0123456789abcdef.json"),
+            pr: Some(PrKey {
+                repo: RepoKey {
+                    owner: "chaosteil".into(),
+                    name: "chaoshub".into(),
+                },
+                number: 7,
+            }),
+            ..resume_args()
+        };
+        let command = resume_argv(Path::new("/usr/bin/chaoshub"), &args);
+        assert_eq!(
+            command,
+            [
+                "/usr/bin/chaoshub",
+                "--config",
+                "/c.toml",
+                "--no-prefetch",
+                "--resume",
+                "/s/resume/pr-0123456789abcdef.json",
+                "pr",
+                "chaosteil/chaoshub",
+                "7",
+            ]
+        );
+        let cli = <Cli as clap::Parser>::try_parse_from(&command).unwrap();
+        assert_eq!(
+            cli.resume,
+            Some(PathBuf::from("/s/resume/pr-0123456789abcdef.json"))
+        );
+        assert_eq!(
+            cli.command,
+            Some(Command::Pr {
+                pr: "chaosteil/chaoshub".into(),
+                number: Some(7),
+            })
+        );
+    }
+
+    #[test]
+    fn resume_exe_strips_a_deleted_suffix_and_needs_an_absolute_path() {
+        assert_eq!(
+            resume_exe(Ok(PathBuf::from("/nix/store/x/bin/chaoshub"))),
+            Some(PathBuf::from("/nix/store/x/bin/chaoshub"))
+        );
+        assert_eq!(
+            resume_exe(Ok(PathBuf::from("/usr/bin/chaoshub (deleted)"))),
+            Some(PathBuf::from("/usr/bin/chaoshub"))
+        );
+        assert_eq!(resume_exe(Ok(PathBuf::from("bin/chaoshub"))), None);
+        assert_eq!(resume_exe(Err(io::Error::other("gone"))), None);
+    }
+
+    #[test]
+    fn only_a_user_quit_ends_the_record() {
+        assert!(ends_record(true, true, false), "q, esc or ctrl-c");
+        assert!(!ends_record(true, true, true), "SIGTERM or SIGINT");
+        assert!(!ends_record(false, true, false), "an error");
+        assert!(!ends_record(true, false, false), "every sender is gone");
+        assert!(!ends_record(false, false, true));
+    }
+
+    #[test]
+    fn a_signal_keeps_the_panes_of_an_active_session() {
+        let tokio = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let runtime = || {
+            let (store_tx, _store_rx) = mpsc::channel(4);
+            let (senders, _channels) = channels(
+                StoreHandle::new(store_tx),
+                Interest {
+                    tab: "mine",
+                    scope: Some(Scope::Mine),
+                    wants_local: true,
+                    selected: None,
+                    visible: Vec::new(),
+                    show_hidden: false,
+                    ci_watch: Vec::new(),
+                },
+                Session {
+                    login: None,
+                    repos: Vec::new(),
+                },
+            );
+            let settings = Settings {
+                config: Config::default(),
+                repos: Vec::new(),
+                launcher: None,
+            };
+            let client =
+                GithubClient::new(TokenSource::command("true", &[]), "http://127.0.0.1:9").unwrap();
+            let env = action_env(
+                &settings,
+                Arc::new(client),
+                RepoLocks::default(),
+                mpsc::channel(4).0,
+            );
+            Runtime::new(tokio.handle().clone(), senders, env, true)
+        };
+        let inactive = runtime();
+        on_signal(&inactive, false);
+        assert!(
+            inactive.closes_panes_on_quit(),
+            "no resume: the quit closes"
+        );
+        let active = runtime();
+        on_signal(&active, true);
+        assert!(!active.closes_panes_on_quit(), "Rex restores the panes");
+    }
+
+    #[test]
+    fn the_list_socket_uses_the_instance_id_when_resume_is_active() {
+        assert_eq!(socket_stem(Some("0123456789abcdef")), "0123456789abcdef");
+        assert_eq!(socket_stem(None), std::process::id().to_string());
+        let dir = tempfile::tempdir().unwrap();
+        let listener = list_listener(
+            Some(dir.path().to_path_buf()),
+            &socket_stem(Some("0123456789abcdef")),
+            mpsc::channel(1).0,
+        )
+        .unwrap();
+        assert_eq!(
+            listener.path(),
+            dir.path().join("list-0123456789abcdef.sock")
+        );
     }
 
     #[test]

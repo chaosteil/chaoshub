@@ -175,14 +175,12 @@ impl Runtime {
 
     /// Makes the next quit leave the open panes open, so Rex can restore
     /// them with the session. `Cmd::CancelAction` still closes a pane.
-    #[allow(dead_code, reason = "the resume wiring in run uses it")]
     pub(crate) fn keep_panes_on_quit(&self) {
         self.close_panes_on_quit.store(false, Ordering::SeqCst);
     }
 
     /// The handles of the open panes of the action `id`, for the resume
     /// state.
-    #[allow(dead_code, reason = "the resume wiring in run uses it")]
     pub(crate) fn pane_handles(&self, id: &str) -> Vec<PaneResume> {
         lock(&self.panes)
             .iter()
@@ -193,6 +191,12 @@ impl Runtime {
                 label: handle.label.clone(),
             })
             .collect()
+    }
+
+    /// True when the next quit closes the open panes.
+    #[cfg(test)]
+    pub(crate) fn closes_panes_on_quit(&self) -> bool {
+        self.close_panes_on_quit.load(Ordering::SeqCst)
     }
 
     /// The root token. Quit cancels it.

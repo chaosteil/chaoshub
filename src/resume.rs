@@ -7,7 +7,6 @@
 //! for a PR view. The file is JSON, for example
 //! `{"v":1,"kind":"list",...}`. The directory has mode 0700 and the file
 //! mode 0600. A save writes a `.tmp` file and renames it.
-#![allow(dead_code, reason = "the resume wiring in run uses it")]
 
 use std::ffi::OsString;
 use std::fs;

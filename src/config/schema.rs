@@ -460,7 +460,6 @@ pub(crate) struct TerminalConfig {
     pub mouse: bool,
     /// OSC 7577, the program resume. chaoshub reports only when the
     /// terminal sets `OSC7577_TOKEN`.
-    #[allow(dead_code, reason = "the resume wiring in run uses it")]
     pub resume: bool,
 }
 

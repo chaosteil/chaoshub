@@ -766,6 +766,9 @@ pub(crate) enum Msg {
     Tick,
     TransitionsDone,
     Signal,
+    /// The process continued after a stop (SIGCONT). The signal thread
+    /// sends it.
+    Continued,
     StartupDone {
         login: String,
         cwd_repo: Option<Repo>,

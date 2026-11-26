@@ -142,7 +142,6 @@ pub(crate) fn clipboard(text: &str) -> Vec<u8> {
 }
 
 /// The command of an OSC 7577 report.
-#[allow(dead_code, reason = "the resume wiring in run uses it")]
 pub(crate) enum ResumeBody<'a> {
     /// The command that starts the program again, and its directory.
     Argv {
@@ -155,10 +154,8 @@ pub(crate) enum ResumeBody<'a> {
 
 /// The maximum length of an OSC 7577 report, in bytes. The terminal
 /// always accepts a report of this length.
-#[allow(dead_code, reason = "the resume wiring in run uses it")]
 pub(crate) const RESUME_MAX_BYTES: usize = 2048;
 /// The maximum number of `argv` elements of an OSC 7577 report.
-#[allow(dead_code, reason = "the resume wiring in run uses it")]
 pub(crate) const RESUME_MAX_ARGV: usize = 64;
 
 /// The OSC 7577 sequence that reports the resume command of the process
@@ -167,7 +164,6 @@ pub(crate) const RESUME_MAX_ARGV: usize = 64;
 /// report: an empty or too long `argv`, an `argv[0]` that is not a bare
 /// name or an absolute path, a control character, a `cwd` that is not
 /// absolute, or a report of more than `RESUME_MAX_BYTES` bytes.
-#[allow(dead_code, reason = "the resume wiring in run uses it")]
 pub(crate) fn program_resume(
     pid: u32,
     time: u64,

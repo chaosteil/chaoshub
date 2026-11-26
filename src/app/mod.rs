@@ -38,6 +38,7 @@ use crate::app::panes::PANES;
 pub(crate) use crate::app::state::DetailPane;
 use crate::app::state::{AppState, OverlayState};
 use crate::app::tabs::TABS;
+pub(crate) use crate::app::update::DETAIL_ID;
 use crate::bus::{Cmd, Interest, Msg, Size, UiEvent};
 use crate::config::schema::{ConversationOrder, FiltersConfig};
 use crate::domain::agent::Backend;
@@ -195,7 +196,6 @@ impl App {
 
     /// Restores the UI state of a resumed list: the active tab, and the
     /// filter and the selection of each tab.
-    #[allow(dead_code, reason = "the resume wiring in run uses it")]
     pub(crate) fn with_resume(mut self, list: &ListResume) -> Self {
         update::restore(&mut self.state, list);
         self
@@ -203,13 +203,11 @@ impl App {
 
     /// Adopts the PR view panes of a resumed list, and returns the
     /// commands that watch them.
-    #[allow(dead_code, reason = "the resume wiring in run uses it")]
     pub(crate) fn adopt_panes(&mut self, panes: Vec<PaneResume>) -> Vec<Cmd> {
         update::adopt(&mut self.state, panes)
     }
 
     /// Shows the toast `resumed session`, after a resume.
-    #[allow(dead_code, reason = "the resume wiring in run uses it")]
     pub(crate) fn resumed(mut self) -> Self {
         self.state.toast("resumed session");
         self
@@ -218,7 +216,6 @@ impl App {
     /// The UI part of the resume state: in the list mode, the active tab
     /// and the selection and the filter of each tab; in the pinned mode,
     /// the active pane of the popup.
-    #[allow(dead_code, reason = "the resume wiring in run uses it")]
     pub(crate) fn resume_ui(&self) -> UiResume {
         if self.state.ui.pinned.is_some() {
             let pane = match self.state.ui.overlays.first().map(|o| &o.state) {

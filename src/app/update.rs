@@ -149,6 +149,7 @@ fn dispatch(
         Msg::Tick => tick(state, tabs, Utc::now()),
         Msg::TransitionsDone => transitions_done(state),
         Msg::Signal => quit(),
+        Msg::Continued => Vec::new(),
         Msg::StartupDone { login, cwd_repo } => {
             let mut cmds = startup_done(state, tabs, login, cwd_repo);
             cmds.extend(after_change(state, tabs));
@@ -4407,6 +4408,14 @@ mod tests {
     fn a_signal_quits() {
         let (tabs, mut state) = setup(None);
         assert_eq!(run(&mut state, &tabs, Msg::Signal), vec![Cmd::Quit]);
+    }
+
+    #[test]
+    fn continued_changes_nothing() {
+        let (tabs, mut state) = setup(None);
+        let generation = state.generation;
+        assert_eq!(run(&mut state, &tabs, Msg::Continued), vec![]);
+        assert_eq!(state.generation, generation);
     }
 
     #[test]
