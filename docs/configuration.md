@@ -327,13 +327,15 @@ directly in the list and in the PR view (see
 
 ## `[terminal]`
 
-The terminal title, the status sequences and the mouse.
+The terminal title, the status sequences, the program resume and the
+mouse.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `title` | detected | Sets the terminal title with the count of ready PRs to review, or the PR overview in the standalone PR view, and the current activity (see [Terminal title](rex.md#terminal-title)). |
 | `program_status` | detected | Writes OSC 7501, the program status (see [Terminal status](rex.md#terminal-status-osc-7501-and-osc-94)). |
 | `progress` | detected | Writes OSC 9;4, the progress bar. |
+| `resume` | `true` | Reports the resume command with OSC 7577 when the terminal sets `OSC7577_TOKEN` (see [Program resume](rex.md#program-resume-osc-7577)). `false` turns it off. |
 | `mouse` | `true` | Reads the mouse. `false` leaves the mouse to the terminal, so the terminal selects the text. chaoshub selects text itself (see [Mouse](usage.md#mouse)), so `false` is only necessary to select across panes. |
 
 When `title`, `program_status` or `progress` is not set, chaoshub writes

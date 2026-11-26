@@ -57,7 +57,8 @@ The confirm popup of a merge of the whole stack.
 - Rex and Ghostty: inside Rex, the PR view and codeview open in panes
   beside the list, and questions can open in the Rex palette. Rex and
   Ghostty tabs show what chaoshub does, and a notice tells you when new
-  PRs are ready for review.
+  PRs are ready for review. Rex resumes the list and its PR view panes
+  after a restart.
 - A fast start: a local cache shows the last lists at once. chaoshub
   then syncs with GitHub in the background.
 

@@ -67,6 +67,7 @@ Command line options:
 | `--no-prefetch` | Turns off the prefetch of PR refs for this session. |
 | `--theme STYLE` | Uses `punk`, `grunge` or `plain` for this session, in place of `[theme] style`. |
 | `--palette NAME` | Uses `pierre` or `ansi16` for this session, in place of `[theme] palette`. |
+| `--resume PATH` | The terminal gives it to a resumed chaoshub. Do not use it yourself. See [Program resume](rex.md#program-resume-osc-7577). |
 | `cache clear` | Deletes the cache file. The next start syncs from GitHub again. |
 | `list [--json] [--all]` | Prints the PRs of the tabs from the cache, and makes no GitHub call. See [List the PRs from a script](#list-the-prs-from-a-script). |
 | `pr OWNER/NAME NUMBER` | Shows one PR and nothing else: the panes of the PR view. A PR that is not in the cache loads from GitHub. `q` or `esc` quits. The PR view pane inside Rex runs this command. |
@@ -410,6 +411,7 @@ one. These keys show a toast:
 | `v` (`review`) | `opening #142 in codeview`, while the Rex pane starts |
 | `enter` with a detail pane, or `space` then `u` (`open_pr_url`) inside Rex | `opening #142 in a pane`, while the Rex pane starts |
 | `R` in the PR view | `refreshing #142` |
+| A start after a terminal restart (see [Program resume](rex.md#program-resume-osc-7577)) | `resumed session` |
 
 When the pane of the PR is open already, the key moves the focus
 to the pane, and no toast shows. A copy to the clipboard shows the same
@@ -487,7 +489,8 @@ With `--json`, the command prints one JSON object on one line:
 | Cache (SQLite) | `~/.cache/chaoshub/chaoshub.db` (`$XDG_CACHE_HOME/chaoshub/chaoshub.db`) |
 | Log | `~/.local/state/chaoshub/chaoshub.log` (`$XDG_STATE_HOME/chaoshub/chaoshub.log`) |
 | Agent results | `~/.local/state/chaoshub/agent/<owner>/<repo>/<n>/` (see [The result files](review-agents.md#the-result-files)) |
-| List socket | `$XDG_RUNTIME_DIR/chaoshub/list-<pid>.sock`, else `~/.local/state/chaoshub/ipc/list-<pid>.sock` (see [How the PR view talks to the list](rex.md#how-the-pr-view-talks-to-the-list)) |
+| Resume state | `~/.local/state/chaoshub/resume/list-<id>.json` and `pr-<id>.json` (see [Program resume](rex.md#program-resume-osc-7577)) |
+| List socket | `$XDG_RUNTIME_DIR/chaoshub/list-<id>.sock` or `list-<pid>.sock`, else the same name in `~/.local/state/chaoshub/ipc/` (see [How the PR view talks to the list](rex.md#how-the-pr-view-talks-to-the-list)) |
 
 chaoshub uses these XDG paths on macOS too, not `~/Library`.
 

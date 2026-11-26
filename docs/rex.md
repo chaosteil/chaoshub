@@ -13,6 +13,7 @@ same terminal, and the PR view opens in the sidebar.
 - [Terminal title](#terminal-title)
 - [Terminal status: OSC 7501 and OSC 9;4](#terminal-status-osc-7501-and-osc-94)
 - [Notice of new PRs](#notice-of-new-prs)
+- [Program resume: OSC 7577](#program-resume-osc-7577)
 
 ## What `v` runs
 
@@ -228,11 +229,15 @@ the list process about its changes through a local socket, so the list
 does not wait for the next sync.
 
 - At start, the list opens a Unix datagram socket, `list-<pid>.sock`.
-  The socket is in `$XDG_RUNTIME_DIR/chaoshub`, or in
-  `~/.local/state/chaoshub/ipc` when `XDG_RUNTIME_DIR` is not set (for
-  example on macOS).
+  When the program resume is on (see
+  [Program resume](#program-resume-osc-7577)), the name is
+  `list-<id>.sock`, with the instance id of the list, so a resumed PR
+  view finds the resumed list. The socket is in
+  `$XDG_RUNTIME_DIR/chaoshub`, or in `~/.local/state/chaoshub/ipc` when
+  `XDG_RUNTIME_DIR` is not set (for example on macOS).
 - The list gives the path to each PR view that it starts, in the env
-  `CHAOSHUB_LIST_SOCKET`.
+  `CHAOSHUB_LIST_SOCKET`. With the program resume, it also gives its
+  instance id in the env `CHAOSHUB_LIST_ID`.
 - For each event, the PR view sends one small JSON message, for
   example `{"v":2,"event":"pr_changed","pr":{...}}`. A message of
   another version is dropped.
@@ -246,6 +251,7 @@ The PR view sends these events:
 | `pending_started` | The PR view starts an action that changes GitHub, for example an approval, a merge or a reaction. The message holds the action id and its parts (see [Changes on their way to GitHub](actions.md#changes-on-their-way-to-github)). | The list keeps the parts with the same rules as its own: the rows pulse, and an approval hides the PR from the Review tab at once. |
 | `pending_done` | That action ends. `ok` is false when it failed or was cancelled. | A failure ends the parts at once, so an approved PR comes back. A success keeps the parts until GitHub shows the change. |
 | `pr_changed` | A review, a reply, a merge, a close, a draft change or a rerun of the checks succeeds, or a codeview review pane ends. | The list reads the PR from GitHub again. |
+| `attached` | A resumed PR view starts. The message holds the PR and the Rex block of the PR view (`REX_BLOCK`). | When the list has no pane for the PR, it adopts the pane: `enter` focuses it, and a quit closes it. |
 
 If the pane of the PR view ends before the end of an action comes, the
 action ends as a success at that time, and the GitHub data or the time
@@ -468,3 +474,93 @@ set `desktop = false`.
 chaoshub does not support tmux for the notice yet. tmux does not pass
 OSC 7501 and OSC 777 to the terminal, and chaoshub does not wrap the
 sequences for tmux. Inside tmux, the notice does not show.
+
+## Program resume: OSC 7577
+
+A terminal with OSC 7577 (program resume) can start chaoshub again
+after the terminal restarts. Rex does this. The terminal sets the env
+`OSC7577_TOKEN`. chaoshub then reports the command that starts it again,
+and the terminal runs this command after a restart. chaoshub comes back
+with its state: the list with its PR view panes, or the PR view.
+
+chaoshub reports only when all of these are true:
+
+- `[terminal] resume` is `true` (the default, see
+  [Configuration](configuration.md#terminal)).
+- `OSC7577_TOKEN` has 22 to 64 characters of `A-Z`, `a-z`, `0-9`, `_`
+  and `-`.
+- The state directory is known.
+
+The report is one sequence:
+
+```text
+ESC ] 7577 ; pid=<pid>:time=<seconds>:argv=<base64>,<base64>,...:cwd=<base64>:mac=<hex> ESC \
+```
+
+- `argv` is the command, with each argument in base64. The first
+  argument is the absolute path of the chaoshub binary. Then come the
+  options that you gave (`--config` as an absolute path,
+  `--no-prefetch`, `--theme`, `--palette` and `--repo`), then
+  `--resume <state file>`. A PR view ends with `pr OWNER/NAME N`.
+- `cwd` is the directory in which chaoshub started, in base64.
+- `mac` is the SHA-256, in hex, of the text before `:mac=`, a `:` and
+  the token. The terminal uses it to check that the report comes from
+  chaoshub.
+
+chaoshub sends the report at start, and again after a stop and a
+continue (SIGCONT). The command does not change while chaoshub runs. When
+the report is longer than 2048 bytes, chaoshub does not send it. If an
+earlier report shows, chaoshub sends `clear=1` in place of `argv`.
+
+chaoshub never gives `OSC7577_TOKEN` to the programs that it starts, for
+example git, jj, rex, the editor, the review agents or the browser.
+
+### When the record ends
+
+The terminal keeps the last report until chaoshub sends `clear=1`.
+
+- A quit with `q`, `esc` or `ctrl-c` sends `clear=1` and deletes the
+  state file. A list also deletes the state files of its PR views,
+  because it closes their panes.
+- A SIGTERM, a SIGINT from another program, a SIGHUP, a crash or a lost
+  terminal sends nothing. The record and the state file stay, so the
+  terminal can start chaoshub again.
+- After a SIGTERM or a SIGINT, the list leaves its PR view panes open
+  while the program resume is on, so Rex can restore them. Without the
+  program resume, the list closes the panes as before.
+
+### The state files
+
+Each chaoshub has an instance id of 16 hex digits and a state file:
+
+- `~/.local/state/chaoshub/resume/list-<id>.json` for a list.
+- `~/.local/state/chaoshub/resume/pr-<id>.json` for a PR view.
+
+The file is JSON, for example `{"v":1,"kind":"list",...}`. A list keeps
+its active tab, the selected PR and the filter of each tab, and its PR
+view panes with their Rex blocks. A PR view keeps its PR, its active
+pane, its list and its Rex block. chaoshub writes the file again when
+the state changes. The directory has mode 0700, and the file has mode
+0600.
+
+chaoshub reads `--resume` only from a file in the `resume` directory
+with a `list-<id>.json` or `pr-<id>.json` name. It ignores any other
+path. At each start, chaoshub deletes the state files that it did not
+write or read in the last 30 days.
+
+### How a resumed list adopts its PR view panes
+
+Rex restores the PR view panes, and each PR view starts again. The
+resumed list finds these panes in three places:
+
+1. The panes in the state file of the list.
+2. The state files of the PR views of the list. Each PR view writes its
+   current Rex block at each start, so this block wins.
+3. The `attached` event, which a resumed PR view sends once at start
+   (see [How the PR view talks to the list](#how-the-pr-view-talks-to-the-list)).
+
+The list checks each pane with `rex block inspect`. It then watches the
+pane as a pane that it opened: `enter` focuses it, a quit closes it,
+and it opens no second pane for the PR.
+
+A resumed list or PR view shows the toast `resumed session`.

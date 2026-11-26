@@ -12,7 +12,7 @@ describe every feature.
 | [Actions and reviews](actions.md) | The actions and their keys, the stack merge, the Review popup for codeview comments, and the pulse of changes on their way to GitHub. |
 | [Configuration](configuration.md) | Every key of `config.toml`. |
 | [Review agents](review-agents.md) | The AI review with Open Code Review or pr-agent: the setup, the models, the Agent pane and the result files. |
-| [Rex, Ghostty and the terminal](rex.md) | What chaoshub runs for codeview and Rex, the Rex palette, the terminal title, the terminal status and the notice of new PRs. |
+| [Rex, Ghostty and the terminal](rex.md) | What chaoshub runs for codeview and Rex, the Rex palette, the terminal title, the terminal status, the notice of new PRs and the program resume. |
 | [Development](development.md) | The checks, how to add an action, a tab or a pane, the benchmark and the screenshots. |
 
 The words of these pages:
