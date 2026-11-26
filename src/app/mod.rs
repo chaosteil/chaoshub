@@ -32,16 +32,19 @@ use chrono::{DateTime, Utc};
 pub(crate) use crate::app::frame::SPINNER_FRAME;
 use crate::app::keymap::Keymap;
 use crate::app::layout::Areas;
-use crate::app::models::FrameModel;
+use crate::app::models::{FrameModel, RowItem};
 pub(crate) use crate::app::notify::{Notice, NotifySettings};
-use crate::app::state::AppState;
+use crate::app::panes::PANES;
 pub(crate) use crate::app::state::DetailPane;
+use crate::app::state::{AppState, OverlayState};
+use crate::app::tabs::TABS;
 use crate::bus::{Cmd, Interest, Msg, Size, UiEvent};
 use crate::config::schema::{ConversationOrder, FiltersConfig};
 use crate::domain::agent::Backend;
 use crate::domain::keys::PrKey;
 use crate::domain::pr_url::FirstPane;
 use crate::domain::repo::Repo;
+use crate::domain::resume::{ListResume, TabResume, UiResume};
 use crate::store::Snapshot;
 
 /// The app: the state and the message handler. `run` drives it.
@@ -178,9 +181,63 @@ impl App {
     /// popup of `key` is in place from the first frame, without a slide,
     /// on the pane `pane`, and the interest is the one of the pinned pull
     /// request.
-    pub(crate) fn pinned(mut self, key: PrKey, pane: FirstPane) -> Self {
+    pub(crate) fn pinned(self, key: PrKey, pane: FirstPane) -> Self {
+        self.pinned_on(key, pane.pane_id())
+    }
+
+    /// Pins the pull request `key` on the pane with the id `pane`, as
+    /// `pinned` does. A resumed PR view gives back its last pane, which
+    /// can be a pane that no url selects, for example `agent`.
+    pub(crate) fn pinned_on(mut self, key: PrKey, pane: &str) -> Self {
         update::pin(&mut self.state, key, pane);
         self
+    }
+
+    /// Restores the UI state of a resumed list: the active tab, and the
+    /// filter and the selection of each tab.
+    #[allow(dead_code, reason = "the resume wiring in run uses it")]
+    pub(crate) fn with_resume(mut self, list: &ListResume) -> Self {
+        update::restore(&mut self.state, list);
+        self
+    }
+
+    /// Shows the toast `resumed session`, after a resume.
+    #[allow(dead_code, reason = "the resume wiring in run uses it")]
+    pub(crate) fn resumed(mut self) -> Self {
+        self.state.toast("resumed session");
+        self
+    }
+
+    /// The UI part of the resume state: in the list mode, the active tab
+    /// and the selection and the filter of each tab; in the pinned mode,
+    /// the active pane of the popup.
+    #[allow(dead_code, reason = "the resume wiring in run uses it")]
+    pub(crate) fn resume_ui(&self) -> UiResume {
+        if self.state.ui.pinned.is_some() {
+            let pane = match self.state.ui.overlays.first().map(|o| &o.state) {
+                Some(OverlayState::Popup(popup)) => PANES[popup.active].id(),
+                _ => FirstPane::Description.pane_id(),
+            };
+            return UiResume::PrView {
+                pane: pane.to_owned(),
+            };
+        }
+        let tabs = TABS
+            .iter()
+            .zip(&self.state.ui.tabs)
+            .map(|(tab, ts)| TabResume {
+                id: tab.id().to_owned(),
+                selected: match &ts.selected {
+                    Some(RowItem::Pr(pr)) => Some(pr.key.clone()),
+                    _ => None,
+                },
+                filter: ts.filter.clone(),
+            })
+            .collect();
+        UiResume::List {
+            tab: TABS[self.state.ui.active].id().to_owned(),
+            tabs,
+        }
     }
 
     /// Applies one message and returns the commands to execute.
@@ -241,7 +298,6 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::models::RowItem;
     use crate::app::testdata;
     use crate::bus::Scope;
     use crate::domain::test_time;
@@ -342,5 +398,66 @@ mod tests {
             assert_eq!(config.filters.matches(&pr, now), included, "{created:?}");
             assert!(FiltersConfig::default().matches(&pr, now));
         }
+    }
+
+    fn mine_app() -> App {
+        App::new(
+            Size {
+                width: 100,
+                height: 30,
+            },
+            Keymap::default(),
+            true,
+            testdata::mine_snapshot(),
+            Vec::new(),
+            test_time(),
+        )
+    }
+
+    #[test]
+    fn a_resumed_app_shows_a_toast() {
+        let mut app = mine_app().resumed();
+        assert_eq!(
+            app.frame().toast.as_ref().map(|toast| toast.text.as_str()),
+            Some("resumed session")
+        );
+    }
+
+    #[test]
+    fn resume_ui_reads_the_tab_selection_filter_and_pane() {
+        let key = testdata::pr_key("chaoshub", 102);
+        let app = mine_app().with_resume(&ListResume {
+            tab: "review".into(),
+            tabs: vec![
+                TabResume {
+                    id: "mine".into(),
+                    selected: Some(key.clone()),
+                    filter: "fix".into(),
+                },
+                TabResume {
+                    id: "review".into(),
+                    selected: None,
+                    filter: String::new(),
+                },
+            ],
+            panes: Vec::new(),
+        });
+        let UiResume::List { tab, tabs } = app.resume_ui() else {
+            panic!("not a list");
+        };
+        assert_eq!(tab, "review");
+        let ids: Vec<&str> = tabs.iter().map(|tab| tab.id.as_str()).collect();
+        assert_eq!(ids, ["mine", "review", "team"]);
+        assert_eq!(tabs[0].selected, Some(key.clone()));
+        assert_eq!(tabs[0].filter, "fix");
+        assert_eq!(tabs[1].filter, "");
+
+        let app = mine_app().pinned_on(key, "files");
+        assert_eq!(
+            app.resume_ui(),
+            UiResume::PrView {
+                pane: "files".into()
+            }
+        );
     }
 }

@@ -53,8 +53,9 @@ use crate::domain::local::LocalState;
 use crate::domain::observed::{Observed, apply_newer};
 use crate::domain::plural;
 use crate::domain::pr::{CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest};
-use crate::domain::pr_url::{self, FirstPane, PrUrl};
+use crate::domain::pr_url::{self, PrUrl};
 use crate::domain::repo::Repo;
+use crate::domain::resume::ListResume;
 
 /// Applies one message to the state, with the tabs of `TABS`.
 pub(crate) fn update(state: &mut AppState, keymap: &Keymap, msg: Msg) -> Vec<Cmd> {
@@ -2969,17 +2970,49 @@ pub(crate) fn start(state: &mut AppState) {
     after_change(state, &TABS);
 }
 
+/// Restores the UI state of a resumed list: the active tab, and the
+/// filter and the selected pull request of each tab. An unknown tab id
+/// keeps the current tab. A pull request that is not in the cache gets a
+/// ref with its key only, because the cursor compares the keys only.
+pub(crate) fn restore(state: &mut AppState, list: &ListResume) {
+    if let Some(active) = TABS.iter().position(|tab| tab.id() == list.tab) {
+        state.ui.active = active;
+    }
+    for saved in &list.tabs {
+        let Some(index) = TABS.iter().position(|tab| tab.id() == saved.id) else {
+            continue;
+        };
+        let selected = saved.selected.as_ref().map(|key| {
+            state.data.prs.get(key).map_or_else(
+                || PrRef {
+                    key: key.clone(),
+                    node_id: String::new(),
+                    head_oid: String::new(),
+                    base_ref: String::new(),
+                    base_oid: String::new(),
+                },
+                pr_ref,
+            )
+        });
+        let ts = &mut state.ui.tabs[index];
+        ts.filter.clone_from(&saved.filter);
+        if let Some(pr) = selected {
+            ts.selected = Some(RowItem::Pr(pr));
+        }
+    }
+    state.bump();
+    start(state);
+}
+
 /// Pins the pull request `key`: it sets `UiState.pinned`, pushes the
-/// popup of `key` on the pane `pane` without a `UiEvent` (the popup is in
-/// place from the first frame), and runs `start` again, so the interest
-/// is the one of the pinned pull request.
-pub(crate) fn pin(state: &mut AppState, key: PrKey, pane: FirstPane) {
+/// popup of `key` on the pane with the id `pane` without a `UiEvent`
+/// (the popup is in place from the first frame), and runs `start` again,
+/// so the interest is the one of the pinned pull request. An unknown
+/// pane id opens the first pane.
+pub(crate) fn pin(state: &mut AppState, key: PrKey, pane: &str) {
     state.ui.pinned = Some(key.clone());
     let panes = init_states(&PANES, pr_target(&state.data, &key).as_ref());
-    let active = PANES
-        .iter()
-        .position(|p| p.id() == pane.pane_id())
-        .unwrap_or(0);
+    let active = PANES.iter().position(|p| p.id() == pane).unwrap_or(0);
     state.ui.overlays.push(Overlay {
         kind: OverlayKind::Popup,
         closing: false,
@@ -4252,6 +4285,8 @@ mod tests {
     use crate::app::tabs::fake::FakeTab;
     use crate::app::testdata;
     use crate::bus::{HighlightReq, Interest, PaletteAsk, RateInfo, ReplyTo, Session};
+    use crate::domain::pr_url::FirstPane;
+    use crate::domain::resume::TabResume;
     use crate::domain::test_time;
 
     const SIZE: Size = Size {
@@ -8373,7 +8408,7 @@ mod tests {
         pin(
             &mut state,
             testdata::pr_key("chaoshub", 103),
-            FirstPane::Description,
+            FirstPane::Description.pane_id(),
         );
         let stack = PANES.iter().position(|pane| pane.id() == "stack").unwrap();
         let Some(OverlayState::Popup(popup)) = state.ui.overlays.first().map(|o| &o.state) else {
@@ -9114,7 +9149,7 @@ mod tests {
         state.load(testdata::mine_snapshot(), repos);
         state.data.session.login = Some("chaosteil".into());
         state.data.now = test_time() + TimeDelta::minutes(5);
-        pin(&mut state, key, FirstPane::Description);
+        pin(&mut state, key, FirstPane::Description.pane_id());
         state
     }
 
@@ -9144,6 +9179,85 @@ mod tests {
     }
 
     #[test]
+    fn pin_on_an_agent_pane_opens_that_pane() {
+        let mut state = AppState::new(SIZE);
+        state.load(testdata::mine_snapshot(), Vec::new());
+        pin(&mut state, testdata::pr_key("chaoshub", 101), "agent");
+        let Some(OverlayState::Popup(popup)) = state.ui.overlays.last().map(|o| &o.state) else {
+            panic!("no popup");
+        };
+        assert_eq!(PANES[popup.active].id(), "agent");
+        assert_eq!(state.ui.pinned, Some(testdata::pr_key("chaoshub", 101)));
+    }
+
+    fn tab_resume(id: &str, selected: Option<PrKey>, filter: &str) -> TabResume {
+        TabResume {
+            id: id.into(),
+            selected,
+            filter: filter.into(),
+        }
+    }
+
+    #[test]
+    fn restore_sets_the_tab_the_filter_and_the_selection() {
+        let mut state = mine_state(20);
+        let mine = TABS.iter().position(|tab| tab.id() == "mine").unwrap();
+        let review = TABS.iter().position(|tab| tab.id() == "review").unwrap();
+        state.ui.active = review;
+        let key = testdata::pr_key("chaoshub", 102);
+        restore(
+            &mut state,
+            &ListResume {
+                tab: "mine".into(),
+                tabs: vec![
+                    tab_resume("mine", Some(key.clone()), ""),
+                    tab_resume("review", None, "fix"),
+                ],
+                panes: Vec::new(),
+            },
+        );
+        assert_eq!(state.ui.active, mine);
+        assert_eq!(state.ui.tabs[review].filter, "fix");
+        assert!(matches!(
+            &state.ui.tabs[mine].selected,
+            Some(RowItem::Pr(pr)) if pr.key == key && !pr.head_oid.is_empty()
+        ));
+        assert_eq!(
+            state
+                .ui
+                .interest
+                .as_ref()
+                .unwrap()
+                .selected
+                .as_ref()
+                .unwrap()
+                .key,
+            key
+        );
+    }
+
+    #[test]
+    fn restore_ignores_an_unknown_tab_and_an_unknown_pr() {
+        let mut state = mine_state(20);
+        let review = TABS.iter().position(|tab| tab.id() == "review").unwrap();
+        state.ui.active = review;
+        restore(
+            &mut state,
+            &ListResume {
+                tab: "gone".into(),
+                tabs: vec![
+                    tab_resume("gone", Some(testdata::pr_key("chaoshub", 101)), "x"),
+                    tab_resume("review", Some(testdata::pr_key("chaoshub", 500)), "y"),
+                ],
+                panes: Vec::new(),
+            },
+        );
+        assert_eq!(state.ui.active, review);
+        assert_eq!(state.ui.tabs[review].filter, "y");
+        assert!(state.ui.tabs.iter().all(|ts| ts.filter != "x"));
+    }
+
+    #[test]
     fn the_pinned_app_opens_on_the_pane_of_the_url() {
         for (pane, id) in [
             (FirstPane::Description, "description"),
@@ -9153,7 +9267,11 @@ mod tests {
         ] {
             let mut state = AppState::new(SIZE);
             state.load(testdata::mine_snapshot(), Vec::new());
-            pin(&mut state, testdata::pr_key("chaoshub", 101), pane);
+            pin(
+                &mut state,
+                testdata::pr_key("chaoshub", 101),
+                pane.pane_id(),
+            );
             let Some(OverlayState::Popup(popup)) = state.ui.overlays.last().map(|o| &o.state)
             else {
                 panic!("no popup");
@@ -9286,7 +9404,7 @@ mod tests {
         pin(
             &mut state,
             testdata::pr_key("chaoshub", 102),
-            FirstPane::Description,
+            FirstPane::Description.pane_id(),
         );
         state
     }
@@ -11767,7 +11885,7 @@ mod tests {
     /// The approval state, pinned to #89: the PR view of #89.
     fn pr_view_state() -> (AppState, PrKey) {
         let (mut state, pr) = approval_state();
-        pin(&mut state, pr.clone(), FirstPane::Description);
+        pin(&mut state, pr.clone(), FirstPane::Description.pane_id());
         (state, pr)
     }
 
