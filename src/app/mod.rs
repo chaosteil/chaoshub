@@ -44,7 +44,7 @@ use crate::domain::agent::Backend;
 use crate::domain::keys::PrKey;
 use crate::domain::pr_url::FirstPane;
 use crate::domain::repo::Repo;
-use crate::domain::resume::{ListResume, TabResume, UiResume};
+use crate::domain::resume::{ListResume, PaneResume, TabResume, UiResume};
 use crate::store::Snapshot;
 
 /// The app: the state and the message handler. `run` drives it.
@@ -199,6 +199,13 @@ impl App {
     pub(crate) fn with_resume(mut self, list: &ListResume) -> Self {
         update::restore(&mut self.state, list);
         self
+    }
+
+    /// Adopts the PR view panes of a resumed list, and returns the
+    /// commands that watch them.
+    #[allow(dead_code, reason = "the resume wiring in run uses it")]
+    pub(crate) fn adopt_panes(&mut self, panes: Vec<PaneResume>) -> Vec<Cmd> {
+        update::adopt(&mut self.state, panes)
     }
 
     /// Shows the toast `resumed session`, after a resume.

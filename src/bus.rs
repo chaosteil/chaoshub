@@ -918,6 +918,15 @@ pub(crate) enum Cmd {
         id: &'static str,
         key: TargetKey,
     },
+    /// Watches the pane in the Rex block `block_id` as the pane of
+    /// `(id, key)`, as if `RunTerminal` started it. A gone block sends
+    /// `PaneEnded`.
+    AdoptPane {
+        id: &'static str,
+        key: TargetKey,
+        block_id: String,
+        label: String,
+    },
     CancelAction {
         id: &'static str,
         key: TargetKey,

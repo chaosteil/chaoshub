@@ -55,7 +55,7 @@ use crate::domain::plural;
 use crate::domain::pr::{CiState, MergeStateStatus, Mergeable, PrHead, PrState, PullRequest};
 use crate::domain::pr_url::{self, PrUrl};
 use crate::domain::repo::Repo;
-use crate::domain::resume::ListResume;
+use crate::domain::resume::{ListResume, PaneResume};
 
 /// Applies one message to the state, with the tabs of `TABS`.
 pub(crate) fn update(state: &mut AppState, keymap: &Keymap, msg: Msg) -> Vec<Cmd> {
@@ -1276,7 +1276,38 @@ fn start_pane(
 }
 
 /// The action id of the detail pane.
-const DETAIL_ID: &str = "detail";
+pub(crate) const DETAIL_ID: &str = "detail";
+
+/// Adopts the PR view panes of a resumed list: each pull request without
+/// a detail pane gets the state `Starting` and a `Cmd::AdoptPane`. A
+/// pull request with a pane keeps it. Only a list with the detail pane
+/// adopts panes.
+pub(crate) fn adopt(state: &mut AppState, panes: Vec<PaneResume>) -> Vec<Cmd> {
+    if state.data.detail.is_none() || state.ui.pinned.is_some() {
+        return Vec::new();
+    }
+    let mut cmds = Vec::new();
+    for pane in panes {
+        let key = TargetKey::Pr(pane.pr);
+        if state.data.panes.contains_key(&(DETAIL_ID, key.clone())) {
+            continue;
+        }
+        state
+            .data
+            .panes
+            .insert((DETAIL_ID, key.clone()), PaneHandleState::Starting);
+        cmds.push(Cmd::AdoptPane {
+            id: DETAIL_ID,
+            key,
+            block_id: pane.block_id,
+            label: pane.label,
+        });
+    }
+    if !cmds.is_empty() {
+        state.bump();
+    }
+    cmds
+}
 
 /// Opens the pull request of the cursor row: in the detail pane when
 /// `run` gave its command, else in the sidebar. A row that is not a pull
@@ -1846,7 +1877,14 @@ fn pr_view_event(
             Vec::new()
         }
         PrViewEvent::PrChanged { pr } => follow_up(&state.data, &TargetKey::Pr(pr)),
-        PrViewEvent::Attached { .. } => Vec::new(),
+        PrViewEvent::Attached { pr, block } => adopt(
+            state,
+            vec![PaneResume {
+                pr,
+                block_id: block,
+                label: String::new(),
+            }],
+        ),
     }
 }
 
@@ -9841,6 +9879,97 @@ mod tests {
             }]
         );
         assert_eq!(toast_of(&state), None, "the focus moves at once");
+    }
+
+    fn resumed_pane(number: u64, block: &str) -> PaneResume {
+        PaneResume {
+            pr: testdata::pr_key("chaoshub", number),
+            block_id: block.into(),
+            label: format!("#{number}"),
+        }
+    }
+
+    #[test]
+    fn adopt_marks_the_pane_starting_and_sends_adopt_pane() {
+        let mut state = detail_state();
+        let cmds = adopt(&mut state, vec![resumed_pane(99, "block:09")]);
+        let key = TargetKey::Pr(testdata::pr_key("chaoshub", 99));
+        assert_eq!(
+            cmds,
+            vec![Cmd::AdoptPane {
+                id: DETAIL_ID,
+                key: key.clone(),
+                block_id: "block:09".into(),
+                label: "#99".into(),
+            }]
+        );
+        assert_eq!(
+            state.data.panes.get(&(DETAIL_ID, key)),
+            Some(&PaneHandleState::Starting)
+        );
+        assert_eq!(
+            adopt(&mut state, vec![resumed_pane(99, "block:19")]),
+            vec![],
+            "a pull request with a pane keeps it"
+        );
+    }
+
+    #[test]
+    fn adopt_needs_the_detail_pane() {
+        let mut state = detail_state();
+        state.data.detail = None;
+        assert_eq!(
+            adopt(&mut state, vec![resumed_pane(99, "block:09")]),
+            vec![]
+        );
+        assert!(state.data.panes.is_empty());
+        let mut state = pinned(testdata::pr_key("chaoshub", 99));
+        state.data.detail = Some(detail_pane());
+        assert_eq!(
+            adopt(&mut state, vec![resumed_pane(99, "block:09")]),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn enter_on_an_adopted_pr_focuses_its_pane() {
+        let mut state = detail_state();
+        adopt(&mut state, vec![resumed_pane(99, "block:09")]);
+        let key = TargetKey::Pr(testdata::pr_key("chaoshub", 99));
+        update(
+            &mut state,
+            &Keymap::default(),
+            Msg::PaneStarted {
+                id: DETAIL_ID,
+                key: key.clone(),
+            },
+        );
+        assert_eq!(
+            enter(&mut state),
+            vec![Cmd::FocusPane { id: DETAIL_ID, key }]
+        );
+    }
+
+    #[test]
+    fn attached_adopts_a_pane_once() {
+        let mut state = detail_state();
+        let attached = || {
+            Msg::PrView(PrViewEvent::Attached {
+                pr: testdata::pr_key("chaoshub", 99),
+                block: "block:09".into(),
+            })
+        };
+        let cmds = update(&mut state, &Keymap::default(), attached());
+        assert_eq!(
+            cmds,
+            vec![Cmd::AdoptPane {
+                id: DETAIL_ID,
+                key: TargetKey::Pr(testdata::pr_key("chaoshub", 99)),
+                block_id: "block:09".into(),
+                label: String::new(),
+            }]
+        );
+        assert_eq!(update(&mut state, &Keymap::default(), attached()), vec![]);
     }
 
     #[test]

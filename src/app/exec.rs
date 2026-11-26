@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -31,7 +32,7 @@ use crate::bus::{
 };
 use crate::config::schema::AgentConfig;
 use crate::domain::keys::PrKey;
-use crate::domain::resume::TOKEN_ENV;
+use crate::domain::resume::{PaneResume, TOKEN_ENV};
 use crate::github::{GithubClient, TokenSource};
 use crate::launch::palette::Palette;
 use crate::launch::{LaunchHandle, Launcher};
@@ -127,8 +128,9 @@ pub(crate) struct Runtime {
     /// True after `Cmd::Quit`.
     quit: bool,
     /// True when a quit closes the open panes. The pinned mode leaves
-    /// them open.
-    close_panes_on_quit: bool,
+    /// them open. The pane runners share the flag, so
+    /// `keep_panes_on_quit` reaches the panes that run.
+    close_panes_on_quit: Arc<AtomicBool>,
     /// The socket of the list process that started this PR view, from
     /// `CHAOSHUB_LIST_SOCKET`. `Cmd::TellList` sends to it.
     list: Option<PathBuf>,
@@ -159,7 +161,7 @@ impl Runtime {
             panes: Arc::default(),
             alive_poll: ALIVE_POLL,
             quit: false,
-            close_panes_on_quit,
+            close_panes_on_quit: Arc::new(AtomicBool::new(close_panes_on_quit)),
             list: None,
             palette_ask: None,
         }
@@ -169,6 +171,28 @@ impl Runtime {
     pub(crate) fn with_list(mut self, path: Option<PathBuf>) -> Self {
         self.list = path;
         self
+    }
+
+    /// Makes the next quit leave the open panes open, so Rex can restore
+    /// them with the session. `Cmd::CancelAction` still closes a pane.
+    #[allow(dead_code, reason = "the resume wiring in run uses it")]
+    pub(crate) fn keep_panes_on_quit(&self) {
+        self.close_panes_on_quit.store(false, Ordering::SeqCst);
+    }
+
+    /// The handles of the open panes of the action `id`, for the resume
+    /// state.
+    #[allow(dead_code, reason = "the resume wiring in run uses it")]
+    pub(crate) fn pane_handles(&self, id: &str) -> Vec<PaneResume> {
+        lock(&self.panes)
+            .iter()
+            .filter(|((pane_id, _), _)| *pane_id == id)
+            .map(|((_, TargetKey::Pr(pr)), handle)| PaneResume {
+                pr: pr.clone(),
+                block_id: handle.block_id.clone(),
+                label: handle.label.clone(),
+            })
+            .collect()
     }
 
     /// The root token. Quit cancels it.
@@ -227,6 +251,12 @@ impl Runtime {
                 }
             }
             Cmd::RunTerminal { id, key, request } => self.run_terminal(id, key, request),
+            Cmd::AdoptPane {
+                id,
+                key,
+                block_id,
+                label,
+            } => self.adopt_pane(id, key, block_id, label),
             Cmd::FocusPane { id, key } => self.focus(id, key),
             Cmd::RunAgent(job) => self.run_agent(job),
             Cmd::LoadAgent(key) => self.load_agent(key),
@@ -375,6 +405,49 @@ impl Runtime {
             tracing::warn!(id, "no launcher for a pane");
             return;
         };
+        let (pane, serial) = self.pane_run(launcher, id, key);
+        self.tasks.spawn_on(
+            async move {
+                pane.run(&request).await;
+                ((pane.id, pane.key), serial)
+            },
+            &self.handle,
+        );
+    }
+
+    /// Spawns the runner of a pane that runs already in the Rex block
+    /// `block_id`, for example a pane that Rex restored with the session.
+    /// When the block is gone, it sends `PaneEnded` at once. Else it
+    /// watches the pane as `run_terminal` does. Without a launcher, it
+    /// sends `PaneEnded` at once.
+    fn adopt_pane(&mut self, id: &'static str, key: TargetKey, block_id: String, label: String) {
+        let Some(launcher) = self.env.launcher.clone() else {
+            tracing::debug!(id, "no launcher to adopt a pane");
+            let tx = self.env.tx.clone();
+            self.handle.spawn(async move {
+                send(&tx, Msg::PaneEnded { id, key }).await;
+            });
+            return;
+        };
+        let (pane, serial) = self.pane_run(launcher, id, key);
+        let handle = LaunchHandle { label, block_id };
+        self.tasks.spawn_on(
+            async move {
+                pane.adopt(handle).await;
+                ((pane.id, pane.key), serial)
+            },
+            &self.handle,
+        );
+    }
+
+    /// A new runner of the pane of `(id, key)`, and the serial of its
+    /// task.
+    fn pane_run(
+        &mut self,
+        launcher: Arc<dyn Launcher>,
+        id: &'static str,
+        key: TargetKey,
+    ) -> (PaneRun, u64) {
         self.reap();
         let (serial, cancel) = self.track(id, key.clone());
         let pane = PaneRun {
@@ -386,15 +459,9 @@ impl Runtime {
             panes: Arc::clone(&self.panes),
             alive_poll: self.alive_poll,
             quit: self.root.clone(),
-            close_on_quit: self.close_panes_on_quit,
+            close_on_quit: Arc::clone(&self.close_panes_on_quit),
         };
-        self.tasks.spawn_on(
-            async move {
-                pane.run(&request).await;
-                ((pane.id, pane.key), serial)
-            },
-            &self.handle,
-        );
+        (pane, serial)
     }
 
     /// Moves the focus to the open pane of `(id, key)`.
@@ -557,19 +624,25 @@ struct PaneRun {
     alive_poll: Duration,
     /// The root token: a quit cancels it.
     quit: CancellationToken,
-    /// True when a quit closes the pane.
-    close_on_quit: bool,
+    /// True when a quit closes the pane. The runtime shares it.
+    close_on_quit: Arc<AtomicBool>,
 }
 
 impl PaneRun {
-    /// Launches the pane, watches it until it ends or the token is
-    /// cancelled, and closes it on a cancel. A quit closes it only when
-    /// `close_on_quit` is true. `PaneEnded` comes last. A
-    /// failed launch sends `Done` with the error only: no `PaneStarted`
-    /// came, so no `PaneEnded` follows, and the follow-up runs once.
+    /// Launches the pane and follows it (see `follow`). A failed launch
+    /// sends `Done` with the error only: no `PaneStarted` came, so no
+    /// `PaneEnded` follows, and the follow-up runs once.
     async fn run(&self, request: &LaunchRequest) {
-        let handle = match self.launcher.launch(request).await {
-            Ok(handle) => handle,
+        if let Some(handle) = self.launch(request).await {
+            self.follow(handle).await;
+        }
+    }
+
+    /// Launches the pane. `None` after a failed launch, which sends
+    /// `Done` with the error.
+    async fn launch(&self, request: &LaunchRequest) -> Option<LaunchHandle> {
+        match self.launcher.launch(request).await {
+            Ok(handle) => Some(handle),
             Err(err) => {
                 tracing::warn!(%err, id = self.id, "cannot open the pane");
                 self.send(Msg::ActionEvent {
@@ -578,9 +651,31 @@ impl PaneRun {
                     event: ActionEvent::Done(Err(format!("cannot open the pane: {err}"))),
                 })
                 .await;
-                return;
+                None
             }
-        };
+        }
+    }
+
+    /// Follows a pane that runs already. When `alive` is false, the pane
+    /// is gone: it sends `PaneEnded` at once. Else it follows the pane
+    /// as a launched pane.
+    async fn adopt(&self, handle: LaunchHandle) {
+        if !self.launcher.alive(&handle).await {
+            tracing::debug!(block = handle.block_id, "the adopted pane is gone");
+            self.send(Msg::PaneEnded {
+                id: self.id,
+                key: self.key.clone(),
+            })
+            .await;
+            return;
+        }
+        self.follow(handle).await;
+    }
+
+    /// Sends `PaneStarted`, watches the pane until it ends or the token
+    /// is cancelled, and closes it on a cancel. A quit closes it only
+    /// when `close_on_quit` is true. `PaneEnded` comes last.
+    async fn follow(&self, handle: LaunchHandle) {
         lock(&self.panes).insert((self.id, self.key.clone()), handle.clone());
         self.send(Msg::PaneStarted {
             id: self.id,
@@ -588,7 +683,7 @@ impl PaneRun {
         })
         .await;
         self.watch(&handle).await;
-        let closes = self.close_on_quit || !self.quit.is_cancelled();
+        let closes = self.close_on_quit.load(Ordering::SeqCst) || !self.quit.is_cancelled();
         if self.cancel.is_cancelled()
             && closes
             && let Err(err) = self.launcher.close(&handle).await
@@ -1296,7 +1391,7 @@ mod tests {
             ..FakeLauncher::default()
         });
         let mut f = pane_fixture(&tokio, &launcher);
-        f.runtime.close_panes_on_quit = false;
+        f.runtime.keep_panes_on_quit();
         f.runtime.exec(run_terminal(1));
         f.runtime.exec(run_terminal(2));
         let mut first = vec![f.msgs.blocking_recv(), f.msgs.blocking_recv()];
@@ -1316,6 +1411,88 @@ mod tests {
         assert!(
             !launcher.calls().contains(&"close block:pane-2".to_owned()),
             "a quit leaves the pane open"
+        );
+    }
+
+    fn adopt_pane(number: u64) -> Cmd {
+        Cmd::AdoptPane {
+            id: "review",
+            key: pr_key(number),
+            block_id: format!("block:old-{number}"),
+            label: format!("pane-{number}"),
+        }
+    }
+
+    #[test]
+    fn an_adopted_pane_runs_like_a_launched_pane() {
+        let tokio = tokio();
+        let launcher = Arc::new(FakeLauncher {
+            alive: true.into(),
+            ..FakeLauncher::default()
+        });
+        let mut f = pane_fixture(&tokio, &launcher);
+        f.runtime.exec(adopt_pane(1));
+        assert_eq!(f.msgs.blocking_recv(), Some(started(1)));
+        eventually(|| launcher.calls().contains(&"wait block:old-1".to_owned()));
+        assert_eq!(
+            launcher.calls()[..2],
+            ["alive block:old-1", "wait block:old-1"]
+        );
+        assert_eq!(
+            f.runtime.pane_handles("review"),
+            [PaneResume {
+                pr: crate::app::testdata::pr_key("chaoshub", 1),
+                block_id: "block:old-1".into(),
+                label: "pane-1".into(),
+            }]
+        );
+        f.runtime.exec(Cmd::FocusPane {
+            id: "review",
+            key: pr_key(1),
+        });
+        eventually(|| launcher.calls().contains(&"focus block:old-1".to_owned()));
+        f.runtime.exec(Cmd::Quit);
+        assert!(launcher.calls().contains(&"close block:old-1".to_owned()));
+        assert_eq!(f.msgs.blocking_recv(), Some(ended(1)));
+    }
+
+    #[test]
+    fn a_gone_adopted_pane_ends_at_once() {
+        let tokio = tokio();
+        let launcher = Arc::new(FakeLauncher::default());
+        let mut f = pane_fixture(&tokio, &launcher);
+        f.runtime.exec(adopt_pane(2));
+        assert_eq!(f.msgs.blocking_recv(), Some(ended(2)));
+        settle(&mut f.runtime, 0);
+        assert_eq!(launcher.calls(), ["alive block:old-2"]);
+        assert_eq!(f.runtime.pane_handles("review"), []);
+    }
+
+    #[test]
+    fn keep_panes_on_quit_leaves_the_panes_open() {
+        let tokio = tokio();
+        let launcher = Arc::new(FakeLauncher {
+            alive: true.into(),
+            ..FakeLauncher::default()
+        });
+        let mut f = pane_fixture(&tokio, &launcher);
+        f.runtime.exec(run_terminal(1));
+        f.runtime.exec(adopt_pane(2));
+        let mut first = vec![f.msgs.blocking_recv(), f.msgs.blocking_recv()];
+        first.sort_by_key(|msg| format!("{msg:?}"));
+        assert_eq!(first, [Some(started(1)), Some(started(2))]);
+        f.runtime.keep_panes_on_quit();
+        f.runtime.exec(Cmd::Quit);
+        let mut last = vec![f.msgs.blocking_recv(), f.msgs.blocking_recv()];
+        last.sort_by_key(|msg| format!("{msg:?}"));
+        assert_eq!(last, [Some(ended(1)), Some(ended(2))]);
+        assert!(
+            !launcher
+                .calls()
+                .iter()
+                .any(|call| call.starts_with("close")),
+            "{:?}",
+            launcher.calls()
         );
     }
 
