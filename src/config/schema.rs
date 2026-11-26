@@ -443,9 +443,9 @@ pub(crate) enum PaletteSetting {
     Ansi16,
 }
 
-/// The `[terminal]` section: the terminal status sequences and the
-/// mouse. For a sequence, `None` turns it on inside Rex and Ghostty only,
-/// and `Some` forces it on or off.
+/// The `[terminal]` section: the terminal status sequences, the program
+/// resume and the mouse. For a status sequence, `None` turns it on inside
+/// Rex and Ghostty only, and `Some` forces it on or off.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub(crate) struct TerminalConfig {
@@ -458,6 +458,10 @@ pub(crate) struct TerminalConfig {
     /// True when chaoshub reads the mouse. False leaves the mouse, and
     /// so the text selection, to the terminal.
     pub mouse: bool,
+    /// OSC 7577, the program resume. chaoshub reports only when the
+    /// terminal sets `OSC7577_TOKEN`.
+    #[allow(dead_code, reason = "the resume wiring in run uses it")]
+    pub resume: bool,
 }
 
 impl Default for TerminalConfig {
@@ -467,6 +471,7 @@ impl Default for TerminalConfig {
             program_status: None,
             progress: None,
             mouse: true,
+            resume: true,
         }
     }
 }
@@ -929,6 +934,14 @@ mod tests {
         assert!(terminal.mouse);
         let terminal: TerminalConfig = toml::from_str("mouse = false").unwrap();
         assert!(!terminal.mouse);
+    }
+
+    #[test]
+    fn terminal_resume_defaults_on() {
+        let terminal: TerminalConfig = toml::from_str("").unwrap();
+        assert!(terminal.resume);
+        let terminal: TerminalConfig = toml::from_str("resume = false").unwrap();
+        assert!(!terminal.resume);
     }
 
     #[test]
