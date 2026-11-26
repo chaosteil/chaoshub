@@ -110,8 +110,10 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
         no_prefetch,
         theme: theme_arg,
         palette: palette_arg,
+        resume: resume_arg,
         command,
     } = cli;
+    let _ = resume_arg;
     let (pinned, first_pane) = match command {
         Some(Command::Cache(CacheAction::Clear)) => return clear_cache(),
         Some(Command::List { json, all }) => return list_prs(config_path, json, all),

@@ -1,6 +1,6 @@
 //! Command line types (clap): `--repo`, `--config`, `--no-prefetch`,
-//! `--theme`, `--palette`, `cache clear`, `list` and `pr OWNER/NAME
-//! NUMBER` (or `pr URL`).
+//! `--theme`, `--palette`, the hidden `--resume`, `cache clear`, `list`
+//! and `pr OWNER/NAME NUMBER` (or `pr URL`).
 
 use std::path::PathBuf;
 
@@ -28,6 +28,10 @@ pub struct Cli {
     /// Use this palette for this session, in place of `[theme] palette`.
     #[arg(long, value_name = "NAME")]
     pub palette: Option<PaletteArg>,
+    /// The state file of a resumed session. The terminal gives it back
+    /// with OSC 7577 (program resume). It is not for manual use.
+    #[arg(long, value_name = "PATH", hide = true)]
+    pub resume: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -114,6 +118,7 @@ mod tests {
                 no_prefetch: false,
                 theme: None,
                 palette: None,
+                resume: None,
                 command: None,
             }
         );
@@ -158,6 +163,7 @@ mod tests {
                 no_prefetch: true,
                 theme: None,
                 palette: None,
+                resume: None,
                 command: None,
             }
         );
@@ -196,6 +202,7 @@ mod tests {
                 no_prefetch: false,
                 theme: None,
                 palette: None,
+                resume: None,
                 command: Some(Command::List {
                     json: true,
                     all: false
@@ -203,6 +210,43 @@ mod tests {
             }
         );
         assert!(Cli::try_parse_from(["chaoshub", "list", "extra"]).is_err());
+    }
+
+    #[test]
+    fn resume_parses() {
+        assert_eq!(
+            parse(&["--resume", "/s/resume/list-0123456789abcdef.json"]).resume,
+            Some(PathBuf::from("/s/resume/list-0123456789abcdef.json"))
+        );
+        let cli = parse(&[
+            "--no-prefetch",
+            "--resume",
+            "/x/pr-0123456789abcdef.json",
+            "pr",
+            "a/b",
+            "7",
+        ]);
+        assert_eq!(
+            cli.resume,
+            Some(PathBuf::from("/x/pr-0123456789abcdef.json"))
+        );
+        assert_eq!(
+            cli.command,
+            Some(Command::Pr {
+                pr: "a/b".into(),
+                number: Some(7),
+            })
+        );
+    }
+
+    #[test]
+    fn resume_is_hidden_from_the_help() {
+        assert!(
+            !Cli::command()
+                .render_help()
+                .to_string()
+                .contains("--resume")
+        );
     }
 
     #[test]
