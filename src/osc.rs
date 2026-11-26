@@ -9,6 +9,14 @@
 //! - OSC 9;4 (progress bar): `ESC ] 9 ; 4 ; <s>[;<v>] ESC \`.
 //! - OSC 777 (desktop notification): `ESC ] 777 ; notify ; <title> ; <body> ESC \`.
 //! - OSC 52 (clipboard): `ESC ] 52 ; c ; <base64> ESC \`.
+//! - OSC 7577 (program resume):
+//!   `ESC ] 7577 ; pid=<pid>:time=<secs>:argv=<b64>,<b64>[:cwd=<b64>]:mac=<hex> ESC \`,
+//!   or `clear=1` in place of `argv`. `mac` is the SHA-256 of the body
+//!   before `:mac=`, a `:` and the token.
+
+use std::fmt::Write as _;
+
+use sha2::{Digest, Sha256};
 
 use crate::bus::{BlockedKind, Progress, TermState, TermStatus};
 
@@ -131,6 +139,90 @@ pub(crate) fn clear() -> Vec<u8> {
 #[allow(dead_code, reason = "the clipboard fallback of phase E writes it")]
 pub(crate) fn clipboard(text: &str) -> Vec<u8> {
     sequence(&format!("52;c;{}", base64(text.as_bytes())))
+}
+
+/// The command of an OSC 7577 report.
+#[allow(dead_code, reason = "the resume wiring in run uses it")]
+pub(crate) enum ResumeBody<'a> {
+    /// The command that starts the program again, and its directory.
+    Argv {
+        argv: &'a [String],
+        cwd: Option<&'a str>,
+    },
+    /// Removes the last report.
+    Clear,
+}
+
+/// The maximum length of an OSC 7577 report, in bytes. The terminal
+/// always accepts a report of this length.
+#[allow(dead_code, reason = "the resume wiring in run uses it")]
+pub(crate) const RESUME_MAX_BYTES: usize = 2048;
+/// The maximum number of `argv` elements of an OSC 7577 report.
+#[allow(dead_code, reason = "the resume wiring in run uses it")]
+pub(crate) const RESUME_MAX_ARGV: usize = 64;
+
+/// The OSC 7577 sequence that reports the resume command of the process
+/// `pid` at the time `time` (in seconds since the epoch). `token` signs
+/// the report. The result is `None` when the terminal would discard the
+/// report: an empty or too long `argv`, an `argv[0]` that is not a bare
+/// name or an absolute path, a control character, a `cwd` that is not
+/// absolute, or a report of more than `RESUME_MAX_BYTES` bytes.
+#[allow(dead_code, reason = "the resume wiring in run uses it")]
+pub(crate) fn program_resume(
+    pid: u32,
+    time: u64,
+    body: &ResumeBody<'_>,
+    token: &str,
+) -> Option<Vec<u8>> {
+    let mut text = format!("pid={pid}:time={time}");
+    match body {
+        ResumeBody::Argv { argv, cwd } => {
+            let first = argv.first()?;
+            if argv.len() > RESUME_MAX_ARGV
+                || first.is_empty()
+                || first.starts_with('-')
+                || (first.contains('/') && !first.starts_with('/'))
+                || argv.iter().any(|arg| has_control(arg))
+            {
+                return None;
+            }
+            let encoded: Vec<String> = argv.iter().map(|arg| base64(arg.as_bytes())).collect();
+            text.push_str(":argv=");
+            text.push_str(&encoded.join(","));
+            if let Some(cwd) = cwd {
+                if !cwd.starts_with('/') || has_control(cwd) {
+                    return None;
+                }
+                text.push_str(":cwd=");
+                text.push_str(&base64(cwd.as_bytes()));
+            }
+        }
+        ResumeBody::Clear => text.push_str(":clear=1"),
+    }
+    let mac = resume_mac(&text, token);
+    let out = sequence(&format!("7577;{text}:mac={mac}"));
+    (out.len() <= RESUME_MAX_BYTES).then_some(out)
+}
+
+/// True when `text` has a C0 control character, DEL or a C1 control
+/// character.
+fn has_control(text: &str) -> bool {
+    text.chars().any(char::is_control)
+}
+
+/// The lowercase hex of the SHA-256 of `body`, a `:` and `token`.
+fn resume_mac(body: &str, token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(body.as_bytes());
+    hasher.update(b":");
+    hasher.update(token.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
 }
 
 /// `body` between the OSC start and the string terminator.
@@ -371,6 +463,105 @@ mod tests {
             b"\x1b]52;c;aHR0cHM6Ly9naXRodWIuY29tL2NoYW9zdGVpbC9jaGFvc2h1Yi9wdWxsLzE=\x1b\\"
         );
         assert_eq!(clipboard(""), b"\x1b]52;c;\x1b\\");
+    }
+
+    /// The token of the spec vectors.
+    const TOKEN: &str = "dummy-token-replace-me";
+
+    fn args(argv: &[&str]) -> Vec<String> {
+        argv.iter().map(|&arg| arg.to_owned()).collect()
+    }
+
+    fn resume(argv: &[String], cwd: Option<&str>) -> Option<Vec<u8>> {
+        program_resume(74877, 1_795_543_200, &ResumeBody::Argv { argv, cwd }, TOKEN)
+    }
+
+    #[test]
+    fn program_resume_clear_matches_the_spec_vector() {
+        assert_eq!(
+            program_resume(74877, 1_795_543_200, &ResumeBody::Clear, TOKEN).unwrap(),
+            b"\x1b]7577;pid=74877:time=1795543200:clear=1:mac=c30603369f98fef581a4098be889175b0c74f0641e49f8b25f4326cb38f97c93\x1b\\"
+        );
+    }
+
+    #[test]
+    fn program_resume_argv_matches_the_spec_vector() {
+        let argv = args(&[
+            "nvim",
+            "-S",
+            "/home/user/.local/state/nvim/sessions/8f2c1d.vim",
+        ]);
+        assert_eq!(
+            resume(&argv, None).unwrap(),
+            b"\x1b]7577;pid=74877:time=1795543200:argv=bnZpbQ==,LVM=,L2hvbWUvdXNlci8ubG9jYWwvc3RhdGUvbnZpbS9zZXNzaW9ucy84ZjJjMWQudmlt:mac=9dbb99bfb856749a87563839d7ce9062818d78cf25909db93f309e0cd3b1909b\x1b\\"
+        );
+    }
+
+    #[test]
+    fn program_resume_cwd_matches_the_spec_vector() {
+        let argv = args(&["lazygit"]);
+        assert_eq!(
+            resume(&argv, Some("/home/user/src/project")).unwrap(),
+            b"\x1b]7577;pid=74877:time=1795543200:argv=bGF6eWdpdA==:cwd=L2hvbWUvdXNlci9zcmMvcHJvamVjdA==:mac=35cb909805c380336efd3689a125acc774a9dec8422a1d21492ebec06ca758e1\x1b\\"
+        );
+    }
+
+    #[test]
+    fn program_resume_rejects_bad_commands() {
+        let too_many: Vec<String> = (0..=RESUME_MAX_ARGV).map(|i| format!("a{i}")).collect();
+        let cases: [(Vec<String>, Option<&str>); 7] = [
+            (args(&["./run.sh"]), None),
+            (args(&["-x"]), None),
+            (Vec::new(), None),
+            (args(&["nvim", "a\nb"]), None),
+            (args(&["nvim", "a\u{85}b"]), None),
+            (args(&["nvim"]), Some("project")),
+            (too_many, None),
+        ];
+        for (argv, cwd) in cases {
+            assert_eq!(resume(&argv, cwd), None, "{argv:?} {cwd:?}");
+        }
+        assert!(resume(&args(&["/usr/bin/nvim", "-x"]), Some("/tmp")).is_some());
+    }
+
+    #[test]
+    fn program_resume_respects_the_length_limit() {
+        // Each 3 bytes of the first element add 4 bytes, and each empty
+        // element adds 1 byte (a ","), so the empty elements fill the gap.
+        let len = |argv: &[String]| resume(argv, None).map(|out| out.len());
+        let mut n = 1;
+        while len(&["a".repeat(n + 3)]).is_some() {
+            n += 3;
+        }
+        let mut argv = vec!["a".repeat(n)];
+        while len(&argv).unwrap() < RESUME_MAX_BYTES {
+            argv.push(String::new());
+        }
+        assert_eq!(len(&argv), Some(RESUME_MAX_BYTES));
+        argv.push(String::new());
+        assert_eq!(len(&argv), None);
+    }
+
+    #[test]
+    fn program_resume_has_only_value_characters() {
+        let argv = args(&["/usr/bin/chaoshub", "--repo", "a/b", "ü€ \u{1f600}", "?>~"]);
+        let out = resume(&argv, Some("/home/user/ü")).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let body = text
+            .strip_prefix("\x1b]7577;")
+            .unwrap()
+            .strip_suffix("\x1b\\")
+            .unwrap();
+        for pair in body.split(':') {
+            let (key, value) = pair.split_once('=').unwrap();
+            assert!(key.bytes().all(|b| b.is_ascii_lowercase()), "{key}");
+            assert!(
+                value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_.,+/=-".contains(&b)),
+                "{pair}"
+            );
+        }
     }
 
     #[test]
