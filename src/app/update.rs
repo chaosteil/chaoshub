@@ -1846,6 +1846,7 @@ fn pr_view_event(
             Vec::new()
         }
         PrViewEvent::PrChanged { pr } => follow_up(&state.data, &TargetKey::Pr(pr)),
+        PrViewEvent::Attached { .. } => Vec::new(),
     }
 }
 
@@ -12131,7 +12132,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let listener =
-            crate::ipc::Listener::bind(dir.path(), move |event| tx.send(event).is_ok()).unwrap();
+            crate::ipc::Listener::bind(dir.path(), "1", move |event| tx.send(event).is_ok())
+                .unwrap();
         let (mut list, pr) = approval_state();
         let (mut view, _) = pr_view_state();
 

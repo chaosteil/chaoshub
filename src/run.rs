@@ -188,9 +188,13 @@ pub(crate) fn run(cli: Cli, theme_kind: ThemeKind) -> anyhow::Result<()> {
     let signals = spawn_signals(tx.clone())?;
     // The list listens for the events of its PR views. The PR view
     // finds the socket in its env.
-    let listener = detail
-        .as_ref()
-        .and_then(|_| list_listener(paths::socket_dir(), tx.clone()));
+    let listener = detail.as_ref().and_then(|_| {
+        list_listener(
+            paths::socket_dir(),
+            &std::process::id().to_string(),
+            tx.clone(),
+        )
+    });
     let detail = detail.map(|mut detail| {
         if let Some(listener) = &listener {
             detail.env.push((
@@ -635,13 +639,13 @@ fn detail_pane(args: &DetailArgs) -> Option<DetailPane> {
     })
 }
 
-/// The socket of the list process in `dir`, with a listener thread that
-/// sends each event as `Msg::PrView`. `None` when the directory is
+/// The socket `list-<stem>.sock` of the list process in `dir`, with a
+/// listener thread that sends each event as `Msg::PrView`. `None` when the directory is
 /// unknown or the bind fails: then the PR views do not tell the list,
 /// and the list sees their changes after the next sync.
-fn list_listener(dir: Option<PathBuf>, tx: mpsc::Sender<Msg>) -> Option<ipc::Listener> {
+fn list_listener(dir: Option<PathBuf>, stem: &str, tx: mpsc::Sender<Msg>) -> Option<ipc::Listener> {
     let dir = dir?;
-    match ipc::Listener::bind(&dir, move |event| {
+    match ipc::Listener::bind(&dir, stem, move |event| {
         tx.blocking_send(Msg::PrView(event)).is_ok()
     }) {
         Ok(listener) => {
@@ -1827,10 +1831,14 @@ mod tests {
 
     #[test]
     fn the_list_listener_sends_each_event_as_a_message() {
-        assert!(list_listener(None, mpsc::channel(1).0).is_none());
+        assert!(list_listener(None, "1", mpsc::channel(1).0).is_none());
         let dir = tempfile::tempdir().unwrap();
         let (tx, mut rx) = mpsc::channel(4);
-        let listener = list_listener(Some(dir.path().join("ipc")), tx).unwrap();
+        let listener = list_listener(Some(dir.path().join("ipc")), "0123456789abcdef", tx).unwrap();
+        assert_eq!(
+            listener.path(),
+            dir.path().join("ipc").join("list-0123456789abcdef.sock")
+        );
         let event = crate::bus::PrViewEvent::PrChanged {
             pr: PrKey {
                 repo: RepoKey {

@@ -1,7 +1,10 @@
 //! The channel from the PR view processes to the list process.
 //!
-//! The list process binds a Unix datagram socket, `list-<pid>.sock`, in
-//! a directory that only the user can open (mode 0700). It gives the
+//! The list process binds a Unix datagram socket, `list-<stem>.sock`,
+//! in a directory that only the user can open (mode 0700). The stem is
+//! the instance id of a list with an active program resume (see
+//! `resume`), so a resumed PR view finds the resumed list at the same
+//! path. Else the stem is the pid. It gives the
 //! path to each PR view that it starts, in the `CHAOSHUB_LIST_SOCKET`
 //! env. The PR view (`chaoshub pr`) sends one small JSON datagram for
 //! each event, for example `{"v":1,"event":"approval_started",...}`.
@@ -98,13 +101,14 @@ pub(crate) struct Listener {
 }
 
 impl Listener {
-    /// Binds `list-<pid>.sock` in `dir` and starts the listener thread.
+    /// Binds `list-<stem>.sock` in `dir` and starts the listener thread.
     /// The thread calls `on_event` for each event, until `on_event`
     /// returns false or the listener drops. The function makes `dir`
     /// with mode 0700, and gives the socket mode 0600. It first deletes
     /// the stale sockets in `dir`.
     pub(crate) fn bind(
         dir: &Path,
+        stem: &str,
         mut on_event: impl FnMut(PrViewEvent) -> bool + Send + 'static,
     ) -> io::Result<Self> {
         fs::DirBuilder::new()
@@ -113,7 +117,7 @@ impl Listener {
             .create(dir)?;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
         remove_stale(dir);
-        let path = dir.join(format!("{PREFIX}{}{SUFFIX}", std::process::id()));
+        let path = dir.join(format!("{PREFIX}{stem}{SUFFIX}"));
         let socket = UnixDatagram::bind(&path)?;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
         socket.set_read_timeout(Some(STOP_POLL))?;
@@ -239,7 +243,8 @@ mod tests {
     /// A listener in `dir` that forwards each event to the receiver.
     fn listen(dir: &Path) -> (Listener, mpsc::Receiver<PrViewEvent>) {
         let (tx, rx) = mpsc::channel();
-        let listener = Listener::bind(dir, move |event| tx.send(event).is_ok()).unwrap();
+        let stem = std::process::id().to_string();
+        let listener = Listener::bind(dir, &stem, move |event| tx.send(event).is_ok()).unwrap();
         (listener, rx)
     }
 
@@ -270,6 +275,10 @@ mod tests {
                 ok: false,
             },
             PrViewEvent::PrChanged { pr: pr(8) },
+            PrViewEvent::Attached {
+                pr: pr(9),
+                block: "block:01".into(),
+            },
         ];
         for event in events {
             assert_eq!(decode(&encode(&event)), Some(event));
@@ -292,6 +301,30 @@ mod tests {
         assert_eq!(
             json,
             r#"{"v":2,"event":"pending_done","pr":{"repo":{"owner":"chaosteil","name":"chaoshub"},"number":7},"id":"draft","parts":[{"pr":{"repo":{"owner":"chaosteil","name":"chaoshub"},"number":7},"part":{"part":"draft"},"expect":{"expect":"draft","value":true}}],"ok":true}"#
+        );
+    }
+
+    #[test]
+    fn attached_round_trips() {
+        let event = PrViewEvent::Attached {
+            pr: pr(7),
+            block: "block:01".into(),
+        };
+        let json = String::from_utf8(encode(&event)).unwrap();
+        assert_eq!(
+            json,
+            r#"{"v":2,"event":"attached","pr":{"repo":{"owner":"chaosteil","name":"chaoshub"},"number":7},"block":"block:01"}"#
+        );
+        assert_eq!(decode(json.as_bytes()), Some(event));
+    }
+
+    #[test]
+    fn the_socket_name_has_the_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        let listener = Listener::bind(dir.path(), "0123456789abcdef", |_| true).unwrap();
+        assert_eq!(
+            listener.path(),
+            dir.path().join("list-0123456789abcdef.sock")
         );
     }
 

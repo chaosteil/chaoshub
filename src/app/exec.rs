@@ -856,7 +856,8 @@ mod tests {
         // A list that listens gets the event.
         let (tx, rx) = std::sync::mpsc::channel();
         let listener =
-            crate::ipc::Listener::bind(dir.path(), move |event| tx.send(event).is_ok()).unwrap();
+            crate::ipc::Listener::bind(dir.path(), "1", move |event| tx.send(event).is_ok())
+                .unwrap();
         f.runtime = f.runtime.with_list(Some(listener.path().to_path_buf()));
         f.runtime.exec(Cmd::TellList(event.clone()));
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(event));

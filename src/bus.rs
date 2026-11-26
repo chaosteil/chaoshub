@@ -393,6 +393,9 @@ pub(crate) enum PrViewEvent {
     /// An action of the PR view changed `pr` on GitHub, for example a
     /// merge, a close, a draft change, a reply or a review.
     PrChanged { pr: PrKey },
+    /// A resumed PR view runs again in the Rex block `block`. The list
+    /// adopts the pane when it has none for `pr`.
+    Attached { pr: PrKey, block: String },
 }
 
 /// A part of a pull request that an action changes on GitHub. While the
