@@ -3,6 +3,7 @@
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
+use crate::domain::resume::TOKEN_ENV;
 use crate::github::error::GithubError;
 
 /// Supplies the GitHub token. It runs the command only on first use, so
@@ -59,6 +60,7 @@ impl TokenSource {
     /// Runs the command and returns the trimmed first line of its output.
     async fn run(&self) -> Result<String, GithubError> {
         let output = Command::new(&self.program)
+            .env_remove(TOKEN_ENV)
             .args(&self.args)
             .kill_on_drop(true)
             .output()

@@ -19,6 +19,7 @@ pub(crate) mod plural;
 pub(crate) mod pr;
 pub(crate) mod pr_url;
 pub(crate) mod repo;
+pub(crate) mod resume;
 pub(crate) mod stack;
 pub(crate) mod team;
 

@@ -11,6 +11,7 @@ use crate::domain::agent::Backend;
 use crate::domain::keys::RepoKey;
 use crate::domain::merge::{MergeMethod, StackOverride};
 use crate::domain::pr::PullRequest;
+use crate::domain::resume::TOKEN_ENV;
 
 /// One `[[repo]]` entry: a repo to track and its local checkout.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -823,6 +824,7 @@ pub(crate) async fn resolve_env(
 /// Runs `command` in `sh -c` and returns its trimmed standard output.
 async fn run_env_command(name: &str, command: &str) -> Result<String, EnvError> {
     let output = tokio::process::Command::new("sh")
+        .env_remove(TOKEN_ENV)
         .args(["-c", command])
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)

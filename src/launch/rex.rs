@@ -13,6 +13,7 @@ use tokio::process::Command;
 use super::error::LaunchError;
 use super::{LaunchHandle, Launcher};
 use crate::bus::LaunchRequest;
+use crate::domain::resume::TOKEN_ENV;
 
 /// The default direction of a new pane.
 pub(crate) const DEFAULT_SPLIT: &str = "right";
@@ -159,7 +160,7 @@ impl RexLauncher {
 
     fn command(&self, args: Vec<OsString>) -> Command {
         let mut cmd = Command::new(&self.bin);
-        cmd.args(args);
+        cmd.env_remove(TOKEN_ENV).args(args);
         cmd
     }
 
@@ -290,6 +291,13 @@ mod tests {
             split: None,
             ratio: None,
         }
+    }
+
+    #[test]
+    fn rex_commands_drop_the_resume_token() {
+        let cmd = launcher().command(vec!["block".into(), "inspect".into()]);
+        let envs: Vec<_> = cmd.as_std().get_envs().collect();
+        assert!(envs.contains(&("OSC7577_TOKEN".as_ref(), None)), "{envs:?}");
     }
 
     fn handle() -> LaunchHandle {

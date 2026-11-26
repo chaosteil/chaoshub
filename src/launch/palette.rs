@@ -17,6 +17,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::bus::{PaletteAsk, PaletteReply};
+use crate::domain::resume::TOKEN_ENV;
 
 /// The name of the action of `contrib/rex/chaoshub.lua` that asks the
 /// question.
@@ -84,6 +85,7 @@ impl RexPalette {
     /// start or exits with a status other than zero.
     async fn stdout(&self, args: &[&str]) -> Option<String> {
         let output = Command::new(&self.bin)
+            .env_remove(TOKEN_ENV)
             .args(args)
             .stdin(Stdio::null())
             .kill_on_drop(true)
@@ -126,6 +128,7 @@ impl RexPalette {
     async fn run(&self, ask: &PaletteAsk) -> Result<PaletteReply, String> {
         let input = json!({ "ask": ask, "timeout": TIMEOUT_SECS }).to_string();
         let mut child = Command::new(&self.bin)
+            .env_remove(TOKEN_ENV)
             .args(Self::ask_args())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

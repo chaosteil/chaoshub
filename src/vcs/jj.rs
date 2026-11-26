@@ -11,6 +11,7 @@ use super::error::VcsError;
 use super::lock::RepoLocks;
 use super::{parse, run};
 use crate::domain::local::{LocalChange, Workspace};
+use crate::domain::resume::TOKEN_ENV;
 
 /// The workspace list template: name, change id and commit id.
 const WORKSPACE_TEMPLATE: &str =
@@ -70,9 +71,11 @@ pub(crate) fn workspace_path(repo_path: &Path, ws_name: &str, root: &Path) -> Pa
 /// no pager, no color.
 fn jj(repo_path: &Path) -> Command {
     let mut cmd = Command::new("jj");
-    cmd.arg("-R")
-        .arg(repo_path)
-        .args(["--ignore-working-copy", "--no-pager", "--color=never"]);
+    cmd.env_remove(TOKEN_ENV).arg("-R").arg(repo_path).args([
+        "--ignore-working-copy",
+        "--no-pager",
+        "--color=never",
+    ]);
     cmd
 }
 
@@ -124,6 +127,13 @@ mod tests {
             .chain(rest)
             .map(|arg| (*arg).to_owned())
             .collect()
+    }
+
+    #[test]
+    fn jj_drops_the_resume_token() {
+        let cmd = jj(Path::new("/repo"));
+        let envs: Vec<_> = cmd.as_std().get_envs().collect();
+        assert!(envs.contains(&("OSC7577_TOKEN".as_ref(), None)), "{envs:?}");
     }
 
     #[test]

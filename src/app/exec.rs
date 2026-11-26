@@ -10,7 +10,9 @@
 //! panes and keeps their handles.
 
 use std::collections::HashMap;
+use std::io;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -29,6 +31,7 @@ use crate::bus::{
 };
 use crate::config::schema::AgentConfig;
 use crate::domain::keys::PrKey;
+use crate::domain::resume::TOKEN_ENV;
 use crate::github::{GithubClient, TokenSource};
 use crate::launch::palette::Palette;
 use crate::launch::{LaunchHandle, Launcher};
@@ -207,7 +210,7 @@ impl Runtime {
             }
             Cmd::OpenUrl(url) => {
                 self.handle.spawn_blocking(move || {
-                    if let Err(err) = open::that(&url) {
+                    if let Err(err) = open_url(&url) {
                         tracing::warn!(%err, url, "cannot open the url");
                     }
                 });
@@ -656,6 +659,31 @@ fn copy(text: &str) {
         Ok(copied) => tracing::debug!(?copied, "copied to the clipboard"),
         Err(err) => tracing::warn!(%err, "cannot copy to the clipboard"),
     }
+}
+
+/// Opens `url` with the openers of `open::commands`, without
+/// `OSC7577_TOKEN`. The first opener that ends with success wins.
+fn open_url(url: &str) -> io::Result<()> {
+    let mut last = io::Error::other("no opener for the url");
+    for mut cmd in open::commands(url) {
+        let status = cmd
+            .env_remove(TOKEN_ENV)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match status {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => {
+                last = io::Error::other(format!(
+                    "{} ended with {status}",
+                    cmd.get_program().display()
+                ));
+            }
+            Err(err) => last = err,
+        }
+    }
+    Err(last)
 }
 
 #[cfg(test)]

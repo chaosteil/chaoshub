@@ -389,6 +389,47 @@ mod tests {
     }
 
     #[test]
+    fn every_child_drops_the_resume_token() {
+        const SKIP: &[&str] = &["testrepo.rs", "testkit.rs", "testdata.rs"];
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rust_files(&src, &mut files);
+        let mut errors = Vec::new();
+        for file in &files {
+            let rel = file.strip_prefix(&src).unwrap();
+            let name = rel.file_name().and_then(|name| name.to_str()).unwrap_or("");
+            if SKIP.contains(&name) || rel == Path::new("run/screenshots.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(file).unwrap();
+            let code = text
+                .split_once("#[cfg(test)]\nmod tests")
+                .map_or(text.as_str(), |(code, _)| code);
+            let lines: Vec<&str> = code.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if line.contains("Command::new(")
+                    && !lines[i..lines.len().min(i + 9)]
+                        .iter()
+                        .any(|line| line.contains("env_remove(TOKEN_ENV)"))
+                {
+                    errors.push(format!(
+                        "{}: line {} spawns without env_remove(TOKEN_ENV)",
+                        rel.display(),
+                        i + 1
+                    ));
+                }
+            }
+            if code.contains("open::that") {
+                errors.push(format!(
+                    "{}: open::that spawns without env_remove(TOKEN_ENV)",
+                    rel.display()
+                ));
+            }
+        }
+        assert!(errors.is_empty(), "{}", errors.join("\n"));
+    }
+
+    #[test]
     fn modules_follow_the_dependency_rule() {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();

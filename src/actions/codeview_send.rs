@@ -55,6 +55,7 @@ use crate::codeview::store;
 use crate::domain::keys::PrKey;
 use crate::domain::plural;
 use crate::domain::pr::PullRequest;
+use crate::domain::resume::TOKEN_ENV;
 use crate::github::ReviewEvent;
 
 /// The longest run of the headless nvim. codeview gives the post of a
@@ -454,6 +455,7 @@ async fn run(job: &Job, request: &Path, result: &Path) -> Result<Outcome, String
         lua_quote(&request.to_string_lossy())
     );
     let child = tokio::process::Command::new(&job.program)
+        .env_remove(TOKEN_ENV)
         .args(["--headless", "-c", &script])
         .current_dir(&job.repo)
         .envs(job.env.iter().map(|(name, value)| (name, value)))

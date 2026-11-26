@@ -11,12 +11,14 @@ use tokio::process::Command;
 use crate::config::schema::parse_repo_name;
 use crate::domain::keys::RepoKey;
 use crate::domain::repo::Repo;
+use crate::domain::resume::TOKEN_ENV;
 
 /// The repo of `cwd`, from `git remote get-url origin`. The path is the
 /// nearest directory at or above `cwd` that holds `.jj` or `.git`. `None`
 /// when git fails or the url names no `owner/name` repo.
 pub(crate) async fn cwd_repo(cwd: &Path) -> Option<Repo> {
     let output = Command::new("git")
+        .env_remove(TOKEN_ENV)
         .arg("-C")
         .arg(cwd)
         .args(["remote", "get-url", "origin"])

@@ -43,6 +43,7 @@ use crate::bus::{ActionEvent, Msg, TargetKey};
 use crate::config::schema::{AgentConfig, PrAgentConfig, resolve_env};
 use crate::domain::agent::{AskEntry, Backend, Record, Tool, ToolKind, VERSION};
 use crate::domain::keys::PrKey;
+use crate::domain::resume::TOKEN_ENV;
 use crate::github::TokenSource;
 use crate::vcs::lock::RepoLocks;
 
@@ -349,6 +350,7 @@ pub(super) async fn spawn(
 ) -> Result<Finished, String> {
     let program = &process.argv[0];
     let mut child = Command::new(program)
+        .env_remove(TOKEN_ENV)
         .args(&process.argv[1..])
         .envs(process.env.iter().map(|(name, value)| (name, value)))
         .current_dir(process.cwd)

@@ -14,6 +14,7 @@ use super::lock::RepoLocks;
 use super::{parse, run};
 use crate::domain::keys::RepoKey;
 use crate::domain::local::{LocalChange, Workspace};
+use crate::domain::resume::TOKEN_ENV;
 
 /// The branch format of `git for-each-ref`: branch name, tip commit and
 /// subject, with the field separator of the parsers.
@@ -119,7 +120,10 @@ fn parse_origin(url: &str) -> Option<RepoKey> {
 /// prompt would draw over the TUI.
 fn git(path: &Path) -> Command {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(path).env("GIT_TERMINAL_PROMPT", "0");
+    cmd.env_remove(TOKEN_ENV)
+        .arg("-C")
+        .arg(path)
+        .env("GIT_TERMINAL_PROMPT", "0");
     cmd
 }
 
@@ -224,7 +228,13 @@ mod tests {
         assert_eq!(cmd.as_std().get_program(), "git");
         assert_eq!(args(&cmd), ["-C", "/repo", "fetch", "origin"]);
         let envs: Vec<_> = cmd.as_std().get_envs().collect();
-        assert_eq!(envs, [("GIT_TERMINAL_PROMPT".as_ref(), Some("0".as_ref()))]);
+        assert_eq!(
+            envs,
+            [
+                ("GIT_TERMINAL_PROMPT".as_ref(), Some("0".as_ref())),
+                ("OSC7577_TOKEN".as_ref(), None)
+            ]
+        );
     }
 
     #[test]
@@ -257,7 +267,13 @@ mod tests {
     fn git_never_prompts() {
         let cmd = prefetch_head_command(Path::new("/repo"), 1);
         let envs: Vec<_> = cmd.as_std().get_envs().collect();
-        assert_eq!(envs, [("GIT_TERMINAL_PROMPT".as_ref(), Some("0".as_ref()))]);
+        assert_eq!(
+            envs,
+            [
+                ("GIT_TERMINAL_PROMPT".as_ref(), Some("0".as_ref())),
+                ("OSC7577_TOKEN".as_ref(), None)
+            ]
+        );
     }
 
     #[test]

@@ -51,6 +51,7 @@ use crate::config::{self, Config, paths};
 use crate::domain::keys::{PrKey, RepoKey};
 use crate::domain::pr_url::{self, FirstPane};
 use crate::domain::repo::Repo;
+use crate::domain::resume::TOKEN_ENV;
 use crate::github::{GITHUB_API, GithubClient, TokenSource};
 use crate::ipc;
 use crate::launch::Launcher;
@@ -1215,6 +1216,7 @@ fn edit_text(editor: &[String], dir: &Path, text: &str) -> Result<String, String
     ));
     std::fs::write(&path, text).map_err(|err| format!("cannot write {}: {err}", path.display()))?;
     let result = std::process::Command::new(program)
+        .env_remove(TOKEN_ENV)
         .args(args)
         .arg(&path)
         .status()
@@ -1256,6 +1258,7 @@ fn run_command(request: &LaunchRequest) -> io::Result<std::process::ExitStatus> 
         .split_first()
         .ok_or_else(|| io::Error::other("the command is empty"))?;
     std::process::Command::new(program)
+        .env_remove(TOKEN_ENV)
         .args(args)
         .current_dir(&request.cwd)
         .envs(request.env.iter().map(|(name, value)| (name, value)))
